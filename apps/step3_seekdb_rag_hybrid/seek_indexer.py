@@ -8,9 +8,10 @@ seek_indexer.py - Step3 索引同步工具
 1. 增量同步 - 基于游标从 Step1 读取新数据
 2. 全量重建 - 重新索引所有数据
 3. 单记录索引 - 指定 blob_id/attachment_id 进行索引
+4. Collection 管理 - rollback/validate-collection/validate-switch
 
 输入参数：
-    --mode: 同步模式（incremental/full/single）
+    --mode: 同步模式（incremental/full/single/rollback/show-active/validate-collection/validate-switch）
     --source: 数据源（patch_blobs/attachments/all）
     --blob-id: 指定 blob_id（single 模式）
     --attachment-id: 指定 attachment_id（single 模式）
@@ -20,6 +21,90 @@ seek_indexer.py - Step3 索引同步工具
 输出：
     - JSON 格式的同步报告
     - 支持 --json 输出便于流水线解析
+
+================================================================================
+Collection 切换流程（可脚本化）
+================================================================================
+
+切换 Primary/Shadow 后端或激活新 Collection 需要遵循以下流程：
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 阶段 1: 切主前检查 (Preflight)                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 1.1 健康检查 - 确认候选 collection 可用                                     │
+│     python -m seek_indexer --mode validate-collection --collection NEW_COLL │
+│                                                                             │
+│ 1.2 对比验证 - 批量查询比较 primary/shadow 差异                             │
+│     python -m seek_query --dual-read --dual-read-report                     │
+│         --query-file test_queries.txt                                       │
+│         --dual-read-min-overlap 0.8 --json                                  │
+│                                                                             │
+│ 1.3 validate-switch - 综合验证（推荐，整合上述步骤）                        │
+│     python -m seek_indexer --mode validate-switch                           │
+│         --collection NEW_COLL --test-queries "q1,q2,q3"                     │
+│         --dry-run --json                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 阶段 2: 执行切换                                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 2.1 激活新 collection（写入 KV）                                            │
+│     python -m seek_indexer --mode validate-switch                           │
+│         --collection NEW_COLL --activate                                    │
+│                                                                             │
+│ 2.2 或使用 full 模式重建后自动激活                                          │
+│     python -m seek_indexer --mode full --activate                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 阶段 3: 切主后验证 (Post-switch)                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 3.1 确认当前 active collection                                              │
+│     python -m seek_indexer --mode show-active --json                        │
+│                                                                             │
+│ 3.2 使用 shadow_only_compare 策略持续监控                                   │
+│     # 流量走新 collection，但仍与旧 collection 对比记录差异                 │
+│     python -m seek_query --dual-read                                        │
+│         --dual-read-strategy shadow_only_compare                            │
+│         --query "测试查询" --json                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 阶段 4: 回滚（如有问题）                                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 4.1 回滚到旧 collection                                                     │
+│     python -m seek_indexer --mode rollback --collection OLD_COLL            │
+│                                                                             │
+│ 4.2 确认回滚成功                                                            │
+│     python -m seek_indexer --mode show-active --json                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+切主检查条件清单
+================================================================================
+
+Preflight 健康检查 (validate-collection):
+  - [x] 后端连接正常
+  - [x] Collection 表存在
+  - [x] 向量维度匹配
+  - [x] 索引可用
+
+Compare Gate 门禁 (dual-read/validate-switch):
+  - [ ] hit_overlap >= min_overlap (默认 0.8)
+  - [ ] only_primary_count <= max_only_primary
+  - [ ] only_shadow_count <= max_only_shadow  
+  - [ ] score_diff_max <= max_score_drift (默认 0.1)
+  - [ ] RBO >= rbo_min_fail (默认 0.7)
+
+Post-switch 验证:
+  - [x] active_collection 已更新
+  - [x] 查询功能正常
+  - [ ] 持续监控差异（shadow_only_compare 模式）
+
+================================================================================
 
 使用:
     # Makefile 入口（推荐）
@@ -38,13 +123,14 @@ seek_indexer.py - Step3 索引同步工具
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import psycopg
 from psycopg.rows import dict_row
@@ -59,11 +145,14 @@ from step3_seekdb_rag_hybrid.step3_chunking import (
     CHUNKING_VERSION,
     ChunkResult,
     chunk_content,
+    generate_attachment_artifact_uri,
 )
 from step3_seekdb_rag_hybrid.step3_readers import (
     read_evidence_text,
     EvidenceReadError,
     EvidenceNotFoundError,
+    scan_docs_directory,
+    build_docs_evidence_uri,
 )
 from step3_seekdb_rag_hybrid.index_backend import (
     IndexBackend,
@@ -90,6 +179,10 @@ from step3_seekdb_rag_hybrid.step3_backend_factory import (
     BackendType,
     DualWriteConfig,
     PGVectorConfig,
+    # Shadow 就绪性校验
+    ShadowReadinessResult,
+    validate_shadow_readiness,
+    format_shadow_readiness_report,
 )
 from step3_seekdb_rag_hybrid.collection_naming import (
     make_collection_id,
@@ -107,7 +200,19 @@ from step3_seekdb_rag_hybrid.active_collection import (
     KV_NAMESPACE_PREFIX,
     ACTIVE_COLLECTION_KEY,
 )
+from step3_seekdb_rag_hybrid.dual_read_compare import (
+    CompareThresholds,
+    CompareReport,
+    CompareDecision,
+    evaluate_with_report,
+)
 from step3_seekdb_rag_hybrid.env_compat import get_bool
+from step3_seekdb_rag_hybrid.index_source_policy import (
+    IndexSourcePolicy,
+    PolicyFilterResult,
+    create_policy_from_env,
+    SkipReason,
+)
 
 # 环境变量：是否自动初始化 pgvector 后端（默认开启）
 # canonical: STEP3_PGVECTOR_AUTO_INIT，别名: STEP3_AUTO_INIT（已废弃，计划于 2026-Q3 移除）
@@ -121,6 +226,19 @@ PGVECTOR_AUTO_INIT = get_bool(
 # 环境变量：是否启用双写（默认关闭）
 PGVECTOR_DUAL_WRITE = os.environ.get("STEP3_PGVECTOR_DUAL_WRITE", "0").lower() in ("1", "true", "yes")
 
+# 环境变量：是否启用 SHA256 校验（默认关闭，nightly 中打开）
+# canonical: STEP3_INDEX_VERIFY_SHA256
+# 布尔解析规则：支持 1/0/true/false/yes/no（不区分大小写）
+VERIFY_SHA256_DEFAULT = get_bool("STEP3_INDEX_VERIFY_SHA256", default=False)
+
+# 环境变量：是否允许切换 active collection（默认关闭）
+# 用于防止意外激活/回滚 collection
+# 布尔解析规则：支持 1/0/true/false/yes/no（不区分大小写）
+ALLOW_ACTIVE_COLLECTION_SWITCH = get_bool(
+    "STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH",
+    default=False,
+)
+
 # 日志配置
 logging.basicConfig(
     level=logging.INFO,
@@ -128,6 +246,82 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+# ============ 异常类 ============
+
+
+class SHA256MismatchError(Exception):
+    """
+    内容 SHA256 校验失败异常
+    
+    当从数据库读取的内容与记录的 sha256 不匹配时抛出。
+    这可能表示数据损坏或存储不一致。
+    """
+    def __init__(self, record_type: str, record_id: int, expected: str, actual: str):
+        self.record_type = record_type
+        self.record_id = record_id
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"{record_type} id={record_id} SHA256 不匹配: "
+            f"expected={expected[:16]}..., actual={actual[:16]}..."
+        )
+
+
+def compute_sha256(content: str) -> str:
+    """计算内容的 SHA256 哈希值"""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+class ActiveCollectionSwitchBlockedError(Exception):
+    """
+    Active Collection 切换被阻止异常
+    
+    当尝试执行 activate/rollback 操作但 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=false 时抛出。
+    """
+    def __init__(self, operation: str, collection: str):
+        self.operation = operation
+        self.collection = collection
+        super().__init__(
+            f"{operation} 操作被阻止: STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH 未启用。"
+            f"目标 collection: {collection}"
+        )
+    
+    def to_dict(self) -> dict:
+        """转换为字典（用于 JSON 输出）"""
+        return {
+            "error": "active_collection_switch_blocked",
+            "operation": self.operation,
+            "target_collection": self.collection,
+            "message": str(self),
+            "how_to_enable": "设置环境变量 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1 或 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=true",
+            "manual_commands": {
+                "activate": f"STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1 python -m seek_indexer --mode validate-switch --collection \"{self.collection}\" --activate",
+                "rollback": f"STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1 python -m seek_indexer --mode rollback --collection \"{self.collection}\"",
+                "show_current": "python -m seek_indexer --mode show-active --json",
+            },
+        }
+
+
+def check_active_collection_switch_allowed(operation: str, collection: str) -> None:
+    """
+    检查是否允许切换 active collection
+    
+    Args:
+        operation: 操作类型 ("activate" / "rollback")
+        collection: 目标 collection 名称
+    
+    Raises:
+        ActiveCollectionSwitchBlockedError: 如果未允许切换
+    """
+    if not ALLOW_ACTIVE_COLLECTION_SWITCH:
+        raise ActiveCollectionSwitchBlockedError(operation, collection)
+
+
+def is_active_collection_switch_allowed() -> bool:
+    """检查是否允许切换 active collection"""
+    return ALLOW_ACTIVE_COLLECTION_SWITCH
 
 
 # ============ 数据结构 ============
@@ -207,6 +401,36 @@ class IndexResult:
     
     # 双写统计
     dual_write: Optional[DualWriteStats] = None
+    
+    # 策略过滤统计
+    policy_version: Optional[str] = None
+    policy_hash: Optional[str] = None
+    policy_filtered_total: int = 0  # 按策略过滤的总数
+    policy_filtered_by_reason: Dict[str, int] = field(default_factory=dict)  # 按原因分类的过滤计数
+    policy_filtered_records: List[Dict[str, Any]] = field(default_factory=list)  # 过滤记录详情（限制数量）
+    
+    def add_policy_filtered(
+        self,
+        record_type: str,
+        record_id: int,
+        skip_reason: str,
+        skip_details: Optional[str] = None,
+        max_records: int = 50,
+    ):
+        """添加策略过滤记录"""
+        self.policy_filtered_total += 1
+        # 按原因分类计数
+        if skip_reason not in self.policy_filtered_by_reason:
+            self.policy_filtered_by_reason[skip_reason] = 0
+        self.policy_filtered_by_reason[skip_reason] += 1
+        # 记录详情（限制数量）
+        if len(self.policy_filtered_records) < max_records:
+            self.policy_filtered_records.append({
+                "type": record_type,
+                "id": record_id,
+                "reason": skip_reason,
+                "details": skip_details,
+            })
 
     def add_error(self, record_type: str, record_id: int, error: str, max_errors: int = 50):
         """添加错误记录"""
@@ -226,6 +450,7 @@ class IndexResult:
                 "total_chunks": self.total_chunks,
                 "total_indexed": self.total_indexed,
                 "total_errors": self.total_errors,
+                "policy_filtered": self.policy_filtered_total,  # 策略过滤计数
             },
             "parameters": {
                 "mode": self.mode,
@@ -244,6 +469,12 @@ class IndexResult:
                 "dim": self.embedding_dim,
                 "normalize": self.embedding_normalize,
             },
+            "policy": {
+                "version": self.policy_version,
+                "hash": self.policy_hash,
+                "filtered_total": self.policy_filtered_total,
+                "filtered_by_reason": self.policy_filtered_by_reason,
+            },
             "cursors": {
                 "last_blob_id": self.last_blob_id,
                 "last_attachment_id": self.last_attachment_id,
@@ -257,6 +488,7 @@ class IndexResult:
                 "processed_blob_ids": self.processed_blob_ids[:100],  # 最多显示 100 个
                 "processed_attachment_ids": self.processed_attachment_ids[:100],
                 "errors": self.error_records,
+                "policy_filtered_records": self.policy_filtered_records,  # 策略过滤详情
             },
         }
         
@@ -871,6 +1103,8 @@ def process_patch_blob(
     shadow_backend: Optional[IndexBackend] = None,
     dual_write_config: Optional[DualWriteConfig] = None,
     dual_write_stats: Optional[DualWriteStats] = None,
+    verify_sha256: bool = False,
+    policy: Optional[IndexSourcePolicy] = None,
 ) -> tuple[int, int]:
     """
     处理单个 patch_blob 记录
@@ -884,9 +1118,14 @@ def process_patch_blob(
         shadow_backend: Shadow 后端（用于双写）
         dual_write_config: 双写配置
         dual_write_stats: 双写统计
+        verify_sha256: 是否校验内容 SHA256（默认 False）
+        policy: 索引源策略（用于写入 chunk metadata）
     
     Returns:
         (chunks_count, indexed_count)
+    
+    Raises:
+        SHA256MismatchError: 当 verify_sha256=True 且内容 SHA256 不匹配时抛出
     """
     blob_id = row["blob_id"]
     uri = row.get("uri")
@@ -900,6 +1139,19 @@ def process_patch_blob(
     if not content:
         logger.warning(f"blob_id={blob_id} 内容为空或读取失败，跳过")
         return 0, 0
+    
+    # SHA256 校验（可选）
+    if verify_sha256:
+        expected_sha256 = row.get("sha256", "")
+        if expected_sha256:
+            actual_sha256 = compute_sha256(content)
+            if actual_sha256 != expected_sha256:
+                raise SHA256MismatchError(
+                    record_type="patch_blob",
+                    record_id=blob_id,
+                    expected=expected_sha256,
+                    actual=actual_sha256,
+                )
     
     # 提取 author_user_id（从 commit_meta_json）
     commit_meta = row.get("commit_meta_json")
@@ -932,6 +1184,12 @@ def process_patch_blob(
         # blob 信息
         "blob_id": blob_id,
     }
+    
+    # 添加策略元信息到 metadata（如果提供了策略）
+    if policy is not None:
+        policy_meta = policy.get_metadata()
+        metadata["policy_version"] = policy_meta["policy_version"]
+        metadata["policy_hash"] = policy_meta["policy_hash"]
     
     # 分块
     chunks = chunk_content(
@@ -979,6 +1237,8 @@ def process_attachment(
     shadow_backend: Optional[IndexBackend] = None,
     dual_write_config: Optional[DualWriteConfig] = None,
     dual_write_stats: Optional[DualWriteStats] = None,
+    verify_sha256: bool = False,
+    policy: Optional[IndexSourcePolicy] = None,
 ) -> tuple[int, int]:
     """
     处理单个 attachment 记录
@@ -992,9 +1252,14 @@ def process_attachment(
         shadow_backend: Shadow 后端（用于双写）
         dual_write_config: 双写配置
         dual_write_stats: 双写统计
+        verify_sha256: 是否校验内容 SHA256（默认 False）
+        policy: 索引源策略（用于写入 chunk metadata）
     
     Returns:
         (chunks_count, indexed_count)
+    
+    Raises:
+        SHA256MismatchError: 当 verify_sha256=True 且内容 SHA256 不匹配时抛出
     """
     attachment_id = row["attachment_id"]
     uri = row.get("uri")
@@ -1008,6 +1273,19 @@ def process_attachment(
     if not content:
         logger.warning(f"attachment_id={attachment_id} 内容为空或读取失败，跳过")
         return 0, 0
+    
+    # SHA256 校验（可选）
+    if verify_sha256:
+        expected_sha256 = row.get("sha256", "")
+        if expected_sha256:
+            actual_sha256 = compute_sha256(content)
+            if actual_sha256 != expected_sha256:
+                raise SHA256MismatchError(
+                    record_type="attachment",
+                    record_id=attachment_id,
+                    expected=expected_sha256,
+                    actual=actual_sha256,
+                )
     
     # 解析 meta_json 和 scope_json
     meta_json = row.get("meta_json")
@@ -1042,32 +1320,52 @@ def process_attachment(
     }
     content_type = content_type_map.get(kind, "text")
     
+    # 获取 sha256 用于 evidence_uri
+    sha256 = row.get("sha256", "")
+    
+    # 生成 canonical evidence_uri（遵循 Step1 Attachment Evidence URI 规范）
+    # 格式: memory://attachments/<attachment_id>/<sha256>
+    evidence_uri = None
+    if sha256:
+        evidence_uri = generate_attachment_artifact_uri(attachment_id, sha256)
+    
+    # source_id 规则: attachment:<id>
+    source_id = f"attachment:{attachment_id}"
+    
     # 构建标准 metadata
     metadata = {
         # 核心标识字段
         "project_key": project_key,
         "source_type": "logbook",
-        "source_id": f"attachment:{attachment_id}",
-        # 关联信息
+        "source_id": source_id,
+        # 关联信息（必须补齐）
         "attachment_id": attachment_id,
         "item_id": row.get("item_id"),
+        "kind": kind,
+        # 附加信息
         "item_type": row.get("item_type"),
         "title": row.get("title"),
-        "kind": kind,
         # 所有者信息
         "owner_user_id": row.get("owner_user_id"),
         "status": row.get("status"),
     }
     
-    # 分块
+    # 添加策略元信息到 metadata（如果提供了策略）
+    if policy is not None:
+        policy_meta = policy.get_metadata()
+        metadata["policy_version"] = policy_meta["policy_version"]
+        metadata["policy_hash"] = policy_meta["policy_hash"]
+    
+    # 分块（传入 evidence_uri 确保 chunk 的 artifact_uri 为 attachments canonical 格式）
     chunks = chunk_content(
         content=content,
         content_type=content_type,
         source_type="logbook",
-        source_id=f"attachment:{attachment_id}",
-        sha256=row.get("sha256", ""),
+        source_id=source_id,
+        sha256=sha256,
         artifact_uri=uri,
         metadata=metadata,
+        evidence_uri=evidence_uri,  # 传入 canonical evidence_uri
     )
     
     if not chunks:
@@ -1088,6 +1386,237 @@ def process_attachment(
     return len(chunks), indexed
 
 
+def process_docs_file(
+    doc_info: Dict[str, Any],
+    dry_run: bool = False,
+    backend: Optional[IndexBackend] = None,
+    embedding_provider: Optional[EmbeddingProvider] = None,
+    shadow_backend: Optional[IndexBackend] = None,
+    dual_write_config: Optional[DualWriteConfig] = None,
+    dual_write_stats: Optional[DualWriteStats] = None,
+    verify_sha256: bool = False,
+    policy: Optional[IndexSourcePolicy] = None,
+) -> tuple[int, int]:
+    """
+    处理单个文档文件
+
+    Args:
+        doc_info: 文档信息字典，来自 scan_docs_directory()
+        dry_run: 预览模式
+        backend: 索引后端
+        embedding_provider: Embedding Provider
+        shadow_backend: Shadow 后端（用于双写）
+        dual_write_config: 双写配置
+        dual_write_stats: 双写统计
+        verify_sha256: 是否校验 SHA256
+        policy: 索引策略
+
+    Returns:
+        (chunk_count, indexed_count)
+    """
+    from pathlib import Path
+
+    rel_path = doc_info["rel_path"]
+    full_path = doc_info["full_path"]
+    sha256 = doc_info["sha256"]
+    size_bytes = doc_info["size_bytes"]
+    artifact_uri = doc_info["artifact_uri"]
+    source_id = doc_info["source_id"]
+
+    # 读取文件内容
+    try:
+        content = Path(full_path).read_text(encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"读取文档失败 {rel_path}: {e}")
+        return 0, 0
+
+    # 校验 SHA256
+    if verify_sha256:
+        actual_sha256 = compute_sha256(content)
+        if actual_sha256.lower() != sha256.lower():
+            raise SHA256MismatchError("docs", rel_path, sha256, actual_sha256)
+
+    # 确定内容类型
+    if rel_path.endswith(".md"):
+        content_type = "markdown"
+    elif rel_path.endswith(".txt"):
+        content_type = "text"
+    else:
+        content_type = "text"
+
+    # 构建标准 metadata
+    metadata = {
+        # 核心标识字段
+        "source_type": "docs",
+        "source_id": source_id,
+        "artifact_uri": artifact_uri,
+        "sha256": sha256,
+        "size_bytes": size_bytes,
+        # 文档特有字段
+        "rel_path": rel_path,
+        "full_path": full_path,
+        "content_type": content_type,
+    }
+
+    # 添加策略元信息
+    if policy is not None:
+        policy_meta = policy.get_metadata()
+        metadata["policy_version"] = policy_meta["policy_version"]
+        metadata["policy_hash"] = policy_meta["policy_hash"]
+
+    # 分块
+    chunks = chunk_content(
+        content=content,
+        content_type=content_type,
+        source_type="docs",
+        source_id=source_id,
+        sha256=sha256,
+        artifact_uri=artifact_uri,
+        metadata=metadata,
+        evidence_uri=artifact_uri,  # docs 的 evidence_uri 就是 artifact_uri
+    )
+
+    if not chunks:
+        logger.warning(f"docs rel_path={rel_path} 分块结果为空")
+        return 0, 0
+
+    # 索引
+    indexed = upsert_to_index(
+        chunks,
+        dry_run=dry_run,
+        backend=backend,
+        embedding_provider=embedding_provider,
+        shadow_backend=shadow_backend,
+        dual_write_config=dual_write_config,
+        dual_write_stats=dual_write_stats,
+    )
+
+    return len(chunks), indexed
+
+
+def index_docs_directory(
+    docs_root: Union[str, "Path"],
+    patterns: Optional[List[str]] = None,
+    exclude_patterns: Optional[List[str]] = None,
+    dry_run: bool = False,
+    backend: Optional[IndexBackend] = None,
+    embedding_provider: Optional[EmbeddingProvider] = None,
+    shadow_backend: Optional[IndexBackend] = None,
+    dual_write_config: Optional[DualWriteConfig] = None,
+    verify_sha256: bool = False,
+    policy: Optional[IndexSourcePolicy] = None,
+) -> IndexResult:
+    """
+    索引指定目录下的文档文件
+
+    扫描 docs_root 目录下符合 patterns 的文件，执行分块并同步到索引后端。
+
+    Args:
+        docs_root: 文档根目录
+        patterns: 包含的文件模式列表（默认 ["*.md", "*.txt"]）
+        exclude_patterns: 排除的文件模式列表
+        dry_run: 预览模式
+        backend: 索引后端
+        embedding_provider: Embedding Provider
+        shadow_backend: Shadow 后端（用于双写）
+        dual_write_config: 双写配置
+        verify_sha256: 是否校验 SHA256
+        policy: 索引策略
+
+    Returns:
+        IndexResult 对象
+
+    示例:
+        # 索引 contracts 目录下的所有 Markdown 文件
+        result = index_docs_directory(
+            docs_root="./contracts",
+            patterns=["*.md"],
+            dry_run=True
+        )
+    """
+    from pathlib import Path
+
+    result = IndexResult(
+        mode="docs",
+        source="docs",
+        dry_run=dry_run,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    start_time = datetime.now(timezone.utc)
+
+    # 初始化策略
+    if policy is None:
+        policy = create_policy_from_env()
+    result.policy_version = policy.version
+    result.policy_hash = policy.compute_hash()
+
+    # 初始化双写统计
+    dual_write_stats = None
+    if dual_write_config is not None and shadow_backend is not None:
+        dual_write_stats = DualWriteStats(
+            enabled=True,
+            shadow_strategy=dual_write_config.strategy,
+            dry_run=dry_run,
+        )
+        result.dual_write = dual_write_stats
+
+    # 扫描文档目录
+    docs_root_path = Path(docs_root)
+    if not docs_root_path.exists():
+        logger.warning(f"文档目录不存在: {docs_root}")
+        return result
+
+    logger.info(f"扫描文档目录: {docs_root}")
+    doc_files = scan_docs_directory(docs_root, patterns, exclude_patterns)
+    logger.info(f"发现 {len(doc_files)} 个文档文件")
+
+    # 索引每个文档
+    for doc_info in doc_files:
+        rel_path = doc_info["rel_path"]
+        result.total_processed += 1
+
+        try:
+            chunk_count, indexed_count = process_docs_file(
+                doc_info=doc_info,
+                dry_run=dry_run,
+                backend=backend,
+                embedding_provider=embedding_provider,
+                shadow_backend=shadow_backend,
+                dual_write_config=dual_write_config,
+                dual_write_stats=dual_write_stats,
+                verify_sha256=verify_sha256,
+                policy=policy,
+            )
+
+            result.total_chunks += chunk_count
+            result.total_indexed += indexed_count
+
+            if chunk_count > 0:
+                logger.info(f"已索引文档: {rel_path} (chunks={chunk_count}, indexed={indexed_count})")
+
+        except SHA256MismatchError as e:
+            result.add_error("docs", rel_path, f"SHA256 不匹配: {e}")
+            logger.error(f"文档 SHA256 不匹配: {rel_path}")
+
+        except Exception as e:
+            result.add_error("docs", rel_path, str(e))
+            logger.error(f"索引文档失败 {rel_path}: {e}")
+
+    # 计算耗时
+    end_time = datetime.now(timezone.utc)
+    result.completed_at = end_time.isoformat()
+    result.duration_seconds = (end_time - start_time).total_seconds()
+
+    logger.info(
+        f"文档索引完成: 处理={result.total_processed}, "
+        f"chunks={result.total_chunks}, indexed={result.total_indexed}, "
+        f"errors={result.total_errors}"
+    )
+
+    return result
+
+
 def run_incremental_sync(
     conn: psycopg.Connection,
     source: str = "all",
@@ -1101,6 +1630,8 @@ def run_incremental_sync(
     rebuild_backend_for_collection: bool = True,
     shadow_backend: Optional[IndexBackend] = None,
     dual_write_config: Optional[DualWriteConfig] = None,
+    verify_sha256: bool = False,
+    policy: Optional[IndexSourcePolicy] = None,
 ) -> IndexResult:
     """
     执行增量同步
@@ -1118,6 +1649,8 @@ def run_incremental_sync(
         rebuild_backend_for_collection: 当 collection 与后端不一致时是否重建后端
         shadow_backend: Shadow 后端（用于双写）
         dual_write_config: 双写配置
+        verify_sha256: 是否校验内容 SHA256（默认 False，nightly 建议启用）
+        policy: 索引源过滤策略（可选，不提供则从环境变量创建）
     """
     result = IndexResult(
         mode="incremental",
@@ -1128,6 +1661,17 @@ def run_incremental_sync(
     )
     
     start_time = datetime.now(timezone.utc)
+    
+    # 初始化索引源过滤策略
+    if policy is None:
+        policy = create_policy_from_env()
+    
+    # 记录策略信息到 result
+    policy_meta = policy.get_metadata()
+    result.policy_version = policy_meta["policy_version"]
+    result.policy_hash = policy_meta["policy_hash"]
+    
+    logger.info(f"使用索引源策略: version={result.policy_version}, hash={result.policy_hash}")
     
     # 初始化双写统计
     dual_write_stats = None
@@ -1227,6 +1771,24 @@ def run_incremental_sync(
         
         max_blob_id = last_blob_id
         for row in rows:
+            blob_id = row["blob_id"]
+            
+            # 策略过滤
+            filter_result = policy.filter_patch_blob(row)
+            if not filter_result.accepted:
+                result.add_policy_filtered(
+                    "patch_blob", blob_id,
+                    filter_result.skip_reason,
+                    filter_result.skip_details,
+                )
+                logger.debug(
+                    f"blob_id={blob_id} 被策略过滤: {filter_result.skip_reason} "
+                    f"({filter_result.skip_details})"
+                )
+                # 仍然更新 max_blob_id 以推进游标
+                max_blob_id = max(max_blob_id, blob_id)
+                continue
+            
             try:
                 chunks_count, indexed_count = process_patch_blob(
                     conn, row, dry_run,
@@ -1235,15 +1797,21 @@ def run_incremental_sync(
                     shadow_backend=shadow_backend,
                     dual_write_config=dual_write_config,
                     dual_write_stats=dual_write_stats,
+                    verify_sha256=verify_sha256,
+                    policy=policy,
                 )
                 result.total_processed += 1
                 result.total_chunks += chunks_count
                 result.total_indexed += indexed_count
-                result.processed_blob_ids.append(row["blob_id"])
-                max_blob_id = max(max_blob_id, row["blob_id"])
+                result.processed_blob_ids.append(blob_id)
+                max_blob_id = max(max_blob_id, blob_id)
+            except SHA256MismatchError as e:
+                # SHA256 校验失败，记录错误并跳过（不更新游标）
+                result.add_error("patch_blob", blob_id, str(e))
+                logger.error(f"blob_id={blob_id} SHA256 校验失败: {e}")
             except Exception as e:
-                result.add_error("patch_blob", row["blob_id"], str(e))
-                logger.error(f"处理 blob_id={row['blob_id']} 失败: {e}")
+                result.add_error("patch_blob", blob_id, str(e))
+                logger.error(f"处理 blob_id={blob_id} 失败: {e}")
         
         # 更新游标（包含 embedding 信息）
         if not dry_run and max_blob_id > last_blob_id:
@@ -1277,6 +1845,24 @@ def run_incremental_sync(
         
         max_attachment_id = last_attachment_id
         for row in rows:
+            attachment_id = row["attachment_id"]
+            
+            # 策略过滤
+            filter_result = policy.filter_attachment(row)
+            if not filter_result.accepted:
+                result.add_policy_filtered(
+                    "attachment", attachment_id,
+                    filter_result.skip_reason,
+                    filter_result.skip_details,
+                )
+                logger.debug(
+                    f"attachment_id={attachment_id} 被策略过滤: {filter_result.skip_reason} "
+                    f"({filter_result.skip_details})"
+                )
+                # 仍然更新 max_attachment_id 以推进游标
+                max_attachment_id = max(max_attachment_id, attachment_id)
+                continue
+            
             try:
                 chunks_count, indexed_count = process_attachment(
                     conn, row, dry_run,
@@ -1285,15 +1871,21 @@ def run_incremental_sync(
                     shadow_backend=shadow_backend,
                     dual_write_config=dual_write_config,
                     dual_write_stats=dual_write_stats,
+                    verify_sha256=verify_sha256,
+                    policy=policy,
                 )
                 result.total_processed += 1
                 result.total_chunks += chunks_count
                 result.total_indexed += indexed_count
-                result.processed_attachment_ids.append(row["attachment_id"])
-                max_attachment_id = max(max_attachment_id, row["attachment_id"])
+                result.processed_attachment_ids.append(attachment_id)
+                max_attachment_id = max(max_attachment_id, attachment_id)
+            except SHA256MismatchError as e:
+                # SHA256 校验失败，记录错误并跳过（不更新游标）
+                result.add_error("attachment", attachment_id, str(e))
+                logger.error(f"attachment_id={attachment_id} SHA256 校验失败: {e}")
             except Exception as e:
-                result.add_error("attachment", row["attachment_id"], str(e))
-                logger.error(f"处理 attachment_id={row['attachment_id']} 失败: {e}")
+                result.add_error("attachment", attachment_id, str(e))
+                logger.error(f"处理 attachment_id={attachment_id} 失败: {e}")
         
         # 更新游标（包含 embedding 信息）
         if not dry_run and max_attachment_id > last_attachment_id:
@@ -1320,6 +1912,8 @@ def run_full_rebuild(
     version_tag: Optional[str] = None,
     shadow_backend: Optional[IndexBackend] = None,
     dual_write_config: Optional[DualWriteConfig] = None,
+    verify_sha256: bool = False,
+    policy: Optional[IndexSourcePolicy] = None,
 ) -> IndexResult:
     """
     执行全量重建
@@ -1339,6 +1933,8 @@ def run_full_rebuild(
         version_tag: 版本标签（不提供则自动生成时间戳）
         shadow_backend: Shadow 后端（用于双写）
         dual_write_config: 双写配置
+        verify_sha256: 是否校验内容 SHA256（默认 False，nightly 建议启用）
+        policy: 索引源过滤策略（可选，不提供则从环境变量创建）
     
     Returns:
         IndexResult 包含新 collection 名称和处理统计
@@ -1410,6 +2006,8 @@ def run_full_rebuild(
         rebuild_backend_for_collection=False,  # 后端已经使用正确的 collection
         shadow_backend=new_shadow_backend,
         dual_write_config=dual_write_config,
+        verify_sha256=verify_sha256,
+        policy=policy,  # 传递策略
     )
     
     # 更新 mode 标识和 collection 信息
@@ -1419,6 +2017,8 @@ def run_full_rebuild(
     
     # 激活新 collection
     if activate and not dry_run and backend_name:
+        # 检查是否允许切换
+        check_active_collection_switch_allowed("activate", new_collection)
         set_active_collection(conn, backend_name, new_collection, project_key)
         result.activated = True
         logger.info(f"已激活新 collection: {new_collection}")
@@ -1431,6 +2031,7 @@ def rollback_collection(
     backend_name: str,
     target_collection: str,
     project_key: Optional[str] = None,
+    skip_switch_check: bool = False,
 ) -> bool:
     """
     回滚到指定的 collection
@@ -1440,10 +2041,18 @@ def rollback_collection(
         backend_name: 索引后端名称
         target_collection: 要回滚到的 collection 名称
         project_key: 项目标识
+        skip_switch_check: 是否跳过 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH 检查（默认 False）
     
     Returns:
         是否成功
+    
+    Raises:
+        ActiveCollectionSwitchBlockedError: 如果未允许切换且 skip_switch_check=False
     """
+    # 检查是否允许切换
+    if not skip_switch_check:
+        check_active_collection_switch_allowed("rollback", target_collection)
+    
     try:
         set_active_collection(conn, backend_name, target_collection, project_key)
         logger.info(f"回滚成功，当前 active collection: {target_collection}")
@@ -1460,6 +2069,9 @@ def run_single_index(
     dry_run: bool = False,
     backend: Optional[IndexBackend] = None,
     embedding_provider: Optional[EmbeddingProvider] = None,
+    verify_sha256: bool = False,
+    policy: Optional[IndexSourcePolicy] = None,
+    apply_policy_filter: bool = False,
 ) -> IndexResult:
     """
     索引单条记录
@@ -1471,6 +2083,9 @@ def run_single_index(
         dry_run: 预览模式
         backend: 索引后端
         embedding_provider: Embedding Provider
+        verify_sha256: 是否校验内容 SHA256（默认 False）
+        policy: 索引源过滤策略（用于 metadata 写入）
+        apply_policy_filter: 是否应用策略过滤（默认 False，单条索引通常不过滤）
     """
     result = IndexResult(
         mode="single",
@@ -1480,6 +2095,15 @@ def run_single_index(
     )
     
     start_time = datetime.now(timezone.utc)
+    
+    # 初始化策略（用于 metadata 写入）
+    if policy is None:
+        policy = create_policy_from_env()
+    
+    # 记录策略信息
+    policy_meta = policy.get_metadata()
+    result.policy_version = policy_meta["policy_version"]
+    result.policy_hash = policy_meta["policy_hash"]
     
     # 获取 embedding provider 并记录模型信息
     provider = embedding_provider or get_embedding_provider_instance()
@@ -1496,16 +2120,35 @@ def run_single_index(
         if not row:
             result.add_error("patch_blob", blob_id, "记录不存在")
         else:
-            try:
-                chunks_count, indexed_count = process_patch_blob(
-                    conn, row, dry_run, backend=backend, embedding_provider=provider
-                )
-                result.total_processed += 1
-                result.total_chunks += chunks_count
-                result.total_indexed += indexed_count
-                result.processed_blob_ids.append(blob_id)
-            except Exception as e:
-                result.add_error("patch_blob", blob_id, str(e))
+            # 可选：应用策略过滤
+            if apply_policy_filter:
+                filter_result = policy.filter_patch_blob(row)
+                if not filter_result.accepted:
+                    result.add_policy_filtered(
+                        "patch_blob", blob_id,
+                        filter_result.skip_reason,
+                        filter_result.skip_details,
+                    )
+                    logger.info(
+                        f"blob_id={blob_id} 被策略过滤: {filter_result.skip_reason}"
+                    )
+                    row = None  # 标记跳过
+            
+            if row:
+                try:
+                    chunks_count, indexed_count = process_patch_blob(
+                        conn, row, dry_run, backend=backend, embedding_provider=provider,
+                        verify_sha256=verify_sha256, policy=policy,
+                    )
+                    result.total_processed += 1
+                    result.total_chunks += chunks_count
+                    result.total_indexed += indexed_count
+                    result.processed_blob_ids.append(blob_id)
+                except SHA256MismatchError as e:
+                    result.add_error("patch_blob", blob_id, str(e))
+                    logger.error(f"blob_id={blob_id} SHA256 校验失败: {e}")
+                except Exception as e:
+                    result.add_error("patch_blob", blob_id, str(e))
     
     if attachment_id:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -1515,16 +2158,35 @@ def run_single_index(
         if not row:
             result.add_error("attachment", attachment_id, "记录不存在")
         else:
-            try:
-                chunks_count, indexed_count = process_attachment(
-                    conn, row, dry_run, backend=backend, embedding_provider=provider
-                )
-                result.total_processed += 1
-                result.total_chunks += chunks_count
-                result.total_indexed += indexed_count
-                result.processed_attachment_ids.append(attachment_id)
-            except Exception as e:
-                result.add_error("attachment", attachment_id, str(e))
+            # 可选：应用策略过滤
+            if apply_policy_filter:
+                filter_result = policy.filter_attachment(row)
+                if not filter_result.accepted:
+                    result.add_policy_filtered(
+                        "attachment", attachment_id,
+                        filter_result.skip_reason,
+                        filter_result.skip_details,
+                    )
+                    logger.info(
+                        f"attachment_id={attachment_id} 被策略过滤: {filter_result.skip_reason}"
+                    )
+                    row = None  # 标记跳过
+            
+            if row:
+                try:
+                    chunks_count, indexed_count = process_attachment(
+                        conn, row, dry_run, backend=backend, embedding_provider=provider,
+                        verify_sha256=verify_sha256, policy=policy,
+                    )
+                    result.total_processed += 1
+                    result.total_chunks += chunks_count
+                    result.total_indexed += indexed_count
+                    result.processed_attachment_ids.append(attachment_id)
+                except SHA256MismatchError as e:
+                    result.add_error("attachment", attachment_id, str(e))
+                    logger.error(f"attachment_id={attachment_id} SHA256 校验失败: {e}")
+                except Exception as e:
+                    result.add_error("attachment", attachment_id, str(e))
     
     end_time = datetime.now(timezone.utc)
     result.completed_at = end_time.isoformat()
@@ -1793,6 +2455,610 @@ def print_validation_report(result: CollectionValidationResult):
     print("\n" + "=" * 60 + "\n")
 
 
+# ============ Validate-Switch 模式 ============
+
+
+@dataclass
+class ValidateSwitchResult:
+    """
+    Validate-Switch 结果
+    
+    包含切换验证的完整信息：
+    - 当前 active collection 状态
+    - 候选 collection 验证结果
+    - Shadow 后端就绪性校验结果
+    - 批量查询比较报告
+    - 门禁判定（pass/warn/fail）
+    - 是否已激活
+    """
+    # 基本信息
+    backend_name: str = ""
+    project_key: Optional[str] = None
+    candidate_collection: str = ""
+    
+    # 当前状态
+    current_active_collection: Optional[str] = None
+    current_active_read_error: Optional[str] = None
+    
+    # 候选 collection 验证
+    candidate_available: bool = False
+    candidate_validation_error: Optional[str] = None
+    
+    # Shadow 就绪性校验结果
+    shadow_readiness: Optional[ShadowReadinessResult] = None
+    shadow_readiness_passed: bool = False
+    
+    # 批量查询比较
+    queries_tested: int = 0
+    compare_reports: List[CompareReport] = field(default_factory=list)
+    
+    # 聚合门禁结果
+    gate_result: str = "unknown"  # "pass" / "warn" / "fail"
+    gate_reason: str = ""
+    gate_violations: List[str] = field(default_factory=list)
+    
+    # Remediation 提示（汇总）
+    remediation_hints: List[str] = field(default_factory=list)
+    
+    # 激活状态
+    activate_requested: bool = False
+    activated: bool = False
+    activation_error: Optional[str] = None
+    activation_blocked: bool = False  # 是否被 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH 阻止
+    activation_blocked_info: Optional[Dict[str, Any]] = None  # 阻止详情
+    
+    # 时间信息
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    duration_seconds: float = 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        # success=False 如果：门禁失败，或请求激活但未激活（包括被阻止）
+        activation_ok = not self.activate_requested or self.activated
+        result = {
+            "success": self.gate_result in ("pass", "warn") and activation_ok and not self.activation_blocked,
+            "backend_name": self.backend_name,
+            "project_key": self.project_key or "default",
+            "candidate_collection": self.candidate_collection,
+            "current_state": {
+                "active_collection": self.current_active_collection,
+                "read_error": self.current_active_read_error,
+            },
+            "candidate_validation": {
+                "available": self.candidate_available,
+                "error": self.candidate_validation_error,
+            },
+            "shadow_readiness": {
+                "passed": self.shadow_readiness_passed,
+                "details": self.shadow_readiness.to_dict() if self.shadow_readiness else None,
+            },
+            "comparison": {
+                "queries_tested": self.queries_tested,
+                "reports_count": len(self.compare_reports),
+            },
+            "gate": {
+                "result": self.gate_result,
+                "reason": self.gate_reason,
+                "violations": self.gate_violations,
+            },
+            "remediation_hints": self.remediation_hints,
+            "activation": {
+                "requested": self.activate_requested,
+                "activated": self.activated,
+                "error": self.activation_error,
+                "blocked": self.activation_blocked,
+                "blocked_info": self.activation_blocked_info,
+            },
+            "timing": {
+                "started_at": self.started_at,
+                "completed_at": self.completed_at,
+                "duration_seconds": self.duration_seconds,
+            },
+        }
+        
+        # 添加详细的比较报告（仅在有报告时）
+        if self.compare_reports:
+            result["compare_reports"] = [r.to_dict() for r in self.compare_reports]
+        
+        return result
+
+
+def aggregate_compare_reports(reports: List[CompareReport]) -> tuple[str, str, List[str]]:
+    """
+    聚合多个 CompareReport 生成门禁判定
+    
+    判定规则：
+    - 任一报告 fail → 整体 fail
+    - 任一报告 warn（无 fail）→ 整体 warn
+    - 全部 pass → 整体 pass
+    
+    Args:
+        reports: CompareReport 列表
+    
+    Returns:
+        (gate_result, gate_reason, violations): 门禁结果、原因、违规列表
+    """
+    if not reports:
+        return "pass", "无查询需要验证", []
+    
+    fail_count = 0
+    warn_count = 0
+    pass_count = 0
+    all_violations: List[str] = []
+    
+    for i, report in enumerate(reports):
+        if report.decision is None:
+            continue
+        
+        if not report.decision.passed:
+            fail_count += 1
+            for check in report.decision.violated_checks:
+                all_violations.append(f"query[{i}]:{check}")
+        elif report.decision.has_warnings:
+            warn_count += 1
+            for check in report.decision.violated_checks:
+                all_violations.append(f"query[{i}]:{check}")
+        else:
+            pass_count += 1
+    
+    total = len(reports)
+    
+    if fail_count > 0:
+        return "fail", f"{fail_count}/{total} 查询比较失败", all_violations
+    elif warn_count > 0:
+        return "warn", f"{warn_count}/{total} 查询有警告，{pass_count}/{total} 通过", all_violations
+    else:
+        return "pass", f"全部 {pass_count}/{total} 查询通过", []
+
+
+def run_validate_switch(
+    conn,
+    candidate_collection: str,
+    backend_name: str,
+    project_key: Optional[str] = None,
+    test_queries: Optional[List[str]] = None,
+    activate: bool = False,
+    dry_run: bool = False,
+    compare_thresholds: Optional[CompareThresholds] = None,
+) -> ValidateSwitchResult:
+    """
+    执行 validate-switch：验证候选 collection 并可选激活
+    
+    ============================================================================
+    切主检查条件
+    ============================================================================
+    
+    Preflight 检查 (validate_collection):
+      - 后端连接可用
+      - Collection 表/索引存在
+      - 向量维度与配置匹配
+      - 后端健康状态正常
+    
+    Compare Gate 门禁 (test_queries + compare_thresholds):
+      - hit_overlap_ratio >= hit_overlap_min_fail (默认 0.5)
+      - RBO >= rbo_min_fail (默认 0.7)
+      - score_drift_p95 <= score_drift_p95_max (默认 0.15)
+      - latency_ratio <= latency_ratio_max (默认 3.0)
+    
+    门禁结果:
+      - pass: 所有检查通过，可安全切换
+      - warn: 有警告但未触发失败阈值，建议调查
+      - fail: 触发失败阈值，不建议切换
+    
+    ============================================================================
+    
+    流程：
+    1. 读取当前 active_collection（只读）
+    2. 验证候选 collection 可用性（Preflight 检查）
+    3. 执行批量查询比较（使用 dual-read，Compare Gate 门禁）
+    4. 聚合门禁判定
+    5. 如果 activate=True 且 gate=pass，写入 KV 切换
+    
+    Args:
+        conn: 数据库连接
+        candidate_collection: 候选 collection ID
+        backend_name: 后端名称
+        project_key: 项目标识
+        test_queries: 测试查询列表（如果不提供则跳过查询比较，仅执行 Preflight）
+        activate: 是否在 gate=pass 时激活
+        dry_run: 是否为预览模式
+        compare_thresholds: 比较阈值配置（可通过环境变量设置默认值）
+    
+    Returns:
+        ValidateSwitchResult 包含完整验证结果
+    
+    环境变量（Compare Gate 阈值）:
+        STEP3_DUAL_READ_OVERLAP_MIN_FAIL=0.5
+        STEP3_DUAL_READ_OVERLAP_MIN_WARN=0.8
+        STEP3_DUAL_READ_RBO_MIN_FAIL=0.7
+        STEP3_DUAL_READ_RBO_MIN_WARN=0.85
+        STEP3_DUAL_READ_SCORE_DRIFT_P95_MAX=0.15
+        STEP3_DUAL_READ_LATENCY_RATIO_MAX=3.0
+        
+        废弃别名（仍然支持，建议迁移到上述 canonical 名称）:
+        - STEP3_DUAL_READ_HIT_OVERLAP_MIN_FAIL -> STEP3_DUAL_READ_OVERLAP_MIN_FAIL
+        - STEP3_DUAL_READ_HIT_OVERLAP_MIN_WARN -> STEP3_DUAL_READ_OVERLAP_MIN_WARN
+    """
+    result = ValidateSwitchResult(
+        backend_name=backend_name,
+        project_key=project_key,
+        candidate_collection=candidate_collection,
+        activate_requested=activate,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    
+    start_time = datetime.now(timezone.utc)
+    
+    # 1. 读取当前 active_collection
+    try:
+        current_active = get_active_collection(conn, backend_name, project_key)
+        result.current_active_collection = current_active
+        if current_active:
+            logger.info(f"当前 active_collection: {current_active}")
+        else:
+            logger.info("当前无 active_collection")
+    except Exception as e:
+        result.current_active_read_error = str(e)
+        logger.warning(f"读取 active_collection 失败: {e}")
+    
+    # 2. 验证候选 collection 可用性
+    try:
+        validation = validate_collection(
+            conn=conn,
+            collection_id=candidate_collection,
+            backend_name=backend_name,
+        )
+        result.candidate_available = validation.available
+        if not validation.available:
+            errors = validation.preflight_errors + validation.recommendations
+            result.candidate_validation_error = "; ".join(errors) if errors else "候选 collection 不可用"
+            logger.warning(f"候选 collection 不可用: {result.candidate_validation_error}")
+            result.gate_result = "fail"
+            result.gate_reason = "候选 collection 验证失败"
+            result.gate_violations = ["candidate_unavailable"]
+            # 计算耗时并返回
+            end_time = datetime.now(timezone.utc)
+            result.completed_at = end_time.isoformat()
+            result.duration_seconds = (end_time - start_time).total_seconds()
+            return result
+        logger.info(f"候选 collection 可用: {candidate_collection}")
+    except Exception as e:
+        result.candidate_validation_error = str(e)
+        result.gate_result = "fail"
+        result.gate_reason = f"候选 collection 验证异常: {e}"
+        result.gate_violations = ["candidate_validation_exception"]
+        logger.error(f"验证候选 collection 异常: {e}")
+        # 计算耗时并返回
+        end_time = datetime.now(timezone.utc)
+        result.completed_at = end_time.isoformat()
+        result.duration_seconds = (end_time - start_time).total_seconds()
+        return result
+    
+    # 2.5 Shadow 后端就绪性校验（切主前必须检查）
+    try:
+        # 获取 embedding provider
+        provider = get_embedding_provider_instance()
+        embedding_model_id = provider.model_id if provider else None
+        
+        # 创建候选 collection 的后端实例作为 shadow
+        shadow_backend = create_backend_from_env(
+            chunking_version=CHUNKING_VERSION,
+            embedding_model_id=embedding_model_id,
+            embedding_provider=provider,
+            collection_id=candidate_collection,
+        )
+        
+        # 创建当前 active collection 的后端实例作为 primary（用于比例计算）
+        primary_backend = None
+        if result.current_active_collection:
+            primary_backend = create_backend_from_env(
+                chunking_version=CHUNKING_VERSION,
+                embedding_model_id=embedding_model_id,
+                embedding_provider=provider,
+                collection_id=result.current_active_collection,
+            )
+            # 初始化 primary 后端
+            if primary_backend and not try_initialize_pgvector_backend(primary_backend):
+                logger.warning("Primary pgvector 初始化失败，跳过文档数比例校验")
+                primary_backend = None
+        
+        # 初始化 shadow 后端
+        if shadow_backend:
+            if not try_initialize_pgvector_backend(shadow_backend):
+                logger.warning("Shadow pgvector 初始化失败")
+        
+        # 执行就绪性校验
+        if shadow_backend:
+            readiness = validate_shadow_readiness(
+                shadow_backend=shadow_backend,
+                primary_backend=primary_backend,
+            )
+            result.shadow_readiness = readiness
+            result.shadow_readiness_passed = readiness.ready
+            
+            # 收集 remediation 提示
+            if readiness.remediation_hints:
+                result.remediation_hints.extend(readiness.remediation_hints)
+            
+            if readiness.ready:
+                logger.info(
+                    f"Shadow 后端就绪性检查通过: "
+                    f"doc_count={readiness.doc_count}, collection={candidate_collection}"
+                )
+            else:
+                logger.warning(
+                    f"Shadow 后端就绪性检查未通过: "
+                    f"health={readiness.health_check_passed}, "
+                    f"stats={readiness.stats_available}, "
+                    f"doc_count={readiness.doc_count_passed}"
+                )
+                # 就绪性检查失败但不直接拒绝，继续执行后续查询比较
+                # 门禁判定时会综合考虑就绪性结果
+                result.gate_violations.append("shadow_readiness_failed")
+        else:
+            logger.warning("无法创建 Shadow 后端实例，跳过就绪性校验")
+            result.remediation_hints.append(
+                "无法创建 Shadow 后端实例。请检查:\n"
+                "  1. STEP3_PGVECTOR_DSN 配置是否正确\n"
+                "  2. 数据库连接是否正常"
+            )
+    except Exception as e:
+        logger.warning(f"Shadow 就绪性校验异常: {e}")
+        result.remediation_hints.append(f"Shadow 就绪性校验异常: {e}")
+    
+    # 3. 执行批量查询比较（如果有测试查询）
+    if test_queries and len(test_queries) > 0:
+        result.queries_tested = len(test_queries)
+        logger.info(f"执行 {len(test_queries)} 个测试查询的双读比较...")
+        
+        # 导入 seek_query 模块（延迟导入避免循环依赖）
+        from step3_seekdb_rag_hybrid.seek_query import (
+            run_batch_query,
+            QueryFilters,
+        )
+        from step3_seekdb_rag_hybrid.step3_backend_factory import (
+            create_backend_from_env,
+            create_shadow_backend_for_read,
+            DualReadConfig,
+            PGVectorConfig,
+        )
+        
+        try:
+            # 获取 embedding provider
+            provider = get_embedding_provider_instance()
+            embedding_model_id = provider.model_id if provider else None
+            
+            # 创建 primary 后端（使用当前 active collection）
+            primary_collection_id = result.current_active_collection or candidate_collection
+            primary_backend = create_backend_from_env(
+                chunking_version=CHUNKING_VERSION,
+                embedding_model_id=embedding_model_id,
+                embedding_provider=provider,
+                collection_id=primary_collection_id,
+            )
+            
+            # 初始化 pgvector 后端
+            if not try_initialize_pgvector_backend(primary_backend):
+                logger.warning("Primary pgvector 初始化失败")
+            
+            # 创建 shadow 后端（使用候选 collection）
+            primary_config = PGVectorConfig.from_env()
+            dual_read_config = DualReadConfig(
+                enabled=True,
+                strategy="compare",
+                shadow_strategy=primary_config.collection_strategy,
+            )
+            
+            shadow_backend = create_backend_from_env(
+                chunking_version=CHUNKING_VERSION,
+                embedding_model_id=embedding_model_id,
+                embedding_provider=provider,
+                collection_id=candidate_collection,
+            )
+            
+            if shadow_backend and not try_initialize_pgvector_backend(shadow_backend):
+                logger.warning("Shadow pgvector 初始化失败")
+            
+            # 构建过滤条件
+            filters = QueryFilters(project_key=project_key) if project_key else None
+            
+            # 执行批量查询
+            query_results = run_batch_query(
+                queries=test_queries,
+                filters=filters,
+                top_k=10,
+                backend=primary_backend,
+                shadow_backend=shadow_backend,
+                enable_compare=True,
+                compare_mode="summary",
+                compare_thresholds=compare_thresholds,
+            )
+            
+            # 收集比较报告
+            for qr in query_results:
+                if qr.compare_report is not None:
+                    result.compare_reports.append(qr.compare_report)
+            
+            logger.info(f"完成 {len(query_results)} 个查询比较，生成 {len(result.compare_reports)} 个报告")
+            
+        except Exception as e:
+            logger.error(f"批量查询比较失败: {e}")
+            result.gate_result = "fail"
+            result.gate_reason = f"批量查询比较异常: {e}"
+            result.gate_violations = ["query_comparison_exception"]
+            # 计算耗时并返回
+            end_time = datetime.now(timezone.utc)
+            result.completed_at = end_time.isoformat()
+            result.duration_seconds = (end_time - start_time).total_seconds()
+            return result
+    
+    # 4. 聚合门禁判定（综合 compare 报告和 shadow 就绪性）
+    gate_result, gate_reason, gate_violations = aggregate_compare_reports(result.compare_reports)
+    
+    # 将 shadow 就绪性失败加入门禁判定
+    if not result.shadow_readiness_passed and result.shadow_readiness is not None:
+        # 如果 shadow 就绪性检查未通过，降级门禁结果
+        if gate_result == "pass":
+            gate_result = "warn"
+            gate_reason = f"Shadow 就绪性检查未通过。{gate_reason}"
+        elif gate_result == "warn":
+            gate_reason = f"Shadow 就绪性检查未通过 + {gate_reason}"
+        
+        # 添加具体的违规信息
+        if not result.shadow_readiness.health_check_passed:
+            gate_violations.append("shadow_health_check_failed")
+        if not result.shadow_readiness.doc_count_passed:
+            gate_violations.append(
+                f"shadow_doc_count_below_threshold:"
+                f"{result.shadow_readiness.doc_count}/{result.shadow_readiness.doc_count_min_threshold}"
+            )
+    
+    # 合并已收集的违规项（如 shadow_readiness_failed）
+    existing_violations = set(result.gate_violations)
+    for v in gate_violations:
+        if v not in existing_violations:
+            result.gate_violations.append(v)
+    
+    result.gate_result = gate_result
+    result.gate_reason = gate_reason
+    
+    logger.info(f"门禁判定: {gate_result} - {gate_reason}")
+    
+    # 5. 如果 activate=True 且 gate=pass，写入 KV 切换
+    if activate and gate_result == "pass":
+        if dry_run:
+            logger.info(f"[DRY-RUN] 将激活 collection: {candidate_collection}")
+            result.activated = False
+        else:
+            # 检查是否允许切换
+            if not is_active_collection_switch_allowed():
+                error_info = ActiveCollectionSwitchBlockedError("activate", candidate_collection)
+                result.activation_error = str(error_info)
+                result.activation_blocked = True
+                result.activation_blocked_info = error_info.to_dict()
+                logger.error(f"激活被阻止: {error_info}")
+                logger.error(f"启用方式: 设置 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1")
+            else:
+                try:
+                    set_active_collection(conn, backend_name, candidate_collection, project_key)
+                    result.activated = True
+                    logger.info(f"已激活 collection: {candidate_collection}")
+                except Exception as e:
+                    result.activation_error = str(e)
+                    logger.error(f"激活 collection 失败: {e}")
+    elif activate and gate_result != "pass":
+        result.activation_error = f"门禁未通过 ({gate_result})，跳过激活"
+        logger.warning(result.activation_error)
+    
+    # 计算耗时
+    end_time = datetime.now(timezone.utc)
+    result.completed_at = end_time.isoformat()
+    result.duration_seconds = (end_time - start_time).total_seconds()
+    
+    return result
+
+
+def print_validate_switch_report(result: ValidateSwitchResult):
+    """打印 Validate-Switch 报告（文本格式）"""
+    print("\n" + "=" * 60)
+    print("Validate-Switch 报告")
+    print("=" * 60)
+    
+    print(f"\n【基本信息】")
+    print(f"  后端: {result.backend_name}")
+    print(f"  项目: {result.project_key or 'default'}")
+    print(f"  候选 Collection: {result.candidate_collection}")
+    
+    print(f"\n【当前状态】")
+    if result.current_active_read_error:
+        print(f"  读取 active_collection 失败: {result.current_active_read_error}")
+    elif result.current_active_collection:
+        print(f"  当前 Active Collection: {result.current_active_collection}")
+    else:
+        print(f"  当前 Active Collection: (未设置)")
+    
+    print(f"\n【候选 Collection 验证】")
+    print(f"  可用性: {'是' if result.candidate_available else '否'}")
+    if result.candidate_validation_error:
+        print(f"  错误: {result.candidate_validation_error}")
+    
+    # Shadow 就绪性校验结果
+    print(f"\n【Shadow 就绪性检查】")
+    print(f"  就绪状态: {'是' if result.shadow_readiness_passed else '否'}")
+    if result.shadow_readiness:
+        sr = result.shadow_readiness
+        print(f"  健康检查: {'通过' if sr.health_check_passed else '失败'} ({sr.health_status or '未知'})")
+        print(f"  统计可用: {'是' if sr.stats_available else '否'}")
+        print(f"  文档数检查: {'通过' if sr.doc_count_passed else '失败'}")
+        print(f"  Shadow 文档数: {sr.doc_count}")
+        if sr.primary_doc_count is not None:
+            ratio = sr.doc_count / sr.primary_doc_count if sr.primary_doc_count > 0 else 0
+            print(f"  Primary 文档数: {sr.primary_doc_count}")
+            print(f"  文档数比例: {ratio:.2%}")
+        if sr.doc_count_min_threshold > 0:
+            print(f"  最小文档数阈值: {sr.doc_count_min_threshold}")
+        if sr.doc_count_ratio_threshold > 0:
+            print(f"  文档数比例阈值: {sr.doc_count_ratio_threshold:.0%}")
+        if sr.health_error:
+            print(f"  健康检查错误: {sr.health_error}")
+        if sr.stats_error:
+            print(f"  统计获取错误: {sr.stats_error}")
+    
+    if result.queries_tested > 0:
+        print(f"\n【查询比较】")
+        print(f"  测试查询数: {result.queries_tested}")
+        print(f"  比较报告数: {len(result.compare_reports)}")
+        
+        # 简要统计各报告状态
+        pass_count = sum(1 for r in result.compare_reports if r.decision and r.decision.passed and not r.decision.has_warnings)
+        warn_count = sum(1 for r in result.compare_reports if r.decision and r.decision.passed and r.decision.has_warnings)
+        fail_count = sum(1 for r in result.compare_reports if r.decision and not r.decision.passed)
+        print(f"  通过: {pass_count}, 警告: {warn_count}, 失败: {fail_count}")
+    
+    print(f"\n【门禁判定】")
+    gate_symbol = {"pass": "✓", "warn": "⚠", "fail": "✗"}.get(result.gate_result, "?")
+    print(f"  结果: [{gate_symbol}] {result.gate_result.upper()}")
+    print(f"  原因: {result.gate_reason}")
+    if result.gate_violations:
+        print(f"  违规项: {', '.join(result.gate_violations[:5])}")
+        if len(result.gate_violations) > 5:
+            print(f"          ...共 {len(result.gate_violations)} 项")
+    
+    # Remediation 提示
+    if result.remediation_hints:
+        print(f"\n【Remediation 建议】")
+        for i, hint in enumerate(result.remediation_hints, 1):
+            # 多行提示需要缩进处理
+            hint_lines = hint.split("\n")
+            print(f"  {i}. {hint_lines[0]}")
+            for line in hint_lines[1:]:
+                print(f"     {line}")
+    
+    print(f"\n【激活状态】")
+    print(f"  请求激活: {'是' if result.activate_requested else '否'}")
+    print(f"  已激活: {'是' if result.activated else '否'}")
+    if result.activation_error:
+        print(f"  激活错误: {result.activation_error}")
+    
+    print(f"\n【耗时】")
+    print(f"  {result.duration_seconds:.2f} 秒")
+    
+    print("\n" + "=" * 60)
+    if result.gate_result == "pass":
+        if result.activated:
+            print("验证通过，已完成切换")
+        elif result.activate_requested:
+            print("验证通过，但激活失败")
+        else:
+            print("验证通过，可安全切换")
+    elif result.gate_result == "warn":
+        print("验证有警告，建议调查后再决定")
+    else:
+        print("验证失败，不建议切换")
+    print("=" * 60 + "\n")
+
+
 # ============ CLI 部分 ============
 
 
@@ -1835,9 +3101,66 @@ def parse_args() -> argparse.Namespace:
     python seek_indexer.py --mode validate-collection --collection "proj1:v1:bge-m3"
     python seek_indexer.py --mode validate-collection --collection "proj1:v1:bge-m3" --json
 
+    # 验证切换到候选 collection（只读验证，不激活）
+    python seek_indexer.py --mode validate-switch --collection "proj1:v1:bge-m3:20260128"
+    python seek_indexer.py --mode validate-switch --collection "proj1:v1:bge-m3:20260128" --test-queries "bug fix,性能优化"
+    python seek_indexer.py --mode validate-switch --collection "proj1:v1:bge-m3:20260128" --test-queries-file queries.txt
+
+    # 验证切换并在 gate=pass 时激活
+    python seek_indexer.py --mode validate-switch --collection "proj1:v1:bge-m3:20260128" --activate
+    python seek_indexer.py --mode validate-switch --collection "proj1:v1:bge-m3:20260128" --test-queries "测试查询" --activate --json
+
 Collection 命名格式:
     {project_key}:{chunking_version}:{embedding_model_id}[:{version_tag}]
     例如: proj1:v1:bge-m3:20260128T120000
+
+================================================================================
+切换流程可脚本化示例:
+================================================================================
+
+    # ========== 阶段 1: 切主前检查 ==========
+    
+    # 1.1 健康检查 - 验证候选 collection 可用性
+    python seek_indexer.py --mode validate-collection \\
+        --collection "proj:v1:bge-m3:NEW_TAG" --json
+    
+    # 1.2 对比验证 - 使用 dual-read 进行批量查询对比
+    python seek_query.py --dual-read --dual-read-report \\
+        --query-file test_queries.txt \\
+        --dual-read-min-overlap 0.8 --json
+    
+    # 1.3 综合验证 - validate-switch 整合检查（推荐）
+    python seek_indexer.py --mode validate-switch \\
+        --collection "proj:v1:bge-m3:NEW_TAG" \\
+        --test-queries-file test_queries.txt \\
+        --dry-run --json
+
+    # ========== 阶段 2: 执行切换 ==========
+    
+    # 2.1 验证通过后激活新 collection
+    python seek_indexer.py --mode validate-switch \\
+        --collection "proj:v1:bge-m3:NEW_TAG" --activate
+    
+    # ========== 阶段 3: 切主后验证 ==========
+    
+    # 3.1 确认 active collection 已更新
+    python seek_indexer.py --mode show-active --json
+    
+    # 3.2 使用 shadow_only_compare 策略持续监控差异
+    python seek_query.py --dual-read \\
+        --dual-read-strategy shadow_only_compare \\
+        --query "测试查询" --json
+
+    # ========== 阶段 4: 回滚（如有问题） ==========
+    
+    # 4.1 回滚到旧 collection
+    python seek_indexer.py --mode rollback \\
+        --collection "proj:v1:bge-m3:OLD_TAG"
+    
+    # 4.2 确认回滚成功
+    python seek_indexer.py --mode show-active --json
+
+================================================================================
 
 环境变量:
     PROJECT_KEY     项目标识（用于筛选）
@@ -1851,17 +3174,17 @@ Collection 命名格式:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["incremental", "full", "single", "rollback", "show-active", "validate-collection"],
+        choices=["incremental", "full", "single", "docs", "rollback", "show-active", "validate-collection", "validate-switch"],
         default=os.environ.get("INDEX_MODE", "incremental"),
-        help="同步模式: incremental(增量)/full(全量重建)/single(单条)/rollback(回滚)/show-active(显示活跃collection)/validate-collection(验证collection)",
+        help="同步模式: incremental(增量)/full(全量重建)/single(单条)/docs(文档索引)/rollback(回滚)/show-active(显示活跃collection)/validate-collection(验证collection)/validate-switch(验证切换)",
     )
     
     parser.add_argument(
         "--source",
         type=str,
-        choices=["patch_blobs", "attachments", "all"],
+        choices=["patch_blobs", "attachments", "docs", "all"],
         default=os.environ.get("INDEX_SOURCE", "all"),
-        help="数据源: patch_blobs/attachments/all",
+        help="数据源: patch_blobs/attachments/docs/all（docs 需要 --docs-root）",
     )
     
     # 单记录模式参数
@@ -1876,6 +3199,26 @@ Collection 命名格式:
         type=int,
         default=None,
         help="指定 attachment_id（single 模式）",
+    )
+
+    # Docs 模式参数
+    parser.add_argument(
+        "--docs-root",
+        type=str,
+        default=os.environ.get("DOCS_ROOT"),
+        help="文档根目录（--source docs 时必需）",
+    )
+    parser.add_argument(
+        "--docs-patterns",
+        type=str,
+        default=os.environ.get("DOCS_PATTERNS", "*.md,*.txt"),
+        help="文档文件模式，逗号分隔（默认 '*.md,*.txt'）",
+    )
+    parser.add_argument(
+        "--docs-exclude",
+        type=str,
+        default=os.environ.get("DOCS_EXCLUDE"),
+        help="排除的文件模式，逗号分隔",
     )
     
     # 筛选参数
@@ -1903,7 +3246,21 @@ Collection 命名格式:
         "--activate",
         action="store_true",
         default=False,
-        help="全量重建完成后激活新 collection（仅 full 模式）",
+        help="全量重建完成后激活新 collection（full 模式），或 gate=pass 时激活候选 collection（validate-switch 模式）",
+    )
+    
+    # Validate-switch 模式参数
+    parser.add_argument(
+        "--test-queries",
+        type=str,
+        default=None,
+        help="validate-switch 模式的测试查询（逗号分隔或 JSON 数组格式）",
+    )
+    parser.add_argument(
+        "--test-queries-file",
+        type=str,
+        default=None,
+        help="validate-switch 模式的测试查询文件（每行一个查询）",
     )
     
     # 批量参数
@@ -1921,6 +3278,12 @@ Collection 命名格式:
         default=os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes"),
         help="仅预览，不实际写入索引",
     )
+    parser.add_argument(
+        "--verify-sha256",
+        action="store_true",
+        default=VERIFY_SHA256_DEFAULT,
+        help="校验内容 SHA256（默认关闭，可通过 STEP3_INDEX_VERIFY_SHA256=1 启用；nightly 建议启用）",
+    )
     
     # 输出选项
     parser.add_argument(
@@ -1934,10 +3297,105 @@ Collection 命名格式:
         help="显示详细输出",
     )
     
+    # Logbook 集成选项
+    logbook_group = parser.add_argument_group("Logbook 集成选项")
+    logbook_group.add_argument(
+        "--log-to-logbook",
+        action="store_true",
+        help="将索引结果保存到 logbook.attachments（kind='report'）",
+    )
+    logbook_group.add_argument(
+        "--save-attachment",
+        action="store_true",
+        help="将索引报告保存为 logbook.attachments（与 --log-to-logbook 等效）",
+    )
+    logbook_group.add_argument(
+        "--item-id",
+        type=int,
+        default=None,
+        help="用于关联的 item_id（需要 --log-to-logbook 或 --save-attachment）",
+    )
+    logbook_group.add_argument(
+        "--actor",
+        type=str,
+        default=None,
+        help="操作者用户 ID（用于 logbook 记录）",
+    )
+    
     # 添加后端选项
     add_backend_arguments(parser)
     
     return parser.parse_args()
+
+
+def add_to_attachments(
+    conn: psycopg.Connection,
+    item_id: int,
+    result: IndexResult,
+) -> int:
+    """
+    将索引结果作为附件保存到 logbook.attachments
+    
+    复用 seek_consistency_check.py 的 add_to_attachments() 模式：
+    - 将结果转换为 JSON 并写入制品存储
+    - 在 logbook.attachments 中创建记录（kind='report'）
+    - meta_json 包含 collection_id/chunking_version/embedding_model_id/policy_version
+    
+    Args:
+        conn: 数据库连接
+        item_id: 关联的 item_id
+        result: 索引结果
+    
+    Returns:
+        attachment_id
+    """
+    # 将结果转换为 JSON
+    result_dict = result.to_dict()
+    result_json = json.dumps(result_dict, ensure_ascii=False, indent=2, default=str)
+    result_bytes = result_json.encode("utf-8")
+    sha256 = hashlib.sha256(result_bytes).hexdigest()
+    size_bytes = len(result_bytes)
+    
+    # 生成时间戳作为文件名的一部分
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    
+    # 写入制品存储
+    from artifacts import write_text_artifact
+    
+    uri = f"reports/seek_indexer/{result.collection or 'default'}_{timestamp}.json"
+    artifact_result = write_text_artifact(uri, result_json)
+    
+    # 构建 meta_json，包含 Evidence Packet 互相引用所需的字段
+    meta_json = json.dumps({
+        "report_type": "seek_indexer",
+        "collection_id": result.collection,
+        "chunking_version": CHUNKING_VERSION,
+        "embedding_model_id": result.embedding_model_id,
+        "policy_version": result.policy_version,
+        "policy_hash": result.policy_hash,
+        "mode": result.mode,
+        "source": result.source,
+        "total_processed": result.total_processed,
+        "total_indexed": result.total_indexed,
+        "total_errors": result.total_errors,
+    })
+    
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO logbook.attachments
+                (item_id, kind, uri, sha256, size_bytes, meta_json)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING attachment_id
+            """,
+            (item_id, "report", artifact_result["uri"], artifact_result["sha256"], 
+             artifact_result["size_bytes"], meta_json),
+        )
+        attachment_id = cur.fetchone()[0]
+    
+    logger.info(f"索引报告已保存为附件, attachment_id={attachment_id}, uri={uri}")
+    
+    return attachment_id
 
 
 def print_report(result: IndexResult):
@@ -2039,6 +3497,20 @@ def main() -> int:
             if args.json:
                 print(json.dumps({"success": False, "error": "missing --collection for validate-collection"}))
             return 1
+    
+    if args.mode == "validate-switch":
+        if not args.collection:
+            logger.error("validate-switch 模式需要指定 --collection 参数（候选 collection）")
+            if args.json:
+                print(json.dumps({"success": False, "error": "missing --collection for validate-switch"}))
+            return 1
+    
+    # 验证 logbook 参数
+    if (args.log_to_logbook or args.save_attachment) and not args.item_id:
+        logger.error("使用 --log-to-logbook 或 --save-attachment 时必须指定 --item-id")
+        if args.json:
+            print(json.dumps({"success": False, "error": "missing --item-id for logbook integration"}))
+        return 1
     
     try:
         # 加载配置
@@ -2144,6 +3616,7 @@ def main() -> int:
                     attachment_id=args.attachment_id,
                     dry_run=args.dry_run,
                     backend=backend,
+                    verify_sha256=args.verify_sha256,
                 )
             elif args.mode == "full":
                 # 全量模式：创建新 collection
@@ -2158,6 +3631,7 @@ def main() -> int:
                     version_tag=args.version_tag,
                     shadow_backend=shadow_backend,
                     dual_write_config=dual_write_config,
+                    verify_sha256=args.verify_sha256,
                 )
             elif args.mode == "rollback":
                 # 回滚模式
@@ -2170,23 +3644,43 @@ def main() -> int:
                 if args.dry_run:
                     logger.info(f"[DRY-RUN] 将回滚到 collection: {args.collection}")
                     success = True
+                    blocked = False
+                    blocked_info = None
                 else:
-                    success = rollback_collection(
-                        conn=conn,
-                        backend_name=backend_name,
-                        target_collection=args.collection,
-                        project_key=args.project_key,
-                    )
+                    try:
+                        success = rollback_collection(
+                            conn=conn,
+                            backend_name=backend_name,
+                            target_collection=args.collection,
+                            project_key=args.project_key,
+                        )
+                        blocked = False
+                        blocked_info = None
+                    except ActiveCollectionSwitchBlockedError as e:
+                        success = False
+                        blocked = True
+                        blocked_info = e.to_dict()
+                        logger.error(f"回滚被阻止: {e}")
+                        logger.error(f"启用方式: 设置 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1")
                 
                 if args.json:
-                    print(json.dumps({
+                    result_dict = {
                         "success": success,
                         "mode": "rollback",
                         "target_collection": args.collection,
                         "dry_run": args.dry_run,
-                    }, ensure_ascii=False, indent=2))
+                    }
+                    if blocked:
+                        result_dict["blocked"] = True
+                        result_dict["blocked_info"] = blocked_info
+                    print(json.dumps(result_dict, ensure_ascii=False, indent=2))
                 else:
-                    if success:
+                    if blocked:
+                        print(f"回滚被阻止: STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH 未启用")
+                        print(f"目标 collection: {args.collection}")
+                        print(f"启用方式: 设置环境变量 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1")
+                        print(f"手动命令: STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1 python -m seek_indexer --mode rollback --collection \"{args.collection}\"")
+                    elif success:
                         print(f"回滚成功: {args.collection}")
                     else:
                         print(f"回滚失败: {args.collection}")
@@ -2227,6 +3721,90 @@ def main() -> int:
                     print_validation_report(validation_result)
                 
                 return 0 if validation_result.available else 1
+            elif args.mode == "validate-switch":
+                # 验证切换模式：验证候选 collection 并可选激活
+                # 解析测试查询
+                test_queries: List[str] = []
+                
+                if args.test_queries:
+                    # 尝试解析为 JSON 数组
+                    try:
+                        test_queries = json.loads(args.test_queries)
+                        if not isinstance(test_queries, list):
+                            test_queries = [str(test_queries)]
+                    except json.JSONDecodeError:
+                        # 按逗号分隔
+                        test_queries = [q.strip() for q in args.test_queries.split(",") if q.strip()]
+                
+                if args.test_queries_file:
+                    try:
+                        with open(args.test_queries_file, "r", encoding="utf-8") as f:
+                            file_queries = [line.strip() for line in f if line.strip()]
+                            test_queries.extend(file_queries)
+                    except FileNotFoundError:
+                        logger.error(f"测试查询文件不存在: {args.test_queries_file}")
+                        if args.json:
+                            print(json.dumps({"success": False, "error": f"file not found: {args.test_queries_file}"}))
+                        return 1
+                
+                logger.info(f"validate-switch: 候选 collection={args.collection}, 测试查询数={len(test_queries)}, activate={args.activate}")
+                
+                # 加载比较阈值（从环境变量）
+                from step3_seekdb_rag_hybrid.dual_read_compare import CompareThresholds
+                compare_thresholds = CompareThresholds.from_env()
+                
+                # 执行 validate-switch
+                vs_result = run_validate_switch(
+                    conn=conn,
+                    candidate_collection=args.collection,
+                    backend_name=backend_name or os.environ.get("STEP3_INDEX_BACKEND", "pgvector"),
+                    project_key=args.project_key,
+                    test_queries=test_queries if test_queries else None,
+                    activate=args.activate,
+                    dry_run=args.dry_run,
+                    compare_thresholds=compare_thresholds,
+                )
+                
+                # 提交或回滚事务
+                if not args.dry_run and vs_result.activated:
+                    conn.commit()
+                else:
+                    conn.rollback()
+                
+                # 输出结果
+                if args.json:
+                    print(json.dumps(vs_result.to_dict(), ensure_ascii=False, indent=2))
+                else:
+                    print_validate_switch_report(vs_result)
+                
+                # 根据门禁结果返回退出码
+                if vs_result.gate_result == "fail":
+                    return 1
+                elif vs_result.activate_requested and not vs_result.activated:
+                    return 1
+                return 0
+            elif args.mode == "docs" or args.source == "docs":
+                # Docs 模式：索引本地文档
+                if not args.docs_root:
+                    logger.error("docs 模式需要指定 --docs-root 参数")
+                    if args.json:
+                        print(json.dumps({"success": False, "error": "missing --docs-root"}))
+                    return 1
+
+                # 解析文件模式
+                patterns = args.docs_patterns.split(",") if args.docs_patterns else None
+                exclude_patterns = args.docs_exclude.split(",") if args.docs_exclude else None
+
+                result = index_docs_directory(
+                    docs_root=args.docs_root,
+                    patterns=patterns,
+                    exclude_patterns=exclude_patterns,
+                    dry_run=args.dry_run,
+                    backend=backend,
+                    shadow_backend=shadow_backend,
+                    dual_write_config=dual_write_config,
+                    verify_sha256=args.verify_sha256,
+                )
             else:
                 # 增量模式
                 result = run_incremental_sync(
@@ -2239,7 +3817,20 @@ def main() -> int:
                     collection=args.collection,
                     shadow_backend=shadow_backend,
                     dual_write_config=dual_write_config,
+                    verify_sha256=args.verify_sha256,
                 )
+            
+            # 保存到 logbook（如果启用）
+            attachment_id = None
+            if (args.log_to_logbook or args.save_attachment) and args.item_id:
+                if not args.dry_run:
+                    attachment_id = add_to_attachments(
+                        conn=conn,
+                        item_id=args.item_id,
+                        result=result,
+                    )
+                else:
+                    logger.info("[DRY-RUN] 跳过保存到 logbook.attachments")
             
             # 提交事务（非 dry-run 模式）
             if not args.dry_run:
@@ -2248,10 +3839,16 @@ def main() -> int:
                 conn.rollback()
             
             # 输出结果
+            result_output = result.to_dict()
+            if attachment_id is not None:
+                result_output["attachment_id"] = attachment_id
+            
             if args.json:
-                print(json.dumps(result.to_dict(), default=str, ensure_ascii=False, indent=2))
+                print(json.dumps(result_output, default=str, ensure_ascii=False, indent=2))
             else:
                 print_report(result)
+                if attachment_id is not None:
+                    print(f"已保存到 logbook.attachments, attachment_id={attachment_id}")
             
             return 0 if result.total_errors == 0 else 1
             

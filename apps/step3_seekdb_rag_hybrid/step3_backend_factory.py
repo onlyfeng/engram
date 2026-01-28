@@ -120,7 +120,7 @@ Collection/Backend 契约结论（2026-01-28 整理）
 import argparse
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -271,6 +271,7 @@ class DualWriteConfig:
 DUAL_READ_STRATEGY_COMPARE = "compare"       # 同时查询两个后端并比较结果，返回 primary 结果
 DUAL_READ_STRATEGY_FALLBACK = "fallback"     # 优先使用 primary，失败或无结果时 fallback 到 shadow
 DUAL_READ_STRATEGY_SHADOW_ONLY = "shadow_only"  # 仅使用 shadow 后端
+DUAL_READ_STRATEGY_SHADOW_ONLY_COMPARE = "shadow_only_compare"  # 使用 shadow 返回结果，但仍与 primary 做对比记录
 
 
 @dataclass
@@ -294,6 +295,8 @@ class DualReadConfig:
         - compare: 同时查询两个后端并比较结果，返回 primary 结果，记录差异
         - fallback: 优先使用 primary，失败或无结果时 fallback 到 shadow
         - shadow_only: 仅使用 shadow 后端（用于验证 shadow 数据）
+        - shadow_only_compare: 使用 shadow 返回结果，但仍查询 primary 做对比记录
+          （用于切换验证：流量已切到 shadow，但仍需记录与 primary 差异以便回滚决策）
     
     双读关闭时行为:
         - 仅使用 primary 后端，完全保持现有行为零变化
@@ -317,6 +320,7 @@ class DualReadConfig:
     STRATEGY_COMPARE = DUAL_READ_STRATEGY_COMPARE
     STRATEGY_FALLBACK = DUAL_READ_STRATEGY_FALLBACK
     STRATEGY_SHADOW_ONLY = DUAL_READ_STRATEGY_SHADOW_ONLY
+    STRATEGY_SHADOW_ONLY_COMPARE = DUAL_READ_STRATEGY_SHADOW_ONLY_COMPARE
     
     @classmethod
     def from_env(cls, primary_strategy: str = COLLECTION_STRATEGY_PER_TABLE) -> "DualReadConfig":
@@ -334,7 +338,12 @@ class DualReadConfig:
         
         # 获取双读策略
         strategy = os.getenv("STEP3_PGVECTOR_DUAL_READ_STRATEGY", DUAL_READ_STRATEGY_COMPARE).lower().strip()
-        valid_read_strategies = (DUAL_READ_STRATEGY_COMPARE, DUAL_READ_STRATEGY_FALLBACK, DUAL_READ_STRATEGY_SHADOW_ONLY)
+        valid_read_strategies = (
+            DUAL_READ_STRATEGY_COMPARE,
+            DUAL_READ_STRATEGY_FALLBACK,
+            DUAL_READ_STRATEGY_SHADOW_ONLY,
+            DUAL_READ_STRATEGY_SHADOW_ONLY_COMPARE,
+        )
         if strategy not in valid_read_strategies:
             logger.warning(
                 f"无效的 STEP3_PGVECTOR_DUAL_READ_STRATEGY 值 '{strategy}'，"
@@ -1634,6 +1643,293 @@ def validate_backend_config(backend_type: Optional[BackendType] = None) -> bool:
     return False
 
 
+# ============ Shadow 后端就绪性校验 ============
+
+
+# 环境变量：Shadow 后端 doc_count 最小阈值
+# 切主或 shadow_only 模式时，检查 shadow 后端文档数是否达到此阈值
+# 默认 0 表示不检查文档数
+SHADOW_DOC_COUNT_MIN_THRESHOLD = int(os.getenv("STEP3_SHADOW_DOC_COUNT_MIN", "0"))
+
+# 环境变量：Shadow 后端 doc_count 相对阈值（相对于 primary 的比例）
+# 取值范围 0.0-1.0，默认 0.0 表示不检查比例
+# 例如 0.9 表示 shadow 文档数必须 >= primary 的 90%
+SHADOW_DOC_COUNT_RATIO_THRESHOLD = float(os.getenv("STEP3_SHADOW_DOC_COUNT_RATIO", "0.0"))
+
+
+@dataclass
+class ShadowReadinessResult:
+    """
+    Shadow 后端就绪性校验结果
+    
+    当启用 shadow_only 或计划切主时，执行此校验确保 shadow 后端已准备就绪。
+    
+    校验内容：
+    1. health_check: Shadow 后端健康检查
+    2. get_stats: Shadow 后端统计信息（doc_count 等）
+    3. doc_count 阈值: 文档数是否达到预期（可配置）
+    """
+    # 基本信息
+    shadow_backend_name: str = ""
+    collection_id: Optional[str] = None
+    
+    # 校验结果
+    ready: bool = False                     # 是否就绪
+    health_check_passed: bool = False       # health_check 是否通过
+    stats_available: bool = False           # get_stats 是否成功
+    doc_count_passed: bool = False          # doc_count 是否达到阈值
+    
+    # 详细信息
+    health_status: Optional[str] = None     # health_check 返回的状态
+    health_error: Optional[str] = None      # health_check 错误信息
+    doc_count: int = 0                      # shadow 后端文档数
+    primary_doc_count: Optional[int] = None # primary 后端文档数（用于比例计算）
+    stats_error: Optional[str] = None       # get_stats 错误信息
+    
+    # 阈值配置
+    doc_count_min_threshold: int = 0        # 最小文档数阈值
+    doc_count_ratio_threshold: float = 0.0  # 文档数比例阈值
+    
+    # Remediation 提示
+    remediation_hints: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "ready": self.ready,
+            "shadow_backend_name": self.shadow_backend_name,
+            "collection_id": self.collection_id,
+            "checks": {
+                "health_check_passed": self.health_check_passed,
+                "stats_available": self.stats_available,
+                "doc_count_passed": self.doc_count_passed,
+            },
+            "details": {
+                "health_status": self.health_status,
+                "health_error": self.health_error,
+                "doc_count": self.doc_count,
+                "primary_doc_count": self.primary_doc_count,
+                "stats_error": self.stats_error,
+            },
+            "thresholds": {
+                "doc_count_min": self.doc_count_min_threshold,
+                "doc_count_ratio": self.doc_count_ratio_threshold,
+            },
+            "remediation_hints": self.remediation_hints,
+        }
+
+
+def validate_shadow_readiness(
+    shadow_backend: "IndexBackend",
+    primary_backend: Optional["IndexBackend"] = None,
+    doc_count_min_threshold: Optional[int] = None,
+    doc_count_ratio_threshold: Optional[float] = None,
+) -> ShadowReadinessResult:
+    """
+    校验 Shadow 后端就绪性
+    
+    当启用 shadow_only 或计划切主时调用，确保 shadow 后端已准备就绪。
+    
+    校验流程：
+    1. 执行 health_check，检查后端是否健康
+    2. 执行 get_stats，获取统计信息
+    3. 检查 doc_count 是否达到阈值（绝对值或相对于 primary 的比例）
+    4. 生成可操作的 remediation 提示
+    
+    Args:
+        shadow_backend: Shadow 后端实例
+        primary_backend: Primary 后端实例（可选，用于比例计算）
+        doc_count_min_threshold: 最小文档数阈值，None 则从环境变量读取
+        doc_count_ratio_threshold: 文档数比例阈值，None 则从环境变量读取
+    
+    Returns:
+        ShadowReadinessResult 包含校验结果和 remediation 提示
+    
+    环境变量:
+        STEP3_SHADOW_DOC_COUNT_MIN=1000       # 最小文档数阈值
+        STEP3_SHADOW_DOC_COUNT_RATIO=0.9      # 文档数比例阈值（相对于 primary）
+    """
+    # 加载阈值配置
+    if doc_count_min_threshold is None:
+        doc_count_min_threshold = SHADOW_DOC_COUNT_MIN_THRESHOLD
+    if doc_count_ratio_threshold is None:
+        doc_count_ratio_threshold = SHADOW_DOC_COUNT_RATIO_THRESHOLD
+    
+    result = ShadowReadinessResult(
+        shadow_backend_name=getattr(shadow_backend, 'backend_name', 'unknown'),
+        collection_id=getattr(shadow_backend, 'collection_id', None) or getattr(shadow_backend, 'canonical_id', None),
+        doc_count_min_threshold=doc_count_min_threshold,
+        doc_count_ratio_threshold=doc_count_ratio_threshold,
+    )
+    
+    # 1. Health Check
+    if hasattr(shadow_backend, 'health_check'):
+        try:
+            health = shadow_backend.health_check()
+            if isinstance(health, dict):
+                result.health_status = health.get("status", "unknown")
+                result.health_check_passed = health.get("status") == "healthy"
+                # 从 health_check 获取 doc_count
+                if "details" in health and isinstance(health["details"], dict):
+                    result.doc_count = health["details"].get("doc_count", 0)
+            else:
+                result.health_check_passed = bool(health)
+                result.health_status = "healthy" if result.health_check_passed else "unhealthy"
+        except Exception as e:
+            result.health_error = str(e)
+            result.health_status = "error"
+            result.remediation_hints.append(
+                f"health_check 失败: {e}。请检查 shadow 后端连接配置 (STEP3_PGVECTOR_DSN)"
+            )
+    else:
+        # 无 health_check 方法，假定健康
+        result.health_check_passed = True
+        result.health_status = "assumed_healthy"
+    
+    # 2. Get Stats
+    if hasattr(shadow_backend, 'get_stats'):
+        try:
+            stats = shadow_backend.get_stats()
+            result.stats_available = True
+            if isinstance(stats, dict):
+                # 从 stats 获取 doc_count（可能覆盖 health_check 中的值）
+                result.doc_count = stats.get("total_docs", stats.get("doc_count", result.doc_count))
+        except Exception as e:
+            result.stats_error = str(e)
+            result.remediation_hints.append(
+                f"get_stats 失败: {e}。请检查 shadow 后端表结构是否已初始化"
+            )
+    else:
+        result.stats_available = True  # 无 get_stats 方法，跳过
+    
+    # 3. 获取 Primary 文档数（用于比例计算）
+    if primary_backend is not None and doc_count_ratio_threshold > 0:
+        if hasattr(primary_backend, 'get_stats'):
+            try:
+                primary_stats = primary_backend.get_stats()
+                if isinstance(primary_stats, dict):
+                    result.primary_doc_count = primary_stats.get("total_docs", primary_stats.get("doc_count", 0))
+            except Exception as e:
+                logger.warning(f"获取 primary 后端 stats 失败: {e}")
+        elif hasattr(primary_backend, 'health_check'):
+            try:
+                primary_health = primary_backend.health_check()
+                if isinstance(primary_health, dict) and "details" in primary_health:
+                    result.primary_doc_count = primary_health["details"].get("doc_count", 0)
+            except Exception as e:
+                logger.warning(f"获取 primary 后端 health_check 失败: {e}")
+    
+    # 4. 检查 doc_count 阈值
+    result.doc_count_passed = True  # 默认通过
+    
+    # 4.1 检查绝对阈值
+    if doc_count_min_threshold > 0:
+        if result.doc_count < doc_count_min_threshold:
+            result.doc_count_passed = False
+            result.remediation_hints.append(
+                f"Shadow 文档数 ({result.doc_count}) 低于阈值 ({doc_count_min_threshold})。"
+                f"建议操作:\n"
+                f"  1. 开启 dual-write 同步数据: STEP3_PGVECTOR_DUAL_WRITE=1\n"
+                f"  2. 执行全量重建: python -m seek_indexer --mode full\n"
+                f"  3. 或回放迁移脚本补齐数据"
+            )
+    
+    # 4.2 检查比例阈值
+    if doc_count_ratio_threshold > 0 and result.primary_doc_count is not None and result.primary_doc_count > 0:
+        actual_ratio = result.doc_count / result.primary_doc_count
+        if actual_ratio < doc_count_ratio_threshold:
+            result.doc_count_passed = False
+            result.remediation_hints.append(
+                f"Shadow 文档数比例 ({actual_ratio:.2%}) 低于阈值 ({doc_count_ratio_threshold:.0%})。"
+                f"Shadow: {result.doc_count}, Primary: {result.primary_doc_count}。"
+                f"建议操作:\n"
+                f"  1. 开启 dual-write 同步数据: STEP3_PGVECTOR_DUAL_WRITE=1\n"
+                f"  2. 执行全量重建: python -m seek_indexer --mode full\n"
+                f"  3. 或回放迁移脚本补齐数据"
+            )
+    
+    # 5. 综合判定
+    result.ready = (
+        result.health_check_passed
+        and result.stats_available
+        and result.doc_count_passed
+    )
+    
+    # 6. 添加未就绪的通用提示
+    if not result.ready:
+        if not result.health_check_passed:
+            if not result.health_error:  # 没有具体错误时添加通用提示
+                result.remediation_hints.append(
+                    "Shadow 后端健康检查未通过。请检查:\n"
+                    "  1. 数据库连接是否正常\n"
+                    "  2. pgvector 扩展是否已安装\n"
+                    "  3. 表结构是否已初始化"
+                )
+    
+    return result
+
+
+def format_shadow_readiness_report(result: ShadowReadinessResult) -> str:
+    """
+    格式化 Shadow 就绪性报告（文本格式）
+    
+    Args:
+        result: ShadowReadinessResult 实例
+    
+    Returns:
+        格式化的报告文本
+    """
+    lines = [
+        "",
+        "=" * 60,
+        "Shadow 后端就绪性检查报告",
+        "=" * 60,
+        "",
+        f"【基本信息】",
+        f"  后端: {result.shadow_backend_name}",
+        f"  Collection: {result.collection_id or '(未指定)'}",
+        "",
+        f"【校验结果】",
+        f"  就绪状态: {'是' if result.ready else '否'}",
+        f"  健康检查: {'通过' if result.health_check_passed else '失败'} ({result.health_status or '未知'})",
+        f"  统计可用: {'是' if result.stats_available else '否'}",
+        f"  文档数检查: {'通过' if result.doc_count_passed else '失败'}",
+        "",
+        f"【统计信息】",
+        f"  Shadow 文档数: {result.doc_count}",
+    ]
+    
+    if result.primary_doc_count is not None:
+        ratio = result.doc_count / result.primary_doc_count if result.primary_doc_count > 0 else 0
+        lines.append(f"  Primary 文档数: {result.primary_doc_count}")
+        lines.append(f"  文档数比例: {ratio:.2%}")
+    
+    if result.health_error:
+        lines.append(f"\n【错误详情】")
+        lines.append(f"  健康检查错误: {result.health_error}")
+    
+    if result.stats_error:
+        if not result.health_error:
+            lines.append(f"\n【错误详情】")
+        lines.append(f"  统计获取错误: {result.stats_error}")
+    
+    if result.doc_count_min_threshold > 0 or result.doc_count_ratio_threshold > 0:
+        lines.append(f"\n【阈值配置】")
+        if result.doc_count_min_threshold > 0:
+            lines.append(f"  最小文档数: {result.doc_count_min_threshold}")
+        if result.doc_count_ratio_threshold > 0:
+            lines.append(f"  文档数比例: {result.doc_count_ratio_threshold:.0%}")
+    
+    if result.remediation_hints:
+        lines.append(f"\n【Remediation 建议】")
+        for i, hint in enumerate(result.remediation_hints, 1):
+            lines.append(f"  {i}. {hint}")
+    
+    lines.extend(["", "=" * 60, ""])
+    
+    return "\n".join(lines)
+
+
 __all__ = [
     # 类型
     "BackendType",
@@ -1641,6 +1937,7 @@ __all__ = [
     "SeekDBConfig",
     "DualWriteConfig",
     "DualReadConfig",
+    "ShadowReadinessResult",
     # Collection 策略常量
     "COLLECTION_STRATEGY_PER_TABLE",
     "COLLECTION_STRATEGY_SINGLE_TABLE",
@@ -1649,6 +1946,10 @@ __all__ = [
     "DUAL_READ_STRATEGY_COMPARE",
     "DUAL_READ_STRATEGY_FALLBACK",
     "DUAL_READ_STRATEGY_SHADOW_ONLY",
+    "DUAL_READ_STRATEGY_SHADOW_ONLY_COMPARE",
+    # Shadow 就绪性校验阈值
+    "SHADOW_DOC_COUNT_MIN_THRESHOLD",
+    "SHADOW_DOC_COUNT_RATIO_THRESHOLD",
     # 工厂函数
     "create_backend_from_env",
     "create_backend_from_args",
@@ -1657,6 +1958,9 @@ __all__ = [
     "create_shadow_backend",
     "create_shadow_backend_for_read",
     "create_dual_write_backends",
+    # Shadow 就绪性校验函数
+    "validate_shadow_readiness",
+    "format_shadow_readiness_report",
     "create_dual_read_backends",
     # CLI 支持
     "add_backend_arguments",

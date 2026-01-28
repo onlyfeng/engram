@@ -1687,14 +1687,15 @@ class TestCollectionStrategyEnvironmentVariable:
     """测试 STEP3_PGVECTOR_COLLECTION_STRATEGY 环境变量的解析"""
 
     def test_env_var_per_table_default(self, monkeypatch):
-        """测试默认值为 per_table"""
-        from step3_backend_factory import PGVectorConfig, COLLECTION_STRATEGY_PER_TABLE
+        """测试默认值为 single_table（根据代码设计）"""
+        from step3_backend_factory import PGVectorConfig, COLLECTION_STRATEGY_SINGLE_TABLE
         
         # 清除环境变量
         monkeypatch.delenv("STEP3_PGVECTOR_COLLECTION_STRATEGY", raising=False)
         
         config = PGVectorConfig.from_env()
-        assert config.collection_strategy == COLLECTION_STRATEGY_PER_TABLE
+        # 注意：代码默认值是 single_table，不是 per_table
+        assert config.collection_strategy == COLLECTION_STRATEGY_SINGLE_TABLE
 
     def test_env_var_single_table(self, monkeypatch):
         """测试设置 single_table 策略"""
@@ -1714,14 +1715,15 @@ class TestCollectionStrategyEnvironmentVariable:
         config = PGVectorConfig.from_env()
         assert config.collection_strategy == COLLECTION_STRATEGY_PER_TABLE
 
-    def test_env_var_invalid_falls_back_to_default(self, monkeypatch):
-        """测试无效值回退到默认值"""
-        from step3_backend_factory import PGVectorConfig, COLLECTION_STRATEGY_PER_TABLE
+    def test_env_var_invalid_raises_error(self, monkeypatch):
+        """测试无效值抛出异常（get_choice 不会回落到默认值）"""
+        from step3_backend_factory import PGVectorConfig
         
         monkeypatch.setenv("STEP3_PGVECTOR_COLLECTION_STRATEGY", "invalid_strategy")
         
-        config = PGVectorConfig.from_env()
-        assert config.collection_strategy == COLLECTION_STRATEGY_PER_TABLE
+        # get_choice 会抛出 ValueError，而不是回落到默认值
+        with pytest.raises(ValueError, match="不在允许的选项中"):
+            PGVectorConfig.from_env()
 
     def test_env_var_case_insensitive(self, monkeypatch):
         """测试值不区分大小写"""

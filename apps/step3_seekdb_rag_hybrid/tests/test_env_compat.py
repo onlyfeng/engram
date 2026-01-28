@@ -735,5 +735,454 @@ class TestDeprecationWarnings:
         assert "废弃" in msg or "deprecated" in msg.lower()
 
 
+# ============ IndexSourcePolicy 测试 ============
+
+
+class TestIndexSourcePolicy:
+    """IndexSourcePolicy 测试"""
+    
+    def test_default_policy(self):
+        """测试默认策略"""
+        from step3_seekdb_rag_hybrid.index_source_policy import (
+            IndexSourcePolicy,
+            DEFAULT_POLICY_VERSION,
+            DEFAULT_FORMATS,
+            DEFAULT_KINDS,
+            DEFAULT_MAX_SIZE_BYTES,
+            DEFAULT_SKIP_BULK,
+        )
+        
+        policy = IndexSourcePolicy()
+        
+        assert policy.version == DEFAULT_POLICY_VERSION
+        assert policy.formats == DEFAULT_FORMATS
+        assert policy.kinds == DEFAULT_KINDS
+        assert policy.max_size_bytes == DEFAULT_MAX_SIZE_BYTES
+        assert policy.skip_bulk == DEFAULT_SKIP_BULK
+    
+    def test_policy_hash_consistency(self):
+        """测试相同配置产生相同的哈希值"""
+        from step3_seekdb_rag_hybrid.index_source_policy import IndexSourcePolicy
+        
+        policy1 = IndexSourcePolicy()
+        policy2 = IndexSourcePolicy()
+        
+        assert policy1.compute_hash() == policy2.compute_hash()
+    
+    def test_policy_hash_changes_with_config(self):
+        """测试不同配置产生不同的哈希值"""
+        from step3_seekdb_rag_hybrid.index_source_policy import IndexSourcePolicy
+        
+        policy1 = IndexSourcePolicy()
+        policy2 = IndexSourcePolicy(skip_bulk=False)
+        
+        assert policy1.compute_hash() != policy2.compute_hash()
+    
+    def test_filter_patch_blob_format_not_allowed(self):
+        """测试 patch_blob 格式过滤"""
+        from step3_seekdb_rag_hybrid.index_source_policy import (
+            IndexSourcePolicy,
+            SkipReason,
+        )
+        
+        policy = IndexSourcePolicy(formats=["diff", "patch"])
+        
+        row = {
+            "blob_id": 1,
+            "uri": "memory://blobs/1/abc",
+            "format": "binary",
+            "size_bytes": 1000,
+            "is_bulk": False,
+        }
+        
+        result = policy.filter_patch_blob(row)
+        
+        assert not result.accepted
+        assert result.skip_reason == SkipReason.FORMAT_NOT_ALLOWED
+        assert "binary" in result.skip_details
+    
+    def test_filter_patch_blob_size_exceeded(self):
+        """测试 patch_blob 大小限制"""
+        from step3_seekdb_rag_hybrid.index_source_policy import (
+            IndexSourcePolicy,
+            SkipReason,
+        )
+        
+        policy = IndexSourcePolicy(max_size_bytes=1000)
+        
+        row = {
+            "blob_id": 1,
+            "uri": "memory://blobs/1/abc",
+            "format": "diff",
+            "size_bytes": 2000,
+            "is_bulk": False,
+        }
+        
+        result = policy.filter_patch_blob(row)
+        
+        assert not result.accepted
+        assert result.skip_reason == SkipReason.SIZE_EXCEEDED
+    
+    def test_filter_patch_blob_bulk_commit(self):
+        """测试 patch_blob 批量提交跳过"""
+        from step3_seekdb_rag_hybrid.index_source_policy import (
+            IndexSourcePolicy,
+            SkipReason,
+        )
+        
+        policy = IndexSourcePolicy(skip_bulk=True)
+        
+        row = {
+            "blob_id": 1,
+            "uri": "memory://blobs/1/abc",
+            "format": "diff",
+            "size_bytes": 1000,
+            "is_bulk": True,
+        }
+        
+        result = policy.filter_patch_blob(row)
+        
+        assert not result.accepted
+        assert result.skip_reason == SkipReason.BULK_COMMIT
+    
+    def test_filter_patch_blob_accepted(self):
+        """测试 patch_blob 正常通过"""
+        from step3_seekdb_rag_hybrid.index_source_policy import IndexSourcePolicy
+        
+        policy = IndexSourcePolicy()
+        
+        row = {
+            "blob_id": 1,
+            "uri": "memory://blobs/1/abc",
+            "format": "diff",
+            "size_bytes": 1000,
+            "is_bulk": False,
+        }
+        
+        result = policy.filter_patch_blob(row)
+        
+        assert result.accepted
+        assert result.skip_reason == ""
+    
+    def test_filter_attachment_kind_not_allowed(self):
+        """测试 attachment 类型过滤"""
+        from step3_seekdb_rag_hybrid.index_source_policy import (
+            IndexSourcePolicy,
+            SkipReason,
+        )
+        
+        policy = IndexSourcePolicy(kinds=["patch", "log"])
+        
+        row = {
+            "attachment_id": 1,
+            "uri": "memory://attachments/1/abc",
+            "kind": "image",
+            "size_bytes": 1000,
+        }
+        
+        result = policy.filter_attachment(row)
+        
+        assert not result.accepted
+        assert result.skip_reason == SkipReason.KIND_NOT_ALLOWED
+        assert "image" in result.skip_details
+    
+    def test_filter_attachment_accepted(self):
+        """测试 attachment 正常通过"""
+        from step3_seekdb_rag_hybrid.index_source_policy import IndexSourcePolicy
+        
+        policy = IndexSourcePolicy()
+        
+        row = {
+            "attachment_id": 1,
+            "uri": "memory://attachments/1/abc",
+            "kind": "patch",
+            "size_bytes": 1000,
+        }
+        
+        result = policy.filter_attachment(row)
+        
+        assert result.accepted
+    
+    def test_filter_no_uri(self):
+        """测试无 URI 的记录"""
+        from step3_seekdb_rag_hybrid.index_source_policy import (
+            IndexSourcePolicy,
+            SkipReason,
+        )
+        
+        policy = IndexSourcePolicy()
+        
+        # 测试 patch_blob
+        blob_result = policy.filter_patch_blob({"blob_id": 1, "format": "diff"})
+        assert not blob_result.accepted
+        assert blob_result.skip_reason == SkipReason.NO_URI
+        
+        # 测试 attachment
+        att_result = policy.filter_attachment({"attachment_id": 1, "kind": "patch"})
+        assert not att_result.accepted
+        assert att_result.skip_reason == SkipReason.NO_URI
+    
+    def test_get_metadata(self):
+        """测试获取策略元信息"""
+        from step3_seekdb_rag_hybrid.index_source_policy import IndexSourcePolicy
+        
+        policy = IndexSourcePolicy(version="2.0")
+        
+        meta = policy.get_metadata()
+        
+        assert meta["policy_version"] == "2.0"
+        assert "policy_hash" in meta
+        assert len(meta["policy_hash"]) == 16  # SHA256 前 16 位
+    
+    def test_to_dict(self):
+        """测试转换为字典"""
+        from step3_seekdb_rag_hybrid.index_source_policy import IndexSourcePolicy
+        
+        policy = IndexSourcePolicy()
+        
+        d = policy.to_dict()
+        
+        assert "version" in d
+        assert "formats" in d
+        assert "kinds" in d
+        assert "max_size_bytes" in d
+        assert "skip_bulk" in d
+        assert "hash" in d
+
+
+class TestCreatePolicyFromEnv:
+    """create_policy_from_env 测试"""
+    
+    def test_default_values(self):
+        """测试从环境变量创建策略（默认值）"""
+        from step3_seekdb_rag_hybrid.index_source_policy import (
+            create_policy_from_env,
+            DEFAULT_POLICY_VERSION,
+            DEFAULT_FORMATS,
+            DEFAULT_KINDS,
+            DEFAULT_MAX_SIZE_BYTES,
+            DEFAULT_SKIP_BULK,
+        )
+        
+        policy = create_policy_from_env()
+        
+        assert policy.version == DEFAULT_POLICY_VERSION
+        assert policy.formats == DEFAULT_FORMATS
+        assert policy.kinds == DEFAULT_KINDS
+        assert policy.max_size_bytes == DEFAULT_MAX_SIZE_BYTES
+        assert policy.skip_bulk == DEFAULT_SKIP_BULK
+    
+    def test_env_override_formats(self, monkeypatch):
+        """测试环境变量覆盖 formats"""
+        from step3_seekdb_rag_hybrid.index_source_policy import create_policy_from_env
+        
+        monkeypatch.setenv("STEP3_INDEX_POLICY_FORMATS", "diff,log")
+        
+        policy = create_policy_from_env()
+        
+        assert policy.formats == ["diff", "log"]
+    
+    def test_env_override_kinds(self, monkeypatch):
+        """测试环境变量覆盖 kinds"""
+        from step3_seekdb_rag_hybrid.index_source_policy import create_policy_from_env
+        
+        monkeypatch.setenv("STEP3_INDEX_POLICY_KINDS", "patch,spec")
+        
+        policy = create_policy_from_env()
+        
+        assert policy.kinds == ["patch", "spec"]
+    
+    def test_env_override_max_size(self, monkeypatch):
+        """测试环境变量覆盖 max_size"""
+        from step3_seekdb_rag_hybrid.index_source_policy import create_policy_from_env
+        
+        monkeypatch.setenv("STEP3_INDEX_POLICY_MAX_SIZE", "5000")
+        
+        policy = create_policy_from_env()
+        
+        assert policy.max_size_bytes == 5000
+    
+    def test_env_override_skip_bulk(self, monkeypatch):
+        """测试环境变量覆盖 skip_bulk"""
+        from step3_seekdb_rag_hybrid.index_source_policy import create_policy_from_env
+        
+        monkeypatch.setenv("STEP3_INDEX_POLICY_SKIP_BULK", "false")
+        
+        policy = create_policy_from_env()
+        
+        assert policy.skip_bulk is False
+    
+    def test_env_override_version(self, monkeypatch):
+        """测试环境变量覆盖 version"""
+        from step3_seekdb_rag_hybrid.index_source_policy import create_policy_from_env
+        
+        monkeypatch.setenv("STEP3_INDEX_POLICY_VERSION", "2.0")
+        
+        policy = create_policy_from_env()
+        
+        assert policy.version == "2.0"
+    
+    def test_cli_override_env(self, monkeypatch):
+        """测试 CLI 参数优先于环境变量"""
+        from step3_seekdb_rag_hybrid.index_source_policy import create_policy_from_env
+        
+        monkeypatch.setenv("STEP3_INDEX_POLICY_FORMATS", "diff,log")
+        
+        policy = create_policy_from_env(cli_formats=["patch"])
+        
+        assert policy.formats == ["patch"]
+
+
+# ============ STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH 测试 ============
+
+
+class TestActiveCollectionSwitchBlocked:
+    """STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH 环境变量测试"""
+    
+    def test_default_is_blocked(self, monkeypatch):
+        """测试默认情况下切换被阻止"""
+        monkeypatch.delenv("STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH", raising=False)
+        
+        # 重新加载模块以获取最新的环境变量值
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        assert seek_indexer.ALLOW_ACTIVE_COLLECTION_SWITCH is False
+        assert seek_indexer.is_active_collection_switch_allowed() is False
+    
+    def test_enabled_with_1(self, monkeypatch):
+        """测试 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1 启用"""
+        monkeypatch.setenv("STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH", "1")
+        
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        assert seek_indexer.ALLOW_ACTIVE_COLLECTION_SWITCH is True
+        assert seek_indexer.is_active_collection_switch_allowed() is True
+    
+    def test_enabled_with_true(self, monkeypatch):
+        """测试 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=true 启用"""
+        monkeypatch.setenv("STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH", "true")
+        
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        assert seek_indexer.ALLOW_ACTIVE_COLLECTION_SWITCH is True
+    
+    def test_check_raises_when_blocked(self, monkeypatch):
+        """测试阻止时抛出异常"""
+        monkeypatch.delenv("STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH", raising=False)
+        
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        with pytest.raises(seek_indexer.ActiveCollectionSwitchBlockedError) as exc_info:
+            seek_indexer.check_active_collection_switch_allowed("activate", "test_collection")
+        
+        error = exc_info.value
+        assert error.operation == "activate"
+        assert error.collection == "test_collection"
+        assert "STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH" in str(error)
+    
+    def test_check_passes_when_allowed(self, monkeypatch):
+        """测试允许时不抛出异常"""
+        monkeypatch.setenv("STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH", "1")
+        
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        # 不应抛出异常
+        seek_indexer.check_active_collection_switch_allowed("rollback", "test_collection")
+    
+    def test_error_to_dict_contains_instructions(self, monkeypatch):
+        """测试错误转换为字典包含启用说明"""
+        monkeypatch.delenv("STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH", raising=False)
+        
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        error = seek_indexer.ActiveCollectionSwitchBlockedError("activate", "my_collection")
+        error_dict = error.to_dict()
+        
+        assert error_dict["error"] == "active_collection_switch_blocked"
+        assert error_dict["operation"] == "activate"
+        assert error_dict["target_collection"] == "my_collection"
+        assert "how_to_enable" in error_dict
+        assert "STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1" in error_dict["how_to_enable"]
+        assert "manual_commands" in error_dict
+        assert "activate" in error_dict["manual_commands"]
+        assert "rollback" in error_dict["manual_commands"]
+        assert "show_current" in error_dict["manual_commands"]
+    
+    def test_rollback_blocked_error_to_dict(self, monkeypatch):
+        """测试 rollback 操作阻止时的错误信息"""
+        monkeypatch.delenv("STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH", raising=False)
+        
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        error = seek_indexer.ActiveCollectionSwitchBlockedError("rollback", "old_collection")
+        error_dict = error.to_dict()
+        
+        assert error_dict["operation"] == "rollback"
+        assert "old_collection" in error_dict["manual_commands"]["rollback"]
+
+
+class TestValidateSwitchResultBlocked:
+    """ValidateSwitchResult 激活被阻止测试"""
+    
+    def test_result_success_false_when_blocked(self, monkeypatch):
+        """测试激活被阻止时 success=False"""
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        result = seek_indexer.ValidateSwitchResult(
+            backend_name="pgvector",
+            candidate_collection="test:v1:bge-m3:20260129",
+            gate_result="pass",
+            activate_requested=True,
+            activated=False,
+            activation_blocked=True,
+            activation_blocked_info={
+                "error": "active_collection_switch_blocked",
+                "how_to_enable": "设置 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH=1",
+            },
+        )
+        
+        result_dict = result.to_dict()
+        
+        assert result_dict["success"] is False
+        assert result_dict["activation"]["blocked"] is True
+        assert result_dict["activation"]["blocked_info"] is not None
+    
+    def test_result_success_true_when_not_blocked(self, monkeypatch):
+        """测试激活成功时 success=True"""
+        import importlib
+        import seek_indexer
+        importlib.reload(seek_indexer)
+        
+        result = seek_indexer.ValidateSwitchResult(
+            backend_name="pgvector",
+            candidate_collection="test:v1:bge-m3:20260129",
+            gate_result="pass",
+            activate_requested=True,
+            activated=True,
+            activation_blocked=False,
+        )
+        
+        result_dict = result.to_dict()
+        
+        assert result_dict["success"] is True
+        assert result_dict["activation"]["blocked"] is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

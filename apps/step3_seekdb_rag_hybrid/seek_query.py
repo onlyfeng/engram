@@ -12,6 +12,7 @@ seek_query.py - Step3 证据检索工具
 输入参数：
     --query: 查询文本
     --query-file: 从文件读取查询（每行一个）
+    --query-set: 使用内置查询集（如 nightly_default）
     --project-key: 项目标识过滤
     --source-type: 来源类型过滤（svn/git/logbook）
     --owner: 所有者过滤
@@ -36,13 +37,17 @@ seek_query.py - Step3 证据检索工具
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
+
+import psycopg
 
 # 导入 Step1 模块
 from engram_step1.config import add_config_argument, get_config
@@ -74,6 +79,11 @@ from step3_seekdb_rag_hybrid.step3_backend_factory import (
     get_backend_info,
     DualReadConfig,
     PGVectorConfig,
+    DUAL_READ_STRATEGY_SHADOW_ONLY_COMPARE,
+    # Shadow 就绪性校验
+    ShadowReadinessResult,
+    validate_shadow_readiness,
+    format_shadow_readiness_report,
 )
 from step3_seekdb_rag_hybrid.dual_read_compare import (
     CompareThresholds,
@@ -83,6 +93,10 @@ from step3_seekdb_rag_hybrid.dual_read_compare import (
     ViolationDetail,
     RankingDriftMetrics,
     ScoreDriftMetrics,
+    ThresholdsSource,
+    THRESHOLD_SOURCE_DEFAULT,
+    THRESHOLD_SOURCE_ENV,
+    THRESHOLD_SOURCE_CLI,
     compute_ranking_drift,
     compute_score_drift,
     evaluate_with_report,
@@ -114,6 +128,21 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+# ============ 内置查询集定义 ============
+# 预定义的查询集，可通过 --query-set 参数调用
+# 用于 CI/CD 流程中避免在 YAML 中维护查询数组
+BUILTIN_QUERY_SETS: Dict[str, List[str]] = {
+    # Nightly dual-read 一致性测试默认查询集
+    "nightly_default": [
+        "bug fix",
+        "性能优化",
+        "数据库连接",
+        "内存泄漏",
+        "安全漏洞修复",
+    ],
+}
 
 
 # ============ 数据结构 ============
@@ -179,6 +208,77 @@ class QueryFilters:
             "time_range_start": self.time_range_start,
             "time_range_end": self.time_range_end,
         }
+
+
+@dataclass
+class RetrievalContext:
+    """
+    检索上下文信息
+    
+    包含检索过程中使用的后端配置、embedding 模型信息、hybrid 配置等。
+    用于追溯和调试检索结果的可再现性。
+    
+    字段说明:
+        - backend_name: 后端名称（pgvector/seekdb）
+        - backend_config: 后端配置摘要（不含敏感信息如密码）
+        - collection_id: resolved 后的最终 collection_id（冒号格式）
+        - embedding_model_id: embedding 模型标识
+        - embedding_dim: embedding 向量维度
+        - embedding_normalize: embedding 是否归一化
+        - hybrid_config: hybrid 检索配置（vector_weight/text_weight 等）
+        - query_request: 查询请求参数（top_k/min_score/filters DSL）
+    """
+    # 后端信息
+    backend_name: Optional[str] = None
+    backend_config: Optional[Dict[str, Any]] = None
+    collection_id: Optional[str] = None
+    
+    # Embedding 模型信息
+    embedding_model_id: Optional[str] = None
+    embedding_dim: Optional[int] = None
+    embedding_normalize: Optional[bool] = None
+    
+    # Hybrid 检索配置
+    hybrid_config: Optional[Dict[str, Any]] = None
+    
+    # 查询请求参数
+    query_request: Optional[Dict[str, Any]] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        转换为字典
+        
+        仅输出非 None 的字段，保持输出精简。
+        """
+        result: Dict[str, Any] = {}
+        
+        # 后端信息
+        if self.backend_name is not None:
+            result["backend_name"] = self.backend_name
+        if self.backend_config is not None:
+            result["backend_config"] = self.backend_config
+        if self.collection_id is not None:
+            result["collection_id"] = self.collection_id
+        
+        # Embedding 模型信息
+        if self.embedding_model_id is not None or self.embedding_dim is not None or self.embedding_normalize is not None:
+            result["embedding"] = {}
+            if self.embedding_model_id is not None:
+                result["embedding"]["model_id"] = self.embedding_model_id
+            if self.embedding_dim is not None:
+                result["embedding"]["dim"] = self.embedding_dim
+            if self.embedding_normalize is not None:
+                result["embedding"]["normalize"] = self.embedding_normalize
+        
+        # Hybrid 配置
+        if self.hybrid_config is not None:
+            result["hybrid_config"] = self.hybrid_config
+        
+        # 查询请求参数
+        if self.query_request is not None:
+            result["query_request"] = self.query_request
+        
+        return result
 
 
 @dataclass
@@ -326,6 +426,9 @@ class QueryResult:
     
     # 双读统计信息（仅当 --dual-read 启用时填充）
     dual_read_stats: Optional["DualReadStats"] = None
+    
+    # 检索上下文（后端配置、embedding 信息、hybrid 配置等）
+    retrieval_context: Optional[RetrievalContext] = None
 
     def to_evidence_packet(self, include_compare: bool = True, include_dual_read: bool = True) -> Dict[str, Any]:
         """
@@ -339,6 +442,7 @@ class QueryResult:
             - chunking_version: 分块版本
             - generated_at: 生成时间
             - result_count: 结果数量
+            - retrieval_context: 检索上下文（后端、embedding、hybrid 配置等）
             - compare_report: 双读比较报告（仅当启用时）
             - dual_read: 双读统计信息（仅当启用时）
         
@@ -362,6 +466,9 @@ class QueryResult:
             active_filters = {k: v for k, v in filter_dict.items() if v is not None}
             if active_filters:
                 packet["filters"] = active_filters
+        # 追加检索上下文（仅当有上下文信息时）
+        if self.retrieval_context is not None:
+            packet["retrieval_context"] = self.retrieval_context.to_dict()
         # 追加双读比较报告（仅当启用且有报告时）
         if include_compare and self.compare_report is not None:
             packet["compare_report"] = self.compare_report.to_dict()
@@ -386,6 +493,7 @@ class QueryResult:
             - chunking_version: 分块版本
             - timing: 耗时统计
             - embedding: Embedding 模型信息（可选）
+            - retrieval_context: 检索上下文（可选）
             - error: 错误信息（可选）
             - compare_report: 双读比较报告（仅当启用时）
             - dual_read: 双读统计信息（仅当启用时）
@@ -413,6 +521,9 @@ class QueryResult:
                 "model_id": self.embedding_model_id,
                 "dim": self.embedding_dim,
             }
+        # 追加检索上下文（仅当有上下文信息时）
+        if self.retrieval_context is not None:
+            result["retrieval_context"] = self.retrieval_context.to_dict()
         if self.error:
             result["error"] = self.error
         # 追加双读比较报告（仅当启用且有报告时）
@@ -571,6 +682,58 @@ def get_embedding_provider_instance() -> Optional[EmbeddingProvider]:
     return _embedding_provider
 
 
+# ============ 超时执行辅助函数 ============
+
+
+class ShadowQueryTimeoutError(Exception):
+    """Shadow 查询超时错误"""
+    def __init__(self, timeout_ms: int, message: str = "Shadow 查询超时"):
+        self.timeout_ms = timeout_ms
+        self.message = message
+        super().__init__(f"{message} (timeout_ms={timeout_ms})")
+
+
+def execute_with_timeout(
+    func: Callable,
+    timeout_ms: int,
+    *args,
+    **kwargs,
+):
+    """
+    使用线程池执行函数并在超时后中止等待
+    
+    注意：这只是停止等待结果，后台线程可能仍在运行。
+    对于数据库查询，建议配合 statement_timeout 使用以确保资源释放。
+    
+    Args:
+        func: 要执行的函数
+        timeout_ms: 超时时间（毫秒）
+        *args: 传递给 func 的位置参数
+        **kwargs: 传递给 func 的关键字参数
+    
+    Returns:
+        func 的返回值
+    
+    Raises:
+        ShadowQueryTimeoutError: 超时
+        Exception: func 抛出的原始异常
+    """
+    if timeout_ms <= 0:
+        # 无超时限制，直接执行
+        return func(*args, **kwargs)
+    
+    timeout_seconds = timeout_ms / 1000.0
+    
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            # 注意：无法真正取消正在执行的数据库查询
+            # 后台线程会继续运行直到查询完成或 statement_timeout 生效
+            raise ShadowQueryTimeoutError(timeout_ms)
+
+
 # ============ 检索函数 ============
 
 
@@ -706,6 +869,35 @@ def _compare_results(
 
 
 @dataclass
+class GateProfile:
+    """
+    门禁阈值 Profile 信息
+    
+    追踪门禁阈值的来源、名称和版本信息，用于审计和调试。
+    """
+    name: str = "dual_read_gate"                # Profile 名称
+    version: str = "1.0"                        # Profile 版本
+    source: str = THRESHOLD_SOURCE_DEFAULT      # 来源标识（default/env/cli）
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "source": self.source,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "GateProfile":
+        """从字典构建 GateProfile"""
+        return cls(
+            name=data.get("name", "dual_read_gate"),
+            version=data.get("version", "1.0"),
+            source=data.get("source", THRESHOLD_SOURCE_DEFAULT),
+        )
+
+
+@dataclass
 class DualReadGateThresholds:
     """
     双读门禁阈值配置
@@ -716,6 +908,7 @@ class DualReadGateThresholds:
     max_only_primary: Optional[int] = None       # only_primary 数量上限
     max_only_shadow: Optional[int] = None        # only_shadow 数量上限
     max_score_drift: Optional[float] = None      # score_diff_max 最大阈值
+    profile: Optional[GateProfile] = None        # Profile 信息（来源追踪）
     
     def has_thresholds(self) -> bool:
         """是否配置了任何阈值"""
@@ -725,6 +918,48 @@ class DualReadGateThresholds:
             self.max_only_shadow is not None,
             self.max_score_drift is not None,
         ])
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        转换为字典格式
+        
+        输出格式（保留兼容字段）：
+        {
+            "min_overlap": ...,         # 兼容字段
+            "max_only_primary": ...,    # 兼容字段
+            "max_only_shadow": ...,     # 兼容字段
+            "max_score_drift": ...,     # 兼容字段
+            "source": ...,              # 兼容字段
+            "profile": {                # 新增字段
+                "name": ...,
+                "version": ...,
+                "source": ...,
+            }
+        }
+        """
+        result: Dict[str, Any] = {}
+        
+        # 保留兼容字段（现有 consumers 期望的 keys）
+        if self.min_overlap is not None:
+            result["min_overlap"] = self.min_overlap
+        if self.max_only_primary is not None:
+            result["max_only_primary"] = self.max_only_primary
+        if self.max_only_shadow is not None:
+            result["max_only_shadow"] = self.max_only_shadow
+        if self.max_score_drift is not None:
+            result["max_score_drift"] = self.max_score_drift
+        
+        # 兼容字段：source（从 profile 提取）
+        if self.profile is not None:
+            result["source"] = self.profile.source
+            # 新增字段：profile 完整信息
+            result["profile"] = self.profile.to_dict()
+        else:
+            result["source"] = THRESHOLD_SOURCE_DEFAULT
+            # 即使没有 profile，也提供默认 profile 信息
+            result["profile"] = GateProfile().to_dict()
+        
+        return result
 
 
 @dataclass
@@ -733,8 +968,8 @@ class DualReadGateViolation:
     门禁违规详情
     """
     check_name: str           # 检查项名称
-    threshold: float          # 阈值
-    actual: float             # 实际值
+    threshold_value: float    # 阈值
+    actual_value: float       # 实际值
     message: str              # 描述信息
 
 
@@ -767,8 +1002,8 @@ class DualReadGateResult:
             result["violations"] = [
                 {
                     "check": v.check_name,
-                    "threshold": v.threshold,
-                    "actual": v.actual,
+                    "threshold": v.threshold_value,
+                    "actual": v.actual_value,
                     "message": v.message,
                 }
                 for v in self.violations
@@ -807,8 +1042,8 @@ def check_dual_read_gate(
         if stats.overlap_ratio < thresholds.min_overlap:
             violations.append(DualReadGateViolation(
                 check_name="min_overlap",
-                threshold=thresholds.min_overlap,
-                actual=stats.overlap_ratio,
+                threshold_value=thresholds.min_overlap,
+                actual_value=stats.overlap_ratio,
                 message=f"重叠率 {stats.overlap_ratio:.4f} 低于阈值 {thresholds.min_overlap}",
             ))
     
@@ -818,8 +1053,8 @@ def check_dual_read_gate(
         if only_primary_count > thresholds.max_only_primary:
             violations.append(DualReadGateViolation(
                 check_name="max_only_primary",
-                threshold=float(thresholds.max_only_primary),
-                actual=float(only_primary_count),
+                threshold_value=float(thresholds.max_only_primary),
+                actual_value=float(only_primary_count),
                 message=f"仅 primary 数量 {only_primary_count} 超过阈值 {thresholds.max_only_primary}",
             ))
     
@@ -829,8 +1064,8 @@ def check_dual_read_gate(
         if only_shadow_count > thresholds.max_only_shadow:
             violations.append(DualReadGateViolation(
                 check_name="max_only_shadow",
-                threshold=float(thresholds.max_only_shadow),
-                actual=float(only_shadow_count),
+                threshold_value=float(thresholds.max_only_shadow),
+                actual_value=float(only_shadow_count),
                 message=f"仅 shadow 数量 {only_shadow_count} 超过阈值 {thresholds.max_only_shadow}",
             ))
     
@@ -839,8 +1074,8 @@ def check_dual_read_gate(
         if stats.score_diff_max > thresholds.max_score_drift:
             violations.append(DualReadGateViolation(
                 check_name="max_score_drift",
-                threshold=thresholds.max_score_drift,
-                actual=stats.score_diff_max,
+                threshold_value=thresholds.max_score_drift,
+                actual_value=stats.score_diff_max,
                 message=f"最大分数漂移 {stats.score_diff_max:.4f} 超过阈值 {thresholds.max_score_drift}",
             ))
     
@@ -848,6 +1083,336 @@ def check_dual_read_gate(
     result.passed = len(violations) == 0
     
     return result
+
+
+@dataclass
+class ViolationSummary:
+    """
+    违规项聚合统计
+    
+    统计各类违规的触发次数和详情。
+    """
+    # 各 check_name 的触发计数（如 {"overlap": 3, "rbo": 2}）
+    by_check: Dict[str, int] = field(default_factory=dict)
+    
+    # 各级别的触发计数（如 {"fail": 2, "warn": 3}）
+    by_level: Dict[str, int] = field(default_factory=dict)
+    
+    # 触发项明细列表（最多保留前 N 个）
+    details: List[Dict[str, Any]] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "by_check": self.by_check,
+            "by_level": self.by_level,
+            "details": self.details,
+        }
+
+
+@dataclass
+class AggregateGateResult:
+    """
+    聚合门禁结果
+    
+    用于批量查询时，按查询列表聚合最差 recommendation 或统计 fail/warn 数。
+    包含聚合 gate 摘要：fail/warn/pass 数、最差 recommendation、触发项统计。
+    """
+    # 是否通过聚合检查
+    passed: bool = True
+    
+    # 最差的 recommendation（"safe_to_switch" < "investigate_required" < "abort_switch"）
+    worst_recommendation: str = "safe_to_switch"
+    
+    # 统计计数
+    total_queries: int = 0
+    fail_count: int = 0
+    warn_count: int = 0
+    pass_count: int = 0
+    error_count: int = 0
+    
+    # 失败的查询索引列表
+    failed_query_indices: List[int] = field(default_factory=list)
+    
+    # 有警告的查询索引列表
+    warned_query_indices: List[int] = field(default_factory=list)
+    
+    # 违规项聚合统计
+    violation_summary: Optional[ViolationSummary] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典，用于 JSON 输出"""
+        result = {
+            "passed": self.passed,
+            "worst_recommendation": self.worst_recommendation,
+            "total_queries": self.total_queries,
+            "fail_count": self.fail_count,
+            "warn_count": self.warn_count,
+            "pass_count": self.pass_count,
+            "error_count": self.error_count,
+            "failed_query_indices": self.failed_query_indices,
+            "warned_query_indices": self.warned_query_indices,
+        }
+        if self.violation_summary is not None:
+            result["violation_summary"] = self.violation_summary.to_dict()
+        return result
+
+
+# recommendation 优先级映射（值越大越严重）
+_RECOMMENDATION_PRIORITY = {
+    "safe_to_switch": 0,
+    "investigate_required": 1,
+    "abort_switch": 2,
+}
+
+
+def aggregate_gate_results(results: List["QueryResult"], max_violation_details: int = 20) -> AggregateGateResult:
+    """
+    聚合批量查询的门禁结果
+    
+    根据所有查询结果中的 compare_report 和 dual_read_stats.gate 决定聚合结果。
+    包含聚合 gate 摘要：fail/warn/pass 数、最差 recommendation、触发项统计。
+    
+    聚合规则：
+    1. 同时检查 compare_report.decision 和 dual_read_stats.gate（若存在）
+    2. 计算 combined 决策：任一失败则 combined 失败
+    3. 统计 fail/warn/pass/error 数量
+    4. 取最差的 recommendation 作为聚合结果
+    5. 任何 fail 级别违规或 error 则聚合结果为 passed=False
+    6. 聚合所有触发的违规项统计（by_check, by_level）
+    
+    Args:
+        results: 查询结果列表
+        max_violation_details: 最多保留的违规详情数量（默认 20）
+        
+    Returns:
+        AggregateGateResult 聚合门禁结果（含 violation_summary）
+    """
+    agg = AggregateGateResult(
+        total_queries=len(results),
+    )
+    
+    if not results:
+        return agg
+    
+    # 触发项统计
+    violation_by_check: Dict[str, int] = {}
+    violation_by_level: Dict[str, int] = {}
+    violation_details: List[Dict[str, Any]] = []
+    
+    for i, result in enumerate(results):
+        # 处理查询错误
+        if result.error is not None:
+            agg.error_count += 1
+            agg.failed_query_indices.append(i)
+            continue
+        
+        # 同时检查 compare_report 和 dual_read_stats.gate
+        compare_decision = None
+        gate_result = None
+        
+        # 读取 compare_report.decision（若存在）
+        if result.compare_report is not None and result.compare_report.decision is not None:
+            compare_decision = result.compare_report.decision
+            
+            # 收集 compare 违规详情
+            if compare_decision.violation_details:
+                for v in compare_decision.violation_details:
+                    check_name = v.check_name
+                    level = v.level
+                    
+                    # 计数
+                    violation_by_check[check_name] = violation_by_check.get(check_name, 0) + 1
+                    violation_by_level[level] = violation_by_level.get(level, 0) + 1
+                    
+                    # 保留详情（限制数量，增加 source 字段）
+                    if len(violation_details) < max_violation_details:
+                        violation_details.append({
+                            "query_index": i,
+                            "check_name": check_name,
+                            "level": level,
+                            "actual_value": v.actual_value,
+                            "threshold_value": v.threshold_value,
+                            "reason": v.reason,
+                            "source": "compare",
+                        })
+        
+        # 读取 dual_read_stats.gate（若存在）
+        if result.dual_read_stats is not None and result.dual_read_stats.gate is not None:
+            gate_result = result.dual_read_stats.gate
+            
+            # 收集 gate 违规详情
+            if gate_result.violations:
+                for v in gate_result.violations:
+                    check_name = v.check_name
+                    level = "fail" if not gate_result.passed else "warn"
+                    
+                    # 计数
+                    violation_by_check[check_name] = violation_by_check.get(check_name, 0) + 1
+                    violation_by_level[level] = violation_by_level.get(level, 0) + 1
+                    
+                    # 保留详情（限制数量，增加 source 字段）
+                    if len(violation_details) < max_violation_details:
+                        violation_details.append({
+                            "query_index": i,
+                            "check_name": check_name,
+                            "level": level,
+                            "actual_value": v.actual_value,
+                            "threshold_value": v.threshold_value,
+                            "message": v.message,
+                            "source": "gate",
+                        })
+        
+        # 计算 combined 决策
+        # compare_passed: None（无 compare）、True（通过）、False（失败）
+        # gate_passed: None（无 gate）、True（通过）、False（失败）
+        compare_passed = compare_decision.passed if compare_decision is not None else None
+        compare_has_warnings = compare_decision.has_warnings if compare_decision is not None else False
+        gate_passed = gate_result.passed if gate_result is not None else None
+        
+        # combined 决策逻辑：任一失败则 combined 失败
+        if compare_passed is None and gate_passed is None:
+            # 无任何门禁信息，视为通过
+            agg.pass_count += 1
+            continue
+        
+        # 计算 combined passed
+        combined_passed = True
+        if compare_passed is not None and not compare_passed:
+            combined_passed = False
+        if gate_passed is not None and not gate_passed:
+            combined_passed = False
+        
+        # 计算 combined has_warnings
+        combined_has_warnings = compare_has_warnings
+        
+        # 更新 recommendation（从 compare_decision 获取，若无则基于 gate 判定）
+        recommendation = "safe_to_switch"
+        if compare_decision is not None:
+            recommendation = compare_decision.recommendation or "safe_to_switch"
+        
+        # 如果 gate 失败，recommendation 至少是 abort_switch
+        if gate_passed is not None and not gate_passed:
+            if _RECOMMENDATION_PRIORITY.get("abort_switch", 2) > _RECOMMENDATION_PRIORITY.get(recommendation, 0):
+                recommendation = "abort_switch"
+        
+        # 更新 worst_recommendation
+        current_priority = _RECOMMENDATION_PRIORITY.get(recommendation, 0)
+        worst_priority = _RECOMMENDATION_PRIORITY.get(agg.worst_recommendation, 0)
+        if current_priority > worst_priority:
+            agg.worst_recommendation = recommendation
+        
+        # 统计计数
+        if not combined_passed:
+            agg.fail_count += 1
+            agg.failed_query_indices.append(i)
+        elif combined_has_warnings:
+            agg.warn_count += 1
+            agg.warned_query_indices.append(i)
+        else:
+            agg.pass_count += 1
+    
+    # 聚合判定：有任何 fail 或 error 则聚合不通过
+    agg.passed = (agg.fail_count == 0) and (agg.error_count == 0)
+    
+    # 构建 violation_summary
+    if violation_by_check or violation_by_level:
+        agg.violation_summary = ViolationSummary(
+            by_check=violation_by_check,
+            by_level=violation_by_level,
+            details=violation_details,
+        )
+    
+    return agg
+
+
+def add_to_attachments(
+    conn: psycopg.Connection,
+    item_id: int,
+    aggregate_gate: AggregateGateResult,
+    results: List["QueryResult"],
+    query_set_name: Optional[str] = None,
+    collection_id: Optional[str] = None,
+    embedding_model_id: Optional[str] = None,
+) -> int:
+    """
+    将查询结果作为附件保存到 logbook.attachments
+    
+    复用 seek_consistency_check.py 的 add_to_attachments() 模式：
+    - 将结果转换为 JSON 并写入制品存储
+    - 在 logbook.attachments 中创建记录（kind='report'）
+    - meta_json 包含 collection_id/chunking_version/embedding_model_id/policy_version
+    
+    Args:
+        conn: 数据库连接
+        item_id: 关联的 item_id
+        aggregate_gate: 聚合门禁结果
+        results: 查询结果列表
+        query_set_name: 查询集名称（可选）
+        collection_id: collection ID（可选）
+        embedding_model_id: embedding 模型 ID（可选）
+    
+    Returns:
+        attachment_id
+    """
+    # 构建完整的结果数据
+    result_dict = {
+        "report_type": "seek_query",
+        "aggregate_gate": aggregate_gate.to_dict(),
+        "query_set_name": query_set_name,
+        "collection_id": collection_id,
+        "chunking_version": CHUNKING_VERSION,
+        "embedding_model_id": embedding_model_id,
+        "total_queries": len(results),
+        "results": [r.to_dict(include_compare=True, include_dual_read=True) for r in results],
+    }
+    
+    result_json = json.dumps(result_dict, ensure_ascii=False, indent=2, default=str)
+    result_bytes = result_json.encode("utf-8")
+    sha256 = hashlib.sha256(result_bytes).hexdigest()
+    size_bytes = len(result_bytes)
+    
+    # 生成时间戳作为文件名的一部分
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    
+    # 写入制品存储
+    from artifacts import write_text_artifact
+    
+    prefix = query_set_name or "batch"
+    uri = f"reports/seek_query/{prefix}_{timestamp}.json"
+    artifact_result = write_text_artifact(uri, result_json)
+    
+    # 构建 meta_json，包含 Evidence Packet 互相引用所需的字段
+    # policy_version 对于 query 操作为 None（策略主要用于索引时过滤）
+    meta_json = json.dumps({
+        "report_type": "seek_query",
+        "collection_id": collection_id,
+        "chunking_version": CHUNKING_VERSION,
+        "embedding_model_id": embedding_model_id,
+        "policy_version": None,  # 查询操作不涉及策略过滤
+        "query_set_name": query_set_name,
+        "total_queries": len(results),
+        "passed": aggregate_gate.passed,
+        "fail_count": aggregate_gate.fail_count,
+        "warn_count": aggregate_gate.warn_count,
+    })
+    
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO logbook.attachments
+                (item_id, kind, uri, sha256, size_bytes, meta_json)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING attachment_id
+            """,
+            (item_id, "report", artifact_result["uri"], artifact_result["sha256"], 
+             artifact_result["size_bytes"], meta_json),
+        )
+        attachment_id = cur.fetchone()[0]
+    
+    logger.info(f"查询报告已保存为附件, attachment_id={attachment_id}, uri={uri}")
+    
+    return attachment_id
 
 
 @dataclass
@@ -883,6 +1448,7 @@ class DualReadStats:
     
     # 错误信息
     shadow_error: Optional[str] = None
+    shadow_timed_out: bool = False  # 是否因超时失败
     
     # 门禁检查结果（可选，仅当配置了门禁阈值时填充）
     gate: Optional[DualReadGateResult] = None
@@ -940,6 +1506,7 @@ class DualReadStats:
         # 添加错误信息
         if self.shadow_error:
             result["shadow_error"] = self.shadow_error
+            result["shadow_timed_out"] = self.shadow_timed_out
         
         # 添加门禁检查结果
         if self.gate is not None:
@@ -956,6 +1523,7 @@ def compute_dual_read_stats(
     primary_latency_ms: float = 0.0,
     shadow_latency_ms: float = 0.0,
     shadow_error: Optional[str] = None,
+    shadow_timed_out: bool = False,
 ) -> DualReadStats:
     """
     计算双读统计信息
@@ -968,6 +1536,7 @@ def compute_dual_read_stats(
         primary_latency_ms: primary 查询延迟
         shadow_latency_ms: shadow 查询延迟
         shadow_error: shadow 查询错误信息
+        shadow_timed_out: shadow 查询是否因超时失败
     
     Returns:
         DualReadStats 实例
@@ -976,6 +1545,7 @@ def compute_dual_read_stats(
         primary_latency_ms=primary_latency_ms,
         shadow_latency_ms=shadow_latency_ms,
         shadow_error=shadow_error,
+        shadow_timed_out=shadow_timed_out,
     )
     
     # 提取健康信息
@@ -1149,6 +1719,50 @@ def query_evidence_dual_read(
     
     默认不开启时无额外开销，直接调用 query_evidence。
     
+    ========================================================================
+    DualReadConfig 行为真值表
+    ========================================================================
+    
+    输入条件:
+      - config: DualReadConfig 实例（可为 None）
+      - enabled: config.enabled（双读总开关）
+      - shadow: shadow_backend 是否可用（非 None）
+      - strategy: config.strategy (compare/fallback/shadow_only/shadow_only_compare)
+    
+    +--------+--------+--------------------+------------------------------------------+
+    | enabled| shadow | strategy           | 行为                                     |
+    +--------+--------+--------------------+------------------------------------------+
+    | None/F | -      | -                  | → primary_only (直接调用 query_evidence) |
+    | True   | None   | -                  | → primary_only (无 shadow 可用)          |
+    | True   | 有     | shadow_only        | → 仅查询 shadow，返回 shadow 结果        |
+    | True   | 有     | shadow_only_compare| → 返回 shadow 结果，但同时查询 primary 做对比记录 |
+    | True   | 有     | fallback           | → primary 优先；primary 失败/空 → shadow |
+    | True   | 有     | compare            | → 同时查询 primary + shadow，返回 primary |
+    +--------+--------+--------------------+------------------------------------------+
+    
+    shadow_only_compare 使用场景:
+      - 已完成切主（流量切到 shadow），但仍需记录与 primary 差异便于回滚决策
+      - preflight 验证阶段：使用 shadow 结果，但通过对比日志评估数据一致性
+    
+    异常处理（compare/fallback 模式）:
+    +-------------------+-------------------+--------------------------------+
+    | primary 状态      | shadow 状态       | 返回结果                       |
+    +-------------------+-------------------+--------------------------------+
+    | 成功              | 成功              | primary（compare 记录差异日志） |
+    | 成功              | 失败              | primary（shadow 错误被吞掉）    |
+    | 失败              | 成功              | shadow（自动 fallback）         |
+    | 失败              | 失败              | 抛出 primary 的异常             |
+    +-------------------+-------------------+--------------------------------+
+    
+    fallback 触发条件（strategy=fallback 时）:
+      1. primary 查询抛异常
+      2. primary 返回空结果列表
+    
+    compare 模式差异记录（strategy=compare 且 log_diff=True）:
+      - 当 primary/shadow 结果不匹配时记录 WARNING
+      - 差异判定: chunk_id 集合不同，或分数差异超过 diff_threshold
+    ========================================================================
+    
     Args:
         query_text: 查询文本
         filters: 过滤条件
@@ -1178,6 +1792,56 @@ def query_evidence_dual_read(
     
     strategy = config.strategy
     
+    # shadow_only 和 shadow_only_compare 策略：执行就绪性校验
+    if strategy in (DualReadConfig.STRATEGY_SHADOW_ONLY, DualReadConfig.STRATEGY_SHADOW_ONLY_COMPARE):
+        # 执行 Shadow 后端就绪性校验
+        readiness = validate_shadow_readiness(
+            shadow_backend=shadow,
+            primary_backend=primary,
+        )
+        
+        if not readiness.ready:
+            # 记录警告日志并输出 remediation 提示
+            logger.warning(
+                f"[DualRead] Shadow 后端就绪性检查未通过: "
+                f"health={readiness.health_check_passed}, "
+                f"stats={readiness.stats_available}, "
+                f"doc_count={readiness.doc_count_passed}"
+            )
+            for hint in readiness.remediation_hints:
+                logger.warning(f"[DualRead] Remediation: {hint}")
+            
+            # 如果使用 fail_open 模式且 shadow 不就绪，回退到 primary
+            if config.fail_open:
+                logger.warning(
+                    f"[DualRead] Shadow 后端未就绪但 fail_open=True，回退到 primary 后端。"
+                    f"建议操作: {'; '.join(readiness.remediation_hints[:1]) if readiness.remediation_hints else '检查 shadow 后端配置'}"
+                )
+                return query_evidence(
+                    query_text=query_text,
+                    filters=filters,
+                    top_k=top_k,
+                    backend=primary,
+                    embedding_provider=embedding_provider,
+                )
+            else:
+                # fail_open=False 时抛出错误
+                error_msg = (
+                    f"Shadow 后端就绪性检查失败，无法使用 {strategy} 策略。\n"
+                    f"检查结果: health={readiness.health_check_passed}, "
+                    f"doc_count={readiness.doc_count} (阈值: {readiness.doc_count_min_threshold})\n"
+                )
+                if readiness.remediation_hints:
+                    error_msg += "Remediation 建议:\n"
+                    for hint in readiness.remediation_hints:
+                        error_msg += f"  - {hint}\n"
+                raise ValueError(error_msg)
+        else:
+            logger.info(
+                f"[DualRead] Shadow 后端就绪性检查通过: "
+                f"doc_count={readiness.doc_count}, strategy={strategy}"
+            )
+    
     # shadow_only 策略：仅使用 shadow 后端
     if strategy == DualReadConfig.STRATEGY_SHADOW_ONLY:
         logger.info(f"[DualRead] 使用 shadow_only 策略")
@@ -1188,6 +1852,74 @@ def query_evidence_dual_read(
             backend=shadow,
             embedding_provider=embedding_provider,
         )
+    
+    # shadow_only_compare 策略：返回 shadow 结果，但仍查询 primary 做对比记录
+    # 用于切换验证：流量已切到 shadow，但仍需记录与 primary 差异以便回滚决策
+    if strategy == DualReadConfig.STRATEGY_SHADOW_ONLY_COMPARE:
+        logger.info(f"[DualRead] 使用 shadow_only_compare 策略")
+        
+        # 查询 shadow（作为主要结果）
+        shadow_results: List[EvidenceResult] = []
+        shadow_error: Optional[Exception] = None
+        try:
+            shadow_results = query_evidence(
+                query_text=query_text,
+                filters=filters,
+                top_k=top_k,
+                backend=shadow,
+                embedding_provider=embedding_provider,
+            )
+        except Exception as e:
+            shadow_error = e
+            logger.error(f"[DualRead] Shadow 查询失败（shadow_only_compare 模式）: {e}")
+        
+        # 查询 primary（用于对比，不影响返回结果）
+        primary_results_for_compare: List[EvidenceResult] = []
+        primary_error_for_compare: Optional[Exception] = None
+        try:
+            primary_results_for_compare = query_evidence(
+                query_text=query_text,
+                filters=filters,
+                top_k=top_k,
+                backend=primary,
+                embedding_provider=embedding_provider,
+            )
+        except Exception as e:
+            primary_error_for_compare = e
+            logger.warning(f"[DualRead] Primary 查询失败（仅用于对比）: {e}")
+        
+        # 比较结果并记录日志
+        if config.log_diff and shadow_results and primary_results_for_compare:
+            diff = _compare_results(
+                primary_results_for_compare,
+                shadow_results,
+                config.diff_threshold
+            )
+            if not diff["match"]:
+                logger.warning(
+                    f"[DualRead/shadow_only_compare] 结果不匹配: "
+                    f"primary={diff['primary_count']}, shadow={diff['shadow_count']}, "
+                    f"common={diff['common_count']}, "
+                    f"only_primary={len(diff['only_primary'])}, "
+                    f"only_shadow={len(diff['only_shadow'])}, "
+                    f"score_diffs={len(diff['score_diffs'])}"
+                )
+            else:
+                logger.info(f"[DualRead/shadow_only_compare] 结果匹配: count={diff['shadow_count']}")
+        elif config.log_diff and not primary_results_for_compare and shadow_results:
+            logger.warning(
+                f"[DualRead/shadow_only_compare] Primary 无结果或失败，无法对比。"
+                f"Shadow 返回 {len(shadow_results)} 条结果"
+            )
+        
+        # shadow_only_compare 模式下，shadow 失败则抛出异常
+        if shadow_error is not None:
+            raise shadow_error
+        
+        return shadow_results
+    
+    # 获取 shadow 超时配置
+    shadow_timeout_ms = config.shadow_timeout_ms if config.shadow_timeout_ms > 0 else 5000
     
     # fallback 策略：优先使用 primary，失败或无结果时 fallback 到 shadow
     if strategy == DualReadConfig.STRATEGY_FALLBACK:
@@ -1202,9 +1934,11 @@ def query_evidence_dual_read(
             if primary_results:
                 return primary_results
             
-            # primary 无结果，fallback 到 shadow
+            # primary 无结果，fallback 到 shadow（带超时）
             logger.info(f"[DualRead] Primary 无结果，fallback 到 shadow")
-            return query_evidence(
+            return execute_with_timeout(
+                query_evidence,
+                shadow_timeout_ms,
                 query_text=query_text,
                 filters=filters,
                 top_k=top_k,
@@ -1212,9 +1946,11 @@ def query_evidence_dual_read(
                 embedding_provider=embedding_provider,
             )
         except Exception as e:
-            # primary 失败，fallback 到 shadow
+            # primary 失败，fallback 到 shadow（带超时）
             logger.warning(f"[DualRead] Primary 查询失败 ({e})，fallback 到 shadow")
-            return query_evidence(
+            return execute_with_timeout(
+                query_evidence,
+                shadow_timeout_ms,
                 query_text=query_text,
                 filters=filters,
                 top_k=top_k,
@@ -1240,17 +1976,22 @@ def query_evidence_dual_read(
         primary_error = e
         logger.warning(f"[DualRead] Primary 查询失败: {e}")
     
-    # 查询 shadow
+    # 查询 shadow（带超时）
     shadow_results: List[EvidenceResult] = []
     shadow_error: Optional[Exception] = None
     try:
-        shadow_results = query_evidence(
+        shadow_results = execute_with_timeout(
+            query_evidence,
+            shadow_timeout_ms,
             query_text=query_text,
             filters=filters,
             top_k=top_k,
             backend=shadow,
             embedding_provider=embedding_provider,
         )
+    except ShadowQueryTimeoutError as e:
+        shadow_error = e
+        logger.warning(f"[DualRead] Shadow 查询超时: {e}")
     except Exception as e:
         shadow_error = e
         logger.warning(f"[DualRead] Shadow 查询失败: {e}")
@@ -1294,6 +2035,107 @@ def query_evidence_dual_read(
     return primary_results
 
 
+def _build_retrieval_context(
+    backend: Optional[IndexBackend],
+    provider: Optional[EmbeddingProvider],
+    filters: Optional[QueryFilters] = None,
+    top_k: int = 10,
+    min_score: float = 0.0,
+) -> RetrievalContext:
+    """
+    构建检索上下文对象
+    
+    从后端实例和 embedding provider 中提取配置信息，
+    组装成 RetrievalContext 用于追溯和调试。
+    
+    Args:
+        backend: 索引后端实例（可能为 None，使用全局实例）
+        provider: Embedding Provider 实例
+        filters: 查询过滤条件
+        top_k: 返回数量
+        min_score: 最小分数阈值
+    
+    Returns:
+        RetrievalContext 实例
+    """
+    # 如果 backend 为 None，尝试获取全局实例
+    actual_backend = backend or get_index_backend()
+    
+    context = RetrievalContext()
+    
+    # 填充后端信息
+    if actual_backend is not None:
+        context.backend_name = getattr(actual_backend, 'backend_name', None)
+        
+        # 获取 collection_id（优先使用 canonical_id，回退到 collection_id）
+        context.collection_id = (
+            getattr(actual_backend, 'canonical_id', None) or 
+            getattr(actual_backend, 'collection_id', None)
+        )
+        
+        # 构建后端配置摘要（不泄漏密码）
+        backend_config: Dict[str, Any] = {}
+        
+        # 通用属性
+        if hasattr(actual_backend, 'backend_name'):
+            backend_config["type"] = actual_backend.backend_name
+        
+        # PGVector 特有属性
+        if hasattr(actual_backend, '_schema'):
+            backend_config["schema"] = actual_backend._schema
+        if hasattr(actual_backend, '_table_name'):
+            backend_config["table"] = actual_backend._table_name
+        if hasattr(actual_backend, '_collection_strategy'):
+            strategy = actual_backend._collection_strategy
+            backend_config["strategy"] = getattr(strategy, 'strategy_name', type(strategy).__name__)
+        
+        # SeekDB 特有属性
+        if hasattr(actual_backend, '_namespace'):
+            backend_config["namespace"] = actual_backend._namespace
+        if hasattr(actual_backend, '_config'):
+            seekdb_config = actual_backend._config
+            if hasattr(seekdb_config, 'host'):
+                backend_config["host"] = seekdb_config.host
+            if hasattr(seekdb_config, 'port'):
+                backend_config["port"] = seekdb_config.port
+        
+        if backend_config:
+            context.backend_config = backend_config
+        
+        # 获取 hybrid 配置
+        if hasattr(actual_backend, '_hybrid_config'):
+            hybrid_cfg = actual_backend._hybrid_config
+            context.hybrid_config = {
+                "vector_weight": getattr(hybrid_cfg, 'vector_weight', None),
+                "text_weight": getattr(hybrid_cfg, 'text_weight', None),
+            }
+            if hasattr(hybrid_cfg, 'normalize_scores'):
+                context.hybrid_config["normalize_scores"] = hybrid_cfg.normalize_scores
+            # 清理 None 值
+            context.hybrid_config = {k: v for k, v in context.hybrid_config.items() if v is not None}
+    
+    # 填充 Embedding 模型信息
+    if provider is not None:
+        context.embedding_model_id = provider.model_id
+        context.embedding_dim = provider.dim
+        # 获取 normalize 属性（如果存在）
+        context.embedding_normalize = getattr(provider, 'normalize', None)
+    
+    # 填充查询请求参数
+    query_request: Dict[str, Any] = {
+        "top_k": top_k,
+    }
+    if min_score > 0:
+        query_request["min_score"] = min_score
+    if filters is not None:
+        filter_dsl = filters.to_filter_dict()
+        if filter_dsl:
+            query_request["filters"] = filter_dsl
+    context.query_request = query_request
+    
+    return context
+
+
 def run_query(
     query_text: str,
     filters: Optional[QueryFilters] = None,
@@ -1307,6 +2149,8 @@ def run_query(
     compare_thresholds: Optional[CompareThresholds] = None,
     enable_dual_read: bool = False,
     dual_read_gate_thresholds: Optional[DualReadGateThresholds] = None,
+    dual_read_report: bool = False,
+    dual_read_report_mode: str = "summary",
 ) -> QueryResult:
     """
     执行单次查询
@@ -1368,26 +2212,47 @@ def run_query(
             primary_end = datetime.now(timezone.utc)
             primary_latency_ms = (primary_end - primary_start).total_seconds() * 1000
             
-            # 查询 shadow 后端
+            # 查询 shadow 后端（带超时支持）
             shadow_start = datetime.now(timezone.utc)
             shadow_results: List[EvidenceResult] = []
             shadow_error: Optional[Exception] = None
+            shadow_timed_out = False
+            
+            # 获取 shadow 超时配置
+            shadow_timeout_ms = 5000  # 默认 5 秒
+            if dual_read_config is not None and dual_read_config.shadow_timeout_ms > 0:
+                shadow_timeout_ms = dual_read_config.shadow_timeout_ms
+            
             try:
-                shadow_results = query_evidence(
+                # 使用线程池超时封装执行 shadow 查询
+                shadow_results = execute_with_timeout(
+                    query_evidence,
+                    shadow_timeout_ms,
                     query_text=query_text,
                     filters=filters,
                     top_k=top_k,
                     backend=shadow_backend,
                     embedding_provider=provider,
                 )
+            except ShadowQueryTimeoutError as e:
+                shadow_error = e
+                shadow_timed_out = True
+                logger.warning(f"[DualReadCompare] Shadow 查询超时: {e}")
             except Exception as e:
                 shadow_error = e
                 logger.warning(f"[DualReadCompare] Shadow 查询失败: {e}")
             shadow_end = datetime.now(timezone.utc)
             shadow_latency_ms = (shadow_end - shadow_start).total_seconds() * 1000
             
-            # 使用 primary 结果作为返回值
-            result.evidences = primary_results
+            # 根据策略决定使用哪个结果作为返回值
+            # shadow_only_compare 策略：返回 shadow 结果（即使生成了对比报告）
+            strategy = dual_read_config.strategy if dual_read_config else None
+            if strategy == DUAL_READ_STRATEGY_SHADOW_ONLY_COMPARE and shadow_error is None:
+                result.evidences = shadow_results
+                logger.info(f"[DualReadCompare] shadow_only_compare 策略：返回 shadow 结果 ({len(shadow_results)} 条)")
+            else:
+                # 默认使用 primary 结果
+                result.evidences = primary_results
             
             # 生成比较报告（即使 shadow 失败也生成）
             if shadow_error is None:
@@ -1427,18 +2292,58 @@ def run_query(
                             f"violations={compare_report.decision.violated_checks}"
                         )
             else:
-                # Shadow 失败，创建一个简单的错误报告
-                result.compare_report = CompareReport(
-                    request_id=request_id,
-                    decision=CompareDecision(
-                        passed=False,
-                        reason=f"Shadow 查询失败: {shadow_error}",
-                        recommendation="investigate_required",
-                    ),
-                    primary_backend=getattr(backend, 'backend_name', 'primary') if backend else 'primary',
-                    secondary_backend=getattr(shadow_backend, 'backend_name', 'shadow'),
-                    metadata={"shadow_error": str(shadow_error)},
-                )
+                # Shadow 失败，根据 fail_open 决定行为
+                # fail_open=True（默认）: shadow 失败不影响 primary 返回，但记录 shadow_error
+                # fail_open=False: shadow 失败导致 compare 失败（用于 Nightly/切换门禁）
+                fail_open = True  # 默认值
+                if dual_read_config is not None:
+                    fail_open = dual_read_config.fail_open
+                
+                primary_name = getattr(backend, 'backend_name', 'primary') if backend else 'primary'
+                shadow_name = getattr(shadow_backend, 'backend_name', 'shadow')
+                
+                if fail_open:
+                    # fail_open=True: shadow 失败不影响，compare 视为通过但带警告
+                    result.compare_report = CompareReport(
+                        request_id=request_id,
+                        decision=CompareDecision(
+                            passed=True,
+                            has_warnings=True,
+                            reason=f"Shadow 查询失败 (fail_open=True): {shadow_error}",
+                            recommendation="investigate_required",
+                        ),
+                        primary_backend=primary_name,
+                        secondary_backend=shadow_name,
+                        metadata={
+                            "shadow_error": str(shadow_error),
+                            "fail_open": True,
+                        },
+                    )
+                    logger.warning(
+                        f"[DualReadCompare] Shadow 查询失败 (fail_open=True): {shadow_error}，"
+                        f"返回 primary 结果"
+                    )
+                else:
+                    # fail_open=False: shadow 失败导致 compare 失败
+                    result.compare_report = CompareReport(
+                        request_id=request_id,
+                        decision=CompareDecision(
+                            passed=False,
+                            reason=f"Shadow 查询失败 (fail_open=False): {shadow_error}",
+                            recommendation="abort_switch",
+                            violated_checks=["shadow_query_failed"],
+                        ),
+                        primary_backend=primary_name,
+                        secondary_backend=shadow_name,
+                        metadata={
+                            "shadow_error": str(shadow_error),
+                            "fail_open": False,
+                        },
+                    )
+                    logger.error(
+                        f"[DualReadCompare] Shadow 查询失败 (fail_open=False): {shadow_error}，"
+                        f"compare 失败，退出码将非 0"
+                    )
         # 当启用 --dual-read 且 shadow 后端可用时，分别查询并生成轻量级统计
         elif enable_dual_read and shadow_backend is not None:
             # 查询 primary 后端
@@ -1453,26 +2358,47 @@ def run_query(
             primary_end = datetime.now(timezone.utc)
             primary_latency_ms = (primary_end - primary_start).total_seconds() * 1000
             
-            # 查询 shadow 后端
+            # 查询 shadow 后端（带超时支持）
             shadow_start = datetime.now(timezone.utc)
             shadow_results: List[EvidenceResult] = []
             shadow_error_str: Optional[str] = None
+            shadow_timed_out_flag: bool = False
+            
+            # 获取 shadow 超时配置
+            shadow_timeout_ms_cfg: int = 5000  # 默认 5 秒
+            if dual_read_config is not None and dual_read_config.shadow_timeout_ms > 0:
+                shadow_timeout_ms_cfg = dual_read_config.shadow_timeout_ms
+            
             try:
-                shadow_results = query_evidence(
+                # 使用线程池超时封装执行 shadow 查询
+                shadow_results = execute_with_timeout(
+                    query_evidence,
+                    shadow_timeout_ms_cfg,
                     query_text=query_text,
                     filters=filters,
                     top_k=top_k,
                     backend=shadow_backend,
                     embedding_provider=provider,
                 )
+            except ShadowQueryTimeoutError as e:
+                shadow_error_str = str(e)
+                shadow_timed_out_flag = True
+                logger.warning(f"[DualRead] Shadow 查询超时: {e}")
             except Exception as e:
                 shadow_error_str = str(e)
                 logger.warning(f"[DualRead] Shadow 查询失败: {e}")
             shadow_end = datetime.now(timezone.utc)
             shadow_latency_ms = (shadow_end - shadow_start).total_seconds() * 1000
             
-            # 使用 primary 结果作为返回值
-            result.evidences = primary_results
+            # 根据策略决定使用哪个结果作为返回值
+            # shadow_only_compare 策略：返回 shadow 结果
+            strategy = dual_read_config.strategy if dual_read_config else None
+            if strategy == DUAL_READ_STRATEGY_SHADOW_ONLY_COMPARE and not shadow_error_str:
+                result.evidences = shadow_results
+                logger.info(f"[DualRead] shadow_only_compare 策略：返回 shadow 结果 ({len(shadow_results)} 条)")
+            else:
+                # 默认使用 primary 结果
+                result.evidences = primary_results
             
             # 计算双读统计信息
             dual_read_stats = compute_dual_read_stats(
@@ -1483,6 +2409,7 @@ def run_query(
                 primary_latency_ms=primary_latency_ms,
                 shadow_latency_ms=shadow_latency_ms,
                 shadow_error=shadow_error_str,
+                shadow_timed_out=shadow_timed_out_flag,
             )
             
             # 执行门禁检查（如果配置了阈值）
@@ -1499,7 +2426,85 @@ def run_query(
                 else:
                     logger.debug("[DualRead] 门禁检查通过")
             
+            # 根据 fail_open 决定 shadow 失败时的行为
+            # fail_open=True（默认）: shadow 失败不影响 primary 返回
+            # fail_open=False: shadow 失败导致门禁失败（用于 Nightly/切换门禁）
+            fail_open = True  # 默认值
+            if dual_read_config is not None:
+                fail_open = dual_read_config.fail_open
+            
+            if shadow_error_str is not None and not fail_open:
+                # fail_open=False 且 shadow 失败，创建/更新门禁失败结果
+                shadow_fail_violation = DualReadGateViolation(
+                    check_name="shadow_query_failed",
+                    threshold_value=0.0,
+                    actual_value=1.0,
+                    message=f"Shadow 查询失败 (fail_open=False): {shadow_error_str}",
+                )
+                
+                if dual_read_stats.gate is None:
+                    # 创建新的门禁失败结果
+                    dual_read_stats.gate = DualReadGateResult(
+                        passed=False,
+                        violations=[shadow_fail_violation],
+                        thresholds_applied=dual_read_gate_thresholds,
+                    )
+                else:
+                    # 更新现有门禁结果，添加 shadow 失败违规
+                    dual_read_stats.gate.passed = False
+                    dual_read_stats.gate.violations.append(shadow_fail_violation)
+                
+                logger.error(
+                    f"[DualRead] Shadow 查询失败 (fail_open=False): {shadow_error_str}，"
+                    f"门禁失败，退出码将非 0"
+                )
+            
             result.dual_read_stats = dual_read_stats
+            
+            # 可选地生成 CompareReport（当 dual_read_report=True 时）
+            if dual_read_report and shadow_error_str is None:
+                request_id = str(uuid.uuid4())[:8]
+                
+                # 获取后端名称
+                primary_name = getattr(backend, 'backend_name', 'primary') if backend else 'primary'
+                shadow_name = getattr(shadow_backend, 'backend_name', 'shadow')
+                
+                # 使用 compare_thresholds，如果未提供则从环境变量加载
+                report_thresholds = compare_thresholds
+                if report_thresholds is None:
+                    report_thresholds = CompareThresholds.from_env()
+                
+                compare_report = generate_compare_report(
+                    primary_results=primary_results,
+                    shadow_results=shadow_results,
+                    primary_latency_ms=primary_latency_ms,
+                    shadow_latency_ms=shadow_latency_ms,
+                    thresholds=report_thresholds,
+                    request_id=request_id,
+                    primary_backend_name=primary_name,
+                    shadow_backend_name=shadow_name,
+                    compare_mode=dual_read_report_mode,
+                )
+                result.compare_report = compare_report
+                
+                # 记录比较结果日志
+                if compare_report.decision:
+                    if compare_report.decision.passed:
+                        if compare_report.decision.has_warnings:
+                            logger.warning(
+                                f"[DualRead] 比较报告: {compare_report.decision.reason}, "
+                                f"recommendation={compare_report.decision.recommendation}"
+                            )
+                        else:
+                            logger.info(
+                                f"[DualRead] 比较报告: {compare_report.decision.reason}, "
+                                f"overlap={compare_report.metrics.hit_overlap_ratio:.4f}"
+                            )
+                    else:
+                        logger.error(
+                            f"[DualRead] 比较报告失败: {compare_report.decision.reason}, "
+                            f"violations={compare_report.decision.violated_checks}"
+                        )
             
             # 记录统计日志
             if shadow_error_str:
@@ -1524,6 +2529,14 @@ def run_query(
                 embedding_provider=provider,
             )
             result.evidences = evidences
+        
+        # 填充检索上下文（retrieval_context）
+        result.retrieval_context = _build_retrieval_context(
+            backend=backend,
+            provider=provider,
+            filters=filters,
+            top_k=top_k,
+        )
     except Exception as e:
         result.error = str(e)
         logger.error(f"检索失败: {e}")
@@ -1548,6 +2561,8 @@ def run_batch_query(
     compare_thresholds: Optional[CompareThresholds] = None,
     enable_dual_read: bool = False,
     dual_read_gate_thresholds: Optional[DualReadGateThresholds] = None,
+    dual_read_report: bool = False,
+    dual_read_report_mode: str = "summary",
 ) -> List[QueryResult]:
     """
     执行批量查询
@@ -1565,6 +2580,8 @@ def run_batch_query(
         compare_thresholds: 比较阈值配置
         enable_dual_read: 是否启用双读统计
         dual_read_gate_thresholds: 双读门禁阈值配置
+        dual_read_report: 是否为 dual_read 生成 CompareReport
+        dual_read_report_mode: dual_read_report 的报告模式
     """
     results = []
     for i, query_text in enumerate(queries):
@@ -1582,6 +2599,8 @@ def run_batch_query(
             compare_thresholds=compare_thresholds,
             enable_dual_read=enable_dual_read,
             dual_read_gate_thresholds=dual_read_gate_thresholds,
+            dual_read_report=dual_read_report,
+            dual_read_report_mode=dual_read_report_mode,
         )
         results.append(result)
     return results
@@ -1611,6 +2630,9 @@ def parse_args() -> argparse.Namespace:
     python -m seek_query --query-file queries.txt --json
     python -m seek_query --query "bug fix" --json --output-format packet
 
+    # 使用内置查询集（CI/CD 场景）
+    python -m seek_query --query-set nightly_default --dual-read --json
+
 环境变量:
     PROJECT_KEY     默认项目标识
     TOP_K           默认返回数量（默认 10）
@@ -1630,6 +2652,12 @@ def parse_args() -> argparse.Namespace:
         "--query-file",
         type=str,
         help="从文件读取查询（每行一个）",
+    )
+    query_group.add_argument(
+        "--query-set",
+        type=str,
+        choices=list(BUILTIN_QUERY_SETS.keys()),
+        help=f"使用内置查询集（可选: {', '.join(BUILTIN_QUERY_SETS.keys())}）",
     )
     
     # 过滤参数
@@ -1734,6 +2762,17 @@ def parse_args() -> argparse.Namespace:
         help="启用双读模式：同时查询 primary 和 shadow 后端，输出 overlap/diff 统计（仅 pgvector）",
     )
     dual_read_group.add_argument(
+        "--dual-read-strategy",
+        type=str,
+        choices=["compare", "fallback", "shadow_only", "shadow_only_compare"],
+        default=None,
+        help=(
+            "双读策略: compare(对比模式,返回primary)/fallback(主备模式)/"
+            "shadow_only(仅shadow)/shadow_only_compare(返回shadow但仍对比)。"
+            "默认从 STEP3_PGVECTOR_DUAL_READ_STRATEGY 读取"
+        ),
+    )
+    dual_read_group.add_argument(
         "--shadow-strategy",
         type=str,
         choices=["per_table", "single_table"],
@@ -1776,6 +2815,59 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="DRIFT",
         help="门禁：最大分数漂移阈值，超过此值视为失败",
+    )
+    dual_read_gate_group.add_argument(
+        "--dual-read-report",
+        action="store_true",
+        help="为 --dual-read 生成 CompareReport（复用 --dual-read-compare 的报告生成逻辑）",
+    )
+    dual_read_gate_group.add_argument(
+        "--dual-read-report-mode",
+        type=str,
+        choices=["summary", "detailed"],
+        default="summary",
+        help="--dual-read-report 的报告模式: summary(摘要)/detailed(详细)，默认 summary",
+    )
+    
+    # fail_open 参数（互斥组）
+    fail_open_group = dual_read_gate_group.add_mutually_exclusive_group()
+    fail_open_group.add_argument(
+        "--fail-open",
+        dest="fail_open",
+        action="store_true",
+        default=None,
+        help="Shadow 失败时不影响 primary 返回（默认行为，用于生产环境灰度）",
+    )
+    fail_open_group.add_argument(
+        "--no-fail-open",
+        dest="fail_open",
+        action="store_false",
+        help="Shadow 失败时导致 compare/dual-read 失败（用于 Nightly/切换门禁）",
+    )
+    
+    # Logbook 集成选项
+    logbook_group = parser.add_argument_group("Logbook 集成选项（用于批量查询/query-set 输出保存）")
+    logbook_group.add_argument(
+        "--log-to-logbook",
+        action="store_true",
+        help="将查询结果保存到 logbook.attachments（kind='report'）",
+    )
+    logbook_group.add_argument(
+        "--save-attachment",
+        action="store_true",
+        help="将查询报告保存为 logbook.attachments（与 --log-to-logbook 等效）",
+    )
+    logbook_group.add_argument(
+        "--item-id",
+        type=int,
+        default=None,
+        help="用于关联的 item_id（需要 --log-to-logbook 或 --save-attachment）",
+    )
+    logbook_group.add_argument(
+        "--actor",
+        type=str,
+        default=None,
+        help="操作者用户 ID（用于 logbook 记录）",
     )
     
     # 添加后端选项
@@ -1931,6 +3023,13 @@ def main() -> int:
     elif args.json:
         logging.getLogger().setLevel(logging.WARNING)
     
+    # 验证 logbook 参数
+    if (args.log_to_logbook or args.save_attachment) and not args.item_id:
+        logger.error("使用 --log-to-logbook 或 --save-attachment 时必须指定 --item-id")
+        if args.json:
+            print(json.dumps({"success": False, "error": "missing --item-id for logbook integration"}))
+        return 1
+    
     # 构建过滤条件
     filters = None
     if any([args.project_key, args.source_type, args.owner, args.module, 
@@ -2030,6 +3129,16 @@ def main() -> int:
                     if hasattr(args, 'shadow_table') and args.shadow_table:
                         dual_read_config.shadow_table = args.shadow_table
             
+            # CLI 参数覆盖双读策略（--dual-read-strategy）
+            if hasattr(args, 'dual_read_strategy') and args.dual_read_strategy:
+                dual_read_config.strategy = args.dual_read_strategy
+                logger.info(f"CLI 参数覆盖双读策略: {args.dual_read_strategy}")
+            
+            # CLI 参数覆盖 fail_open（适用于 --dual-read 和 --dual-read-compare）
+            if hasattr(args, 'fail_open') and args.fail_open is not None:
+                dual_read_config.fail_open = args.fail_open
+                logger.info(f"CLI 参数覆盖 fail_open={args.fail_open}")
+            
             set_dual_read_config(dual_read_config)
             
             if dual_read_config.enabled:
@@ -2059,9 +3168,15 @@ def main() -> int:
         # 读取查询
         if args.query:
             queries = [args.query]
-        else:
+        elif args.query_file:
             with open(args.query_file, "r", encoding="utf-8") as f:
                 queries = [line.strip() for line in f if line.strip()]
+        elif args.query_set:
+            # 使用内置查询集
+            queries = BUILTIN_QUERY_SETS[args.query_set]
+            logger.info(f"使用内置查询集 '{args.query_set}'，包含 {len(queries)} 个查询")
+        else:
+            queries = []
         
         if not queries:
             logger.error("没有有效的查询")
@@ -2129,6 +3244,15 @@ def main() -> int:
             not enable_compare  # 如果启用了 --dual-read-compare，则不再重复启用 dual_read
         )
         
+        # 处理 --dual-read-report 参数
+        dual_read_report = getattr(args, 'dual_read_report', False)
+        dual_read_report_mode = getattr(args, 'dual_read_report_mode', 'summary')
+        
+        # 如果 --dual-read-report 启用但 --compare-thresholds 未提供，从环境变量加载
+        if enable_dual_read and dual_read_report and compare_thresholds is None:
+            compare_thresholds = CompareThresholds.from_env()
+            logger.info("双读报告已启用，从环境变量加载比较阈值")
+        
         # 构建双读门禁阈值配置
         dual_read_gate_thresholds: Optional[DualReadGateThresholds] = None
         if enable_dual_read:
@@ -2145,6 +3269,11 @@ def main() -> int:
                     max_only_primary=max_only_primary,
                     max_only_shadow=max_only_shadow,
                     max_score_drift=max_score_drift,
+                    profile=GateProfile(
+                        name="dual_read_gate",
+                        version="1.0",
+                        source=THRESHOLD_SOURCE_CLI,  # 来自 CLI 参数
+                    ),
                 )
                 logger.info(
                     f"双读门禁已配置: min_overlap={min_overlap}, "
@@ -2167,10 +3296,12 @@ def main() -> int:
                 compare_thresholds=compare_thresholds,
                 enable_dual_read=enable_dual_read,
                 dual_read_gate_thresholds=dual_read_gate_thresholds,
+                dual_read_report=dual_read_report,
+                dual_read_report_mode=dual_read_report_mode,
             )
             
             # 输出结果
-            include_compare = enable_compare and compare_mode != "off"
+            include_compare = (enable_compare and compare_mode != "off") or (enable_dual_read and dual_read_report)
             include_dual_read = enable_dual_read and result.dual_read_stats is not None
             if args.json:
                 if args.output_format == "packet":
@@ -2196,12 +3327,18 @@ def main() -> int:
             # 确定退出码
             # 1. 查询错误: 退出码=1
             # 2. 门禁失败: 退出码=1
+            # 3. CompareReport 失败: 退出码=1
             if result.error is not None:
                 return 1
             if (result.dual_read_stats is not None and 
                 result.dual_read_stats.gate is not None and 
                 not result.dual_read_stats.gate.passed):
                 logger.error("[DualRead] 门禁检查失败，退出码=1")
+                return 1
+            if (result.compare_report is not None and
+                result.compare_report.decision is not None and
+                not result.compare_report.decision.passed):
+                logger.error(f"[DualRead] 比较报告失败: {result.compare_report.decision.reason}，退出码=1")
                 return 1
             return 0
         else:
@@ -2218,9 +3355,45 @@ def main() -> int:
                 compare_thresholds=compare_thresholds,
                 enable_dual_read=enable_dual_read,
                 dual_read_gate_thresholds=dual_read_gate_thresholds,
+                dual_read_report=dual_read_report,
+                dual_read_report_mode=dual_read_report_mode,
             )
             
-            include_compare = enable_compare and compare_mode != "off"
+            include_compare = (enable_compare and compare_mode != "off") or (enable_dual_read and dual_read_report)
+            
+            # 计算聚合门禁结果
+            aggregate_gate = aggregate_gate_results(results)
+            
+            # 保存到 logbook（如果启用）
+            attachment_id = None
+            if (args.log_to_logbook or args.save_attachment) and args.item_id and conn is not None:
+                # 获取查询集名称和 embedding 模型信息
+                query_set_name = getattr(args, 'query_set', None)
+                try:
+                    provider = get_embedding_provider_instance()
+                    embedding_model_id = provider.model_id if provider else None
+                except Exception:
+                    embedding_model_id = None
+                
+                attachment_id = add_to_attachments(
+                    conn=conn,
+                    item_id=args.item_id,
+                    aggregate_gate=aggregate_gate,
+                    results=results,
+                    query_set_name=query_set_name,
+                    collection_id=resolved_collection,
+                    embedding_model_id=embedding_model_id,
+                )
+                conn.commit()
+            
+            # 构建阈值来源元数据
+            thresholds_metadata: Dict[str, Any] = {}
+            if compare_thresholds is not None:
+                thresholds_metadata["compare_thresholds"] = compare_thresholds.to_dict()
+            if dual_read_gate_thresholds is not None:
+                # 使用 GateProfile.to_dict() 构建（保留兼容字段，新增 profile）
+                thresholds_metadata["gate_thresholds"] = dual_read_gate_thresholds.to_dict()
+            
             if args.json:
                 if args.output_format == "packet":
                     output = [r.to_evidence_packet(
@@ -2229,13 +3402,17 @@ def main() -> int:
                     ) for r in results]
                 else:
                     output = {
-                        "success": all(r.error is None for r in results),
+                        "success": aggregate_gate.passed,
                         "total_queries": len(results),
+                        "aggregate_gate": aggregate_gate.to_dict(),
+                        "thresholds_metadata": thresholds_metadata if thresholds_metadata else None,
                         "results": [r.to_dict(
                             include_compare=include_compare,
                             include_dual_read=enable_dual_read,
                         ) for r in results],
                     }
+                    if attachment_id is not None:
+                        output["attachment_id"] = attachment_id
                 print(json.dumps(output, default=str, ensure_ascii=False, indent=2))
             else:
                 for result in results:
@@ -2244,20 +3421,57 @@ def main() -> int:
                         _print_compare_report(result.compare_report)
                     if enable_dual_read and result.dual_read_stats is not None:
                         _print_dual_read_stats(result.dual_read_stats)
+                
+                # 输出保存到 logbook 的信息
+                if attachment_id is not None:
+                    print(f"已保存到 logbook.attachments, attachment_id={attachment_id}")
+                
+                # 输出聚合门禁结果摘要
+                if aggregate_gate.total_queries > 1:
+                    print("\n" + "-" * 60)
+                    print("聚合门禁结果")
+                    print("-" * 60)
+                    print(f"  总查询数: {aggregate_gate.total_queries}")
+                    print(f"  通过数: {aggregate_gate.pass_count}")
+                    print(f"  警告数: {aggregate_gate.warn_count}")
+                    print(f"  失败数: {aggregate_gate.fail_count}")
+                    print(f"  错误数: {aggregate_gate.error_count}")
+                    print(f"  最差建议: {aggregate_gate.worst_recommendation}")
+                    print(f"  聚合结果: {'通过' if aggregate_gate.passed else '失败'}")
+                    if aggregate_gate.failed_query_indices:
+                        print(f"  失败查询索引: {aggregate_gate.failed_query_indices}")
+                    if aggregate_gate.warned_query_indices:
+                        print(f"  警告查询索引: {aggregate_gate.warned_query_indices}")
+                    
+                    # 显示触发项统计
+                    if aggregate_gate.violation_summary is not None:
+                        vs = aggregate_gate.violation_summary
+                        print(f"\n  【触发项统计】")
+                        if vs.by_level:
+                            print(f"    按级别: {vs.by_level}")
+                        if vs.by_check:
+                            print(f"    按检查项: {vs.by_check}")
+                        if vs.details:
+                            print(f"    详情（前 {len(vs.details)} 条）:")
+                            for d in vs.details[:5]:  # 文本输出只显示前 5 条
+                                q_idx = d.get("query_index", "?")
+                                check = d.get("check_name", "?")
+                                level = d.get("level", "?")
+                                actual = d.get("actual_value", 0)
+                                threshold = d.get("threshold_value", 0)
+                                print(f"      [{level.upper()}] query[{q_idx}] {check}: {actual:.4f} (阈值: {threshold:.4f})")
+                    
+                    print("-" * 60 + "\n")
             
-            # 确定退出码
-            # 1. 任何查询错误: 退出码=1
-            # 2. 任何门禁失败: 退出码=1
-            if any(r.error is not None for r in results):
-                return 1
-            gate_failed = any(
-                r.dual_read_stats is not None and 
-                r.dual_read_stats.gate is not None and 
-                not r.dual_read_stats.gate.passed
-                for r in results
-            )
-            if gate_failed:
-                logger.error("[DualRead] 门禁检查失败，退出码=1")
+            # 使用聚合门禁结果确定退出码
+            if not aggregate_gate.passed:
+                if aggregate_gate.error_count > 0:
+                    logger.error(f"[DualRead] 存在 {aggregate_gate.error_count} 个查询错误，退出码=1")
+                elif aggregate_gate.fail_count > 0:
+                    logger.error(
+                        f"[DualRead] 聚合门禁失败: {aggregate_gate.fail_count} 个查询失败, "
+                        f"worst_recommendation={aggregate_gate.worst_recommendation}，退出码=1"
+                    )
                 return 1
             return 0
     

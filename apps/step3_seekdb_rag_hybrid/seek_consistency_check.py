@@ -4,10 +4,29 @@ seek_consistency_check.py - Step3 索引一致性检查工具
 
 检查 SeekDB/RAG 索引与 Step1 数据之间的一致性问题：
 
+patch_blobs 检查:
 1. missing_index - patch_blobs 中有记录但未被索引（根据 chunking_version）
 2. missing_evidence_uri - 缺失 evidence_uri 或 artifact_uri
 3. unreadable_artifact - artifact URI 指向的文件不存在或无法读取
 4. sha_mismatch - artifact 文件的 SHA256 与数据库记录不匹配
+5. scheme_violation - evidence_uri scheme 不符合规范
+
+attachments 检查:
+6. attachment_missing_index - attachment 未被索引
+7. attachment_missing_uri - attachment uri 为空
+8. attachment_unreadable - attachment 制品文件不可读
+9. attachment_sha_mismatch - attachment SHA256 不匹配
+
+索引一致性检查（需要 --check-index）:
+10. index_missing - 索引中不存在预期的 chunk
+11. index_metadata_mismatch - 索引中 chunk 的元数据与数据库不一致
+12. attachment_index_missing - attachment 索引中不存在预期的 chunk
+13. attachment_index_metadata_mismatch - attachment 索引元数据不一致
+
+Scheme 校验规则（--check-scheme，默认开启）:
+- patch_blobs 必须使用 memory://patch_blobs/...
+- attachments 必须使用 memory://attachments/...
+- 其他来源必须落在 contracts 白名单（memory, artifact, file）
 
 输入参数：
     - chunking_version: 要检查的分块版本号（必需）
@@ -28,12 +47,16 @@ seek_consistency_check.py - Step3 索引一致性检查工具
     make step3-check LIMIT=1000 JSON_OUTPUT=1               # 限制检查数并 JSON 输出
     make step3-check SKIP_ARTIFACTS=1                       # 仅检查索引状态
     make step3-check CHECK_INDEX=1 INDEX_BACKEND=pgvector   # 检查索引一致性
+    make step3-check SKIP_ATTACHMENTS=1                     # 跳过 attachments 检查
+    make step3-check SKIP_SCHEME_CHECK=1                    # 跳过 scheme 校验
 
     # 直接调用（在 apps/step3_seekdb_rag_hybrid 目录下）
     python -m seek_consistency_check --chunking-version v1-2026-01
     python -m seek_consistency_check --chunking-version v1-2026-01 --project-key myproject
     python -m seek_consistency_check --chunking-version v1-2026-01 --sample-ratio 0.1
     python -m seek_consistency_check --chunking-version v1-2026-01 --check-index --index-backend pgvector
+    python -m seek_consistency_check --chunking-version v1-2026-01 --skip-attachments
+    python -m seek_consistency_check --chunking-version v1-2026-01 --skip-scheme-check
     python -m seek_consistency_check --chunking-version v1-2026-01 --log-to-logbook --item-id 123
 """
 
@@ -121,16 +144,27 @@ class ConsistencyIssue:
     一致性问题记录
     
     issue_type 取值:
-        # 制品相关（原有）
+        # patch_blobs 相关
         - missing_index: patch_blobs 中 chunking_version 不匹配
         - missing_evidence_uri: 缺失 evidence_uri 或 artifact_uri
         - unreadable_artifact: artifact URI 指向的文件不存在或无法读取
         - sha_mismatch: artifact 文件的 SHA256 与数据库记录不匹配
+        - scheme_violation: evidence_uri scheme 不符合规范
         
-        # 索引相关（新增，需要 IndexBackend）
+        # attachments 相关
+        - attachment_missing_index: attachment chunking_version 不匹配
+        - attachment_missing_uri: attachment uri 为空
+        - attachment_unreadable: attachment 制品文件不可读
+        - attachment_sha_mismatch: attachment SHA256 不匹配
+        
+        # patch_blobs 索引相关（需要 IndexBackend）
         - index_missing: 索引中不存在预期的 chunk
         - index_version_mismatch: 索引中 chunk 的版本与预期不匹配
         - index_metadata_mismatch: 索引中 chunk 的元数据与数据库不一致
+        
+        # attachments 索引相关（需要 IndexBackend）
+        - attachment_index_missing: attachment 索引中不存在预期的 chunk
+        - attachment_index_metadata_mismatch: attachment 索引元数据不一致
     """
     issue_type: str
     blob_id: int
@@ -233,12 +267,13 @@ SQL_FETCH_PATCH_BLOBS_TO_CHECK = """
 --   :chunking_version - 要检查的分块版本
 --   :project_key - 项目标识（可选，NULL 表示不筛选）
 --   :limit - 最大记录数
+-- 注意: evidence_uri 使用 COALESCE 兼容旧数据（列优先，meta_json 回退）
 SELECT
     pb.blob_id,
     pb.source_type,
     pb.source_id,
     pb.uri,
-    pb.evidence_uri,
+    COALESCE(pb.evidence_uri, pb.meta_json->>'evidence_uri') AS evidence_uri,
     pb.sha256,
     pb.size_bytes,
     pb.format,
@@ -267,12 +302,13 @@ SQL_FETCH_PATCH_BLOBS_FULL = """
 --   :chunking_version - 要检查的分块版本
 --   :project_key - 项目标识（可选，NULL 表示不筛选）
 --   :limit - 最大记录数
+-- 注意: evidence_uri 使用 COALESCE 兼容旧数据（列优先，meta_json 回退）
 SELECT
     pb.blob_id,
     pb.source_type,
     pb.source_id,
     pb.uri,
-    pb.evidence_uri,
+    COALESCE(pb.evidence_uri, pb.meta_json->>'evidence_uri') AS evidence_uri,
     pb.sha256,
     pb.size_bytes,
     pb.format,
@@ -299,7 +335,156 @@ WHERE (:project_key IS NULL OR r.project_key = :project_key);
 """
 
 
+# ============ Attachments SQL 查询 ============
+
+
+SQL_FETCH_ATTACHMENTS_FULL = """
+-- 获取全量 attachments 记录用于一致性检查
+-- 参数:
+--   :chunking_version - 要检查的分块版本
+--   :project_key - 项目标识（可选，NULL 表示不筛选）
+--   :limit - 最大记录数
+SELECT
+    a.attachment_id,
+    a.item_id,
+    a.kind,
+    a.uri,
+    a.sha256,
+    a.size_bytes,
+    a.meta_json,
+    a.chunking_version,
+    a.created_at,
+    i.project_key
+FROM logbook.attachments a
+LEFT JOIN logbook.items i ON i.item_id = a.item_id
+WHERE (:project_key IS NULL OR i.project_key = :project_key)
+ORDER BY a.attachment_id
+LIMIT :limit;
+"""
+
+
+SQL_FETCH_ATTACHMENTS_TO_CHECK = """
+-- 获取需要检查的 attachments 记录（chunking_version 不匹配）
+-- 参数:
+--   :chunking_version - 要检查的分块版本
+--   :project_key - 项目标识（可选，NULL 表示不筛选）
+--   :limit - 最大记录数
+SELECT
+    a.attachment_id,
+    a.item_id,
+    a.kind,
+    a.uri,
+    a.sha256,
+    a.size_bytes,
+    a.meta_json,
+    a.chunking_version,
+    a.created_at,
+    i.project_key
+FROM logbook.attachments a
+LEFT JOIN logbook.items i ON i.item_id = a.item_id
+WHERE (
+    a.chunking_version IS NULL 
+    OR a.chunking_version != :chunking_version
+)
+AND (:project_key IS NULL OR i.project_key = :project_key)
+ORDER BY a.attachment_id
+LIMIT :limit;
+"""
+
+
+SQL_COUNT_ATTACHMENTS = """
+-- 统计符合条件的 attachments 总数
+SELECT COUNT(*) as total
+FROM logbook.attachments a
+LEFT JOIN logbook.items i ON i.item_id = a.item_id
+WHERE (:project_key IS NULL OR i.project_key = :project_key);
+"""
+
+
+# ============ Scheme 校验白名单 ============
+
+# contracts 白名单：允许的其他 evidence_uri scheme
+ALLOWED_EVIDENCE_SCHEMES = {
+    "memory",       # memory://patch_blobs/..., memory://attachments/...
+    "artifact",     # artifact://... 旧格式
+    "file",         # file://... 本地文件
+}
+
+
 # ============ 检查函数 ============
+
+
+def build_attachment_evidence_uri(attachment_id: int, sha256: str) -> str:
+    """
+    构建 attachment 的 canonical evidence URI（不依赖 DB 存储）
+    
+    格式: memory://attachments/<attachment_id>/<sha256>
+    
+    Args:
+        attachment_id: 附件 ID
+        sha256: 内容 SHA256 哈希
+    
+    Returns:
+        Canonical evidence URI
+    """
+    sha256_norm = sha256.strip().lower() if sha256 else ""
+    return f"memory://attachments/{attachment_id}/{sha256_norm}"
+
+
+def check_evidence_uri_scheme(
+    evidence_uri: str,
+    source_type: str,
+    record_type: str = "patch_blob",
+) -> Optional[str]:
+    """
+    校验 evidence_uri 的 scheme 是否符合规范
+    
+    规则:
+    - patch_blobs 记录必须使用 memory://patch_blobs/...
+    - attachments 记录必须使用 memory://attachments/...
+    - docs 记录必须使用 memory://docs/...
+    - 其他来源必须落在 ALLOWED_EVIDENCE_SCHEMES 白名单
+    
+    Args:
+        evidence_uri: evidence URI
+        source_type: 来源类型
+        record_type: 记录类型 ("patch_blob", "attachment" 或 "docs")
+    
+    Returns:
+        错误详情（如果有问题），否则 None
+    """
+    if not evidence_uri:
+        return None  # 缺失 URI 由其他检查处理
+    
+    # 解析 scheme
+    if "://" in evidence_uri:
+        scheme = evidence_uri.split("://")[0].lower()
+    else:
+        # 无 scheme，视为 artifact key
+        scheme = "artifact"
+    
+    # 检查 scheme 是否在白名单
+    if scheme not in ALLOWED_EVIDENCE_SCHEMES:
+        return f"非法 scheme: {scheme}，允许的 scheme: {', '.join(sorted(ALLOWED_EVIDENCE_SCHEMES))}"
+    
+    # 检查 memory:// URI 的路径前缀
+    if scheme == "memory":
+        if evidence_uri.startswith("memory://patch_blobs/"):
+            if record_type != "patch_blob":
+                return f"attachment/docs 记录不应使用 memory://patch_blobs/ URI: {evidence_uri}"
+        elif evidence_uri.startswith("memory://attachments/"):
+            if record_type != "attachment":
+                return f"patch_blob/docs 记录不应使用 memory://attachments/ URI: {evidence_uri}"
+        elif evidence_uri.startswith("memory://docs/"):
+            if record_type != "docs":
+                return f"patch_blob/attachment 记录不应使用 memory://docs/ URI: {evidence_uri}"
+        else:
+            # 其他 memory:// 路径
+            path_parts = evidence_uri.replace("memory://", "").split("/")
+            resource_type = path_parts[0] if path_parts else ""
+            return f"未知的 memory:// 资源类型: {resource_type}，允许: patch_blobs, attachments, docs"
+    
+    return None
 
 
 def check_missing_index(
@@ -467,6 +652,196 @@ def check_sha_mismatch(row: Dict[str, Any]) -> Optional[ConsistencyIssue]:
             )
     except Exception as e:
         # 读取失败已在 check_unreadable_artifact 中处理，这里跳过
+        pass
+    
+    return None
+
+
+def check_scheme_violation(
+    row: Dict[str, Any],
+    record_type: str = "patch_blob",
+) -> Optional[ConsistencyIssue]:
+    """
+    检查 evidence_uri 的 scheme 是否符合规范
+    
+    Args:
+        row: patch_blobs 或 attachments 记录
+        record_type: 记录类型 ("patch_blob" 或 "attachment")
+    
+    Returns:
+        ConsistencyIssue 如果有问题，否则 None
+    """
+    evidence_uri = row.get("evidence_uri") or row.get("uri")
+    source_type = row.get("source_type") or row.get("kind", "")
+    
+    error_detail = check_evidence_uri_scheme(evidence_uri, source_type, record_type)
+    
+    if error_detail:
+        # 获取记录标识
+        if record_type == "attachment":
+            blob_id = row.get("attachment_id", 0)
+            source_id = f"attachment:{blob_id}"
+            source_type = row.get("kind", "attachment")
+        else:
+            blob_id = row.get("blob_id", 0)
+            source_id = row.get("source_id", "")
+            source_type = row.get("source_type", "")
+        
+        return ConsistencyIssue(
+            issue_type="scheme_violation",
+            blob_id=blob_id,
+            source_type=source_type,
+            source_id=source_id,
+            uri=row.get("uri"),
+            evidence_uri=evidence_uri,
+            sha256=row.get("sha256"),
+            chunking_version=row.get("chunking_version"),
+            project_key=row.get("project_key"),
+            details=error_detail,
+        )
+    
+    return None
+
+
+# ============ Attachment 检查函数 ============
+
+
+def check_attachment_missing_index(
+    row: Dict[str, Any],
+    target_version: str,
+) -> Optional[ConsistencyIssue]:
+    """
+    检查 attachment 是否缺少索引（chunking_version 不匹配）
+    
+    Args:
+        row: attachments 记录
+        target_version: 目标分块版本
+    
+    Returns:
+        ConsistencyIssue 如果有问题，否则 None
+    """
+    current_version = row.get("chunking_version")
+    attachment_id = row.get("attachment_id", 0)
+    
+    if current_version is None or current_version != target_version:
+        return ConsistencyIssue(
+            issue_type="attachment_missing_index",
+            blob_id=attachment_id,
+            source_type=row.get("kind", "attachment"),
+            source_id=f"attachment:{attachment_id}",
+            uri=row.get("uri"),
+            evidence_uri=build_attachment_evidence_uri(attachment_id, row.get("sha256", "")),
+            sha256=row.get("sha256"),
+            chunking_version=current_version,
+            project_key=row.get("project_key"),
+            details=f"当前版本: {current_version or '(空)'}, 目标版本: {target_version}",
+        )
+    
+    return None
+
+
+def check_attachment_unreadable(row: Dict[str, Any]) -> Optional[ConsistencyIssue]:
+    """
+    检查 attachment artifact 文件是否可读
+    
+    复用 artifacts.artifact_exists 和 artifacts.read_artifact
+    
+    Args:
+        row: attachments 记录
+    
+    Returns:
+        ConsistencyIssue 如果有问题，否则 None
+    """
+    uri = row.get("uri")
+    attachment_id = row.get("attachment_id", 0)
+    
+    if not uri:
+        return ConsistencyIssue(
+            issue_type="attachment_missing_uri",
+            blob_id=attachment_id,
+            source_type=row.get("kind", "attachment"),
+            source_id=f"attachment:{attachment_id}",
+            uri=None,
+            evidence_uri=build_attachment_evidence_uri(attachment_id, row.get("sha256", "")),
+            sha256=row.get("sha256"),
+            chunking_version=row.get("chunking_version"),
+            project_key=row.get("project_key"),
+            details="attachment uri 为空",
+        )
+    
+    try:
+        if not artifact_exists(uri):
+            return ConsistencyIssue(
+                issue_type="attachment_unreadable",
+                blob_id=attachment_id,
+                source_type=row.get("kind", "attachment"),
+                source_id=f"attachment:{attachment_id}",
+                uri=uri,
+                evidence_uri=build_attachment_evidence_uri(attachment_id, row.get("sha256", "")),
+                sha256=row.get("sha256"),
+                chunking_version=row.get("chunking_version"),
+                project_key=row.get("project_key"),
+                details=f"attachment 制品文件不存在: {uri}",
+            )
+    except Exception as e:
+        return ConsistencyIssue(
+            issue_type="attachment_unreadable",
+            blob_id=attachment_id,
+            source_type=row.get("kind", "attachment"),
+            source_id=f"attachment:{attachment_id}",
+            uri=uri,
+            evidence_uri=build_attachment_evidence_uri(attachment_id, row.get("sha256", "")),
+            sha256=row.get("sha256"),
+            chunking_version=row.get("chunking_version"),
+            project_key=row.get("project_key"),
+            details=f"无法访问 attachment 制品文件: {uri}, 错误: {e}",
+        )
+    
+    return None
+
+
+def check_attachment_sha_mismatch(row: Dict[str, Any]) -> Optional[ConsistencyIssue]:
+    """
+    检查 attachment SHA256 是否匹配
+    
+    复用 artifacts.get_artifact_info 获取实际 SHA256
+    
+    Args:
+        row: attachments 记录
+    
+    Returns:
+        ConsistencyIssue 如果有问题，否则 None
+    """
+    uri = row.get("uri")
+    expected_sha256 = row.get("sha256")
+    attachment_id = row.get("attachment_id", 0)
+    
+    if not uri or not expected_sha256:
+        return None  # 没有 URI 或 SHA256 无法检查
+    
+    try:
+        if not artifact_exists(uri):
+            return None  # 已在 check_attachment_unreadable 中处理
+        
+        # 获取实际的 SHA256
+        artifact_info = get_artifact_info(uri)
+        actual_sha256 = artifact_info.get("sha256", "")
+        
+        if actual_sha256.lower() != expected_sha256.lower():
+            return ConsistencyIssue(
+                issue_type="attachment_sha_mismatch",
+                blob_id=attachment_id,
+                source_type=row.get("kind", "attachment"),
+                source_id=f"attachment:{attachment_id}",
+                uri=uri,
+                evidence_uri=build_attachment_evidence_uri(attachment_id, expected_sha256),
+                sha256=expected_sha256,
+                chunking_version=row.get("chunking_version"),
+                project_key=row.get("project_key"),
+                details=f"SHA256 不匹配: 期望={expected_sha256[:16]}..., 实际={actual_sha256[:16]}...",
+            )
+    except Exception as e:
+        # 读取失败已在 check_attachment_unreadable 中处理，这里跳过
         pass
     
     return None
@@ -788,6 +1163,523 @@ def run_index_checks(
             result.add_issue(issue)
 
 
+# ============ Attachment 索引验证函数 ============
+
+
+def generate_expected_attachment_chunk_id(
+    row: Dict[str, Any],
+    chunking_version: str,
+    chunk_idx: int = 0,
+    namespace: str = CHUNK_ID_NAMESPACE,
+) -> str:
+    """
+    根据 attachment 记录生成预期的 chunk_id
+    
+    使用 step3_chunking.generate_chunk_id 保持一致性：
+    - 格式: <namespace>:logbook:attachment.<attachment_id>:<sha256_prefix>:<chunking_version>:<chunk_idx>
+    
+    Args:
+        row: attachments 记录
+        chunking_version: 分块版本
+        chunk_idx: 分块索引（默认 0，检查第一个 chunk）
+        namespace: 命名空间（默认 CHUNK_ID_NAMESPACE）
+    
+    Returns:
+        预期的 chunk_id
+    """
+    attachment_id = row.get("attachment_id", 0)
+    sha256 = row.get("sha256", "") or "unknown"
+    
+    # attachment 使用 source_type="logbook", source_id="attachment:<id>"
+    # generate_chunk_id 内部会将冒号替换为点
+    return generate_chunk_id(
+        source_type="logbook",
+        source_id=f"attachment:{attachment_id}",
+        sha256=sha256,
+        chunk_idx=chunk_idx,
+        namespace=namespace,
+        chunking_version=chunking_version,
+    )
+
+
+def check_attachment_index_existence(
+    row: Dict[str, Any],
+    index_backend: "IndexBackend",
+    chunking_version: str,
+    max_probe_chunks: int = 5,
+) -> List[ConsistencyIssue]:
+    """
+    检查索引中是否存在预期的 attachment chunk
+    
+    探测策略：
+    1. 首先尝试 chunk_idx=0
+    2. 如果不存在，尝试调用 count_by_source 查询总数
+    3. 如果 count_by_source 不支持，循环探测少量 chunk_idx
+    4. 只有全部探测失败才报告 attachment_index_missing
+    
+    Args:
+        row: attachments 记录
+        index_backend: 索引后端实例
+        chunking_version: 分块版本
+        max_probe_chunks: 最大探测 chunk 数量（默认 5）
+    
+    Returns:
+        ConsistencyIssue 列表
+    """
+    issues = []
+    
+    # 仅检查已标记为已索引的记录（chunking_version 匹配）
+    current_version = row.get("chunking_version")
+    if current_version != chunking_version:
+        return []  # 未索引的记录由 check_attachment_missing_index 处理
+    
+    attachment_id = row.get("attachment_id", 0)
+    source_type = "logbook"
+    source_id = f"attachment:{attachment_id}"
+    
+    try:
+        # 策略 1: 先尝试 chunk_idx=0
+        expected_chunk_id_0 = generate_expected_attachment_chunk_id(row, chunking_version, chunk_idx=0)
+        exists_result = index_backend.exists([expected_chunk_id_0])
+        
+        if exists_result.get(expected_chunk_id_0, False):
+            # chunk_idx=0 存在，通过检查
+            return []
+        
+        # 策略 2: 尝试 count_by_source
+        try:
+            count = index_backend.count_by_source(source_type, source_id)
+            if count > 0:
+                # 存在 chunk，通过检查
+                return []
+            elif count == 0:
+                # 明确返回 0，说明没有 chunk
+                issues.append(ConsistencyIssue(
+                    issue_type="attachment_index_missing",
+                    blob_id=attachment_id,
+                    source_type=row.get("kind", "attachment"),
+                    source_id=source_id,
+                    uri=row.get("uri"),
+                    evidence_uri=build_attachment_evidence_uri(attachment_id, row.get("sha256", "")),
+                    sha256=row.get("sha256"),
+                    chunking_version=current_version,
+                    project_key=row.get("project_key"),
+                    details=f"索引中不存在该 attachment 的任何 chunk (count_by_source=0), 预期 chunk_id 前缀: {expected_chunk_id_0.rsplit(':', 1)[0]}",
+                ))
+                return issues
+            # count == -1 表示不支持，继续下一个策略
+        except Exception as e:
+            logger.debug(f"count_by_source 调用失败 source_type={source_type}, source_id={source_id}: {e}")
+        
+        # 策略 3: 循环探测少量 chunk_idx
+        chunk_ids_to_probe = [
+            generate_expected_attachment_chunk_id(row, chunking_version, chunk_idx=i)
+            for i in range(1, max_probe_chunks)
+        ]
+        
+        if chunk_ids_to_probe:
+            exists_result = index_backend.exists(chunk_ids_to_probe)
+            for chunk_id in chunk_ids_to_probe:
+                if exists_result.get(chunk_id, False):
+                    # 找到存在的 chunk，通过检查
+                    return []
+        
+        # 全部探测失败，报告 attachment_index_missing
+        issues.append(ConsistencyIssue(
+            issue_type="attachment_index_missing",
+            blob_id=attachment_id,
+            source_type=row.get("kind", "attachment"),
+            source_id=source_id,
+            uri=row.get("uri"),
+            evidence_uri=build_attachment_evidence_uri(attachment_id, row.get("sha256", "")),
+            sha256=row.get("sha256"),
+            chunking_version=current_version,
+            project_key=row.get("project_key"),
+            details=f"索引中不存在预期的 chunk (探测 chunk_idx 0~{max_probe_chunks-1}): {expected_chunk_id_0}",
+        ))
+        
+    except Exception as e:
+        logger.debug(f"attachment 索引检查失败 attachment_id={attachment_id}: {e}")
+    
+    return issues
+
+
+def check_attachment_index_metadata(
+    row: Dict[str, Any],
+    index_backend: "IndexBackend",
+    chunking_version: str,
+    max_probe_chunks: int = 5,
+) -> List[ConsistencyIssue]:
+    """
+    检查索引中 attachment chunk 的元数据是否与数据库一致
+    
+    验证字段：
+    - artifact_uri: 应为 memory://attachments/<attachment_id>/<sha256>
+    - sha256: 应与 DB 记录一致
+    - source_id: 应为 attachment:<attachment_id>
+    
+    Args:
+        row: attachments 记录
+        index_backend: 索引后端实例
+        chunking_version: 分块版本
+        max_probe_chunks: 最大探测 chunk 数量（默认 5）
+    
+    Returns:
+        ConsistencyIssue 列表
+    """
+    issues = []
+    
+    # 仅检查已标记为已索引的记录
+    current_version = row.get("chunking_version")
+    if current_version != chunking_version:
+        return []
+    
+    attachment_id = row.get("attachment_id", 0)
+    expected_sha256 = row.get("sha256", "")
+    expected_evidence_uri = build_attachment_evidence_uri(attachment_id, expected_sha256)
+    expected_source_id = f"attachment:{attachment_id}"
+    
+    try:
+        # 探测找到第一个存在的 chunk
+        found_chunk_id = None
+        chunk_ids_to_probe = [
+            generate_expected_attachment_chunk_id(row, chunking_version, chunk_idx=i)
+            for i in range(max_probe_chunks)
+        ]
+        
+        exists_result = index_backend.exists(chunk_ids_to_probe)
+        for chunk_id in chunk_ids_to_probe:
+            if exists_result.get(chunk_id, False):
+                found_chunk_id = chunk_id
+                break
+        
+        if not found_chunk_id:
+            return []  # 不存在的情况由 check_attachment_index_existence 处理
+        
+        # 获取索引中的元数据
+        metadata_result = index_backend.get_chunk_metadata([found_chunk_id])
+        chunk_meta = metadata_result.get(found_chunk_id)
+        
+        if not chunk_meta:
+            return []  # 元数据获取失败，跳过
+        
+        # 验证 artifact_uri
+        indexed_artifact_uri = chunk_meta.get("artifact_uri", "")
+        if indexed_artifact_uri and expected_evidence_uri:
+            if indexed_artifact_uri.lower() != expected_evidence_uri.lower():
+                issues.append(ConsistencyIssue(
+                    issue_type="attachment_index_metadata_mismatch",
+                    blob_id=attachment_id,
+                    source_type=row.get("kind", "attachment"),
+                    source_id=expected_source_id,
+                    uri=row.get("uri"),
+                    evidence_uri=expected_evidence_uri,
+                    sha256=expected_sha256,
+                    chunking_version=current_version,
+                    project_key=row.get("project_key"),
+                    details=f"artifact_uri 不匹配: 期望={expected_evidence_uri}, 索引={indexed_artifact_uri}",
+                ))
+        
+        # 验证 SHA256
+        indexed_sha256 = chunk_meta.get("sha256", "")
+        if expected_sha256 and indexed_sha256:
+            sha256_prefix_len = 12
+            expected_prefix = expected_sha256[:sha256_prefix_len].lower()
+            indexed_prefix = indexed_sha256[:sha256_prefix_len].lower() if len(indexed_sha256) >= sha256_prefix_len else indexed_sha256.lower()
+            
+            if not expected_prefix.startswith(indexed_prefix) and not indexed_prefix.startswith(expected_prefix):
+                if expected_sha256.lower() != indexed_sha256.lower():
+                    issues.append(ConsistencyIssue(
+                        issue_type="attachment_index_metadata_mismatch",
+                        blob_id=attachment_id,
+                        source_type=row.get("kind", "attachment"),
+                        source_id=expected_source_id,
+                        uri=row.get("uri"),
+                        evidence_uri=expected_evidence_uri,
+                        sha256=expected_sha256,
+                        chunking_version=current_version,
+                        project_key=row.get("project_key"),
+                        details=f"SHA256 不匹配: DB={expected_sha256[:16]}..., Index={indexed_sha256[:16] if indexed_sha256 else '(空)'}...",
+                    ))
+        
+        # 验证 source_id
+        indexed_source_id = chunk_meta.get("source_id", "")
+        # 还原 source_id 的冒号（如果索引中存储的是替换后的格式）
+        indexed_source_id_normalized = indexed_source_id.replace(".", ":") if "." in indexed_source_id and ":" not in indexed_source_id else indexed_source_id
+        if indexed_source_id:
+            if expected_source_id != indexed_source_id and expected_source_id != indexed_source_id_normalized:
+                issues.append(ConsistencyIssue(
+                    issue_type="attachment_index_metadata_mismatch",
+                    blob_id=attachment_id,
+                    source_type=row.get("kind", "attachment"),
+                    source_id=expected_source_id,
+                    uri=row.get("uri"),
+                    evidence_uri=expected_evidence_uri,
+                    sha256=expected_sha256,
+                    chunking_version=current_version,
+                    project_key=row.get("project_key"),
+                    details=f"source_id 不匹配: 期望={expected_source_id}, Index={indexed_source_id}",
+                ))
+            
+    except Exception as e:
+        logger.debug(f"attachment 索引元数据检查失败 attachment_id={attachment_id}: {e}")
+    
+    return issues
+
+
+def run_attachment_index_checks(
+    rows: List[Dict[str, Any]],
+    index_backend: "IndexBackend",
+    chunking_version: str,
+    result: "ConsistencyCheckResult",
+    sample_size: int = 100,
+) -> None:
+    """
+    对 attachment 记录进行索引一致性检查（抽样）
+    
+    Args:
+        rows: attachments 记录列表
+        index_backend: 索引后端实例
+        chunking_version: 分块版本
+        result: 检查结果对象（会被原地修改）
+        sample_size: 抽样大小
+    """
+    if not INDEX_BACKEND_AVAILABLE or index_backend is None:
+        logger.warning("IndexBackend 不可用，跳过 attachment 索引一致性检查")
+        return
+    
+    # 筛选已索引的记录
+    indexed_rows = [r for r in rows if r.get("chunking_version") == chunking_version]
+    
+    if not indexed_rows:
+        logger.info("没有已索引的 attachment 记录，跳过索引检查")
+        return
+    
+    # 抽样
+    if len(indexed_rows) > sample_size:
+        check_rows = random.sample(indexed_rows, sample_size)
+        logger.info(f"Attachment 索引检查: 从 {len(indexed_rows)} 条已索引记录中抽样 {sample_size} 条")
+    else:
+        check_rows = indexed_rows
+        logger.info(f"Attachment 索引检查: 检查全部 {len(check_rows)} 条已索引记录")
+    
+    # 执行检查
+    for row in check_rows:
+        # 检查存在性
+        for issue in check_attachment_index_existence(row, index_backend, chunking_version):
+            result.add_issue(issue)
+        
+        # 检查元数据一致性
+        for issue in check_attachment_index_metadata(row, index_backend, chunking_version):
+            result.add_issue(issue)
+
+
+# ============ Docs 一致性检查函数 ============
+
+
+def build_docs_evidence_uri(rel_path: str, sha256: str) -> str:
+    """
+    构建 docs 的 canonical evidence URI（不依赖 DB 存储）
+    
+    格式: memory://docs/<rel_path>/<sha256>
+    
+    Args:
+        rel_path: 相对路径
+        sha256: 内容 SHA256 哈希
+    
+    Returns:
+        Canonical evidence URI
+    """
+    sha256_norm = sha256.strip().lower() if sha256 else ""
+    rel_path_norm = rel_path.replace("\\", "/").strip("/")
+    return f"memory://docs/{rel_path_norm}/{sha256_norm}"
+
+
+def check_docs_file_readable(
+    doc_info: Dict[str, Any],
+    docs_root: str,
+) -> Optional[ConsistencyIssue]:
+    """
+    检查文档文件是否可读
+    
+    Args:
+        doc_info: 文档信息字典
+        docs_root: 文档根目录
+    
+    Returns:
+        ConsistencyIssue 如果有问题，否则 None
+    """
+    from pathlib import Path
+    
+    rel_path = doc_info.get("rel_path", "")
+    full_path = Path(docs_root) / rel_path
+    
+    if not full_path.exists():
+        return ConsistencyIssue(
+            issue_type="docs_unreadable",
+            blob_id=0,
+            source_type="docs",
+            source_id=f"docs:{rel_path}",
+            uri=str(full_path),
+            evidence_uri=doc_info.get("artifact_uri"),
+            sha256=doc_info.get("sha256"),
+            chunking_version=None,
+            project_key=None,
+            details=f"文档文件不存在: {full_path}",
+        )
+    
+    if not full_path.is_file():
+        return ConsistencyIssue(
+            issue_type="docs_unreadable",
+            blob_id=0,
+            source_type="docs",
+            source_id=f"docs:{rel_path}",
+            uri=str(full_path),
+            evidence_uri=doc_info.get("artifact_uri"),
+            sha256=doc_info.get("sha256"),
+            chunking_version=None,
+            project_key=None,
+            details=f"路径不是文件: {full_path}",
+        )
+    
+    try:
+        full_path.read_bytes()
+    except OSError as e:
+        return ConsistencyIssue(
+            issue_type="docs_unreadable",
+            blob_id=0,
+            source_type="docs",
+            source_id=f"docs:{rel_path}",
+            uri=str(full_path),
+            evidence_uri=doc_info.get("artifact_uri"),
+            sha256=doc_info.get("sha256"),
+            chunking_version=None,
+            project_key=None,
+            details=f"无法读取文档文件: {e}",
+        )
+    
+    return None
+
+
+def check_docs_sha_mismatch(
+    doc_info: Dict[str, Any],
+    docs_root: str,
+) -> Optional[ConsistencyIssue]:
+    """
+    检查文档 SHA256 是否匹配
+    
+    Args:
+        doc_info: 文档信息字典
+        docs_root: 文档根目录
+    
+    Returns:
+        ConsistencyIssue 如果有问题，否则 None
+    """
+    from pathlib import Path
+    
+    rel_path = doc_info.get("rel_path", "")
+    expected_sha256 = doc_info.get("sha256", "")
+    full_path = Path(docs_root) / rel_path
+    
+    if not expected_sha256:
+        return None  # 没有预期 SHA256 无法检查
+    
+    if not full_path.exists():
+        return None  # 文件不存在由 check_docs_file_readable 处理
+    
+    try:
+        content = full_path.read_bytes()
+        actual_sha256 = hashlib.sha256(content).hexdigest()
+        
+        if actual_sha256.lower() != expected_sha256.lower():
+            return ConsistencyIssue(
+                issue_type="docs_sha_mismatch",
+                blob_id=0,
+                source_type="docs",
+                source_id=f"docs:{rel_path}",
+                uri=str(full_path),
+                evidence_uri=doc_info.get("artifact_uri"),
+                sha256=expected_sha256,
+                chunking_version=None,
+                project_key=None,
+                details=f"SHA256 不匹配: 期望={expected_sha256[:16]}..., 实际={actual_sha256[:16]}...",
+            )
+    except OSError:
+        pass  # 读取失败由 check_docs_file_readable 处理
+    
+    return None
+
+
+def run_docs_consistency_check(
+    docs_root: str,
+    patterns: Optional[list] = None,
+    exclude_patterns: Optional[list] = None,
+    result: "ConsistencyCheckResult" = None,
+    sample_size: int = 100,
+) -> int:
+    """
+    执行文档一致性检查（抽样）
+    
+    扫描 docs_root 目录，检查文档文件的可读性和 SHA256 一致性。
+    
+    Args:
+        docs_root: 文档根目录
+        patterns: 包含的文件模式列表（默认 ["*.md", "*.txt"]）
+        exclude_patterns: 排除的文件模式列表
+        result: 检查结果对象（会被原地修改）
+        sample_size: 抽样大小
+    
+    Returns:
+        检查的文档数量
+    """
+    from pathlib import Path
+    
+    # 导入扫描函数
+    try:
+        from step3_seekdb_rag_hybrid.step3_readers import scan_docs_directory
+    except ImportError:
+        from step3_readers import scan_docs_directory
+    
+    docs_root_path = Path(docs_root)
+    if not docs_root_path.exists():
+        logger.warning(f"文档目录不存在: {docs_root}")
+        return 0
+    
+    # 扫描文档
+    logger.info(f"扫描文档目录: {docs_root}")
+    doc_files = scan_docs_directory(docs_root, patterns, exclude_patterns)
+    
+    if not doc_files:
+        logger.info("没有发现文档文件，跳过 docs 检查")
+        return 0
+    
+    # 抽样
+    if len(doc_files) > sample_size:
+        check_docs = random.sample(doc_files, sample_size)
+        logger.info(f"Docs 检查: 从 {len(doc_files)} 个文档中抽样 {sample_size} 个")
+    else:
+        check_docs = doc_files
+        logger.info(f"Docs 检查: 检查全部 {len(check_docs)} 个文档")
+    
+    # 执行检查
+    docs_checked = 0
+    for doc_info in check_docs:
+        docs_checked += 1
+        
+        # 检查文件可读性
+        issue = check_docs_file_readable(doc_info, docs_root)
+        if issue:
+            result.add_issue(issue)
+            continue  # 不可读的文件跳过 SHA256 检查
+        
+        # 检查 SHA256
+        issue = check_docs_sha_mismatch(doc_info, docs_root)
+        if issue:
+            result.add_issue(issue)
+    
+    return docs_checked
+
+
 def run_consistency_check(
     conn: psycopg.Connection,
     chunking_version: str,
@@ -796,6 +1688,13 @@ def run_consistency_check(
     limit: Optional[int] = None,
     check_artifacts: bool = True,
     verify_sha256: bool = True,
+    check_scheme: bool = True,
+    check_attachments: bool = True,
+    check_docs: bool = False,
+    docs_root: Optional[str] = None,
+    docs_patterns: Optional[list] = None,
+    docs_exclude: Optional[list] = None,
+    docs_sample_size: int = 100,
     index_backend: Optional["IndexBackend"] = None,
     index_sample_size: int = 100,
 ) -> ConsistencyCheckResult:
@@ -810,6 +1709,13 @@ def run_consistency_check(
         limit: 最大记录数
         check_artifacts: 是否检查制品文件存在性
         verify_sha256: 是否验证 SHA256
+        check_scheme: 是否检查 scheme 规范
+        check_attachments: 是否检查 attachments
+        check_docs: 是否检查 docs（本地文档）
+        docs_root: 文档根目录（check_docs=True 时必需）
+        docs_patterns: 文档文件模式列表（默认 ["*.md", "*.txt"]）
+        docs_exclude: 排除的文件模式列表
+        docs_sample_size: docs 检查抽样大小（默认 100）
         index_backend: 可选的索引后端实例，用于验证索引一致性
         index_sample_size: 索引检查抽样大小（默认 100）
     
@@ -820,6 +1726,7 @@ def run_consistency_check(
         - 原有的制品检查逻辑（check_artifacts, verify_sha256）作为降级路径保持不变
         - 如果提供了 index_backend，会额外进行索引一致性检查
         - 索引检查包括: index_missing, index_version_mismatch, index_metadata_mismatch
+        - docs 检查包括: docs_unreadable, docs_sha_mismatch
     """
     result = ConsistencyCheckResult(
         chunking_version=chunking_version,
@@ -902,6 +1809,21 @@ def run_consistency_check(
         )
     elif INDEX_BACKEND_AVAILABLE:
         logger.debug("未提供 IndexBackend 实例，跳过索引一致性检查")
+    
+    # 检查 8: docs（本地文档）一致性检查（可选）
+    if check_docs and docs_root:
+        logger.info("开始执行 docs 一致性检查...")
+        docs_checked = run_docs_consistency_check(
+            docs_root=docs_root,
+            patterns=docs_patterns,
+            exclude_patterns=docs_exclude,
+            result=result,
+            sample_size=docs_sample_size,
+        )
+        result.total_checked += docs_checked
+        logger.info(f"Docs 检查完成: 检查了 {docs_checked} 个文档")
+    elif check_docs and not docs_root:
+        logger.warning("check_docs=True 但未提供 docs_root，跳过 docs 检查")
     
     # 计算耗时
     end_time = datetime.now(timezone.utc)
@@ -1118,6 +2040,8 @@ def parse_args() -> argparse.Namespace:
     make step3-check LIMIT=1000 JSON_OUTPUT=1               # 限制检查数并 JSON 输出
     make step3-check SKIP_ARTIFACTS=1                       # 仅检查索引状态
     make step3-check CHECK_INDEX=1 INDEX_BACKEND=pgvector   # 检查索引一致性
+    make step3-check SKIP_ATTACHMENTS=1                     # 跳过 attachments 检查
+    make step3-check SKIP_SCHEME_CHECK=1                    # 跳过 scheme 校验
 
     # 直接调用
     python -m seek_consistency_check --chunking-version v1-2026-01
@@ -1125,6 +2049,8 @@ def parse_args() -> argparse.Namespace:
     python -m seek_consistency_check --chunking-version v1-2026-01 --sample-ratio 0.1
     python -m seek_consistency_check --chunking-version v1-2026-01 --limit 1000
     python -m seek_consistency_check --chunking-version v1-2026-01 --skip-artifacts
+    python -m seek_consistency_check --chunking-version v1-2026-01 --skip-attachments
+    python -m seek_consistency_check --chunking-version v1-2026-01 --skip-scheme-check
     python -m seek_consistency_check --chunking-version v1-2026-01 --check-index --index-backend pgvector
     python -m seek_consistency_check --chunking-version v1-2026-01 --check-index --backend seekdb
     python -m seek_consistency_check --chunking-version v1-2026-01 --log-to-logbook --item-id 123
@@ -1174,6 +2100,47 @@ def parse_args() -> argparse.Namespace:
         "--skip-sha256",
         action="store_true",
         help="跳过 SHA256 验证",
+    )
+    parser.add_argument(
+        "--skip-scheme-check",
+        action="store_true",
+        help="跳过 evidence_uri scheme 校验",
+    )
+    parser.add_argument(
+        "--skip-attachments",
+        action="store_true",
+        help="跳过 logbook.attachments 检查",
+    )
+
+    # Docs 检查选项
+    parser.add_argument(
+        "--check-docs",
+        action="store_true",
+        help="启用本地文档（docs）一致性检查",
+    )
+    parser.add_argument(
+        "--docs-root",
+        type=str,
+        default=None,
+        help="文档根目录（--check-docs 时必需）",
+    )
+    parser.add_argument(
+        "--docs-patterns",
+        type=str,
+        default="*.md,*.txt",
+        help="文档文件模式，逗号分隔（默认 '*.md,*.txt'）",
+    )
+    parser.add_argument(
+        "--docs-exclude",
+        type=str,
+        default=None,
+        help="排除的文件模式，逗号分隔",
+    )
+    parser.add_argument(
+        "--docs-sample-size",
+        type=int,
+        default=100,
+        help="Docs 检查抽样大小 (默认: 100)",
     )
     
     # 索引检查选项（需要 IndexBackend）
@@ -1289,6 +2256,10 @@ def main() -> int:
             if index_backend:
                 logger.info(f"  索引检查: 已启用 (抽样 {args.index_sample_size} 条)")
             
+            # 解析 docs 相关参数
+            docs_patterns = args.docs_patterns.split(",") if args.docs_patterns else None
+            docs_exclude = args.docs_exclude.split(",") if args.docs_exclude else None
+
             result = run_consistency_check(
                 conn=conn,
                 chunking_version=args.chunking_version,
@@ -1297,6 +2268,13 @@ def main() -> int:
                 limit=args.limit,
                 check_artifacts=not args.skip_artifacts,
                 verify_sha256=not args.skip_sha256,
+                check_scheme=not args.skip_scheme_check,
+                check_attachments=not args.skip_attachments,
+                check_docs=args.check_docs,
+                docs_root=args.docs_root,
+                docs_patterns=docs_patterns,
+                docs_exclude=docs_exclude,
+                docs_sample_size=args.docs_sample_size,
                 index_backend=index_backend,
                 index_sample_size=args.index_sample_size,
             )

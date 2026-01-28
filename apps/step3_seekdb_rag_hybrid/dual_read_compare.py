@@ -92,6 +92,72 @@ ENV_RANK_P95_MAX_FAIL = "STEP3_DUAL_READ_RANK_P95_MAX_FAIL"  # P95 排名漂移�
 # 延迟比率阈值
 ENV_LATENCY_RATIO_MAX = "STEP3_DUAL_READ_LATENCY_RATIO_MAX"  # 延迟比率上限，默认 2.0
 
+# =============================================================================
+# 废弃的环境变量别名（deprecated）
+# 这些旧名称仍然支持，但会映射到 canonical 名称
+# =============================================================================
+
+# 旧的命中重叠率变量名（HIT_OVERLAP -> OVERLAP）
+# DEPRECATED: 请使用 STEP3_DUAL_READ_OVERLAP_MIN_WARN / STEP3_DUAL_READ_OVERLAP_MIN_FAIL
+DEPRECATED_ENV_HIT_OVERLAP_MIN_WARN = "STEP3_DUAL_READ_HIT_OVERLAP_MIN_WARN"
+DEPRECATED_ENV_HIT_OVERLAP_MIN_FAIL = "STEP3_DUAL_READ_HIT_OVERLAP_MIN_FAIL"
+
+# 废弃别名映射：{canonical_key: [deprecated_key1, deprecated_key2, ...]}
+DEPRECATED_ALIASES: Dict[str, List[str]] = {
+    ENV_OVERLAP_MIN_WARN: [DEPRECATED_ENV_HIT_OVERLAP_MIN_WARN],
+    ENV_OVERLAP_MIN_FAIL: [DEPRECATED_ENV_HIT_OVERLAP_MIN_FAIL],
+}
+
+
+# 阈值来源常量
+THRESHOLD_SOURCE_DEFAULT = "default"
+THRESHOLD_SOURCE_ENV = "env"
+THRESHOLD_SOURCE_CLI = "cli"
+
+
+@dataclass
+class ThresholdsSource:
+    """
+    阈值来源追踪
+    
+    记录 CompareThresholds 各字段的来源，用于审计和调试。
+    """
+    # 主来源标识（default/env/cli）
+    primary_source: str = THRESHOLD_SOURCE_DEFAULT
+    
+    # 各字段的来源追踪（字段名 -> 来源）
+    field_sources: Dict[str, str] = field(default_factory=dict)
+    
+    # 版本信息
+    version: str = ""  # 时间戳或 git SHA
+    
+    # 环境变量中实际设置的键
+    env_keys_used: List[str] = field(default_factory=list)
+    
+    # CLI 参数覆盖的字段
+    cli_overrides: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            "primary_source": self.primary_source,
+            "field_sources": self.field_sources,
+            "version": self.version,
+            "env_keys_used": self.env_keys_used,
+            "cli_overrides": self.cli_overrides,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ThresholdsSource":
+        """从字典构建 ThresholdsSource"""
+        return cls(
+            primary_source=data.get("primary_source", THRESHOLD_SOURCE_DEFAULT),
+            field_sources=data.get("field_sources", {}),
+            version=data.get("version", ""),
+            env_keys_used=data.get("env_keys_used", []),
+            cli_overrides=data.get("cli_overrides", []),
+        )
+
 
 @dataclass
 class CompareThresholds:
@@ -144,9 +210,12 @@ class CompareThresholds:
     # 默认 2.0 表示次要后端延迟不超过主后端 2 倍
     latency_ratio_max: float = 2.0
     
+    # 来源追踪（不参与阈值比较）
+    source: Optional[ThresholdsSource] = field(default=None, compare=False)
+    
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
-        return {
+        result = {
             "score_tolerance": self.score_tolerance,
             "score_drift_p95_max": self.score_drift_p95_max,
             "rank_drift_max": self.rank_drift_max,
@@ -159,10 +228,29 @@ class CompareThresholds:
             "rbo_min_fail": self.rbo_min_fail,
             "latency_ratio_max": self.latency_ratio_max,
         }
+        if self.source is not None:
+            result["source"] = self.source.to_dict()
+        return result
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CompareThresholds":
-        """从字典构建 CompareThresholds"""
+    def from_dict(cls, data: Dict[str, Any], source: str = THRESHOLD_SOURCE_CLI) -> "CompareThresholds":
+        """
+        从字典构建 CompareThresholds
+        
+        Args:
+            data: 阈值配置字典
+            source: 来源标识（默认 cli，表示从 CLI 参数解析）
+        """
+        # 追踪哪些字段被显式设置
+        cli_overrides = [k for k in data.keys() if k != "source"]
+        
+        thresholds_source = ThresholdsSource(
+            primary_source=source,
+            field_sources={k: source for k in cli_overrides},
+            cli_overrides=cli_overrides,
+            version=datetime.now().strftime("%Y%m%dT%H%M%S"),
+        )
+        
         return cls(
             score_tolerance=data.get("score_tolerance", 0.05),
             score_drift_p95_max=data.get("score_drift_p95_max", 0.1),
@@ -175,6 +263,7 @@ class CompareThresholds:
             rbo_min_warn=data.get("rbo_min_warn", 0.8),
             rbo_min_fail=data.get("rbo_min_fail", 0.6),
             latency_ratio_max=data.get("latency_ratio_max", 2.0),
+            source=thresholds_source,
         )
     
     @classmethod
@@ -182,7 +271,7 @@ class CompareThresholds:
         """
         从环境变量加载阈值配置
         
-        环境变量命名规则：
+        环境变量命名规则（canonical）：
         - STEP3_DUAL_READ_OVERLAP_MIN_WARN: 命中重叠率警告阈值
         - STEP3_DUAL_READ_OVERLAP_MIN_FAIL: 命中重叠率失败阈值
         - STEP3_DUAL_READ_SCORE_DRIFT_P95_MAX: P95 分数漂移上限
@@ -192,40 +281,143 @@ class CompareThresholds:
         - STEP3_DUAL_READ_RANK_P95_MAX_FAIL: P95 排名漂移失败阈值
         - STEP3_DUAL_READ_LATENCY_RATIO_MAX: 延迟比率上限
         
+        废弃别名（仍然支持，映射到 canonical）：
+        - STEP3_DUAL_READ_HIT_OVERLAP_MIN_WARN -> STEP3_DUAL_READ_OVERLAP_MIN_WARN
+        - STEP3_DUAL_READ_HIT_OVERLAP_MIN_FAIL -> STEP3_DUAL_READ_OVERLAP_MIN_FAIL
+        
         Returns:
-            从环境变量加载的 CompareThresholds 实例
+            从环境变量加载的 CompareThresholds 实例（含来源追踪）
         """
-        def _get_float(key: str, default: float) -> float:
-            val = os.environ.get(key)
+        import warnings
+        
+        env_keys_used: List[str] = []
+        field_sources: Dict[str, str] = {}
+        
+        def _get_env_with_aliases(
+            canonical_key: str,
+            deprecated_keys: Optional[List[str]] = None,
+        ) -> tuple:
+            """
+            获取环境变量值，支持废弃别名
+            
+            优先级: canonical > deprecated (按顺序)
+            
+            Returns:
+                (value, used_key): value 是字符串或 None，used_key 是实际使用的键名
+            """
+            # 1. 先检查 canonical 键
+            val = os.environ.get(canonical_key)
+            if val is not None:
+                return (val, canonical_key)
+            
+            # 2. 检查废弃别名
+            if deprecated_keys:
+                for dep_key in deprecated_keys:
+                    val = os.environ.get(dep_key)
+                    if val is not None:
+                        # 发出废弃警告
+                        warnings.warn(
+                            f"环境变量 {dep_key} 已废弃，请改用 {canonical_key}。",
+                            DeprecationWarning,
+                            stacklevel=4,
+                        )
+                        return (val, dep_key)
+            
+            return (None, None)
+        
+        def _get_float(key: str, field_name: str, default: float) -> float:
+            deprecated_keys = DEPRECATED_ALIASES.get(key)
+            val, used_key = _get_env_with_aliases(key, deprecated_keys)
             if val is None:
+                field_sources[field_name] = THRESHOLD_SOURCE_DEFAULT
                 return default
             try:
+                env_keys_used.append(used_key)
+                field_sources[field_name] = THRESHOLD_SOURCE_ENV
                 return float(val)
             except ValueError:
+                field_sources[field_name] = THRESHOLD_SOURCE_DEFAULT
                 return default
         
-        def _get_int(key: str, default: int) -> int:
-            val = os.environ.get(key)
+        def _get_int(key: str, field_name: str, default: int) -> int:
+            deprecated_keys = DEPRECATED_ALIASES.get(key)
+            val, used_key = _get_env_with_aliases(key, deprecated_keys)
             if val is None:
+                field_sources[field_name] = THRESHOLD_SOURCE_DEFAULT
                 return default
             try:
+                env_keys_used.append(used_key)
+                field_sources[field_name] = THRESHOLD_SOURCE_ENV
                 return int(val)
             except ValueError:
+                field_sources[field_name] = THRESHOLD_SOURCE_DEFAULT
                 return default
         
-        return cls(
-            score_tolerance=_get_float("STEP3_DUAL_READ_SCORE_TOLERANCE", 0.05),
-            score_drift_p95_max=_get_float(ENV_SCORE_DRIFT_P95_MAX, 0.1),
-            rank_drift_max=_get_int("STEP3_DUAL_READ_RANK_DRIFT_MAX", 3),
-            rank_p95_max_warn=_get_int(ENV_RANK_P95_MAX_WARN, 3),
-            rank_p95_max_fail=_get_int(ENV_RANK_P95_MAX_FAIL, 5),
-            hit_overlap_min=_get_float("STEP3_DUAL_READ_OVERLAP_MIN", 0.7),
-            hit_overlap_min_warn=_get_float(ENV_OVERLAP_MIN_WARN, 0.7),
-            hit_overlap_min_fail=_get_float(ENV_OVERLAP_MIN_FAIL, 0.5),
-            rbo_min_warn=_get_float(ENV_RBO_MIN_WARN, 0.8),
-            rbo_min_fail=_get_float(ENV_RBO_MIN_FAIL, 0.6),
-            latency_ratio_max=_get_float(ENV_LATENCY_RATIO_MAX, 2.0),
+        # 加载各字段值
+        score_tolerance = _get_float("STEP3_DUAL_READ_SCORE_TOLERANCE", "score_tolerance", 0.05)
+        score_drift_p95_max = _get_float(ENV_SCORE_DRIFT_P95_MAX, "score_drift_p95_max", 0.1)
+        rank_drift_max = _get_int("STEP3_DUAL_READ_RANK_DRIFT_MAX", "rank_drift_max", 3)
+        rank_p95_max_warn = _get_int(ENV_RANK_P95_MAX_WARN, "rank_p95_max_warn", 3)
+        rank_p95_max_fail = _get_int(ENV_RANK_P95_MAX_FAIL, "rank_p95_max_fail", 5)
+        hit_overlap_min = _get_float("STEP3_DUAL_READ_OVERLAP_MIN", "hit_overlap_min", 0.7)
+        hit_overlap_min_warn = _get_float(ENV_OVERLAP_MIN_WARN, "hit_overlap_min_warn", 0.7)
+        hit_overlap_min_fail = _get_float(ENV_OVERLAP_MIN_FAIL, "hit_overlap_min_fail", 0.5)
+        rbo_min_warn = _get_float(ENV_RBO_MIN_WARN, "rbo_min_warn", 0.8)
+        rbo_min_fail = _get_float(ENV_RBO_MIN_FAIL, "rbo_min_fail", 0.6)
+        latency_ratio_max = _get_float(ENV_LATENCY_RATIO_MAX, "latency_ratio_max", 2.0)
+        
+        # 确定主来源
+        primary_source = THRESHOLD_SOURCE_ENV if env_keys_used else THRESHOLD_SOURCE_DEFAULT
+        
+        thresholds_source = ThresholdsSource(
+            primary_source=primary_source,
+            field_sources=field_sources,
+            version=datetime.now().strftime("%Y%m%dT%H%M%S"),
+            env_keys_used=env_keys_used,
         )
+        
+        return cls(
+            score_tolerance=score_tolerance,
+            score_drift_p95_max=score_drift_p95_max,
+            rank_drift_max=rank_drift_max,
+            rank_p95_max_warn=rank_p95_max_warn,
+            rank_p95_max_fail=rank_p95_max_fail,
+            hit_overlap_min=hit_overlap_min,
+            hit_overlap_min_warn=hit_overlap_min_warn,
+            hit_overlap_min_fail=hit_overlap_min_fail,
+            rbo_min_warn=rbo_min_warn,
+            rbo_min_fail=rbo_min_fail,
+            latency_ratio_max=latency_ratio_max,
+            source=thresholds_source,
+        )
+    
+    @classmethod
+    def default(cls) -> "CompareThresholds":
+        """
+        返回默认阈值配置（含来源追踪）
+        
+        Returns:
+            默认的 CompareThresholds 实例
+        """
+        thresholds_source = ThresholdsSource(
+            primary_source=THRESHOLD_SOURCE_DEFAULT,
+            field_sources={
+                "score_tolerance": THRESHOLD_SOURCE_DEFAULT,
+                "score_drift_p95_max": THRESHOLD_SOURCE_DEFAULT,
+                "rank_drift_max": THRESHOLD_SOURCE_DEFAULT,
+                "rank_p95_max_warn": THRESHOLD_SOURCE_DEFAULT,
+                "rank_p95_max_fail": THRESHOLD_SOURCE_DEFAULT,
+                "hit_overlap_min": THRESHOLD_SOURCE_DEFAULT,
+                "hit_overlap_min_warn": THRESHOLD_SOURCE_DEFAULT,
+                "hit_overlap_min_fail": THRESHOLD_SOURCE_DEFAULT,
+                "rbo_min_warn": THRESHOLD_SOURCE_DEFAULT,
+                "rbo_min_fail": THRESHOLD_SOURCE_DEFAULT,
+                "latency_ratio_max": THRESHOLD_SOURCE_DEFAULT,
+            },
+            version=datetime.now().strftime("%Y%m%dT%H%M%S"),
+        )
+        
+        return cls(source=thresholds_source)
 
 
 @dataclass

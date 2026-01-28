@@ -23,6 +23,7 @@ from step3_seekdb_rag_hybrid.seek_query import (
     EvidenceResult,
     QueryFilters,
     QueryResult,
+    RetrievalContext,
     query_evidence,
     query_evidence_dual_read,
     run_query,
@@ -35,8 +36,14 @@ from step3_seekdb_rag_hybrid.seek_query import (
     DualReadGateThresholds,
     DualReadGateResult,
     DualReadGateViolation,
+    GateProfile,
     check_dual_read_gate,
     compute_dual_read_stats,
+)
+from step3_seekdb_rag_hybrid.dual_read_compare import (
+    THRESHOLD_SOURCE_CLI,
+    THRESHOLD_SOURCE_DEFAULT,
+    THRESHOLD_SOURCE_ENV,
 )
 from step3_seekdb_rag_hybrid.step3_backend_factory import DualReadConfig
 from step3_seekdb_rag_hybrid.index_backend import (
@@ -56,6 +63,9 @@ from step3_seekdb_rag_hybrid.active_collection import (
     KV_NAMESPACE_PREFIX,
     ACTIVE_COLLECTION_KEY,
 )
+
+# Step1 URI 解析函数，用于集成测试
+from engram_step1.uri import parse_attachment_evidence_uri
 
 
 # ============ Mock Backend ============
@@ -256,12 +266,12 @@ def sample_docs():
             "metadata": {"author": "charlie"},
         },
         {
-            "chunk_id": "webapp:logbook:evt123:v1:0",
+            "chunk_id": "webapp:logbook:12345:v1:0",
             "content": "发布 v2.0 版本记录",
             "score": 0.75,
             "source_type": "logbook",
-            "source_id": "evt123",
-            "artifact_uri": "memory://attachments/evt123/sha256_log",
+            "source_id": "12345",
+            "artifact_uri": "memory://attachments/12345/sha256_log",
             "chunk_idx": 0,
             "sha256": "sha256_log",
             "excerpt": "v2.0 发布版本记录...",
@@ -1561,8 +1571,8 @@ class TestCheckDualReadGate:
         assert result.passed is False
         assert len(result.violations) == 1
         assert result.violations[0].check_name == "min_overlap"
-        assert result.violations[0].threshold == 0.9
-        assert result.violations[0].actual == 0.75
+        assert result.violations[0].threshold_value == 0.9
+        assert result.violations[0].actual_value == 0.75
     
     def test_max_only_primary_pass(self, sample_stats):
         """only_primary 数量 <= 阈值时通过"""
@@ -1580,8 +1590,8 @@ class TestCheckDualReadGate:
         assert result.passed is False
         assert len(result.violations) == 1
         assert result.violations[0].check_name == "max_only_primary"
-        assert result.violations[0].threshold == 1.0
-        assert result.violations[0].actual == 2.0
+        assert result.violations[0].threshold_value == 1.0
+        assert result.violations[0].actual_value == 2.0
     
     def test_max_only_shadow_pass(self, sample_stats):
         """only_shadow 数量 <= 阈值时通过"""
@@ -1599,8 +1609,8 @@ class TestCheckDualReadGate:
         assert result.passed is False
         assert len(result.violations) == 1
         assert result.violations[0].check_name == "max_only_shadow"
-        assert result.violations[0].threshold == 0.0
-        assert result.violations[0].actual == 1.0
+        assert result.violations[0].threshold_value == 0.0
+        assert result.violations[0].actual_value == 1.0
     
     def test_max_score_drift_pass(self, sample_stats):
         """score_diff_max <= 阈值时通过"""
@@ -1618,8 +1628,8 @@ class TestCheckDualReadGate:
         assert result.passed is False
         assert len(result.violations) == 1
         assert result.violations[0].check_name == "max_score_drift"
-        assert result.violations[0].threshold == 0.05
-        assert result.violations[0].actual == 0.08
+        assert result.violations[0].threshold_value == 0.05
+        assert result.violations[0].actual_value == 0.08
     
     def test_multiple_thresholds_all_pass(self, sample_stats):
         """多个阈值都满足时通过"""
@@ -1686,8 +1696,8 @@ class TestDualReadGateResultToDict:
             violations=[
                 DualReadGateViolation(
                     check_name="min_overlap",
-                    threshold=0.9,
-                    actual=0.75,
+                    threshold_value=0.9,
+                    actual_value=0.75,
                     message="重叠率 0.7500 低于阈值 0.9",
                 ),
             ],
@@ -1760,8 +1770,8 @@ class TestDualReadStatsWithGate:
             violations=[
                 DualReadGateViolation(
                     check_name="min_overlap",
-                    threshold=0.9,
-                    actual=0.75,
+                    threshold_value=0.9,
+                    actual_value=0.75,
                     message="重叠率低于阈值",
                 ),
             ],
@@ -1985,6 +1995,1284 @@ class TestDualReadGateIntegration:
         gate_result = check_dual_read_gate(stats, thresholds_strict)
         assert gate_result.passed is False
         assert len(gate_result.violations) == 2
+
+
+# ============ Test: compare_report/dual_read 字段可选性与默认行为 ============
+
+
+class TestCompareReportDualReadOptional:
+    """测试 packet/full 输出中 compare_report/dual_read 字段的可选性与默认行为"""
+    
+    def test_packet_no_compare_report_by_default(self, mock_backend, sample_docs):
+        """packet 默认不包含 compare_report（无双读时）"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("XSS 漏洞", top_k=5)
+        packet = result.to_evidence_packet()
+        
+        # 无双读配置时，默认不应有 compare_report
+        assert "compare_report" not in packet
+    
+    def test_packet_no_dual_read_by_default(self, mock_backend, sample_docs):
+        """packet 默认不包含 dual_read（无双读时）"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("数据库优化", top_k=5)
+        packet = result.to_evidence_packet()
+        
+        # 无双读配置时，默认不应有 dual_read
+        assert "dual_read" not in packet
+    
+    def test_full_no_compare_report_by_default(self, mock_backend, sample_docs):
+        """full 默认不包含 compare_report（无双读时）"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("API 接口", top_k=5)
+        full_output = result.to_dict()
+        
+        # 无双读配置时，默认不应有 compare_report
+        assert "compare_report" not in full_output
+    
+    def test_full_no_dual_read_by_default(self, mock_backend, sample_docs):
+        """full 默认不包含 dual_read（无双读时）"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("版本记录", top_k=5)
+        full_output = result.to_dict()
+        
+        # 无双读配置时，默认不应有 dual_read
+        assert "dual_read" not in full_output
+    
+    def test_packet_include_compare_false(self, mock_backend, sample_docs):
+        """packet include_compare=False 时不输出 compare_report"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        # 创建 shadow 并启用双读
+        shadow_backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="shadow:v1:model",
+        )
+        config = DualReadConfig(enabled=True, strategy=DualReadConfig.STRATEGY_COMPARE)
+        set_dual_read_config(config)
+        set_shadow_backend(shadow_backend)
+        
+        try:
+            result = run_query(
+                query_text="XSS",
+                top_k=5,
+                shadow_backend=shadow_backend,
+                dual_read_config=config,
+            )
+            
+            # 显式设置 include_compare=False
+            packet = result.to_evidence_packet(include_compare=False)
+            assert "compare_report" not in packet
+            
+            # 但 dual_read 仍可能存在（如果有 stats）
+            # 显式设置 include_dual_read=False 时也不输出
+            packet_no_dual = result.to_evidence_packet(include_compare=False, include_dual_read=False)
+            assert "compare_report" not in packet_no_dual
+            assert "dual_read" not in packet_no_dual
+        finally:
+            set_dual_read_config(None)
+            set_shadow_backend(None)
+    
+    def test_full_include_compare_false(self, mock_backend, sample_docs):
+        """full include_compare=False 时不输出 compare_report"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        shadow_backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="shadow:v1:model",
+        )
+        config = DualReadConfig(enabled=True, strategy=DualReadConfig.STRATEGY_COMPARE)
+        set_dual_read_config(config)
+        set_shadow_backend(shadow_backend)
+        
+        try:
+            result = run_query(
+                query_text="优化",
+                top_k=5,
+                shadow_backend=shadow_backend,
+                dual_read_config=config,
+            )
+            
+            # 显式设置 include_compare=False
+            full_output = result.to_dict(include_compare=False)
+            assert "compare_report" not in full_output
+            
+            # 显式设置 include_dual_read=False
+            full_no_dual = result.to_dict(include_compare=False, include_dual_read=False)
+            assert "compare_report" not in full_no_dual
+            assert "dual_read" not in full_no_dual
+        finally:
+            set_dual_read_config(None)
+            set_shadow_backend(None)
+    
+    def test_dual_read_stats_present_when_enabled(self, mock_backend, sample_docs):
+        """启用双读时 dual_read_stats 存在且可输出"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        shadow_backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="shadow:v1:model",
+        )
+        config = DualReadConfig(enabled=True, strategy=DualReadConfig.STRATEGY_COMPARE)
+        set_dual_read_config(config)
+        set_shadow_backend(shadow_backend)
+        
+        try:
+            result = run_query(
+                query_text="漏洞",
+                top_k=5,
+                shadow_backend=shadow_backend,
+                enable_dual_read=True,
+            )
+            
+            # 验证 dual_read_stats 被填充
+            assert result.dual_read_stats is not None
+            
+            # 验证 to_dict 包含 dual_read
+            full_output = result.to_dict(include_dual_read=True)
+            assert "dual_read" in full_output
+            assert "health" in full_output["dual_read"]
+            
+            # 验证 to_evidence_packet 包含 dual_read
+            packet = result.to_evidence_packet(include_dual_read=True)
+            assert "dual_read" in packet
+        finally:
+            set_dual_read_config(None)
+            set_shadow_backend(None)
+
+
+# ============ Test: summary/detailed 模式下 thresholds/metadata 存在性 ============
+
+
+class TestCompareModeThresholdsMetadata:
+    """测试 summary/detailed 模式下 thresholds/metadata 的存在性"""
+    
+    def test_summary_mode_no_thresholds(self, mock_backend, sample_docs):
+        """summary 模式下 compare_report 不包含 thresholds"""
+        from step3_seekdb_rag_hybrid.seek_query import generate_compare_report
+        from step3_seekdb_rag_hybrid.dual_read_compare import CompareThresholds
+        
+        mock_backend.set_mock_data(sample_docs)
+        
+        # 构建测试数据
+        primary_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.95,
+            ),
+        ]
+        shadow_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.93,
+            ),
+        ]
+        
+        # 使用 summary 模式生成报告
+        report = generate_compare_report(
+            primary_results=primary_results,
+            shadow_results=shadow_results,
+            thresholds=CompareThresholds(),
+            compare_mode="summary",
+        )
+        
+        # summary 模式下 thresholds 应为 None
+        assert report.thresholds is None
+        
+        # 转为 dict 后验证
+        report_dict = report.to_dict()
+        assert "thresholds" not in report_dict
+    
+    def test_detailed_mode_has_thresholds(self, mock_backend, sample_docs):
+        """detailed 模式下 compare_report 包含 thresholds"""
+        from step3_seekdb_rag_hybrid.seek_query import generate_compare_report
+        from step3_seekdb_rag_hybrid.dual_read_compare import CompareThresholds
+        
+        mock_backend.set_mock_data(sample_docs)
+        
+        # 构建测试数据
+        primary_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.95,
+            ),
+        ]
+        shadow_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.93,
+            ),
+        ]
+        
+        thresholds = CompareThresholds(
+            hit_overlap_min=0.7,
+            rbo_min_warn=0.8,
+        )
+        
+        # 使用 detailed 模式生成报告
+        report = generate_compare_report(
+            primary_results=primary_results,
+            shadow_results=shadow_results,
+            thresholds=thresholds,
+            compare_mode="detailed",
+        )
+        
+        # detailed 模式下 thresholds 应存在
+        assert report.thresholds is not None
+        
+        # 转为 dict 后验证
+        report_dict = report.to_dict()
+        assert "thresholds" in report_dict
+        assert report_dict["thresholds"]["hit_overlap_min"] == 0.7
+    
+    def test_detailed_mode_has_metadata(self, mock_backend, sample_docs):
+        """detailed 模式下 compare_report 包含 metadata"""
+        from step3_seekdb_rag_hybrid.seek_query import generate_compare_report
+        from step3_seekdb_rag_hybrid.dual_read_compare import CompareThresholds
+        
+        mock_backend.set_mock_data(sample_docs)
+        
+        # 构建测试数据
+        primary_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.95,
+            ),
+            EvidenceResult(
+                chunk_id="chunk_b", chunk_idx=0, content="content_b",
+                artifact_uri="uri_b", sha256="sha_b", source_id="s_b",
+                source_type="git", excerpt="excerpt_b", relevance_score=0.85,
+            ),
+        ]
+        shadow_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.93,
+            ),
+        ]
+        
+        # 使用 detailed 模式生成报告
+        report = generate_compare_report(
+            primary_results=primary_results,
+            shadow_results=shadow_results,
+            thresholds=CompareThresholds(),
+            compare_mode="detailed",
+        )
+        
+        # detailed 模式下 metadata 应存在且非空
+        assert report.metadata is not None
+        assert len(report.metadata) > 0
+        
+        # metadata 应包含 ranking_drift、score_drift、compare_mode
+        assert "ranking_drift" in report.metadata
+        assert "score_drift" in report.metadata
+        assert "compare_mode" in report.metadata
+        assert report.metadata["compare_mode"] == "detailed"
+        
+        # 转为 dict 后验证
+        report_dict = report.to_dict()
+        assert "metadata" in report_dict
+        assert len(report_dict["metadata"]) > 0
+    
+    def test_summary_mode_no_detailed_metadata(self, mock_backend, sample_docs):
+        """summary 模式下 compare_report 不包含详细 metadata"""
+        from step3_seekdb_rag_hybrid.seek_query import generate_compare_report
+        from step3_seekdb_rag_hybrid.dual_read_compare import CompareThresholds
+        
+        mock_backend.set_mock_data(sample_docs)
+        
+        # 构建测试数据
+        primary_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.95,
+            ),
+        ]
+        shadow_results = [
+            EvidenceResult(
+                chunk_id="chunk_a", chunk_idx=0, content="content_a",
+                artifact_uri="uri_a", sha256="sha_a", source_id="s_a",
+                source_type="git", excerpt="excerpt_a", relevance_score=0.93,
+            ),
+        ]
+        
+        # 使用 summary 模式生成报告
+        report = generate_compare_report(
+            primary_results=primary_results,
+            shadow_results=shadow_results,
+            thresholds=CompareThresholds(),
+            compare_mode="summary",
+        )
+        
+        # summary 模式下 metadata 应为空
+        assert report.metadata == {} or report.metadata is None or len(report.metadata) == 0
+        
+        # 转为 dict 后验证
+        report_dict = report.to_dict()
+        # metadata 为空时可能不在输出中
+        if "metadata" in report_dict:
+            assert len(report_dict["metadata"]) == 0
+
+
+# ============ Test: 字段仅追加、不覆盖既有字段 ============
+
+
+class TestFieldsAppendOnly:
+    """测试字段仅追加、不覆盖既有字段（artifact_uri/evidence_uri 别名行为等）"""
+    
+    def test_artifact_uri_evidence_uri_both_present(self, mock_backend, sample_docs):
+        """evidence_uri 作为别名与 artifact_uri 同时存在，不覆盖"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("XSS", top_k=5)
+        packet = result.to_evidence_packet()
+        
+        for ev in packet["evidences"]:
+            # 两者都应存在
+            assert "artifact_uri" in ev
+            assert "evidence_uri" in ev
+            # 两者值相同
+            assert ev["artifact_uri"] == ev["evidence_uri"]
+            # artifact_uri 不应被 evidence_uri 覆盖（都保留）
+            assert len(ev["artifact_uri"]) > 0
+    
+    def test_full_output_artifact_uri_evidence_uri_coexist(self, mock_backend, sample_docs):
+        """full 输出中 artifact_uri 和 evidence_uri 同时存在"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("优化", top_k=5)
+        full_output = result.to_dict()
+        
+        for ev in full_output["evidences"]:
+            # 两者都应存在
+            assert "artifact_uri" in ev
+            assert "evidence_uri" in ev
+            # 值相同
+            assert ev["artifact_uri"] == ev["evidence_uri"]
+    
+    def test_compare_report_appends_to_packet(self, mock_backend, sample_docs):
+        """compare_report 追加到 packet，不覆盖既有字段"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        shadow_backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="shadow:v1:model",
+        )
+        config = DualReadConfig(enabled=True, strategy=DualReadConfig.STRATEGY_COMPARE)
+        set_dual_read_config(config)
+        set_shadow_backend(shadow_backend)
+        
+        try:
+            result = run_query(
+                query_text="XSS",
+                top_k=5,
+                shadow_backend=shadow_backend,
+                dual_read_config=config,
+            )
+            
+            packet = result.to_evidence_packet()
+            
+            # 验证核心字段仍存在
+            assert "query" in packet
+            assert "evidences" in packet
+            assert "chunking_version" in packet
+            assert "generated_at" in packet
+            assert "result_count" in packet
+            
+            # 如果有 compare_report，它应该是追加的
+            if "compare_report" in packet:
+                # compare_report 不应覆盖任何核心字段
+                assert packet["query"] == "XSS"
+                assert len(packet["evidences"]) > 0
+                # compare_report 内部结构正确
+                assert "decision" in packet["compare_report"] or "metrics" in packet["compare_report"]
+        finally:
+            set_dual_read_config(None)
+            set_shadow_backend(None)
+    
+    def test_dual_read_appends_to_full(self, mock_backend, sample_docs):
+        """dual_read 追加到 full 输出，不覆盖既有字段"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        shadow_backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="shadow:v1:model",
+        )
+        config = DualReadConfig(enabled=True, strategy=DualReadConfig.STRATEGY_COMPARE)
+        set_dual_read_config(config)
+        set_shadow_backend(shadow_backend)
+        
+        try:
+            result = run_query(
+                query_text="数据库",
+                top_k=5,
+                shadow_backend=shadow_backend,
+                enable_dual_read=True,
+            )
+            
+            full_output = result.to_dict(include_dual_read=True)
+            
+            # 验证核心字段仍存在且未被覆盖
+            assert "success" in full_output
+            assert "query" in full_output
+            assert "filters" in full_output
+            assert "top_k" in full_output
+            assert "result_count" in full_output
+            assert "evidences" in full_output
+            assert "timing" in full_output
+            
+            # 如果有 dual_read，它应该是追加的
+            if "dual_read" in full_output:
+                # dual_read 不应覆盖任何核心字段
+                assert full_output["query"] == "数据库"
+                assert full_output["success"] is True
+                # dual_read 内部结构正确
+                assert "health" in full_output["dual_read"]
+        finally:
+            set_dual_read_config(None)
+            set_shadow_backend(None)
+    
+    def test_evidence_fields_preserved_with_dual_read(self, mock_backend, sample_docs):
+        """启用双读时 evidence 字段保持完整，不被覆盖"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        shadow_backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="shadow:v1:model",
+        )
+        config = DualReadConfig(enabled=True, strategy=DualReadConfig.STRATEGY_COMPARE)
+        set_dual_read_config(config)
+        set_shadow_backend(shadow_backend)
+        
+        try:
+            result = run_query(
+                query_text="XSS",
+                top_k=5,
+                shadow_backend=shadow_backend,
+                enable_dual_read=True,
+            )
+            
+            # 验证 evidence 字段完整性
+            for ev in result.evidences:
+                # 核心字段
+                assert ev.chunk_id is not None
+                assert ev.artifact_uri is not None
+                assert ev.evidence_uri is not None  # 别名
+                assert ev.artifact_uri == ev.evidence_uri
+                assert ev.source_type is not None
+                assert ev.source_id is not None
+                
+            # 验证输出格式中字段完整
+            packet = result.to_evidence_packet()
+            for ev_dict in packet["evidences"]:
+                assert "chunk_id" in ev_dict
+                assert "artifact_uri" in ev_dict
+                assert "evidence_uri" in ev_dict
+                assert "source_type" in ev_dict
+                assert "relevance_score" in ev_dict
+        finally:
+            set_dual_read_config(None)
+            set_shadow_backend(None)
+    
+    def test_metadata_preserved_in_evidence(self, mock_backend, sample_docs):
+        """evidence 的 metadata 字段保持完整"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("XSS", top_k=5)
+        full_output = result.to_dict()
+        
+        # 验证有 metadata 的 evidence 保持 metadata
+        for ev in full_output["evidences"]:
+            assert "metadata" in ev
+            # metadata 可以是空字典但不能缺失
+            assert isinstance(ev["metadata"], dict)
+
+
+# ============ Test: Attachment artifact_uri 与 Step1 互通性集成测试 ============
+
+
+class TestAttachmentArtifactUriStep1Integration:
+    """测试 attachment artifact_uri 与 Step1 parse_attachment_evidence_uri() 的互通性"""
+    
+    def test_evidence_result_attachment_uri_parsed_by_step1(self):
+        """构造 EvidenceResult -> to_evidence_dict()，验证 artifact_uri 可被 Step1 解析"""
+        attachment_id = 12345
+        sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        artifact_uri = f"memory://attachments/{attachment_id}/{sha256}"
+        
+        # 构造 EvidenceResult
+        result = EvidenceResult(
+            chunk_id=f"webapp:logbook:{attachment_id}:v1:0",
+            chunk_idx=0,
+            content="附件测试内容",
+            artifact_uri=artifact_uri,
+            sha256=sha256,
+            source_id=str(attachment_id),
+            source_type="logbook",
+            excerpt="附件摘要...",
+            relevance_score=0.85,
+            metadata={"kind": "screenshot"},
+        )
+        
+        # 转换为 evidence dict
+        evidence_dict = result.to_evidence_dict(include_content=False)
+        
+        # 验证 artifact_uri 和 evidence_uri 存在
+        assert "artifact_uri" in evidence_dict
+        assert "evidence_uri" in evidence_dict
+        assert evidence_dict["artifact_uri"] == artifact_uri
+        assert evidence_dict["evidence_uri"] == artifact_uri
+        
+        # 使用 Step1 的 parse_attachment_evidence_uri 解析
+        parsed = parse_attachment_evidence_uri(evidence_dict["artifact_uri"])
+        
+        # 断言解析成功
+        assert parsed is not None, "Step1 parse_attachment_evidence_uri 应能解析 attachment URI"
+        assert parsed["attachment_id"] == attachment_id
+        assert parsed["sha256"] == sha256
+    
+    def test_evidence_packet_attachment_uri_parsed_by_step1(self, mock_backend, sample_docs):
+        """通过 to_evidence_packet() 输出的 attachment artifact_uri 应可被 Step1 解析"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        # 执行查询
+        result = run_query("发布版本", top_k=5)
+        packet = result.to_evidence_packet()
+        
+        # 找到 logbook 类型的 evidence（使用 memory://attachments/ URI）
+        logbook_evidences = [
+            ev for ev in packet["evidences"]
+            if ev.get("source_type") == "logbook"
+        ]
+        
+        assert len(logbook_evidences) > 0, "应有 logbook 类型的 evidence"
+        
+        for ev in logbook_evidences:
+            artifact_uri = ev["artifact_uri"]
+            
+            # 验证 URI scheme 正确
+            assert artifact_uri.startswith("memory://attachments/"), \
+                f"logbook evidence 应使用 memory://attachments/ scheme: {artifact_uri}"
+            
+            # 使用 Step1 解析
+            parsed = parse_attachment_evidence_uri(artifact_uri)
+            
+            # 断言解析成功且 attachment_id 为整数
+            assert parsed is not None, f"Step1 应能解析 artifact_uri: {artifact_uri}"
+            assert isinstance(parsed["attachment_id"], int), \
+                f"attachment_id 应为整数: {parsed['attachment_id']}"
+            assert parsed["sha256"] == ev["sha256"]
+    
+    def test_attachment_uri_integer_id_format(self):
+        """验证 attachment URI 使用整数 ID 格式"""
+        attachment_id = 99999
+        sha256 = "a" * 64
+        artifact_uri = f"memory://attachments/{attachment_id}/{sha256}"
+        
+        # 构造 EvidenceResult
+        result = EvidenceResult(
+            chunk_id=f"test:logbook:{attachment_id}:v1:0",
+            chunk_idx=0,
+            content="内容",
+            artifact_uri=artifact_uri,
+            sha256=sha256,
+            source_id=str(attachment_id),
+            source_type="logbook",
+            excerpt="摘要",
+            relevance_score=0.9,
+            metadata={},
+        )
+        
+        # 验证 Step1 可以正确解析
+        parsed = parse_attachment_evidence_uri(result.artifact_uri)
+        assert parsed is not None
+        assert parsed["attachment_id"] == attachment_id
+        
+        # 验证 evidence_uri 别名也可解析
+        parsed_alias = parse_attachment_evidence_uri(result.evidence_uri)
+        assert parsed_alias is not None
+        assert parsed_alias["attachment_id"] == attachment_id
+    
+    def test_attachment_uri_scheme_consistency(self):
+        """验证 attachment URI scheme 与 Step1 规范一致"""
+        # Step1 规范: memory://attachments/<attachment_id>/<sha256>
+        test_cases = [
+            (12345, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            (1, "a" * 64),
+            (999999999, "b" * 64),
+        ]
+        
+        for attachment_id, sha256 in test_cases:
+            artifact_uri = f"memory://attachments/{attachment_id}/{sha256}"
+            
+            result = EvidenceResult(
+                chunk_id=f"test:logbook:{attachment_id}:v1:0",
+                chunk_idx=0,
+                content="",
+                artifact_uri=artifact_uri,
+                sha256=sha256,
+                source_id=str(attachment_id),
+                source_type="logbook",
+                excerpt="",
+                relevance_score=0.5,
+                metadata={},
+            )
+            
+            # 转换为 packet 格式
+            evidence_dict = result.to_evidence_dict(include_content=False)
+            
+            # 验证 scheme 一致性
+            assert evidence_dict["artifact_uri"].startswith("memory://attachments/")
+            
+            # Step1 解析验证
+            parsed = parse_attachment_evidence_uri(evidence_dict["artifact_uri"])
+            assert parsed is not None, f"attachment_id={attachment_id} 应可解析"
+            assert parsed["attachment_id"] == attachment_id
+            assert parsed["sha256"] == sha256
+
+
+# ============ Test: retrieval_context 字段测试 ============
+
+
+class TestRetrievalContextDataClass:
+    """测试 RetrievalContext 数据类"""
+    
+    def test_to_dict_empty(self):
+        """空 RetrievalContext 返回空字典"""
+        ctx = RetrievalContext()
+        result = ctx.to_dict()
+        assert result == {}
+    
+    def test_to_dict_backend_info(self):
+        """测试后端信息输出"""
+        ctx = RetrievalContext(
+            backend_name="pgvector",
+            backend_config={"type": "pgvector", "schema": "step3", "table": "chunks"},
+            collection_id="webapp:v1:bge-m3",
+        )
+        result = ctx.to_dict()
+        
+        assert result["backend_name"] == "pgvector"
+        assert result["backend_config"]["type"] == "pgvector"
+        assert result["backend_config"]["schema"] == "step3"
+        assert result["collection_id"] == "webapp:v1:bge-m3"
+    
+    def test_to_dict_embedding_info(self):
+        """测试 embedding 信息输出"""
+        ctx = RetrievalContext(
+            embedding_model_id="bge-m3",
+            embedding_dim=1024,
+            embedding_normalize=True,
+        )
+        result = ctx.to_dict()
+        
+        assert "embedding" in result
+        assert result["embedding"]["model_id"] == "bge-m3"
+        assert result["embedding"]["dim"] == 1024
+        assert result["embedding"]["normalize"] is True
+    
+    def test_to_dict_hybrid_config(self):
+        """测试 hybrid 配置输出"""
+        ctx = RetrievalContext(
+            hybrid_config={
+                "vector_weight": 0.7,
+                "text_weight": 0.3,
+                "normalize_scores": True,
+            },
+        )
+        result = ctx.to_dict()
+        
+        assert "hybrid_config" in result
+        assert result["hybrid_config"]["vector_weight"] == 0.7
+        assert result["hybrid_config"]["text_weight"] == 0.3
+        assert result["hybrid_config"]["normalize_scores"] is True
+    
+    def test_to_dict_query_request(self):
+        """测试查询请求参数输出"""
+        ctx = RetrievalContext(
+            query_request={
+                "top_k": 10,
+                "min_score": 0.5,
+                "filters": {"project_key": "webapp"},
+            },
+        )
+        result = ctx.to_dict()
+        
+        assert "query_request" in result
+        assert result["query_request"]["top_k"] == 10
+        assert result["query_request"]["min_score"] == 0.5
+        assert result["query_request"]["filters"]["project_key"] == "webapp"
+    
+    def test_to_dict_full(self):
+        """测试完整 RetrievalContext 输出"""
+        ctx = RetrievalContext(
+            backend_name="pgvector",
+            backend_config={"type": "pgvector", "schema": "step3", "strategy": "single_table"},
+            collection_id="webapp:v1:bge-m3:20260128",
+            embedding_model_id="bge-m3",
+            embedding_dim=1024,
+            embedding_normalize=True,
+            hybrid_config={"vector_weight": 0.7, "text_weight": 0.3},
+            query_request={"top_k": 10, "filters": {"source_type": "git"}},
+        )
+        result = ctx.to_dict()
+        
+        # 验证所有顶级字段存在
+        assert "backend_name" in result
+        assert "backend_config" in result
+        assert "collection_id" in result
+        assert "embedding" in result
+        assert "hybrid_config" in result
+        assert "query_request" in result
+        
+        # 验证 embedding 子字段
+        assert result["embedding"]["model_id"] == "bge-m3"
+        assert result["embedding"]["dim"] == 1024
+        assert result["embedding"]["normalize"] is True
+
+
+class TestRetrievalContextInPacket:
+    """测试 retrieval_context 在 packet 输出中的集成"""
+    
+    def test_packet_includes_retrieval_context(self, mock_backend, sample_docs):
+        """packet 格式包含 retrieval_context"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("XSS 漏洞", top_k=5)
+        packet = result.to_evidence_packet()
+        
+        # 验证 retrieval_context 存在
+        assert "retrieval_context" in packet
+        ctx = packet["retrieval_context"]
+        
+        # 验证必要字段存在
+        assert "backend_name" in ctx
+        assert ctx["backend_name"] == "mock"
+        
+        # 验证 query_request 存在并包含 top_k
+        assert "query_request" in ctx
+        assert ctx["query_request"]["top_k"] == 5
+    
+    def test_full_output_includes_retrieval_context(self, mock_backend, sample_docs):
+        """full 格式包含 retrieval_context"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("数据库优化", top_k=10)
+        full_output = result.to_dict()
+        
+        # 验证 retrieval_context 存在
+        assert "retrieval_context" in full_output
+        ctx = full_output["retrieval_context"]
+        
+        # 验证后端信息
+        assert "backend_name" in ctx
+        
+        # 验证 query_request
+        assert "query_request" in ctx
+        assert ctx["query_request"]["top_k"] == 10
+    
+    def test_packet_retrieval_context_with_filters(self, mock_backend, sample_docs):
+        """带过滤条件时 retrieval_context 包含 filters DSL"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        filters = QueryFilters(
+            project_key="webapp",
+            source_type="git",
+            module="src/",
+        )
+        result = run_query("修复漏洞", filters=filters, top_k=5)
+        packet = result.to_evidence_packet()
+        
+        # 验证 retrieval_context 包含 filters
+        assert "retrieval_context" in packet
+        ctx = packet["retrieval_context"]
+        
+        assert "query_request" in ctx
+        assert "filters" in ctx["query_request"]
+        
+        # 验证 filter DSL 格式
+        filters_dsl = ctx["query_request"]["filters"]
+        assert filters_dsl["project_key"] == "webapp"
+        assert filters_dsl["source_type"] == "git"
+        assert filters_dsl["module"] == {"$prefix": "src/"}
+    
+    def test_retrieval_context_collection_id(self, sample_docs):
+        """测试 retrieval_context 包含正确的 collection_id"""
+        # 创建带有特定 collection_id 的 backend
+        backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="test-project:v2:bge-m3:20260128",
+        )
+        set_index_backend(backend)
+        set_embedding_provider_instance(None)
+        
+        try:
+            result = run_query("测试查询", top_k=3)
+            packet = result.to_evidence_packet()
+            
+            # 验证 collection_id 存在
+            assert "retrieval_context" in packet
+            ctx = packet["retrieval_context"]
+            
+            assert "collection_id" in ctx
+            assert ctx["collection_id"] == "test-project:v2:bge-m3:20260128"
+        finally:
+            set_index_backend(None)
+
+
+class TestRetrievalContextSchemaStability:
+    """测试 retrieval_context schema 稳定性（只追加不破坏兼容）"""
+    
+    def test_required_top_level_fields(self):
+        """验证必要的顶级字段可以被设置"""
+        # 这些字段是契约的一部分，不应被移除
+        ctx = RetrievalContext(
+            backend_name="pgvector",
+            backend_config={"type": "pgvector"},
+            collection_id="default:v1:model",
+            embedding_model_id="bge-m3",
+            embedding_dim=1024,
+            embedding_normalize=True,
+            hybrid_config={"vector_weight": 0.7, "text_weight": 0.3},
+            query_request={"top_k": 10},
+        )
+        
+        # 验证所有字段都可访问
+        assert ctx.backend_name == "pgvector"
+        assert ctx.backend_config is not None
+        assert ctx.collection_id == "default:v1:model"
+        assert ctx.embedding_model_id == "bge-m3"
+        assert ctx.embedding_dim == 1024
+        assert ctx.embedding_normalize is True
+        assert ctx.hybrid_config is not None
+        assert ctx.query_request is not None
+    
+    def test_to_dict_output_structure(self):
+        """验证 to_dict 输出结构"""
+        ctx = RetrievalContext(
+            backend_name="pgvector",
+            backend_config={"type": "pgvector", "schema": "step3"},
+            collection_id="webapp:v1:bge-m3",
+            embedding_model_id="bge-m3",
+            embedding_dim=1024,
+            hybrid_config={"vector_weight": 0.7, "text_weight": 0.3},
+            query_request={"top_k": 10, "filters": {"project_key": "webapp"}},
+        )
+        result = ctx.to_dict()
+        
+        # 验证结构符合契约
+        # 1. backend_name 是字符串
+        assert isinstance(result["backend_name"], str)
+        
+        # 2. backend_config 是字典
+        assert isinstance(result["backend_config"], dict)
+        assert "type" in result["backend_config"]
+        
+        # 3. collection_id 是字符串
+        assert isinstance(result["collection_id"], str)
+        
+        # 4. embedding 是字典，包含 model_id 和 dim
+        assert isinstance(result["embedding"], dict)
+        assert "model_id" in result["embedding"]
+        assert "dim" in result["embedding"]
+        
+        # 5. hybrid_config 是字典，包含权重
+        assert isinstance(result["hybrid_config"], dict)
+        assert "vector_weight" in result["hybrid_config"]
+        assert "text_weight" in result["hybrid_config"]
+        
+        # 6. query_request 是字典，包含 top_k
+        assert isinstance(result["query_request"], dict)
+        assert "top_k" in result["query_request"]
+    
+    def test_backend_config_no_password(self):
+        """验证 backend_config 不包含敏感信息（密码）"""
+        ctx = RetrievalContext(
+            backend_name="pgvector",
+            backend_config={
+                "type": "pgvector",
+                "schema": "step3",
+                "table": "chunks",
+                "strategy": "single_table",
+                # 注意：不应包含 dsn、password 等敏感字段
+            },
+        )
+        result = ctx.to_dict()
+        
+        # 验证不包含敏感字段
+        config = result["backend_config"]
+        assert "password" not in config
+        assert "dsn" not in config
+        assert "connection_string" not in config
+        assert "api_key" not in config
+    
+    def test_query_request_filters_dsl_format(self):
+        """验证 query_request.filters 使用 DSL 格式"""
+        filters = QueryFilters(
+            project_key="webapp",
+            module="src/auth/",
+            time_range_start="2024-01-01T00:00:00Z",
+            time_range_end="2024-12-31T23:59:59Z",
+        )
+        
+        ctx = RetrievalContext(
+            query_request={
+                "top_k": 10,
+                "filters": filters.to_filter_dict(),
+            },
+        )
+        result = ctx.to_dict()
+        
+        filters_dsl = result["query_request"]["filters"]
+        
+        # 验证 DSL 格式
+        assert filters_dsl["project_key"] == "webapp"
+        assert filters_dsl["module"] == {"$prefix": "src/auth/"}
+        assert "commit_ts" in filters_dsl
+        assert filters_dsl["commit_ts"]["$gte"] == "2024-01-01T00:00:00Z"
+        assert filters_dsl["commit_ts"]["$lte"] == "2024-12-31T23:59:59Z"
+
+
+class TestRetrievalContextFieldsAppendOnly:
+    """测试 retrieval_context 字段仅追加、不覆盖既有字段"""
+    
+    def test_retrieval_context_does_not_override_existing_fields(self, mock_backend, sample_docs):
+        """retrieval_context 追加到 packet，不覆盖核心字段"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        result = run_query("XSS", top_k=5)
+        packet = result.to_evidence_packet()
+        
+        # 验证核心字段仍存在且未被覆盖
+        assert "query" in packet
+        assert packet["query"] == "XSS"
+        
+        assert "evidences" in packet
+        assert len(packet["evidences"]) > 0
+        
+        assert "chunking_version" in packet
+        assert "generated_at" in packet
+        assert "result_count" in packet
+        
+        # 验证 retrieval_context 是追加的，不影响其他字段
+        assert "retrieval_context" in packet
+    
+    def test_retrieval_context_coexists_with_filters(self, mock_backend, sample_docs):
+        """retrieval_context 与 filters 字段共存"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        filters = QueryFilters(project_key="webapp")
+        result = run_query("修复", filters=filters, top_k=5)
+        packet = result.to_evidence_packet()
+        
+        # 验证 filters 字段存在（在 packet 顶层）
+        assert "filters" in packet
+        assert packet["filters"]["project_key"] == "webapp"
+        
+        # 验证 retrieval_context 也存在
+        assert "retrieval_context" in packet
+        
+        # 两者独立存在，互不干扰
+        assert packet["filters"] != packet["retrieval_context"]
+    
+    def test_retrieval_context_coexists_with_dual_read(self, mock_backend, sample_docs):
+        """retrieval_context 与 dual_read 字段共存"""
+        mock_backend.set_mock_data(sample_docs)
+        
+        shadow_backend = MockIndexBackend(
+            mock_data=sample_docs,
+            collection_id="shadow:v1:model",
+        )
+        config = DualReadConfig(enabled=True, strategy=DualReadConfig.STRATEGY_COMPARE)
+        set_dual_read_config(config)
+        set_shadow_backend(shadow_backend)
+        
+        try:
+            result = run_query(
+                query_text="XSS",
+                top_k=5,
+                shadow_backend=shadow_backend,
+                enable_dual_read=True,
+            )
+            
+            packet = result.to_evidence_packet(include_dual_read=True)
+            
+            # 验证 retrieval_context 存在
+            assert "retrieval_context" in packet
+            
+            # 验证 dual_read 也存在
+            assert "dual_read" in packet
+            
+            # 两者独立存在
+            assert "health" in packet["dual_read"]
+            assert "backend_name" in packet["retrieval_context"]
+        finally:
+            set_dual_read_config(None)
+            set_shadow_backend(None)
+
+
+# =============================================================================
+# GateProfile 与 thresholds_metadata 测试
+# =============================================================================
+
+
+class TestGateProfileToDict:
+    """测试 GateProfile.to_dict() 输出格式稳定性"""
+    
+    def test_gate_profile_to_dict_contains_required_fields(self):
+        """GateProfile.to_dict() 应包含 name/version/source 字段"""
+        profile = GateProfile(
+            name="dual_read_gate",
+            version="1.0",
+            source=THRESHOLD_SOURCE_CLI,
+        )
+        
+        result = profile.to_dict()
+        
+        # 验证必须字段存在
+        assert "name" in result
+        assert "version" in result
+        assert "source" in result
+        
+        # 验证字段值正确
+        assert result["name"] == "dual_read_gate"
+        assert result["version"] == "1.0"
+        assert result["source"] == THRESHOLD_SOURCE_CLI
+    
+    def test_gate_profile_default_values(self):
+        """GateProfile 默认值应正确序列化"""
+        profile = GateProfile()
+        
+        result = profile.to_dict()
+        
+        assert result["name"] == "dual_read_gate"
+        assert result["version"] == "1.0"
+        assert result["source"] == THRESHOLD_SOURCE_DEFAULT
+    
+    def test_gate_profile_from_dict_roundtrip(self):
+        """GateProfile 序列化/反序列化往返正确"""
+        original = GateProfile(
+            name="custom_gate",
+            version="2.0",
+            source=THRESHOLD_SOURCE_ENV,
+        )
+        
+        # 序列化
+        data = original.to_dict()
+        
+        # 反序列化
+        restored = GateProfile.from_dict(data)
+        
+        assert restored.name == original.name
+        assert restored.version == original.version
+        assert restored.source == original.source
+
+
+class TestDualReadGateThresholdsToDictWithProfile:
+    """测试 DualReadGateThresholds.to_dict() 包含 profile 信息"""
+    
+    def test_to_dict_includes_profile(self):
+        """to_dict() 应包含完整的 profile 字段"""
+        thresholds = DualReadGateThresholds(
+            min_overlap=0.7,
+            max_only_primary=5,
+            max_only_shadow=3,
+            max_score_drift=0.1,
+            profile=GateProfile(
+                name="dual_read_gate",
+                version="1.0",
+                source=THRESHOLD_SOURCE_CLI,
+            ),
+        )
+        
+        result = thresholds.to_dict()
+        
+        # 验证 profile 字段存在
+        assert "profile" in result
+        
+        # 验证 profile 子字段
+        profile = result["profile"]
+        assert "name" in profile
+        assert "version" in profile
+        assert "source" in profile
+        
+        # 验证 profile 值正确
+        assert profile["name"] == "dual_read_gate"
+        assert profile["version"] == "1.0"
+        assert profile["source"] == THRESHOLD_SOURCE_CLI
+    
+    def test_to_dict_preserves_compat_fields(self):
+        """to_dict() 应保留兼容字段（现有 consumers 期望的 keys）"""
+        thresholds = DualReadGateThresholds(
+            min_overlap=0.8,
+            max_only_primary=10,
+            max_only_shadow=5,
+            max_score_drift=0.15,
+            profile=GateProfile(source=THRESHOLD_SOURCE_CLI),
+        )
+        
+        result = thresholds.to_dict()
+        
+        # 验证兼容字段存在
+        assert "min_overlap" in result
+        assert "max_only_primary" in result
+        assert "max_only_shadow" in result
+        assert "max_score_drift" in result
+        assert "source" in result  # 顶层兼容字段
+        
+        # 验证兼容字段值正确
+        assert result["min_overlap"] == 0.8
+        assert result["max_only_primary"] == 10
+        assert result["max_only_shadow"] == 5
+        assert result["max_score_drift"] == 0.15
+        assert result["source"] == THRESHOLD_SOURCE_CLI
+    
+    def test_to_dict_without_profile_provides_default(self):
+        """没有 profile 时，to_dict() 应提供默认 profile"""
+        thresholds = DualReadGateThresholds(
+            min_overlap=0.6,
+        )
+        
+        result = thresholds.to_dict()
+        
+        # 即使没有设置 profile，也应该有 profile 字段
+        assert "profile" in result
+        assert result["profile"]["name"] == "dual_read_gate"
+        assert result["profile"]["version"] == "1.0"
+        assert result["profile"]["source"] == THRESHOLD_SOURCE_DEFAULT
+        
+        # 顶层 source 也应该是 default
+        assert result["source"] == THRESHOLD_SOURCE_DEFAULT
+    
+    def test_to_dict_omits_none_threshold_values(self):
+        """to_dict() 应只包含非 None 的阈值字段"""
+        thresholds = DualReadGateThresholds(
+            min_overlap=0.7,
+            # 其他字段为 None
+            profile=GateProfile(source=THRESHOLD_SOURCE_CLI),
+        )
+        
+        result = thresholds.to_dict()
+        
+        # min_overlap 存在
+        assert "min_overlap" in result
+        assert result["min_overlap"] == 0.7
+        
+        # 其他阈值字段不存在（因为为 None）
+        assert "max_only_primary" not in result
+        assert "max_only_shadow" not in result
+        assert "max_score_drift" not in result
+        
+        # profile 和 source 始终存在
+        assert "profile" in result
+        assert "source" in result
+    
+    def test_to_dict_json_serializable(self):
+        """to_dict() 输出应可直接 JSON 序列化"""
+        thresholds = DualReadGateThresholds(
+            min_overlap=0.75,
+            max_only_primary=8,
+            max_only_shadow=4,
+            max_score_drift=0.12,
+            profile=GateProfile(
+                name="dual_read_gate",
+                version="1.0",
+                source=THRESHOLD_SOURCE_CLI,
+            ),
+        )
+        
+        result = thresholds.to_dict()
+        
+        # 验证可以 JSON 序列化
+        json_str = json.dumps(result)
+        
+        # 验证可以反序列化
+        parsed = json.loads(json_str)
+        
+        # 验证字段稳定（反序列化后与原始一致）
+        assert parsed["min_overlap"] == 0.75
+        assert parsed["max_only_primary"] == 8
+        assert parsed["profile"]["name"] == "dual_read_gate"
+        assert parsed["profile"]["version"] == "1.0"
+        assert parsed["profile"]["source"] == THRESHOLD_SOURCE_CLI
+
+
+class TestThresholdsMetadataProfileFields:
+    """测试 thresholds_metadata.gate_thresholds.profile 字段稳定性"""
+    
+    def test_gate_thresholds_profile_fields_stable(self):
+        """验证 gate_thresholds 输出包含稳定的 profile 字段"""
+        # 模拟 CLI 参数创建的 thresholds
+        thresholds = DualReadGateThresholds(
+            min_overlap=0.7,
+            max_only_primary=5,
+            max_only_shadow=3,
+            max_score_drift=0.1,
+            profile=GateProfile(
+                name="dual_read_gate",
+                version="1.0",
+                source=THRESHOLD_SOURCE_CLI,
+            ),
+        )
+        
+        # 模拟 thresholds_metadata 构建
+        thresholds_metadata = {
+            "gate_thresholds": thresholds.to_dict(),
+        }
+        
+        # JSON 序列化
+        json_output = json.dumps(thresholds_metadata, indent=2)
+        parsed = json.loads(json_output)
+        
+        gate = parsed["gate_thresholds"]
+        
+        # 验证 profile 字段存在且稳定
+        assert "profile" in gate, "thresholds_metadata.gate_thresholds.profile 必须存在"
+        assert "name" in gate["profile"], "profile.name 必须存在"
+        assert "version" in gate["profile"], "profile.version 必须存在"
+        assert "source" in gate["profile"], "profile.source 必须存在"
+        
+        # 验证字段值符合预期
+        assert gate["profile"]["name"] == "dual_read_gate"
+        assert gate["profile"]["version"] == "1.0"
+        assert gate["profile"]["source"] == "cli"
+    
+    def test_gate_thresholds_compat_and_profile_coexist(self):
+        """验证兼容字段与 profile 字段共存"""
+        thresholds = DualReadGateThresholds(
+            min_overlap=0.8,
+            max_only_primary=10,
+            profile=GateProfile(
+                name="dual_read_gate",
+                version="1.0",
+                source=THRESHOLD_SOURCE_CLI,
+            ),
+        )
+        
+        result = thresholds.to_dict()
+        
+        # 兼容字段存在
+        assert result["min_overlap"] == 0.8
+        assert result["max_only_primary"] == 10
+        assert result["source"] == "cli"  # 顶层兼容字段
+        
+        # profile 字段也存在
+        assert result["profile"]["name"] == "dual_read_gate"
+        assert result["profile"]["source"] == "cli"
+        
+        # 两者 source 一致
+        assert result["source"] == result["profile"]["source"]
 
 
 if __name__ == "__main__":

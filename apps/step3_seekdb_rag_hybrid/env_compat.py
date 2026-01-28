@@ -50,6 +50,7 @@ from __future__ import annotations
 import os
 import sys
 import warnings
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set, TypeVar, Union
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "EnvConflictError",
     "set_allow_conflict",
     "reset_deprecation_warnings",
+    "check_env_conflicts",
 ]
 
 T = TypeVar("T")
@@ -763,3 +765,148 @@ def debug_env_resolution(
     result["resolved_source"] = source
     
     return result
+
+
+# ============ 冲突检测 API ============
+
+@dataclass
+class EnvConflictInfo:
+    """环境变量冲突信息"""
+    canonical: str
+    conflicting_var: str
+    canonical_value: str
+    conflicting_value: str
+    conflict_type: str  # "canonical_vs_deprecated" 或 "canonical_vs_canonical"
+
+
+def check_env_conflicts(
+    var_definitions: List[Dict[str, Any]],
+    *,
+    raise_on_conflict: Optional[bool] = None,
+) -> List[EnvConflictInfo]:
+    """
+    批量检测多个环境变量定义之间的冲突
+    
+    用于启动时一次性检测所有关键变量的冲突情况，而不是等到运行时才发现。
+    
+    Args:
+        var_definitions: 变量定义列表，每个定义是一个字典，包含:
+            - name: canonical 环境变量名（必需）
+            - aliases: 同等优先级的别名列表（可选）
+            - deprecated_aliases: 废弃的别名列表（可选）
+        raise_on_conflict: 是否在发现冲突时抛出异常
+            - True: 抛出 EnvConflictError
+            - False: 仅返回冲突列表
+            - None: 使用 _get_allow_conflict() 的设置（默认）
+    
+    Returns:
+        冲突信息列表（如果没有冲突则为空列表）
+    
+    Raises:
+        EnvConflictError: 如果 raise_on_conflict=True 且发现冲突
+    
+    Example:
+        >>> conflicts = check_env_conflicts([
+        ...     {"name": "STEP3_CHUNKING_VERSION", "deprecated_aliases": ["CHUNKING_VERSION"]},
+        ...     {"name": "STEP3_PG_SCHEMA", "deprecated_aliases": ["STEP3_SCHEMA"]},
+        ... ])
+        >>> if conflicts:
+        ...     print(f"发现 {len(conflicts)} 个冲突")
+    """
+    conflicts: List[EnvConflictInfo] = []
+    
+    for var_def in var_definitions:
+        name = var_def.get("name")
+        if not name:
+            continue
+        
+        aliases = var_def.get("aliases") or []
+        deprecated_aliases = var_def.get("deprecated_aliases") or []
+        
+        # 获取 canonical 值
+        canonical_value = None
+        canonical_source = None
+        
+        for n in [name] + aliases:
+            val = os.environ.get(n)
+            if val is not None:
+                if canonical_value is not None and val != canonical_value:
+                    # canonical 别名之间冲突
+                    conflicts.append(EnvConflictInfo(
+                        canonical=canonical_source,
+                        conflicting_var=n,
+                        canonical_value=canonical_value,
+                        conflicting_value=val,
+                        conflict_type="canonical_vs_canonical",
+                    ))
+                else:
+                    canonical_value = val
+                    canonical_source = n
+        
+        # 检查 deprecated 别名
+        for dep_name in deprecated_aliases:
+            dep_val = os.environ.get(dep_name)
+            if dep_val is not None and canonical_value is not None:
+                if dep_val != canonical_value:
+                    # canonical 与 deprecated 冲突
+                    conflicts.append(EnvConflictInfo(
+                        canonical=canonical_source,
+                        conflicting_var=dep_name,
+                        canonical_value=canonical_value,
+                        conflicting_value=dep_val,
+                        conflict_type="canonical_vs_deprecated",
+                    ))
+    
+    # 处理冲突
+    if conflicts:
+        should_raise = raise_on_conflict if raise_on_conflict is not None else not _get_allow_conflict()
+        
+        if should_raise:
+            # 抛出第一个冲突的异常
+            first = conflicts[0]
+            raise EnvConflictError(
+                canonical=first.canonical,
+                legacy=first.conflicting_var,
+                canonical_value=first.canonical_value,
+                legacy_value=first.conflicting_value,
+            )
+        else:
+            # 仅打印警告
+            for conflict in conflicts:
+                msg = (
+                    f"[ENV_CONFLICT] {conflict.canonical}={conflict.canonical_value!r} 与 "
+                    f"{conflict.conflicting_var}={conflict.conflicting_value!r} 冲突，"
+                    f"使用 {conflict.canonical} 的值。"
+                )
+                warnings.warn(msg, UserWarning)
+                print(f"Warning: {msg}", file=sys.stderr)
+    
+    return conflicts
+
+
+# ============ 双读对比阈值废弃别名 ============
+
+# 用于统一管理 CompareThresholds 相关的废弃环境变量别名
+# 当使用 from_env() 加载阈值时，会检查这些废弃别名并映射到 canonical 名称
+
+DUAL_READ_THRESHOLD_DEPRECATED_ALIASES: Dict[str, List[str]] = {
+    # canonical: [deprecated_aliases...]
+    # 命中重叠率阈值（HIT_OVERLAP -> OVERLAP）
+    "STEP3_DUAL_READ_OVERLAP_MIN_WARN": ["STEP3_DUAL_READ_HIT_OVERLAP_MIN_WARN"],
+    "STEP3_DUAL_READ_OVERLAP_MIN_FAIL": ["STEP3_DUAL_READ_HIT_OVERLAP_MIN_FAIL"],
+}
+
+
+def get_dual_read_deprecated_aliases() -> Dict[str, List[str]]:
+    """
+    获取双读对比阈值的废弃别名映射
+    
+    Returns:
+        字典，键为 canonical 环境变量名，值为废弃别名列表
+        
+    Example:
+        >>> aliases = get_dual_read_deprecated_aliases()
+        >>> print(aliases["STEP3_DUAL_READ_OVERLAP_MIN_WARN"])
+        ["STEP3_DUAL_READ_HIT_OVERLAP_MIN_WARN"]
+    """
+    return DUAL_READ_THRESHOLD_DEPRECATED_ALIASES.copy()

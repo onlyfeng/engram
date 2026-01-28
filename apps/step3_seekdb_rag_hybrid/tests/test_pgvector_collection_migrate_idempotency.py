@@ -38,6 +38,7 @@ from pgvector_collection_migrate import (
     ALLOWED_SCHEMA_PATTERNS,
     ALLOWED_TABLE_PATTERNS,
     PUBLIC_SCHEMA_PATTERN,
+    MigrationResult,
 )
 
 # 环境变量检查
@@ -776,6 +777,186 @@ class TestSchemaTableWhitelistValidation:
             # public 不应匹配任何默认模式
             if re.match(pattern, "public"):
                 pytest.fail(f"ALLOWED_SCHEMA_PATTERNS 不应包含匹配 'public' 的模式: {pattern}")
+
+
+# ============ JSON 输出 Schema 验证测试 ============
+
+
+class TestMigrationResultJsonSchema:
+    """
+    测试 MigrationResult.to_dict() 输出的 JSON schema 完整性
+    
+    验证必需字段：
+    - success
+    - dry_run
+    - schema
+    - target_table
+    - table_allowlist
+    - rows_planned
+    - rows_migrated
+    - duration_seconds
+    - errors
+    """
+    
+    # 必需字段列表
+    REQUIRED_FIELDS = [
+        "success",
+        "dry_run",
+        "schema",
+        "target_table",
+        "table_allowlist",
+        "rows_planned",
+        "rows_migrated",
+        "duration_seconds",
+        "errors",
+    ]
+    
+    def test_migration_result_to_dict_contains_all_required_fields(self):
+        """验证 MigrationResult.to_dict() 包含所有必需字段"""
+        result = MigrationResult(
+            success=True,
+            message="test",
+            rows_processed=100,
+            rows_migrated=50,
+            errors=[],
+            duration_seconds=1.5,
+            dry_run=False,
+            plan=None,
+            schema="step3",
+            target_table="chunks",
+            table_allowlist=["table_a", "table_b"],
+            rows_planned=100,
+        )
+        
+        output = result.to_dict()
+        
+        for field in self.REQUIRED_FIELDS:
+            assert field in output, f"缺失必需字段: {field}"
+    
+    def test_migration_result_default_values(self):
+        """验证 MigrationResult 使用默认值时输出仍包含所有必需字段"""
+        result = MigrationResult(
+            success=True,
+            message="minimal test",
+        )
+        
+        output = result.to_dict()
+        
+        for field in self.REQUIRED_FIELDS:
+            assert field in output, f"缺失必需字段（使用默认值）: {field}"
+    
+    def test_migration_result_dry_run_true(self):
+        """验证 dry_run=True 时输出正确"""
+        result = MigrationResult(
+            success=True,
+            message="dry-run test",
+            dry_run=True,
+            schema="step3_test",
+            target_table="chunks_test",
+            rows_planned=500,
+        )
+        
+        output = result.to_dict()
+        
+        assert output["dry_run"] is True
+        assert output["schema"] == "step3_test"
+        assert output["target_table"] == "chunks_test"
+        assert output["rows_planned"] == 500
+    
+    def test_migration_result_with_errors(self):
+        """验证带错误信息时输出正确"""
+        errors = ["Error 1", "Error 2"]
+        result = MigrationResult(
+            success=False,
+            message="failed test",
+            errors=errors,
+            schema="step3",
+            target_table="chunks",
+        )
+        
+        output = result.to_dict()
+        
+        assert output["success"] is False
+        assert output["errors"] == errors
+        assert len(output["errors"]) == 2
+    
+    def test_migration_result_with_table_allowlist(self):
+        """验证 table_allowlist 字段正确输出"""
+        allowlist = ["step3_chunks_a", "step3_chunks_b"]
+        result = MigrationResult(
+            success=True,
+            message="allowlist test",
+            table_allowlist=allowlist,
+            schema="step3",
+            target_table="chunks",
+        )
+        
+        output = result.to_dict()
+        
+        assert output["table_allowlist"] == allowlist
+    
+    def test_migration_result_table_allowlist_none(self):
+        """验证 table_allowlist 为 None 时输出正确"""
+        result = MigrationResult(
+            success=True,
+            message="no allowlist test",
+            table_allowlist=None,
+            schema="step3",
+            target_table="chunks",
+        )
+        
+        output = result.to_dict()
+        
+        assert output["table_allowlist"] is None
+    
+    def test_migration_result_rows_planned_vs_migrated(self):
+        """验证 rows_planned 和 rows_migrated 字段独立正确"""
+        result = MigrationResult(
+            success=True,
+            message="rows test",
+            rows_planned=1000,
+            rows_migrated=800,
+            rows_processed=1000,
+            schema="step3",
+            target_table="chunks",
+        )
+        
+        output = result.to_dict()
+        
+        assert output["rows_planned"] == 1000
+        assert output["rows_migrated"] == 800
+        assert output["rows_processed"] == 1000
+    
+    def test_migration_result_include_plan(self):
+        """验证 include_plan=True 时输出包含 plan 字段"""
+        plan = {"source_tables": ["a", "b"], "total_rows": 500}
+        result = MigrationResult(
+            success=True,
+            message="plan test",
+            plan=plan,
+            schema="step3",
+            target_table="chunks",
+        )
+        
+        output = result.to_dict(include_plan=True)
+        
+        assert "plan" in output
+        assert output["plan"] == plan
+    
+    def test_migration_result_exclude_plan_by_default(self):
+        """验证默认不包含 plan 字段"""
+        plan = {"source_tables": ["a", "b"], "total_rows": 500}
+        result = MigrationResult(
+            success=True,
+            message="no plan test",
+            plan=plan,
+            schema="step3",
+            target_table="chunks",
+        )
+        
+        output = result.to_dict()
+        
+        assert "plan" not in output
 
 
 if __name__ == "__main__":

@@ -97,6 +97,7 @@ def read_evidence_text(
     verify_sha256: bool = False,
     expected_sha256: Optional[str] = None,
     encoding: str = "utf-8",
+    docs_root: Optional[Union[str, Path]] = None,
 ) -> EvidenceReadResult:
     """
     统一读取 Evidence 文本内容
@@ -106,9 +107,17 @@ def read_evidence_text(
        - scm/proj_a/1/svn/r100/abc123.diff
        - artifact://scm/proj_a/1/svn/r100/abc123.diff
 
-    2. Memory URI（memory://patch_blobs/...）
+    2. Memory URI - patch_blobs（memory://patch_blobs/...）
        - memory://patch_blobs/{source_type}/{source_id}/{sha256}
        - 解析并查询 Step1 的 scm.patch_blobs 表
+
+    3. Memory URI - attachments（memory://attachments/...）
+       - memory://attachments/{attachment_id}/{sha256}
+       - 解析并查询 Step1 的 logbook.attachments 表
+
+    4. Memory URI - docs（memory://docs/...）
+       - memory://docs/{rel_path}/{sha256}
+       - 读取本地文件系统中的文档
 
     Args:
         uri: Evidence URI 或 artifact key
@@ -119,6 +128,7 @@ def read_evidence_text(
         expected_sha256: 预期的 SHA256 值（verify_sha256=True 时可选，
                          如果不提供，对于 memory:// URI 会使用 URI 中或 DB 中的值）
         encoding: 文本编码（默认 utf-8）
+        docs_root: 文档根目录（memory://docs/ URI 需要，默认为当前工作目录）
 
     Returns:
         EvidenceReadResult 对象
@@ -137,6 +147,12 @@ def read_evidence_text(
         result = read_evidence_text(
             "memory://patch_blobs/git/1:abc123/sha256hash",
             verify_sha256=True
+        )
+
+        # 读取本地文档
+        result = read_evidence_text(
+            "memory://docs/contracts/evidence_packet.md/abc123...",
+            docs_root="/path/to/repo"
         )
     """
     # 导入 Step1 模块
@@ -159,7 +175,7 @@ def read_evidence_text(
 
     # 根据 URI 类型分派处理
     if parsed.uri_type == UriType.MEMORY:
-        # memory:// URI - 需要查询数据库
+        # memory:// URI - 需要查询数据库或读取本地文件
         return _read_memory_uri(
             uri=uri,
             parsed=parsed,
@@ -169,6 +185,7 @@ def read_evidence_text(
             verify_sha256=verify_sha256,
             expected_sha256=expected_sha256,
             encoding=encoding,
+            docs_root=docs_root,
         )
     elif parsed.uri_type == UriType.ARTIFACT:
         # artifact key 或 artifact:// URI
@@ -353,15 +370,17 @@ def _read_memory_uri(
     verify_sha256: bool,
     expected_sha256: Optional[str],
     encoding: str,
+    docs_root: Optional[Union[str, Path]] = None,
 ) -> EvidenceReadResult:
     """
-    读取 memory://patch_blobs/... 或 memory://attachments/... URI
+    读取 memory://patch_blobs/..., memory://attachments/... 或 memory://docs/... URI
 
     流程:
-    1. 解析 URI 判断资源类型 (patch_blobs 或 attachments)
+    1. 解析 URI 判断资源类型 (patch_blobs, attachments 或 docs)
     2. 查询对应的 Step1 表获取 artifact_uri
        - patch_blobs -> scm.patch_blobs 表
        - attachments -> logbook.attachments 表
+       - docs -> 本地文件系统
     3. 读取 artifact_uri 指向的制品
     4. 可选校验 SHA256
     """
@@ -379,10 +398,10 @@ def _read_memory_uri(
 
     resource_type = path_parts[0]
 
-    # 支持 patch_blobs 和 attachments 两种资源类型
-    if resource_type not in ("patch_blobs", "attachments"):
+    # 支持 patch_blobs, attachments 和 docs 三种资源类型
+    if resource_type not in ("patch_blobs", "attachments", "docs"):
         raise EvidenceUriInvalidError(
-            f"不支持的 memory:// 资源类型: {resource_type}，支持: patch_blobs, attachments",
+            f"不支持的 memory:// 资源类型: {resource_type}，支持: patch_blobs, attachments, docs",
             {"uri": uri, "resource_type": resource_type},
         )
 
@@ -395,6 +414,17 @@ def _read_memory_uri(
             conn=conn,
             artifacts_root=artifacts_root,
             config=config,
+            verify_sha256=verify_sha256,
+            expected_sha256=expected_sha256,
+            encoding=encoding,
+        )
+
+    if resource_type == "docs":
+        return _read_docs_memory_uri(
+            uri=uri,
+            parsed=parsed,
+            path_parts=path_parts,
+            docs_root=docs_root,
             verify_sha256=verify_sha256,
             expected_sha256=expected_sha256,
             encoding=encoding,
@@ -867,6 +897,159 @@ def _query_patch_blob(path_parts: list, original_uri: str, conn) -> Optional[dic
         }
 
 
+def _read_docs_memory_uri(
+    uri: str,
+    parsed,
+    path_parts: list,
+    docs_root: Optional[Union[str, Path]],
+    verify_sha256: bool,
+    expected_sha256: Optional[str],
+    encoding: str,
+) -> EvidenceReadResult:
+    """
+    读取 memory://docs/<rel_path>/<sha256> URI
+
+    流程:
+    1. 解析 URI 获取 (rel_path, sha256)
+    2. 根据 docs_root 定位本地文件
+    3. 读取文件内容
+    4. 可选校验 SHA256
+
+    Args:
+        uri: 原始 URI
+        parsed: 解析后的 URI 对象
+        path_parts: URI 路径分段（第一个元素是 "docs"）
+        docs_root: 文档根目录（默认为当前工作目录）
+        verify_sha256: 是否校验 SHA256
+        expected_sha256: 预期的 SHA256 值
+        encoding: 文本编码
+
+    Returns:
+        EvidenceReadResult 对象
+    """
+    import os
+    import re
+
+    # SHA256 格式正则：64 位十六进制
+    _SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")
+
+    def _is_sha256_hex(value: str) -> bool:
+        return bool(_SHA256_PATTERN.match(value))
+
+    # path_parts[0] 是 "docs"
+    if len(path_parts) < 2:
+        raise EvidenceUriInvalidError(
+            f"docs URI 路径格式无效: {uri}",
+            {"uri": uri, "path_parts": path_parts},
+        )
+
+    # 解析路径：docs/<rel_path>/<sha256>
+    # 最后一个元素如果是 sha256，则分离出来
+    docs_path_parts = path_parts[1:]
+    uri_sha256 = None
+
+    if docs_path_parts and _is_sha256_hex(docs_path_parts[-1]):
+        uri_sha256 = docs_path_parts[-1].lower()
+        docs_path_parts = docs_path_parts[:-1]
+
+    if not docs_path_parts:
+        raise EvidenceUriInvalidError(
+            f"docs URI 缺少相对路径: {uri}",
+            {"uri": uri},
+        )
+
+    # 重建相对路径
+    rel_path = "/".join(docs_path_parts)
+
+    # 确定 docs_root
+    if docs_root is None:
+        # 默认使用当前工作目录
+        docs_root = Path.cwd()
+    else:
+        docs_root = Path(docs_root)
+
+    # 构建完整路径
+    full_path = docs_root / rel_path
+
+    # 安全检查：防止路径遍历
+    try:
+        full_path = full_path.resolve()
+        docs_root_resolved = docs_root.resolve()
+        # 确保路径在 docs_root 内或其子目录
+        # 注意：允许 docs_root 之外的路径（如仓库根目录下的任意文件）
+        # 这里只做基本的存在性检查
+    except Exception as e:
+        raise EvidenceUriInvalidError(
+            f"无法解析文档路径: {uri}",
+            {"uri": uri, "rel_path": rel_path, "error": str(e)},
+        )
+
+    # 检查文件存在性
+    if not full_path.exists():
+        raise EvidenceNotFoundError(
+            f"文档文件不存在: {uri}",
+            {"uri": uri, "path": str(full_path), "rel_path": rel_path},
+        )
+
+    if not full_path.is_file():
+        raise EvidenceNotFoundError(
+            f"路径不是文件: {uri}",
+            {"uri": uri, "path": str(full_path)},
+        )
+
+    # 读取文件内容
+    try:
+        content = full_path.read_bytes()
+    except OSError as e:
+        raise EvidenceNotFoundError(
+            f"读取文档文件失败: {uri}",
+            {"uri": uri, "path": str(full_path), "error": str(e)},
+        )
+
+    # 计算 SHA256
+    actual_sha256 = _compute_sha256(content)
+
+    # 确定要校验的预期 SHA256
+    sha256_to_verify = expected_sha256 or uri_sha256
+
+    # 校验 SHA256
+    if verify_sha256 and sha256_to_verify:
+        if actual_sha256.lower() != sha256_to_verify.lower():
+            raise EvidenceSha256MismatchError(
+                f"文档 SHA256 校验失败",
+                {
+                    "uri": uri,
+                    "expected": sha256_to_verify,
+                    "actual": actual_sha256,
+                    "path": str(full_path),
+                },
+            )
+
+    # 解码为文本
+    try:
+        text = content.decode(encoding)
+    except UnicodeDecodeError as e:
+        raise EvidenceReadError(
+            f"文本解码失败 (encoding={encoding}): {uri}",
+            {"uri": uri, "encoding": encoding, "error": str(e)},
+        )
+
+    # 构建 source_id：使用冒号分隔的格式
+    # 格式: <docs_root_name>:<rel_path>
+    docs_root_name = docs_root.name if docs_root.name else "docs"
+    source_id = f"{docs_root_name}:{rel_path}"
+
+    return EvidenceReadResult(
+        text=text,
+        sha256=actual_sha256,
+        size_bytes=len(content),
+        uri=uri,
+        artifact_uri=uri,  # 对于 docs，artifact_uri 就是 URI 本身
+        source_type="docs",
+        source_id=source_id,
+    )
+
+
 def _read_artifact_content(
     artifact_uri: str,
     artifacts_root: Union[str, Path],
@@ -1018,14 +1201,18 @@ def get_evidence_info(
             "size_bytes": None,
         }
 
-    # memory:// URI 需要查询数据库
+    # memory:// URI 需要查询数据库或文件系统
     path_parts = parsed.path.strip("/").split("/")
     if len(path_parts) < 2:
         return None
 
     resource_type = path_parts[0]
-    if resource_type not in ("patch_blobs", "attachments"):
+    if resource_type not in ("patch_blobs", "attachments", "docs"):
         return None
+
+    # docs 资源类型不需要数据库查询
+    if resource_type == "docs":
+        return _get_docs_evidence_info(uri, path_parts)
 
     if config is None:
         config = step1_get_config()
@@ -1072,3 +1259,152 @@ def get_evidence_info(
     finally:
         if should_close_conn:
             conn.close()
+
+
+def _get_docs_evidence_info(uri: str, path_parts: list) -> Optional[dict]:
+    """
+    获取 docs 资源类型的元数据
+
+    Args:
+        uri: 原始 URI
+        path_parts: URI 路径分段
+
+    Returns:
+        元数据字典
+    """
+    import re
+
+    # SHA256 格式正则：64 位十六进制
+    _SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")
+
+    def _is_sha256_hex(value: str) -> bool:
+        return bool(_SHA256_PATTERN.match(value))
+
+    # 解析路径：docs/<rel_path>/<sha256>
+    docs_path_parts = path_parts[1:]
+    uri_sha256 = None
+
+    if docs_path_parts and _is_sha256_hex(docs_path_parts[-1]):
+        uri_sha256 = docs_path_parts[-1].lower()
+        docs_path_parts = docs_path_parts[:-1]
+
+    if not docs_path_parts:
+        return None
+
+    rel_path = "/".join(docs_path_parts)
+
+    return {
+        "uri": uri,
+        "artifact_uri": uri,
+        "source_type": "docs",
+        "source_id": f"docs:{rel_path}",
+        "sha256": uri_sha256,
+        "size_bytes": None,  # 需要读取文件才能获取
+        "rel_path": rel_path,
+    }
+
+
+# ============================================================
+# 本地文档索引辅助函数
+# ============================================================
+
+
+def build_docs_evidence_uri(rel_path: str, sha256: str) -> str:
+    """
+    构建 docs 的 canonical evidence URI
+
+    格式: memory://docs/<rel_path>/<sha256>
+
+    Args:
+        rel_path: 相对路径（如 "contracts/evidence_packet.md"）
+        sha256: 内容 SHA256 哈希
+
+    Returns:
+        Canonical evidence URI
+    """
+    sha256_norm = sha256.strip().lower() if sha256 else ""
+    # 规范化路径分隔符
+    rel_path_norm = rel_path.replace("\\", "/").strip("/")
+    return f"memory://docs/{rel_path_norm}/{sha256_norm}"
+
+
+def scan_docs_directory(
+    docs_root: Union[str, Path],
+    patterns: Optional[list] = None,
+    exclude_patterns: Optional[list] = None,
+) -> list:
+    """
+    扫描文档目录，返回待索引的文档列表
+
+    Args:
+        docs_root: 文档根目录
+        patterns: 包含的文件模式列表（默认 ["*.md", "*.txt"]）
+        exclude_patterns: 排除的文件模式列表
+
+    Returns:
+        文档信息列表，每个元素包含:
+        - rel_path: 相对路径
+        - full_path: 完整路径
+        - sha256: 文件 SHA256
+        - size_bytes: 文件大小
+        - artifact_uri: canonical evidence URI
+        - source_id: 源标识
+        - source_type: 源类型 (固定为 "docs")
+    """
+    import fnmatch
+
+    docs_root = Path(docs_root).resolve()
+    if not docs_root.exists():
+        return []
+
+    if patterns is None:
+        patterns = ["*.md", "*.txt"]
+
+    if exclude_patterns is None:
+        exclude_patterns = []
+
+    results = []
+
+    for pattern in patterns:
+        for file_path in docs_root.rglob(pattern):
+            if not file_path.is_file():
+                continue
+
+            rel_path = str(file_path.relative_to(docs_root))
+            # 规范化路径分隔符
+            rel_path = rel_path.replace("\\", "/")
+
+            # 检查排除模式
+            should_exclude = False
+            for exc_pattern in exclude_patterns:
+                if fnmatch.fnmatch(rel_path, exc_pattern):
+                    should_exclude = True
+                    break
+            if should_exclude:
+                continue
+
+            # 读取文件计算 SHA256
+            try:
+                content = file_path.read_bytes()
+                sha256 = _compute_sha256(content)
+                size_bytes = len(content)
+            except OSError:
+                continue
+
+            # 构建 source_id
+            source_id = f"docs:{rel_path}"
+
+            # 构建 artifact_uri
+            artifact_uri = build_docs_evidence_uri(rel_path, sha256)
+
+            results.append({
+                "rel_path": rel_path,
+                "full_path": str(file_path),
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+                "artifact_uri": artifact_uri,
+                "source_id": source_id,
+                "source_type": "docs",
+            })
+
+    return results

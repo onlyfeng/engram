@@ -26,6 +26,55 @@ CHUNKING_VERSION = "v1-2026-01"
 """
 
 
+def get_chunking_version(cli_value: str = None) -> str:
+    """
+    获取运行时的 chunking version
+    
+    优先级（从高到低）：
+    1. CLI 显式参数（cli_value）
+    2. 环境变量 STEP3_CHUNKING_VERSION（canonical）
+    3. 环境变量 CHUNKING_VERSION（deprecated alias，触发警告）
+    4. 模块常量 CHUNKING_VERSION
+    
+    Args:
+        cli_value: CLI 传入的值（最高优先级）
+    
+    Returns:
+        chunking version 字符串
+    
+    Example:
+        >>> get_chunking_version()  # 从环境变量或常量获取
+        'v1-2026-01'
+        >>> get_chunking_version("v2-custom")  # CLI 覆盖
+        'v2-custom'
+    """
+    import os
+    import sys
+    
+    # 1. CLI 显式参数优先
+    if cli_value is not None and cli_value.strip():
+        return cli_value.strip()
+    
+    # 2. STEP3_CHUNKING_VERSION（canonical）
+    canonical_value = os.environ.get("STEP3_CHUNKING_VERSION")
+    if canonical_value is not None and canonical_value.strip():
+        return canonical_value.strip()
+    
+    # 3. CHUNKING_VERSION（deprecated alias）
+    deprecated_value = os.environ.get("CHUNKING_VERSION")
+    if deprecated_value is not None and deprecated_value.strip():
+        # 触发废弃警告
+        print(
+            f"Warning: [DEPRECATION] 环境变量 CHUNKING_VERSION 已废弃，"
+            f"请改用 STEP3_CHUNKING_VERSION。此警告仅显示一次。",
+            file=sys.stderr
+        )
+        return deprecated_value.strip()
+    
+    # 4. fallback 到模块常量
+    return CHUNKING_VERSION
+
+
 # ============================================================
 # Chunk ID 规则
 # ============================================================
@@ -244,12 +293,13 @@ def generate_artifact_uri(
     优先级:
     1. 如果提供了 evidence_uri，直接使用（假定已符合 canonical 格式）
     2. 如果 original_uri 已是 memory:// 格式且符合 canonical 规范，保持不变
-    3. 根据参数构建 canonical patch_blobs URI
+    3. 如果 source_type='logbook' 且 source_id 形如 'attachment:<int>'，构建 attachments URI
+    4. 根据参数构建 canonical patch_blobs URI
 
     Args:
         original_uri: 原始 URI（可能是 file://、artifact:// 或其他）
         source_type: 来源类型 (svn/git/logbook)
-        source_id: 来源标识（格式: <repo_id>:<rev/sha> 或其他标识）
+        source_id: 来源标识（格式: <repo_id>:<rev/sha> 或 attachment:<id>）
         sha256: 内容哈希（完整的 64 位 SHA256）
         evidence_uri: 可选，调用方预先构建的 evidence URI（优先使用）
 
@@ -262,6 +312,9 @@ def generate_artifact_uri(
 
         >>> generate_artifact_uri("", "git", "2:abc123", "e3b0c44...", evidence_uri="memory://patch_blobs/git/2:abc123/e3b0c44...")
         'memory://patch_blobs/git/2:abc123/e3b0c44...'
+
+        >>> generate_artifact_uri("", "logbook", "attachment:12345", "e3b0c44...")
+        'memory://attachments/12345/e3b0c44...'
     """
     # 优先级 1：调用方传入的 evidence_uri
     if evidence_uri:
@@ -271,12 +324,20 @@ def generate_artifact_uri(
     if original_uri.startswith("memory://patch_blobs/") or original_uri.startswith("memory://attachments/"):
         return original_uri
 
-    # 优先级 3：构建 canonical patch_blobs URI
+    # 优先级 3：检测 attachment 格式的 source_id
+    # 如果 source_type='logbook' 且 source_id 形如 'attachment:<int>'，构建 attachments URI
+    source_id_norm = source_id.strip()
+    sha256_norm = sha256.strip().lower()
+
+    attachment_match = re.match(r"^attachment:(\d+)$", source_id_norm)
+    if source_type.strip().lower() == "logbook" and attachment_match:
+        attachment_id = attachment_match.group(1)
+        return f"memory://attachments/{attachment_id}/{sha256_norm}"
+
+    # 优先级 4：构建 canonical patch_blobs URI
     # 格式: memory://patch_blobs/<source_type>/<source_id>/<sha256>
     # source_id 保持原格式（不再替换冒号）
     source_type_norm = source_type.strip().lower()
-    source_id_norm = source_id.strip()
-    sha256_norm = sha256.strip().lower()
 
     return f"memory://patch_blobs/{source_type_norm}/{source_id_norm}/{sha256_norm}"
 
@@ -854,6 +915,7 @@ def compute_sha256(content: str) -> str:
 __all__ = [
     # 版本常量
     "CHUNKING_VERSION",
+    "get_chunking_version",
     "CHUNK_ID_NAMESPACE",
     # chunk_id 相关
     "generate_chunk_id",

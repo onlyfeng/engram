@@ -751,7 +751,8 @@ class TestBackendFactorySchemaTable:
             vector_dim=768,
         )
         
-        backend = create_pgvector_backend(config=config)
+        # SharedTableStrategy 要求提供 collection_id 进行租户隔离
+        backend = create_pgvector_backend(config=config, collection_id="test:v1:nomodel")
         
         # 验证 schema 和 table_name 被正确分离传递（不是拼成 schema.table）
         assert backend._schema == "step3_test"
@@ -768,7 +769,8 @@ class TestBackendFactorySchemaTable:
             dsn="postgresql://mock:mock@localhost:5432/mockdb",
         )
         
-        backend = create_pgvector_backend(config=config)
+        # SharedTableStrategy 要求提供 collection_id 进行租户隔离
+        backend = create_pgvector_backend(config=config, collection_id="default:v1:nomodel")
         
         # 默认值应为 step3 和 chunks
         assert backend._schema == "step3"

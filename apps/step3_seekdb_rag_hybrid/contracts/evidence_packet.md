@@ -22,16 +22,48 @@
 
 ### memory:// URI 格式规范
 
-`memory://` scheme 支持两种资源类型：
+`memory://` scheme 支持三种资源类型：
 
-| 资源类型 | URI 格式 | 查询的表 | 说明 |
-|----------|----------|----------|------|
+| 资源类型 | URI 格式 | 查询的表/来源 | 说明 |
+|----------|----------|---------------|------|
 | patch_blobs | `memory://patch_blobs/<source_type>/<source_id>/<sha256>` | `scm.patch_blobs` | SCM 补丁/diff 内容 |
 | attachments | `memory://attachments/<attachment_id>/<sha256>` | `logbook.attachments` | 通用附件（截图、文档等） |
+| docs | `memory://docs/<rel_path>/<sha256>` | 本地文件系统 | 规格/设计文档（如 contracts/, docs/） |
 
 **示例**：
 - `memory://patch_blobs/git/1:abc123/e3b0c44298fc...` - Git commit 的 diff
 - `memory://attachments/12345/e3b0c44298fc...` - logbook 条目的附件
+- `memory://docs/contracts/evidence_packet.md/a1b2c3d4e5f6...` - 规格文档
+
+### memory://docs 技术决策（Canonical Scheme）
+
+**选型决策**：采用 `memory://docs/...` 作为本地文档的 canonical scheme，而非 `git://`。
+
+**理由**：
+1. **统一性**：与现有 `memory://patch_blobs/...` 和 `memory://attachments/...` 保持一致的 URI 风格
+2. **简洁性**：无需解析 git remote URL、branch 等复杂信息
+3. **可扩展**：可支持非 git 管理的文档（如临时规格文档）
+4. **兼容性**：回溯时可通过相对路径直接读取本地文件
+
+**字段定义**：
+
+| 字段 | 生成规则 | 示例 |
+|------|----------|------|
+| `source_type` | 固定为 `"docs"` | `"docs"` |
+| `source_id` | 格式: `<docs_root>:<rel_path>` | `"contracts:evidence_packet.md"` |
+| `artifact_uri` | 格式: `memory://docs/<rel_path>/<sha256>` | `memory://docs/contracts/evidence_packet.md/a1b2c3...` |
+| `sha256` | 文件内容的 SHA256 哈希（64位十六进制） | `a1b2c3d4e5f67890...` |
+
+**回溯步骤**：
+1. **解析 URI**：从 `memory://docs/<rel_path>/<sha256>` 提取 `rel_path` 和 `sha256`
+2. **定位文件**：根据配置的 docs_root（默认为仓库根目录）拼接 `rel_path`
+3. **读取内容**：读取本地文件内容
+4. **校验哈希**：计算内容 SHA256，与 URI 中的 `sha256` 比对
+5. **返回或报错**：匹配则返回内容，不匹配则标记 `status: invalid`
+
+**Git 集成（可选）**：
+- 可通过 `git log -1 --format='%H' -- <rel_path>` 获取文件最后修改的 commit
+- 存入 chunk metadata 的 `git_commit` 字段，便于精确版本追踪
 
 **禁止的 Scheme**：`http://`（非加密）、`data://`（禁止内嵌大段内容）、`ftp://`
 

@@ -1721,7 +1721,11 @@ class PGVectorBackend(IndexBackend):
     
     # ============ 检索操作 ============
     
-    def query(self, request: QueryRequest) -> List[QueryHit]:
+    def query(
+        self,
+        request: QueryRequest,
+        statement_timeout_ms: Optional[int] = None,
+    ) -> List[QueryHit]:
         """
         执行 Hybrid 检索
         
@@ -1735,10 +1739,25 @@ class PGVectorBackend(IndexBackend):
         - SharedTableStrategy: 自动添加 collection_id 过滤（只查询本 collection）
         - DefaultCollectionStrategy: 无额外过滤（管理态需显式传 collection_id filter）
         
+        超时支持：
+        - 通过 statement_timeout_ms 参数设置查询超时（毫秒）
+        - 使用 SET LOCAL statement_timeout 仅影响当前查询
+        - 超时后抛出 PGVectorError（包含 QueryTimeoutError 信息）
+        
         注意：
         - 使用 SharedTableStrategy 时，collection 隔离由策略自动提供
         - 使用 DefaultCollectionStrategy 且 collection_id=None 时，需要显式传入
           filters={"collection_id": "xxx"} 才能限定范围
+        
+        Args:
+            request: 查询请求
+            statement_timeout_ms: 查询超时（毫秒），None 表示不设超时
+        
+        Returns:
+            QueryHit 列表
+        
+        Raises:
+            PGVectorError: 查询失败或超时
         """
         if not request.validate():
             raise PGVectorError("无效的查询请求")
@@ -1840,8 +1859,29 @@ class PGVectorBackend(IndexBackend):
         
         conn = self._get_connection()
         with conn.cursor() as cur:
-            cur.execute(query_sql, params)
-            rows = cur.fetchall()
+            # 设置查询超时（仅影响当前事务/查询）
+            if statement_timeout_ms is not None and statement_timeout_ms > 0:
+                try:
+                    cur.execute(f"SET LOCAL statement_timeout = {int(statement_timeout_ms)}")
+                except Exception as e:
+                    logger.warning(f"设置 statement_timeout 失败: {e}")
+            
+            try:
+                cur.execute(query_sql, params)
+                rows = cur.fetchall()
+            except Exception as e:
+                # 检查是否是超时错误
+                error_msg = str(e).lower()
+                if 'timeout' in error_msg or 'cancel' in error_msg:
+                    raise PGVectorError(
+                        f"查询超时 (timeout_ms={statement_timeout_ms})",
+                        details={
+                            "error_type": "QueryTimeoutError",
+                            "timeout_ms": statement_timeout_ms,
+                            "original_error": str(e),
+                        }
+                    )
+                raise
         
         # 转换结果
         hits = []

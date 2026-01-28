@@ -738,6 +738,101 @@ class TestArtifactUriGeneration:
 
         assert uri == evidence_uri, "传入的 evidence_uri 应该被优先使用"
 
+    def test_attachment_source_id_generates_attachments_uri(self):
+        """测试 source_type=logbook 且 source_id=attachment:<int> 时生成 attachments URI"""
+        sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        uri = generate_artifact_uri(
+            original_uri="file:///data/attachment.txt",
+            source_type="logbook",
+            source_id="attachment:12345",
+            sha256=sha256,
+        )
+
+        expected = f"memory://attachments/12345/{sha256}"
+        assert uri == expected, f"应该生成 attachments URI，实际: {uri}"
+
+    def test_attachment_source_id_various_ids(self):
+        """测试不同 attachment_id 的 attachments URI 生成"""
+        sha256 = "abcdef1234567890" * 4
+
+        test_cases = [
+            ("attachment:1", "1"),
+            ("attachment:999999", "999999"),
+            ("attachment:0", "0"),
+        ]
+
+        for source_id, expected_id in test_cases:
+            uri = generate_artifact_uri(
+                original_uri="",
+                source_type="logbook",
+                source_id=source_id,
+                sha256=sha256,
+            )
+            expected = f"memory://attachments/{expected_id}/{sha256}"
+            assert uri == expected, f"source_id={source_id} 应该生成正确的 attachments URI"
+
+    def test_attachment_source_id_evidence_uri_priority(self):
+        """测试 attachment 格式下 evidence_uri 仍为最高优先级"""
+        evidence_uri = "memory://custom/path/to/evidence"
+        uri = generate_artifact_uri(
+            original_uri="",
+            source_type="logbook",
+            source_id="attachment:12345",
+            sha256="abc123def456",
+            evidence_uri=evidence_uri,
+        )
+
+        assert uri == evidence_uri, "evidence_uri 应该优先于 attachment 格式检测"
+
+    def test_attachment_source_id_non_logbook_type(self):
+        """测试非 logbook 类型不会生成 attachments URI"""
+        sha256 = "abcdef1234567890" * 4
+        uri = generate_artifact_uri(
+            original_uri="",
+            source_type="svn",  # 非 logbook
+            source_id="attachment:12345",
+            sha256=sha256,
+        )
+
+        # 应该生成 patch_blobs URI，而不是 attachments
+        assert uri.startswith("memory://patch_blobs/"), f"非 logbook 类型应该生成 patch_blobs URI，实际: {uri}"
+
+    def test_attachment_source_id_invalid_format(self):
+        """测试无效 attachment 格式仍生成 patch_blobs URI"""
+        sha256 = "abcdef1234567890" * 4
+
+        invalid_formats = [
+            "attachment:",       # 缺少 ID
+            "attachment:abc",    # 非数字 ID
+            "attachments:123",   # 拼写错误
+            "ATTACHMENT:123",    # 大写
+            "attach:123",        # 前缀错误
+            "123",               # 纯数字
+        ]
+
+        for source_id in invalid_formats:
+            uri = generate_artifact_uri(
+                original_uri="",
+                source_type="logbook",
+                source_id=source_id,
+                sha256=sha256,
+            )
+            assert uri.startswith("memory://patch_blobs/"), (
+                f"无效格式 source_id={source_id} 应该生成 patch_blobs URI，实际: {uri}"
+            )
+
+    def test_attachment_source_id_memory_uri_preserved(self):
+        """测试已有 memory:// URI 时保持不变（优先级 2 高于 attachment 检测）"""
+        original = "memory://attachments/99999/existing_sha256"
+        uri = generate_artifact_uri(
+            original_uri=original,
+            source_type="logbook",
+            source_id="attachment:12345",  # 不同的 attachment_id
+            sha256="different_sha256",
+        )
+
+        assert uri == original, "已有的 memory:// URI 应该被保留"
+
 
 # ============================================================
 # 测试: memory://attachments resolver 往返测试

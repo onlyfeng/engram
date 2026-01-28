@@ -69,7 +69,8 @@ pgvector_collection_migrate.py - PGVector Collection 迁移脚本
     STEP3_SCHEMA: 目标 schema 的别名（已废弃，请改用 STEP3_PG_SCHEMA）
     STEP3_PG_TABLE: 基础表名 (默认 chunks)
     STEP3_TABLE: 基础表名的别名（已废弃，请改用 STEP3_PG_TABLE）
-    CHUNKING_VERSION: 分块版本号 (默认 v1)
+    STEP3_CHUNKING_VERSION: 分块版本号 (默认 v1-2026-01)
+    CHUNKING_VERSION: 分块版本号的别名（已废弃，请改用 STEP3_CHUNKING_VERSION）
     STEP3_EMBEDDING_MODEL: Embedding 模型 ID (默认 nomodel)
     ENGRAM_BACKUP_OK: 设置为 "1" 表示已完成备份（生产环境安全检查）
     BACKUP_TAG: 备份标签（生产环境安全检查，与 ENGRAM_BACKUP_OK 二选一）
@@ -148,6 +149,12 @@ except ImportError:
         if val is not None:
             return int(val)
         return default
+
+# 导入 chunking 版本常量
+try:
+    from step3_chunking import CHUNKING_VERSION as DEFAULT_CHUNKING_VERSION
+except ImportError:
+    DEFAULT_CHUNKING_VERSION = "v1-2026-01"
 
 # 尝试导入 collection_naming 模块
 _collection_naming_imported = False
@@ -269,13 +276,52 @@ class MigrationConfig:
         - STEP3_PG_PASSWORD > POSTGRES_PASSWORD（必需）
         - STEP3_PG_SCHEMA（canonical）> STEP3_SCHEMA（deprecated alias）（默认 step3）
         - STEP3_PG_TABLE（canonical）> STEP3_TABLE（deprecated alias）（默认 chunks）
+        - STEP3_CHUNKING_VERSION（canonical）> CHUNKING_VERSION（deprecated alias）（默认 v1-2026-01）
         """
-        def get_with_fallback(primary: str, fallback: str, default: str = "") -> str:
-            """优先读取 primary，回退到 fallback，最后使用 default"""
-            return os.environ.get(primary) or os.environ.get(fallback, default)
-        
-        chunking_version = os.environ.get("CHUNKING_VERSION", "v1")
+        # 通过兼容层读取 chunking_version（canonical 优先，legacy 作为别名并触发废弃警告）
+        # STEP3_CHUNKING_VERSION 为 canonical，CHUNKING_VERSION 为 deprecated alias
+        chunking_version = get_str(
+            "STEP3_CHUNKING_VERSION",
+            deprecated_aliases=["CHUNKING_VERSION"],
+            default=DEFAULT_CHUNKING_VERSION,
+        )
         embedding_model_id = os.environ.get("STEP3_EMBEDDING_MODEL", "nomodel")
+        
+        # 通过兼容层读取数据库连接变量（canonical 优先，legacy 作为别名并触发废弃警告）
+        # STEP3_PG_HOST 为 canonical，POSTGRES_HOST 为 deprecated alias
+        host = get_str(
+            "STEP3_PG_HOST",
+            deprecated_aliases=["POSTGRES_HOST"],
+            default="localhost",
+        )
+        
+        # STEP3_PG_PORT 为 canonical，POSTGRES_PORT 为 deprecated alias
+        port = get_int(
+            "STEP3_PG_PORT",
+            deprecated_aliases=["POSTGRES_PORT"],
+            default=5432,
+        )
+        
+        # STEP3_PG_DB 为 canonical，POSTGRES_DB 为 deprecated alias
+        database = get_str(
+            "STEP3_PG_DB",
+            deprecated_aliases=["POSTGRES_DB"],
+            default="engram",
+        )
+        
+        # STEP3_PG_USER 为 canonical，POSTGRES_USER 为 deprecated alias
+        user = get_str(
+            "STEP3_PG_USER",
+            deprecated_aliases=["POSTGRES_USER"],
+            default="postgres",
+        )
+        
+        # STEP3_PG_PASSWORD 为 canonical，POSTGRES_PASSWORD 为 deprecated alias
+        password = get_str(
+            "STEP3_PG_PASSWORD",
+            deprecated_aliases=["POSTGRES_PASSWORD"],
+            default="",
+        )
         
         # 通过兼容层读取 schema/table（canonical 优先，legacy 作为别名并触发废弃警告）
         # STEP3_PG_SCHEMA 为 canonical，STEP3_SCHEMA 为 deprecated alias
@@ -293,11 +339,11 @@ class MigrationConfig:
         )
         
         return cls(
-            host=get_with_fallback("STEP3_PG_HOST", "POSTGRES_HOST", "localhost"),
-            port=int(get_with_fallback("STEP3_PG_PORT", "POSTGRES_PORT", "5432")),
-            database=get_with_fallback("STEP3_PG_DB", "POSTGRES_DB", "engram"),
-            user=get_with_fallback("STEP3_PG_USER", "POSTGRES_USER", "postgres"),
-            password=get_with_fallback("STEP3_PG_PASSWORD", "POSTGRES_PASSWORD", ""),
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
             schema=schema,
             base_table=base_table,
             chunking_version=chunking_version,
@@ -347,16 +393,31 @@ class MigrationResult:
     duration_seconds: float = 0.0
     dry_run: bool = False
     plan: Optional[Dict[str, Any]] = None  # 详细计划信息
+    # 统一 JSON schema 必需字段
+    schema: Optional[str] = None  # 目标 schema 名
+    target_table: Optional[str] = None  # 目标表名
+    table_allowlist: Optional[List[str]] = None  # 表白名单（用于 consolidate）
+    rows_planned: int = 0  # 计划处理的行数
     
     def to_dict(self, include_plan: bool = False) -> Dict[str, Any]:
+        """
+        转换为统一的 JSON schema 字典
+        
+        必需字段：success, dry_run, schema, target_table, table_allowlist,
+                  rows_planned, rows_migrated, duration_seconds, errors
+        """
         result = {
             "success": self.success,
             "message": self.message,
-            "rows_processed": self.rows_processed,
-            "rows_migrated": self.rows_migrated,
-            "errors": self.errors,
-            "duration_seconds": self.duration_seconds,
             "dry_run": self.dry_run,
+            "schema": self.schema,
+            "target_table": self.target_table,
+            "table_allowlist": self.table_allowlist,
+            "rows_planned": self.rows_planned,
+            "rows_migrated": self.rows_migrated,
+            "rows_processed": self.rows_processed,  # 保留兼容性
+            "duration_seconds": self.duration_seconds,
+            "errors": self.errors,
         }
         if include_plan and self.plan:
             result["plan"] = self.plan
@@ -420,9 +481,41 @@ class ConsolidateConfig:
         - STEP3_PG_SCHEMA（canonical）> STEP3_SCHEMA（deprecated alias）（默认 step3）
         - STEP3_PG_TABLE（canonical）> STEP3_TABLE（deprecated alias）（默认 chunks）
         """
-        def get_with_fallback(primary: str, fallback: str, default: str = "") -> str:
-            """优先读取 primary，回退到 fallback，最后使用 default"""
-            return os.environ.get(primary) or os.environ.get(fallback, default)
+        # 通过兼容层读取数据库连接变量（canonical 优先，legacy 作为别名并触发废弃警告）
+        # STEP3_PG_HOST 为 canonical，POSTGRES_HOST 为 deprecated alias
+        host = get_str(
+            "STEP3_PG_HOST",
+            deprecated_aliases=["POSTGRES_HOST"],
+            default="localhost",
+        )
+        
+        # STEP3_PG_PORT 为 canonical，POSTGRES_PORT 为 deprecated alias
+        port = get_int(
+            "STEP3_PG_PORT",
+            deprecated_aliases=["POSTGRES_PORT"],
+            default=5432,
+        )
+        
+        # STEP3_PG_DB 为 canonical，POSTGRES_DB 为 deprecated alias
+        database = get_str(
+            "STEP3_PG_DB",
+            deprecated_aliases=["POSTGRES_DB"],
+            default="engram",
+        )
+        
+        # STEP3_PG_USER 为 canonical，POSTGRES_USER 为 deprecated alias
+        user = get_str(
+            "STEP3_PG_USER",
+            deprecated_aliases=["POSTGRES_USER"],
+            default="postgres",
+        )
+        
+        # STEP3_PG_PASSWORD 为 canonical，POSTGRES_PASSWORD 为 deprecated alias
+        password = get_str(
+            "STEP3_PG_PASSWORD",
+            deprecated_aliases=["POSTGRES_PASSWORD"],
+            default="",
+        )
         
         # 通过兼容层读取 schema/table（canonical 优先，legacy 作为别名并触发废弃警告）
         # STEP3_PG_SCHEMA 为 canonical，STEP3_SCHEMA 为 deprecated alias
@@ -440,11 +533,11 @@ class ConsolidateConfig:
         )
         
         return cls(
-            host=get_with_fallback("STEP3_PG_HOST", "POSTGRES_HOST", "localhost"),
-            port=int(get_with_fallback("STEP3_PG_PORT", "POSTGRES_PORT", "5432")),
-            database=get_with_fallback("STEP3_PG_DB", "POSTGRES_DB", "engram"),
-            user=get_with_fallback("STEP3_PG_USER", "POSTGRES_USER", "postgres"),
-            password=get_with_fallback("STEP3_PG_PASSWORD", "POSTGRES_PASSWORD", ""),
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
             schema=schema,
             target_table=target_table,
         )
@@ -1018,10 +1111,13 @@ class SharedTableMigrator:
             
             # dry-run 时使用计划中的 total_rows
             rows_processed = 0
+            rows_planned = 0
             if not self.config.dry_run:
                 rows_processed = self.count_total_rows()
+                rows_planned = rows_processed
             elif plan:
                 rows_processed = plan.get("total_rows", 0)
+                rows_planned = plan.get("planned_backfill_rows", 0)
             
             return MigrationResult(
                 success=True,
@@ -1031,6 +1127,11 @@ class SharedTableMigrator:
                 duration_seconds=duration,
                 dry_run=self.config.dry_run,
                 plan=plan,
+                # 统一 JSON schema 字段
+                schema=self.config.schema,
+                target_table=self.config.base_table,
+                table_allowlist=None,  # shared-table 不使用 table_allowlist
+                rows_planned=rows_planned,
             )
             
         except Exception as e:
@@ -1045,6 +1146,11 @@ class SharedTableMigrator:
                 duration_seconds=duration,
                 dry_run=self.config.dry_run,
                 plan=plan,
+                # 统一 JSON schema 字段
+                schema=self.config.schema,
+                target_table=self.config.base_table,
+                table_allowlist=None,
+                rows_planned=0,
             )
         finally:
             self.close()
@@ -1455,6 +1561,11 @@ class TablePerCollectionMigrator:
                         errors=[plan.get("error", "源表没有 collection_id 列")],
                         dry_run=self.config.dry_run,
                         plan=plan,
+                        # 统一 JSON schema 字段
+                        schema=self.config.schema,
+                        target_table=self.config.base_table,
+                        table_allowlist=self.config.collection_allowlist,
+                        rows_planned=0,
                     )
             
             # Step 0: 检查 collection_id 列是否存在
@@ -1472,6 +1583,11 @@ class TablePerCollectionMigrator:
                     message="源表为空，无需迁移",
                     dry_run=self.config.dry_run,
                     plan=plan,
+                    # 统一 JSON schema 字段
+                    schema=self.config.schema,
+                    target_table=self.config.base_table,
+                    table_allowlist=self.config.collection_allowlist,
+                    rows_planned=0,
                 )
             
             logger.info(f"发现 {len(full_distribution)} 个 collection，共 {sum(full_distribution.values())} 条记录")
@@ -1486,6 +1602,11 @@ class TablePerCollectionMigrator:
                     message="allowlist 过滤后没有需要处理的 collection",
                     dry_run=self.config.dry_run,
                     plan=plan,
+                    # 统一 JSON schema 字段
+                    schema=self.config.schema,
+                    target_table=self.config.base_table,
+                    table_allowlist=self.config.collection_allowlist,
+                    rows_planned=0,
                 )
             
             total_rows = sum(distribution.values())
@@ -1533,14 +1654,17 @@ class TablePerCollectionMigrator:
                 duration_seconds=duration,
                 dry_run=self.config.dry_run,
                 plan=plan,
+                # 统一 JSON schema 字段
+                schema=self.config.schema,
+                target_table=self.config.base_table,
+                table_allowlist=self.config.collection_allowlist,
+                rows_planned=total_rows,
             )
             
         except Exception as e:
             duration = time.time() - start_time
             errors.append(str(e))
             logger.error(f"迁移失败: {e}")
-            import traceback
-            traceback.print_exc()
             return MigrationResult(
                 success=False,
                 message=f"迁移失败: {e}",
@@ -1549,6 +1673,11 @@ class TablePerCollectionMigrator:
                 duration_seconds=duration,
                 dry_run=self.config.dry_run,
                 plan=plan,
+                # 统一 JSON schema 字段
+                schema=self.config.schema,
+                target_table=self.config.base_table,
+                table_allowlist=self.config.collection_allowlist,
+                rows_planned=0,
             )
         finally:
             self.close()
@@ -2030,6 +2159,11 @@ class ConsolidateToSharedTableMigrator:
                     message="未找到匹配的源表",
                     dry_run=self.config.dry_run,
                     plan=plan,
+                    # 统一 JSON schema 字段
+                    schema=self.config.schema,
+                    target_table=self.config.target_table,
+                    table_allowlist=self.config.table_allowlist,
+                    rows_planned=0,
                 )
             
             logger.info(f"发现 {len(source_tables)} 个源表: {', '.join(source_tables)}")
@@ -2058,6 +2192,11 @@ class ConsolidateToSharedTableMigrator:
                     errors=errors,
                     dry_run=self.config.dry_run,
                     plan=plan,
+                    # 统一 JSON schema 字段
+                    schema=self.config.schema,
+                    target_table=self.config.target_table,
+                    table_allowlist=self.config.table_allowlist,
+                    rows_planned=0,
                 )
             
             # Step 3: 确保目标表有 collection_id 列
@@ -2107,9 +2246,11 @@ class ConsolidateToSharedTableMigrator:
                 )
             
             # dry-run 时使用计划中的估算值
+            rows_planned = rows_processed
             if self.config.dry_run and plan:
                 rows_processed = plan.get("total_estimated_rows", 0)
                 rows_migrated = rows_processed  # dry-run 假设全部迁移
+                rows_planned = rows_processed
             
             return MigrationResult(
                 success=all_ok,
@@ -2120,14 +2261,17 @@ class ConsolidateToSharedTableMigrator:
                 duration_seconds=duration,
                 dry_run=self.config.dry_run,
                 plan=plan,
+                # 统一 JSON schema 字段
+                schema=self.config.schema,
+                target_table=self.config.target_table,
+                table_allowlist=self.config.table_allowlist,
+                rows_planned=rows_planned,
             )
             
         except Exception as e:
             duration = time.time() - start_time
             errors.append(str(e))
             logger.error(f"迁移失败: {e}")
-            import traceback
-            traceback.print_exc()
             return MigrationResult(
                 success=False,
                 message=f"迁移失败: {e}",
@@ -2136,6 +2280,11 @@ class ConsolidateToSharedTableMigrator:
                 duration_seconds=duration,
                 dry_run=self.config.dry_run,
                 plan=plan,
+                # 统一 JSON schema 字段
+                schema=self.config.schema,
+                target_table=self.config.target_table,
+                table_allowlist=self.config.table_allowlist,
+                rows_planned=0,
             )
         finally:
             self.close()
@@ -2474,6 +2623,16 @@ def main() -> int:
     """主入口"""
     args = parse_args()
     
+    # 解析 JSON 输出相关参数
+    output_json = getattr(args, 'json', False)
+    include_plan = getattr(args, 'plan_json', False)
+    
+    # 如果是 JSON 输出模式，禁用日志输出到控制台（避免污染 JSON）
+    if output_json or include_plan:
+        logging.getLogger().handlers = []
+        # 添加一个 NullHandler 避免 "No handler" 警告
+        logging.getLogger().addHandler(logging.NullHandler())
+    
     # 解析确认机制参数
     auto_yes = getattr(args, 'auto_yes', False) or getattr(args, 'no_require_confirm', False)
     require_backup = not getattr(args, 'no_require_backup_env', False)
@@ -2499,7 +2658,24 @@ def main() -> int:
         
         # 检查密码
         if not config.password:
-            logger.error("错误: POSTGRES_PASSWORD 环境变量未设置")
+            error_msg = "POSTGRES_PASSWORD 环境变量未设置"
+            if output_json or include_plan:
+                error_result = {
+                    "success": False,
+                    "message": error_msg,
+                    "dry_run": config.dry_run,
+                    "schema": config.schema,
+                    "target_table": config.target_table,
+                    "table_allowlist": config.table_allowlist,
+                    "rows_planned": 0,
+                    "rows_migrated": 0,
+                    "rows_processed": 0,
+                    "duration_seconds": 0,
+                    "errors": [error_msg],
+                }
+                print(json.dumps(error_result, indent=2, ensure_ascii=False))
+            else:
+                logger.error(f"错误: {error_msg}")
             return 1
         
         # Schema/Table 白名单校验（仅非 dry-run 时严格执行）
@@ -2509,7 +2685,24 @@ def main() -> int:
                 validate_table_name(config.target_table)
                 logger.info(f"Schema/Table 校验通过: {config.schema}.{config.target_table}")
             except ValueError as e:
-                logger.error(f"Schema/Table 校验失败: {e}")
+                error_msg = f"Schema/Table 校验失败: {e}"
+                if output_json or include_plan:
+                    error_result = {
+                        "success": False,
+                        "message": error_msg,
+                        "dry_run": config.dry_run,
+                        "schema": config.schema,
+                        "target_table": config.target_table,
+                        "table_allowlist": config.table_allowlist,
+                        "rows_planned": 0,
+                        "rows_migrated": 0,
+                        "rows_processed": 0,
+                        "duration_seconds": 0,
+                        "errors": [str(e)],
+                    }
+                    print(json.dumps(error_result, indent=2, ensure_ascii=False))
+                else:
+                    logger.error(error_msg)
                 return 1
         
         migrator = ConsolidateToSharedTableMigrator(config)
@@ -2556,7 +2749,24 @@ def main() -> int:
         
         # 检查密码
         if not config.password:
-            logger.error("错误: POSTGRES_PASSWORD 环境变量未设置")
+            error_msg = "POSTGRES_PASSWORD 环境变量未设置"
+            if output_json or include_plan:
+                error_result = {
+                    "success": False,
+                    "message": error_msg,
+                    "dry_run": config.dry_run,
+                    "schema": config.schema,
+                    "target_table": config.base_table,
+                    "table_allowlist": getattr(config, 'collection_allowlist', None),
+                    "rows_planned": 0,
+                    "rows_migrated": 0,
+                    "rows_processed": 0,
+                    "duration_seconds": 0,
+                    "errors": [error_msg],
+                }
+                print(json.dumps(error_result, indent=2, ensure_ascii=False))
+            else:
+                logger.error(f"错误: {error_msg}")
             return 1
         
         # Schema/Table 白名单校验（仅非 dry-run 时严格执行）
@@ -2566,7 +2776,24 @@ def main() -> int:
                 validate_table_name(config.base_table)
                 logger.info(f"Schema/Table 校验通过: {config.schema}.{config.base_table}")
             except ValueError as e:
-                logger.error(f"Schema/Table 校验失败: {e}")
+                error_msg = f"Schema/Table 校验失败: {e}"
+                if output_json or include_plan:
+                    error_result = {
+                        "success": False,
+                        "message": error_msg,
+                        "dry_run": config.dry_run,
+                        "schema": config.schema,
+                        "target_table": config.base_table,
+                        "table_allowlist": getattr(config, 'collection_allowlist', None),
+                        "rows_planned": 0,
+                        "rows_migrated": 0,
+                        "rows_processed": 0,
+                        "duration_seconds": 0,
+                        "errors": [str(e)],
+                    }
+                    print(json.dumps(error_result, indent=2, ensure_ascii=False))
+                else:
+                    logger.error(error_msg)
                 return 1
         
         # 执行迁移
@@ -2575,7 +2802,24 @@ def main() -> int:
         elif args.command == "table-per-collection":
             migrator = TablePerCollectionMigrator(config)
         else:
-            logger.error(f"未知命令: {args.command}")
+            error_msg = f"未知命令: {args.command}"
+            if output_json or include_plan:
+                error_result = {
+                    "success": False,
+                    "message": error_msg,
+                    "dry_run": args.dry_run,
+                    "schema": config.schema,
+                    "target_table": config.base_table,
+                    "table_allowlist": None,
+                    "rows_planned": 0,
+                    "rows_migrated": 0,
+                    "rows_processed": 0,
+                    "duration_seconds": 0,
+                    "errors": [error_msg],
+                }
+                print(json.dumps(error_result, indent=2, ensure_ascii=False))
+            else:
+                logger.error(error_msg)
             return 1
         
         logger.info(f"开始迁移: {args.command}")
@@ -2591,17 +2835,40 @@ def main() -> int:
         logger.info(f"  dry-run: {config.dry_run}")
         logger.info(f"  batch-size: {config.batch_size}")
     
-    # 确定是否需要计划信息
-    include_plan = getattr(args, 'plan_json', False)
-    output_json = getattr(args, 'json', False)
-    
     # ============ 生产安全检查（非 dry-run 时执行）============
     if not args.dry_run:
         # 1. 备份环境变量检查
         try:
             check_backup_env(require_backup)
         except RuntimeError as e:
-            logger.error(str(e))
+            error_msg = str(e)
+            if output_json or include_plan:
+                # 获取当前配置的 schema 和 table
+                if args.command == "consolidate-to-shared-table":
+                    schema = config.schema
+                    target_table = config.target_table
+                    table_allowlist = config.table_allowlist
+                else:
+                    schema = config.schema
+                    target_table = config.base_table
+                    table_allowlist = getattr(config, 'collection_allowlist', None)
+                
+                error_result = {
+                    "success": False,
+                    "message": f"备份检查失败: {error_msg}",
+                    "dry_run": args.dry_run,
+                    "schema": schema,
+                    "target_table": target_table,
+                    "table_allowlist": table_allowlist,
+                    "rows_planned": 0,
+                    "rows_migrated": 0,
+                    "rows_processed": 0,
+                    "duration_seconds": 0,
+                    "errors": [error_msg],
+                }
+                print(json.dumps(error_result, indent=2, ensure_ascii=False))
+            else:
+                logger.error(error_msg)
             return 1
         
         # 2. 获取并显示迁移计划
