@@ -1376,6 +1376,8 @@ services:
     working_dir: /app
     volumes:
       - ./apps/step1_logbook_postgres:/app:ro
+      # 挂载 .artifacts 目录以输出测试结果
+      - ./.artifacts:/app/.artifacts
     environment:
       # 数据库配置
       POSTGRES_DSN: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-engram}"
@@ -1391,6 +1393,8 @@ services:
       ENGRAM_UNIFIED_INTEGRATION: "1"
       ENGRAM_MINIO_INTEGRATION: "1"
       ENGRAM_UNIFIED_SKIP_DOCKER: "1"
+      # pytest 额外参数（用于 CI 输出 junitxml）
+      PYTEST_ADDOPTS: ${PYTEST_ADDOPTS:-}
     command: >
       bash -c "
         pip install --quiet psycopg[binary] boto3 pytest requests &&
@@ -1399,7 +1403,7 @@ services:
         echo '=======================================' &&
         echo 'Step1 集成测试' &&
         echo '=======================================' &&
-        python -m pytest tests/test_unified_stack_integration.py -v --tb=short
+        python -m pytest tests/test_unified_stack_integration.py -v --tb=short $${PYTEST_ADDOPTS}
       "
     depends_on:
       step1_migrate:
