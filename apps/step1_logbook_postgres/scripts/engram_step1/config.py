@@ -1563,6 +1563,39 @@ DEFAULT_BACKFILL_CRON_HINT = "0 2 * * *"
 DEFAULT_BACKFILL_MAX_CONCURRENT_JOBS = 4
 DEFAULT_BACKFILL_UPDATE_WATERMARK = False
 
+# Backfill 窗口限制默认值
+# max_total_window_seconds: 回填窗口最大总秒数，防止单次回填范围过大
+# 默认 30 天 = 30 * 24 * 3600 = 2592000 秒
+DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS = 30 * 24 * 3600  # 30 天
+
+# max_chunks_per_request: 每次回填请求最大 chunk 数，防止任务过多
+# 默认 100 个 chunks
+DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST = 100
+
+
+class BackfillWindowExceededError(Exception):
+    """回填窗口超限错误
+    
+    当回填请求的时间窗口或 chunk 数超过配置的限制时抛出。
+    
+    Attributes:
+        error_type: 错误类型标识
+        details: 结构化错误详情，用于 JSON 输出
+    """
+    
+    def __init__(self, message: str, details: dict = None):
+        super().__init__(message)
+        self.error_type = "BACKFILL_WINDOW_EXCEEDED"
+        self.details = details or {}
+    
+    def to_dict(self) -> dict:
+        """转换为结构化字典，便于 JSON 输出"""
+        return {
+            "error_type": self.error_type,
+            "message": str(self),
+            "details": self.details,
+        }
+
 
 def get_backfill_config(config: Optional["Config"] = None) -> dict:
     """
@@ -1573,6 +1606,8 @@ def get_backfill_config(config: Optional["Config"] = None) -> dict:
     - scm.backfill.cron_hint: 建议的 cron 表达式 (默认 "0 2 * * *")
     - scm.backfill.max_concurrent_jobs: 最大并发任务数 (默认 4)
     - scm.backfill.default_update_watermark: 默认是否更新 watermark (默认 false)
+    - scm.backfill.max_total_window_seconds: 回填窗口最大总秒数 (默认 2592000，即 30 天)
+    - scm.backfill.max_chunks_per_request: 每次请求最大 chunk 数 (默认 100)
 
     配置示例:
         [scm.backfill]
@@ -1580,6 +1615,8 @@ def get_backfill_config(config: Optional["Config"] = None) -> dict:
         cron_hint = "0 2 * * *"       # 建议的 cron 表达式
         max_concurrent_jobs = 4       # 最大并发任务数
         default_update_watermark = false  # 回填默认不更新 watermark
+        max_total_window_seconds = 2592000  # 回填窗口最大 30 天
+        max_chunks_per_request = 100  # 每次请求最多 100 个 chunks
 
     Args:
         config: 可选的 Config 实例
@@ -1607,7 +1644,73 @@ def get_backfill_config(config: Optional["Config"] = None) -> dict:
             "scm.backfill.default_update_watermark",
             DEFAULT_BACKFILL_UPDATE_WATERMARK,
         ),
+        "max_total_window_seconds": config.get(
+            "scm.backfill.max_total_window_seconds",
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+        ),
+        "max_chunks_per_request": config.get(
+            "scm.backfill.max_chunks_per_request",
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        ),
     }
+
+
+def validate_backfill_window(
+    total_window_seconds: int,
+    chunk_count: int,
+    config: Optional["Config"] = None,
+) -> None:
+    """
+    校验回填窗口是否超限
+    
+    Args:
+        total_window_seconds: 回填窗口总秒数
+        chunk_count: chunk 数量
+        config: 可选的 Config 实例
+    
+    Raises:
+        BackfillWindowExceededError: 如果超过配置的限制
+    """
+    backfill_cfg = get_backfill_config(config)
+    max_window_seconds = backfill_cfg["max_total_window_seconds"]
+    max_chunks = backfill_cfg["max_chunks_per_request"]
+    
+    errors = []
+    
+    # 检查窗口时长限制
+    if total_window_seconds > max_window_seconds:
+        errors.append({
+            "constraint": "max_total_window_seconds",
+            "limit": max_window_seconds,
+            "actual": total_window_seconds,
+            "message": f"回填窗口 {total_window_seconds}s 超过限制 {max_window_seconds}s "
+                       f"({max_window_seconds / 86400:.1f} 天)",
+        })
+    
+    # 检查 chunk 数量限制
+    if chunk_count > max_chunks:
+        errors.append({
+            "constraint": "max_chunks_per_request",
+            "limit": max_chunks,
+            "actual": chunk_count,
+            "message": f"chunk 数量 {chunk_count} 超过限制 {max_chunks}",
+        })
+    
+    if errors:
+        # 构建详细错误信息
+        messages = [e["message"] for e in errors]
+        raise BackfillWindowExceededError(
+            f"回填窗口超限: {'; '.join(messages)}",
+            details={
+                "errors": errors,
+                "total_window_seconds": total_window_seconds,
+                "chunk_count": chunk_count,
+                "limits": {
+                    "max_total_window_seconds": max_window_seconds,
+                    "max_chunks_per_request": max_chunks,
+                },
+            },
+        )
 
 
 # === SCM Scheduler 配置 ===

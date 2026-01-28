@@ -49,6 +49,11 @@ from engram_step1.config import (
     add_config_argument,
     get_config,
     get_app_config,
+    get_backfill_config,
+    validate_backfill_window,
+    BackfillWindowExceededError,
+    DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+    DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
 )
 from engram_step1.db import get_connection
 from engram_step1.errors import EngramError, ConfigError
@@ -911,6 +916,12 @@ class SyncRunner:
         
         except WatermarkConstraintError:
             raise
+        except BackfillWindowExceededError as e:
+            # 回填窗口超限，输出结构化错误
+            result.status = RunnerStatus.FAILED.value
+            result.errors.append(str(e))
+            result.metadata["backfill_window_exceeded"] = e.to_dict()
+            raise
         except Exception as e:
             logger.exception("回填同步失败: %s", e)
             result.status = RunnerStatus.FAILED.value
@@ -928,6 +939,9 @@ class SyncRunner:
         
         Returns:
             汇总的同步结果
+            
+        Raises:
+            BackfillWindowExceededError: 如果窗口超过配置的限制
         """
         # 计算回填时间窗口
         since_time, until_time = calculate_backfill_window(
@@ -942,6 +956,21 @@ class SyncRunner:
             until_time,
             chunk_hours=self.ctx.window_chunk_hours,
         )
+        
+        # 校验回填窗口是否超限
+        total_window_seconds = int((until_time - since_time).total_seconds())
+        try:
+            validate_backfill_window(
+                total_window_seconds=total_window_seconds,
+                chunk_count=len(chunks),
+                config=self.ctx.config,
+            )
+        except BackfillWindowExceededError as e:
+            logger.error(
+                "回填窗口超限被拒绝: %s, 详情: %s",
+                e, json.dumps(e.details, ensure_ascii=False)
+            )
+            raise
         
         # 确定 watermark 约束策略
         # strict 模式下: monotonic（只能前进，不允许回退）
@@ -1051,6 +1080,9 @@ class SyncRunner:
         
         Returns:
             汇总的同步结果
+            
+        Raises:
+            BackfillWindowExceededError: 如果 chunk 数量超过配置的限制
         """
         start_rev = self.ctx.start_rev or 1
         end_rev = self.ctx.end_rev  # 可能为 None，表示 HEAD
@@ -1073,6 +1105,23 @@ class SyncRunner:
                 end_rev,
                 chunk_size=self.ctx.window_chunk_revs,
             )
+            
+            # 校验回填窗口是否超限（SVN 使用 revision 差值估算秒数）
+            # 对于 SVN，无法直接获取时间窗口，使用 revision 数量 * 估算系数（假设每 revision 约 1 小时）
+            # 主要检查 chunk 数量限制
+            estimated_window_seconds = (end_rev - start_rev + 1) * 3600  # 保守估算
+            try:
+                validate_backfill_window(
+                    total_window_seconds=estimated_window_seconds,
+                    chunk_count=len(chunks),
+                    config=self.ctx.config,
+                )
+            except BackfillWindowExceededError as e:
+                logger.error(
+                    "SVN 回填窗口超限被拒绝: %s, 详情: %s",
+                    e, json.dumps(e.details, ensure_ascii=False)
+                )
+                raise
         
         # 确定 watermark 约束策略
         watermark_constraint = "monotonic" if self.ctx.update_watermark else "none"
@@ -1554,6 +1603,17 @@ def main(args: Optional[List[str]] = None) -> int:
     except WatermarkConstraintError as e:
         logger.error("Watermark 约束错误: %s", e)
         return e.exit_code
+    except BackfillWindowExceededError as e:
+        # 输出结构化错误（JSON 格式）
+        error_output = e.to_dict()
+        if getattr(parsed, "json_output", False):
+            print(json.dumps(error_output, ensure_ascii=False, indent=2))
+        else:
+            logger.error("回填窗口超限: %s", e)
+            for err in e.details.get("errors", []):
+                logger.error("  - %s (limit=%s, actual=%s)", 
+                            err.get("constraint"), err.get("limit"), err.get("actual"))
+        return 32  # 特定退出码表示窗口超限
     except Exception as e:
         logger.exception("运行器异常: %s", e)
         return 1

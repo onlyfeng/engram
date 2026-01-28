@@ -737,6 +737,119 @@ class TestPrometheusOutputFormat:
         assert "scm_error_budget_timeout_count" in prom_output
         assert "scm_error_budget_timeout_rate" in prom_output
 
+    def test_prometheus_jobs_by_status_metric(self, db_conn):
+        """验证 Prometheus 输出包含 jobs_by_status 指标（带 instance_key/tenant_id/job_type 标签）"""
+        # 创建测试仓库和任务
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://gitlab.example.com/tenant_a/project.git",
+            project_key="tenant_a/project",
+        )
+        enqueue_sync_job(db_conn, repo_id, "gitlab_commits", priority=50)
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证指标名存在
+        assert "scm_jobs_by_status" in prom_output
+        # 验证标签存在
+        assert 'instance_key=' in prom_output
+        assert 'tenant_id=' in prom_output
+        assert 'job_type=' in prom_output
+        assert 'status=' in prom_output
+
+    def test_prometheus_breaker_state_metric(self, db_conn):
+        """验证 Prometheus 输出包含 breaker_state 指标（使用 instance_key 标签，无敏感信息）"""
+        # 插入熔断器状态
+        cb_key = build_circuit_breaker_key("test_instance.com", "global")
+        cb_state = {
+            "state": "open",
+            "failure_count": 5,
+            "success_count": 10,
+        }
+        save_circuit_breaker_state(db_conn, cb_key, cb_state)
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证新指标名存在
+        assert "scm_breaker_state" in prom_output
+        assert "scm_breaker_failure_count" in prom_output
+        assert "scm_breaker_success_count" in prom_output
+        # 验证使用 instance_key 标签
+        assert 'scm_breaker_state{instance_key=' in prom_output
+
+    def test_prometheus_rate_limit_pause_until_metric(self, db_conn):
+        """验证 Prometheus 输出包含 rate_limit_pause_until 指标"""
+        instance_key = "rate-limit-pause-test.com"
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, paused_until, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now() + interval '1 hour', now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET tokens = EXCLUDED.tokens, 
+                    paused_until = EXCLUDED.paused_until,
+                    updated_at = EXCLUDED.updated_at
+            """, (instance_key, 0, 10.0, 20, '{}'))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证指标名存在
+        assert "scm_rate_limit_pause_until" in prom_output
+        # 验证有实际的时间戳值（大于 0）
+        import re
+        match = re.search(r'scm_rate_limit_pause_until\{instance_key="[^"]+"\}\s+(\d+)', prom_output)
+        assert match is not None
+        pause_until_ts = int(match.group(1))
+        assert pause_until_ts > 0, "pause_until should be a positive timestamp"
+
+    def test_prometheus_retry_backoff_seconds_metric(self, db_conn):
+        """验证 Prometheus 输出包含 retry_backoff_seconds 指标"""
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://gitlab.example.com/retry_test/project.git",
+            project_key="retry_test/project",
+        )
+        
+        # 创建一个 not_before 在未来的任务
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_jobs (repo_id, job_type, status, priority, not_before)
+                VALUES (%s, %s, %s, %s, now() + interval '5 minutes')
+            """, (repo_id, "gitlab_commits", "pending", 50))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证指标名存在
+        assert "scm_retry_backoff_seconds" in prom_output
+        # 验证标签存在
+        assert 'scm_retry_backoff_seconds{instance_key=' in prom_output
+
     def test_prometheus_circuit_breaker_metrics(self, db_conn):
         """验证 Prometheus 输出包含熔断器指标（新/旧格式）"""
         # 插入熔断器状态

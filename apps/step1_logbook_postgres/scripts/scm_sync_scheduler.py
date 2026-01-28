@@ -52,6 +52,9 @@ from engram_step1.config import (
     Config,
     add_config_argument,
     get_config,
+    get_backfill_config,
+    validate_backfill_window,
+    BackfillWindowExceededError,
 )
 from engram_step1.cursor import (
     Cursor,
@@ -613,6 +616,21 @@ class SyncScheduler:
                     # 检查是否有需要回填的内容
                     if backfill_window.total_chunks == 0:
                         continue
+                    
+                    # 校验回填窗口是否超限（SVN 使用 revision 数量估算）
+                    estimated_window_seconds = backfill_window.total_chunks * 100 * 3600  # 估算
+                    try:
+                        validate_backfill_window(
+                            total_window_seconds=estimated_window_seconds,
+                            chunk_count=backfill_window.total_chunks,
+                            config=self._config,
+                        )
+                    except BackfillWindowExceededError as e:
+                        logger.warning(
+                            "SVN 回填窗口超限，跳过 repo_id=%d job_type=%s: %s",
+                            state.repo_id, logical_job_type, e
+                        )
+                        continue
                 else:
                     # Git/MR/Review 使用时间窗口
                     backfill_window = compute_time_backfill_window(
@@ -620,6 +638,25 @@ class SyncScheduler:
                         config=self._scheduler_config,
                         chunk_hours=24,  # 每 24 小时为一块
                     )
+                    
+                    # 校验回填窗口是否超限
+                    # 计算窗口总秒数
+                    window_seconds = 0
+                    if backfill_window.since_ts is not None and backfill_window.until_ts is not None:
+                        window_seconds = int(backfill_window.until_ts - backfill_window.since_ts)
+                    
+                    try:
+                        validate_backfill_window(
+                            total_window_seconds=window_seconds,
+                            chunk_count=backfill_window.total_chunks,
+                            config=self._config,
+                        )
+                    except BackfillWindowExceededError as e:
+                        logger.warning(
+                            "回填窗口超限，跳过 repo_id=%d job_type=%s: %s",
+                            state.repo_id, logical_job_type, e
+                        )
+                        continue
                 
                 # 构建 payload
                 payload = backfill_window.to_payload()

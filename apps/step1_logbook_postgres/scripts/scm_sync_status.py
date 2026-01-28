@@ -617,23 +617,31 @@ def get_sync_summary(
             "rate_limit_rate": rate_429,
         }
         
-        # 每实例/租户队列占用
+        # 每实例/租户/job_type 队列占用（用于细粒度 Prometheus 指标）
         cur.execute("""
             SELECT 
                 j.status,
+                j.job_type,
+                j.not_before,
                 r.url,
                 r.project_key,
                 r.repo_type
             FROM scm.sync_jobs j
             JOIN scm.repos r ON j.repo_id = r.repo_id
-            WHERE j.status IN ('pending', 'running')
+            WHERE j.status IN ('pending', 'running', 'failed')
         """)
         
         by_instance: Dict[str, int] = {}
         by_tenant: Dict[str, int] = {}
+        # 新增：按 instance_key/tenant_id/job_type/status 细粒度聚合
+        jobs_by_dimensions: Dict[str, Dict[str, Any]] = {}
+        # 新增：retry_backoff 统计（基于 not_before 与当前时间的差值）
+        retry_backoff_by_job: List[Dict[str, Any]] = []
+        
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         
         for row in cur.fetchall():
-            status, url, project_key, repo_type = row
+            status, job_type, not_before, url, project_key, repo_type = row
             
             # 解析 gitlab_instance（仅 git 类型，使用统一的 key 规范化）
             gitlab_instance = None
@@ -650,9 +658,45 @@ def get_sync_summary(
             # 按租户计数
             if tenant_id:
                 by_tenant[tenant_id] = by_tenant.get(tenant_id, 0) + 1
+            
+            # 细粒度聚合：按 instance_key/tenant_id/job_type/status
+            # 使用 "_unknown_" 作为缺失值的占位符（避免 None 导致 label 问题）
+            dim_instance = gitlab_instance or "_unknown_"
+            dim_tenant = tenant_id or "_unknown_"
+            dim_job_type = job_type or "_unknown_"
+            dim_key = f"{dim_instance}|{dim_tenant}|{dim_job_type}|{status}"
+            
+            if dim_key not in jobs_by_dimensions:
+                jobs_by_dimensions[dim_key] = {
+                    "instance_key": dim_instance,
+                    "tenant_id": dim_tenant,
+                    "job_type": dim_job_type,
+                    "status": status,
+                    "count": 0,
+                }
+            jobs_by_dimensions[dim_key]["count"] += 1
+            
+            # 计算 retry_backoff_seconds（仅对 pending/failed 且 not_before 在未来的任务）
+            if not_before and status in ("pending", "failed"):
+                if not_before.tzinfo is not None:
+                    not_before_naive = not_before.replace(tzinfo=None)
+                else:
+                    not_before_naive = not_before
+                
+                backoff_seconds = (not_before_naive - now).total_seconds()
+                if backoff_seconds > 0:
+                    retry_backoff_by_job.append({
+                        "instance_key": dim_instance,
+                        "tenant_id": dim_tenant,
+                        "job_type": dim_job_type,
+                        "backoff_seconds": round(backoff_seconds, 3),
+                    })
         
         summary["by_instance"] = by_instance
         summary["by_tenant"] = by_tenant
+        # 新增稳定字段
+        summary["jobs_by_dimensions"] = list(jobs_by_dimensions.values())
+        summary["retry_backoff_jobs"] = retry_backoff_by_job
         
         # Top N lag 最大仓库（按最后同步时间排序，越久未同步的 lag 越大）
         # 注意：URL 和 project_key 会被脱敏处理
@@ -1018,6 +1062,37 @@ def format_prometheus_metrics(summary: Dict[str, Any]) -> str:
         for tenant, count in by_tenant.items():
             lines.append(f'scm_queue_by_tenant{{tenant="{tenant}"}} {count}')
     
+    # ============ jobs_by_status 细粒度指标（按 instance_key/tenant_id/job_type） ============
+    jobs_by_dimensions = summary.get("jobs_by_dimensions", [])
+    if jobs_by_dimensions:
+        lines.append("# HELP scm_jobs_by_status Job counts by instance_key, tenant_id, job_type and status")
+        lines.append("# TYPE scm_jobs_by_status gauge")
+        for item in jobs_by_dimensions:
+            instance_key = item.get("instance_key", "_unknown_")
+            tenant_id = item.get("tenant_id", "_unknown_")
+            job_type = item.get("job_type", "_unknown_")
+            status = item.get("status", "unknown")
+            count = item.get("count", 0)
+            lines.append(
+                f'scm_jobs_by_status{{instance_key="{instance_key}",tenant_id="{tenant_id}",'
+                f'job_type="{job_type}",status="{status}"}} {count}'
+            )
+    
+    # ============ retry_backoff_seconds 指标 ============
+    retry_backoff_jobs = summary.get("retry_backoff_jobs", [])
+    if retry_backoff_jobs:
+        lines.append("# HELP scm_retry_backoff_seconds Retry backoff time in seconds for pending/failed jobs")
+        lines.append("# TYPE scm_retry_backoff_seconds gauge")
+        for item in retry_backoff_jobs:
+            instance_key = item.get("instance_key", "_unknown_")
+            tenant_id = item.get("tenant_id", "_unknown_")
+            job_type = item.get("job_type", "_unknown_")
+            backoff_seconds = item.get("backoff_seconds", 0)
+            lines.append(
+                f'scm_retry_backoff_seconds{{instance_key="{instance_key}",tenant_id="{tenant_id}",'
+                f'job_type="{job_type}"}} {backoff_seconds}'
+            )
+    
     # scm_repo_lag_seconds - Top N lag 最大仓库
     top_lag_repos = summary.get("top_lag_repos", [])
     if top_lag_repos:
@@ -1101,17 +1176,45 @@ def format_prometheus_metrics(summary: Dict[str, Any]) -> str:
         for scope, data in by_scope.items():
             lines.append(f'scm_circuit_breakers_total_failures{{scope="{scope}"}} {data.get("total_failures", 0)}')
     
-    # 兼容旧指标格式
+    # ============ breaker_state 指标（使用规范化的 instance_key 标签，无敏感信息） ============
     circuit_breaker_states = summary.get("circuit_breaker_states", [])
     if circuit_breaker_states:
-        lines.append("# HELP scm_circuit_breaker_state Circuit breaker state (0=closed, 1=open, 2=half_open)")
-        lines.append("# TYPE scm_circuit_breaker_state gauge")
-        lines.append("# HELP scm_circuit_breaker_failure_count Circuit breaker failure count")
-        lines.append("# TYPE scm_circuit_breaker_failure_count gauge")
-        lines.append("# HELP scm_circuit_breaker_success_count Circuit breaker success count")
-        lines.append("# TYPE scm_circuit_breaker_success_count gauge")
+        # 新指标：使用规范化 instance_key 标签（脱敏）
+        lines.append("# HELP scm_breaker_state Circuit breaker state by instance_key (0=closed, 1=open, 2=half_open)")
+        lines.append("# TYPE scm_breaker_state gauge")
+        lines.append("# HELP scm_breaker_failure_count Circuit breaker failure count by instance_key")
+        lines.append("# TYPE scm_breaker_failure_count gauge")
+        lines.append("# HELP scm_breaker_success_count Circuit breaker success count by instance_key")
+        lines.append("# TYPE scm_breaker_success_count gauge")
         
         state_map = {"closed": 0, "open": 1, "half_open": 2}
+        
+        for cb in circuit_breaker_states:
+            key = cb.get("key", "")
+            state = cb.get("state", {})
+            cb_state = state.get("state", "closed")
+            failure_count = state.get("failure_count", 0)
+            success_count = state.get("success_count", 0)
+            
+            state_value = state_map.get(cb_state, 0)
+            
+            # 从 key 中提取 instance_key（格式: "cb:scope:instance_key"）
+            # 使用 normalize_instance_key 进行规范化和脱敏
+            parts = key.split(":", 2) if key else []
+            raw_instance = parts[2] if len(parts) >= 3 else "_unknown_"
+            instance_key = normalize_instance_key(raw_instance) or "_unknown_"
+            
+            lines.append(f'scm_breaker_state{{instance_key="{instance_key}"}} {state_value}')
+            lines.append(f'scm_breaker_failure_count{{instance_key="{instance_key}"}} {failure_count}')
+            lines.append(f'scm_breaker_success_count{{instance_key="{instance_key}"}} {success_count}')
+        
+        # 兼容旧指标格式（保留 key 标签，但标记为 deprecated）
+        lines.append("# HELP scm_circuit_breaker_state Circuit breaker state (deprecated, use scm_breaker_state)")
+        lines.append("# TYPE scm_circuit_breaker_state gauge")
+        lines.append("# HELP scm_circuit_breaker_failure_count Circuit breaker failure count (deprecated)")
+        lines.append("# TYPE scm_circuit_breaker_failure_count gauge")
+        lines.append("# HELP scm_circuit_breaker_success_count Circuit breaker success count (deprecated)")
+        lines.append("# TYPE scm_circuit_breaker_success_count gauge")
         
         for cb in circuit_breaker_states:
             key = cb.get("key", "")
@@ -1134,6 +1237,8 @@ def format_prometheus_metrics(summary: Dict[str, Any]) -> str:
         lines.append("# TYPE scm_rate_limit_bucket_paused gauge")
         lines.append("# HELP scm_rate_limit_bucket_pause_seconds Remaining pause time in seconds")
         lines.append("# TYPE scm_rate_limit_bucket_pause_seconds gauge")
+        lines.append("# HELP scm_rate_limit_pause_until Unix timestamp when rate limit pause ends (0 if not paused)")
+        lines.append("# TYPE scm_rate_limit_pause_until gauge")
         
         for bucket in rate_limit_buckets:
             instance_key = bucket.get("instance_key", "")
@@ -1142,9 +1247,22 @@ def format_prometheus_metrics(summary: Dict[str, Any]) -> str:
             pause_remaining = bucket.get("pause_remaining_seconds", 0)
             source = bucket.get("source") or ""
             
+            # 计算 pause_until 时间戳（epoch 秒）
+            pause_until_ts = 0
+            pause_until_str = bucket.get("pause_until")
+            if pause_until_str:
+                try:
+                    from datetime import datetime
+                    # ISO 格式转 epoch
+                    dt = datetime.fromisoformat(pause_until_str.replace("Z", "+00:00"))
+                    pause_until_ts = int(dt.timestamp())
+                except (ValueError, AttributeError):
+                    pause_until_ts = 0
+            
             lines.append(f'scm_rate_limit_bucket_tokens{{instance_key="{instance_key}"}} {tokens_remaining}')
             lines.append(f'scm_rate_limit_bucket_paused{{instance_key="{instance_key}",source="{source}"}} {is_paused}')
             lines.append(f'scm_rate_limit_bucket_pause_seconds{{instance_key="{instance_key}"}} {pause_remaining}')
+            lines.append(f'scm_rate_limit_pause_until{{instance_key="{instance_key}"}} {pause_until_ts}')
     
     # 兼容旧指标格式
     token_bucket_states = summary.get("token_bucket_states", [])
