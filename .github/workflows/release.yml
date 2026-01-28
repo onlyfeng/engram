@@ -1,0 +1,500 @@
+# ==============================================================================
+# Engram Release Workflow
+# ==============================================================================
+#
+# 触发条件: push tag (vX.Y.Z 格式)
+#
+# 主要功能:
+#   1. Gate 检查: verify-build + verify-unified VERIFY_FULL=1
+#   2. Docker buildx build + push (可配置是否推送到 registry)
+#   3. 产出 digest 报告并作为 artifact 存档
+#
+# 镜像列表:
+#   - gateway
+#   - worker
+#   - openmemory
+#   - openmemory_migrate
+#   - dashboard
+#
+# ==============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'  # v1.0.0, v1.0.0-beta.1, v1.0.0-rc.1, etc.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '手动指定 tag (例如: v1.0.0)'
+        required: false
+        type: string
+      push_images:
+        description: '是否推送镜像到 registry'
+        required: false
+        default: false
+        type: boolean
+      skip_gate:
+        description: '跳过 Gate 检查 (仅调试用)'
+        required: false
+        default: false
+        type: boolean
+      registry:
+        description: 'Docker registry (默认 ghcr.io)'
+        required: false
+        default: 'ghcr.io'
+        type: string
+
+# 全局环境变量
+env:
+  COMPOSE_PROJECT_NAME: engram
+  COMPOSE_FILE: docker-compose.unified.yml
+  # 服务账号密码 (CI 测试固定值)
+  STEP1_MIGRATOR_PASSWORD: ci_migrator_pass_123
+  STEP1_SVC_PASSWORD: ci_svc_pass_123
+  OPENMEMORY_MIGRATOR_PASSWORD: ci_om_migrator_pass_123
+  OPENMEMORY_SVC_PASSWORD: ci_om_svc_pass_123
+  # PostgreSQL 配置
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: engram
+  # 默认 registry
+  REGISTRY: ${{ github.event.inputs.registry || 'ghcr.io' }}
+  IMAGE_PREFIX: ${{ github.event.inputs.registry || 'ghcr.io' }}/${{ github.repository_owner }}/engram
+
+jobs:
+  # ============================================================================
+  # 阶段 1: Gate 检查 (verify-build + verify-unified)
+  # ============================================================================
+  gate:
+    name: Release Gate Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: ${{ github.event.inputs.skip_gate != 'true' }}
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_short: ${{ steps.version.outputs.version_short }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          # 移除 v 前缀获取短版本
+          VERSION_SHORT="${VERSION#v}"
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_short=$VERSION_SHORT" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION (short: $VERSION_SHORT)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-release-${{ hashFiles('apps/**/requirements*.txt', 'apps/**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-release-
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest psycopg[binary] httpx
+          # Step1 dependencies
+          cd apps/step1_logbook_postgres/scripts
+          pip install -r requirements.txt
+          pip install -e .
+          # Gateway dependencies
+          cd ../../../apps/step2_openmemory_gateway/gateway
+          pip install -e '.[dev]'
+
+      # ========================================================================
+      # Gate Step 1: verify-build-static
+      # ========================================================================
+      - name: Verify build static
+        run: |
+          echo "::group::Static Build Checks"
+          make verify-build-static
+          echo "::endgroup::"
+
+      # ========================================================================
+      # Gate Step 2: verify-build (实际 Docker 构建)
+      # ========================================================================
+      - name: Verify build (Docker)
+        run: |
+          echo "::group::Docker Build Verification"
+          make verify-build
+          echo "::endgroup::"
+
+      # ========================================================================
+      # Gate Step 3: Deploy + verify-unified VERIFY_FULL=1
+      # ========================================================================
+      - name: Deploy unified stack
+        run: |
+          echo "::group::Deploy unified stack"
+          make deploy
+          echo "::endgroup::"
+          
+          echo "Waiting for services to stabilize..."
+          sleep 15
+          
+          echo "::group::Service status"
+          docker compose -p engram -f docker-compose.unified.yml ps
+          echo "::endgroup::"
+
+      - name: Verify unified stack (FULL mode)
+        env:
+          VERIFY_FULL: "1"
+        run: |
+          echo "::group::Unified Stack Verification (FULL)"
+          mkdir -p .artifacts
+          make verify-unified VERIFY_FULL=1 VERIFY_JSON_OUT=.artifacts/verify-results.json
+          echo "::endgroup::"
+
+      - name: Run Gateway integration tests
+        env:
+          RUN_INTEGRATION_TESTS: "1"
+          HTTP_ONLY_MODE: "1"
+        run: |
+          echo "::group::Gateway Integration Tests"
+          make test-gateway-integration
+          echo "::endgroup::"
+
+      - name: Upload gate verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-verification-results
+          path: |
+            .artifacts/verify-results.json
+            .artifacts/test-results/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p .artifacts/gate-failure
+          docker compose -p engram -f docker-compose.unified.yml config > .artifacts/gate-failure/compose-config.yml 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml ps > .artifacts/gate-failure/compose-ps.txt 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml logs --no-color --tail=500 > .artifacts/gate-failure/compose-logs.txt 2>&1 || true
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-failure-logs-${{ github.run_number }}
+          path: .artifacts/gate-failure/
+          retention-days: 14
+
+  # ============================================================================
+  # 阶段 2: Docker 镜像构建 + Push + Digest 报告
+  # ============================================================================
+  build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [gate]
+    # 即使 gate 被跳过也执行（workflow_dispatch skip_gate=true 场景）
+    if: ${{ always() && (needs.gate.result == 'success' || needs.gate.result == 'skipped') }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      digest_gateway: ${{ steps.build_gateway.outputs.digest }}
+      digest_worker: ${{ steps.build_worker.outputs.digest }}
+      digest_openmemory: ${{ steps.build_openmemory.outputs.digest }}
+      digest_openmemory_migrate: ${{ steps.build_openmemory_migrate.outputs.digest }}
+      digest_dashboard: ${{ steps.build_dashboard.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION_SHORT="${VERSION#v}"
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_short=$VERSION_SHORT" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        if: ${{ github.event.inputs.push_images == 'true' || github.event_name == 'push' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========================================================================
+      # Build: gateway
+      # ========================================================================
+      - name: Build gateway
+        id: build_gateway
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/step2_openmemory_gateway/gateway/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event.inputs.push_images == 'true' || github.event_name == 'push' }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-gateway:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-gateway:${{ steps.version.outputs.version_short }}
+            ${{ env.IMAGE_PREFIX }}-gateway:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ========================================================================
+      # Build: worker (同 Dockerfile，不同 command)
+      # ========================================================================
+      - name: Build worker
+        id: build_worker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/step2_openmemory_gateway/gateway/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event.inputs.push_images == 'true' || github.event_name == 'push' }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version_short }}
+            ${{ env.IMAGE_PREFIX }}-worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ========================================================================
+      # Build: openmemory
+      # ========================================================================
+      - name: Build openmemory
+        id: build_openmemory
+        uses: docker/build-push-action@v5
+        with:
+          context: ./libs/OpenMemory/packages/openmemory-js
+          file: ./libs/OpenMemory/packages/openmemory-js/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event.inputs.push_images == 'true' || github.event_name == 'push' }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-openmemory:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-openmemory:${{ steps.version.outputs.version_short }}
+            ${{ env.IMAGE_PREFIX }}-openmemory:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ========================================================================
+      # Build: openmemory_migrate
+      # ========================================================================
+      - name: Build openmemory_migrate
+        id: build_openmemory_migrate
+        uses: docker/build-push-action@v5
+        with:
+          context: ./libs/OpenMemory/packages/openmemory-js
+          file: ./libs/OpenMemory/packages/openmemory-js/Dockerfile
+          target: builder
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event.inputs.push_images == 'true' || github.event_name == 'push' }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-openmemory-migrate:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-openmemory-migrate:${{ steps.version.outputs.version_short }}
+            ${{ env.IMAGE_PREFIX }}-openmemory-migrate:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ========================================================================
+      # Build: dashboard (可选，仅当目录存在时构建)
+      # ========================================================================
+      - name: Check dashboard source exists
+        id: check_dashboard
+        run: |
+          if [ -f "libs/OpenMemory/dashboard/package.json" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "::warning::Dashboard source not found, skipping dashboard build"
+          fi
+
+      - name: Build dashboard
+        id: build_dashboard
+        if: steps.check_dashboard.outputs.exists == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./libs/OpenMemory/dashboard
+          file: ./libs/OpenMemory/dashboard/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event.inputs.push_images == 'true' || github.event_name == 'push' }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-dashboard:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}-dashboard:${{ steps.version.outputs.version_short }}
+            ${{ env.IMAGE_PREFIX }}-dashboard:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ========================================================================
+      # 生成 Digest 报告
+      # ========================================================================
+      - name: Set up Python for audit
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate artifact audit report
+        id: audit
+        run: |
+          mkdir -p .artifacts
+          
+          # 运行 openmemory_artifact_audit.py 生成报告
+          python scripts/openmemory_artifact_audit.py \
+            --compose-project engram \
+            --output .artifacts/openmemory-artifact-audit.json
+          
+          # 同时输出 JSON 到 stdout 供日志查看
+          echo "=== Artifact Audit Report ==="
+          python scripts/openmemory_artifact_audit.py --json
+          
+          # 生成完整的 release digest 报告
+          cat > .artifacts/release-digest-report.json << EOF
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "version_short": "${{ steps.version.outputs.version_short }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "git_sha": "${{ github.sha }}",
+            "git_ref": "${{ github.ref }}",
+            "pushed_to_registry": ${{ github.event.inputs.push_images == 'true' || github.event_name == 'push' }},
+            "registry": "${{ env.REGISTRY }}",
+            "images": {
+              "gateway": {
+                "tag": "${{ env.IMAGE_PREFIX }}-gateway:${{ steps.version.outputs.version }}",
+                "digest": "${{ steps.build_gateway.outputs.digest }}"
+              },
+              "worker": {
+                "tag": "${{ env.IMAGE_PREFIX }}-worker:${{ steps.version.outputs.version }}",
+                "digest": "${{ steps.build_worker.outputs.digest }}"
+              },
+              "openmemory": {
+                "tag": "${{ env.IMAGE_PREFIX }}-openmemory:${{ steps.version.outputs.version }}",
+                "digest": "${{ steps.build_openmemory.outputs.digest }}"
+              },
+              "openmemory_migrate": {
+                "tag": "${{ env.IMAGE_PREFIX }}-openmemory-migrate:${{ steps.version.outputs.version }}",
+                "digest": "${{ steps.build_openmemory_migrate.outputs.digest }}"
+              },
+              "dashboard": {
+                "tag": "${{ env.IMAGE_PREFIX }}-dashboard:${{ steps.version.outputs.version }}",
+                "digest": "${{ steps.build_dashboard.outputs.digest }}",
+                "skipped": ${{ steps.check_dashboard.outputs.exists != 'true' }}
+              }
+            }
+          }
+          EOF
+          
+          echo "=== Release Digest Report ==="
+          cat .artifacts/release-digest-report.json
+
+      - name: Upload digest report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-digest-report-${{ steps.version.outputs.version }}
+          path: |
+            .artifacts/release-digest-report.json
+            .artifacts/openmemory-artifact-audit.json
+          retention-days: 90
+
+  # ============================================================================
+  # 阶段 3: Release Summary
+  # ============================================================================
+  summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [gate, build]
+    if: always()
+
+    steps:
+      - name: Download digest report
+        uses: actions/download-artifact@v4
+        with:
+          name: release-digest-report-${{ needs.gate.outputs.version || github.event.inputs.tag || github.ref_name }}
+          path: .artifacts
+        continue-on-error: true
+
+      - name: Generate Release Summary
+        run: |
+          echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # 版本信息
+          VERSION="${{ needs.gate.outputs.version || github.event.inputs.tag || github.ref_name }}"
+          echo "### Version: \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Gate 状态
+          echo "### Gate Check" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.skip_gate }}" == "true" ]; then
+            echo "| Gate | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Gate | ${{ needs.gate.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Build 状态
+          echo "### Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| gateway | ${{ needs.build.result == 'success' && '✅ Built' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| worker | ${{ needs.build.result == 'success' && '✅ Built' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| openmemory | ${{ needs.build.result == 'success' && '✅ Built' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| openmemory_migrate | ${{ needs.build.result == 'success' && '✅ Built' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| dashboard | ${{ needs.build.result == 'success' && '✅ Built' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Push 状态
+          if [ "${{ github.event.inputs.push_images }}" == "true" ] || [ "${{ github.event_name }}" == "push" ]; then
+            echo "### Registry Push" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Images pushed to \`${{ env.REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Registry Push" >> $GITHUB_STEP_SUMMARY
+            echo "⏭️ Images **not pushed** (build only)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Digest 报告链接
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 [Digest Report](../actions/runs/${{ github.run_id }}#artifacts)" >> $GITHUB_STEP_SUMMARY
+          
+          # 显示 digest 详情（如果存在）
+          if [ -f ".artifacts/release-digest-report.json" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Image Digests" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat .artifacts/release-digest-report.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi

@@ -6,19 +6,25 @@
 # 也可通过 workflow_dispatch 手动触发
 #
 # ==============================================================================
-# 环境变量分层说明 (Nightly = Full 层)
+# Full 层分层策略说明 (2026-01 更新)
 # ==============================================================================
-# Full 层:
+# Full 层 (Nightly 必跑):
+#   - verify-unified VERIFY_FULL=1（含降级测试）
+#   - step3-migrate-dry-run（迁移脚本验证）
+#   - dual-read test（primary/shadow 后端一致性）
+#   - MinIO integration（可配置开关: run_minio_tests）
+#   - Docker build verification（可配置开关: run_build）
+#
+# 环境变量:
 #   - RUN_INTEGRATION_TESTS=1
 #   - 不启用 HTTP_ONLY_MODE（允许降级测试）
 #   - VERIFY_FULL=1
 #   - SKIP_JSONRPC 保持未设置/false
 #
-# Full Tier 内容:
-#   - make deploy（统一栈部署）
-#   - make test-step1-integration（MinIO + test profile）
-#   - make verify-unified VERIFY_FULL=1（含降级测试）
-#   - make verify-build（Docker 实际构建，可选）
+# Allowed Failure 策略:
+#   - openmemory_upstream_drift_check: 保持 warning/非阻塞
+#   - Security priority (exit=1): 在 Summary 中突出显示，触发通知
+#
 # ==============================================================================
 #
 # ==============================================================================
@@ -46,6 +52,23 @@
 #     验证 primary (single_table) 和 shadow (per_table) 后端一致性
 #     执行固定查询列表，比较 overlap_ratio 和 score_diff
 #     输出: .artifacts/dual-read/*.json
+#
+# Step3 PGVector Migration Drill Test:
+#   - make test-step3-pgvector-migration-drill  ≤15min
+#     完整的 per_table -> shared_table 迁移演练
+#     测试内容: 数据写入、迁移执行、隔离性验证、dry-run、冲突策略
+#     输出: .artifacts/test-results/step3-pgvector-migration-drill.xml
+#     失败时: .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+#
+# Step3 Nightly Rebuild (标准化流程):
+#   - make step3-nightly-rebuild                 ≤30min
+#     标准化索引重建流程（Nightly 强执行）:
+#     1. 保存当前 active collection（用于回滚）
+#     2. full rebuild 生成带 version_tag 的新 collection（不覆盖旧）
+#     3. 执行 seek_query --query-set nightly_default 门禁检查
+#     4. 门禁通过后调用 set_active_collection 激活
+#     5. 失败输出明确回滚指令（回到旧 active_collection）
+#     输出: .artifacts/step3-nightly-rebuild/nightly-rebuild.json
 #
 # 预算更新说明:
 #   - 如实际运行超时，需检查是否有性能回归或测试用例增加
@@ -96,6 +119,26 @@ on:
         required: false
         default: true
         type: boolean
+      run_step3_migration_drill:
+        description: '运行 Step3 PGVector 迁移演练集成测试'
+        required: false
+        default: true
+        type: boolean
+      run_nightly_rebuild:
+        description: '运行 Step3 Nightly Rebuild（full rebuild + gate + activate）'
+        required: false
+        default: true
+        type: boolean
+      openmemory_freeze_override:
+        description: 'OpenMemory 升级冻结 Override（需配合 override_reason）'
+        required: false
+        default: false
+        type: boolean
+      openmemory_freeze_override_reason:
+        description: 'Override 原因（如：Security update for CVE-XXXX）'
+        required: false
+        default: ''
+        type: string
 
 # 全局环境变量
 env:
@@ -257,40 +300,280 @@ jobs:
       - name: Run OpenMemory patch sync check
         id: openmemory_patch_check
         timeout-minutes: 5
+        env:
+          # ===================================================================
+          # 路径 B 策略 (2026-01)：Nightly 不强制要求 patch 文件
+          # ===================================================================
+          # - 默认: OPENMEMORY_PATCH_FILES_REQUIRED=0（非严格模式）
+          # - 严格校验仅在以下场景启用（通过 workflow_dispatch 输入）:
+          #   1. 明确要求 patch 文件校验 (例如 release 分支准备)
+          #   2. upstream_ref 变更后需要验证 patch 一致性
+          # - 如需强制校验，可手动触发 workflow 并设置相应输入参数
+          # ===================================================================
+          OPENMEMORY_PATCH_FILES_REQUIRED: "0"
         run: |
           echo "::group::OpenMemory Patch Sync Check"
           mkdir -p .artifacts/openmemory-patch-conflicts
           
+          # 运行一致性检查（严格模式，patch 文件缺失/校验失败会导致错误）
+          python scripts/openmemory_sync.py check --json > .artifacts/openmemory-sync-check-report.json 2>&1 || true
+          
           # 使用 manual 策略生成冲突文件以便分析
           python scripts/openmemory_sync.py apply --dry-run --strategy manual --json > .artifacts/openmemory-sync-apply-report.json 2>&1 || true
           
-          # 运行一致性检查
-          python scripts/openmemory_sync.py check --json > .artifacts/openmemory-sync-check-report.json 2>&1 || true
+          # 运行补丁落地校验
+          python scripts/openmemory_sync.py verify --json > .artifacts/openmemory-sync-verify-report.json 2>&1 || true
           
           # 显示汇总
+          echo "=== Check Report ===" 
+          cat .artifacts/openmemory-sync-check-report.json | head -100 || true
+          echo ""
           echo "=== Apply Report ===" 
           cat .artifacts/openmemory-sync-apply-report.json | head -100 || true
           echo ""
-          echo "=== Check Report ==="
-          cat .artifacts/openmemory-sync-check-report.json | head -100 || true
-          
-          # 检查是否有 Category A 冲突（必须修复）
-          if grep -q '"overall_status": "error"' .artifacts/openmemory-sync-apply-report.json 2>/dev/null; then
-            echo "::error::OpenMemory patch sync has Category A conflicts (ERROR status)"
-            # 不立即失败，让产物上传后再失败
-          fi
+          echo "=== Verify Report ==="
+          cat .artifacts/openmemory-sync-verify-report.json | head -100 || true
           echo "::endgroup::"
 
-      - name: Upload OpenMemory patch conflicts (on failure)
-        if: failure() || (always() && steps.openmemory_patch_check.outcome == 'failure')
+      - name: Upload OpenMemory patch conflicts (always, before potential fail)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: openmemory-patch-conflicts-${{ github.run_number }}
           path: |
             .artifacts/openmemory-patch-conflicts/
-            .artifacts/openmemory-sync-*.json
+            .artifacts/openmemory-sync-check-report.json
+            .artifacts/openmemory-sync-apply-report.json
+            .artifacts/openmemory-sync-verify-report.json
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Parse OpenMemory patch sync results
+        id: patch_sync_parse
+        if: always()
+        run: |
+          echo "=== Parse OpenMemory Patch Sync Results ==="
+          python scripts/openmemory_sync_parse.py \
+            --check .artifacts/openmemory-sync-check-report.json \
+            --apply .artifacts/openmemory-sync-apply-report.json \
+            --verify .artifacts/openmemory-sync-verify-report.json \
+            --github-output $GITHUB_OUTPUT
+
+      - name: Fail if OpenMemory patch sync has errors (after artifacts upload)
+        if: always()
+        run: |
+          # 从解析脚本输出中读取状态
+          SHOULD_FAIL="${{ steps.patch_sync_parse.outputs.should_fail }}"
+          SHOULD_WARN="${{ steps.patch_sync_parse.outputs.should_warn }}"
+          OVERALL_STATUS="${{ steps.patch_sync_parse.outputs.overall_status }}"
+          SUMMARY="${{ steps.patch_sync_parse.outputs.summary }}"
+          
+          # 输出关键字段
+          echo "=== OpenMemory Patch Sync Status ==="
+          echo "Overall Status: $OVERALL_STATUS"
+          echo "Should Fail: $SHOULD_FAIL"
+          echo "Should Warn: $SHOULD_WARN"
+          echo "Summary: $SUMMARY"
+          echo ""
+          echo "Verify 状态:"
+          echo "  - verify_final_status: ${{ steps.patch_sync_parse.outputs.verify_final_status }}"
+          echo "  - category_mismatch_A: ${{ steps.patch_sync_parse.outputs.category_mismatch_A }}"
+          echo "  - category_mismatch_B: ${{ steps.patch_sync_parse.outputs.category_mismatch_B }}"
+          echo "  - category_mismatch_C: ${{ steps.patch_sync_parse.outputs.category_mismatch_C }}"
+          echo "  - missing_count: ${{ steps.patch_sync_parse.outputs.missing_count }}"
+          echo "  - conflict_files_count: ${{ steps.patch_sync_parse.outputs.conflict_files_count }}"
+          echo "  - conflict_artifacts_dir: ${{ steps.patch_sync_parse.outputs.conflict_artifacts_dir }}"
+          echo "  - strict_patch_files: ${{ steps.patch_sync_parse.outputs.strict_patch_files }}"
+          echo ""
+          echo "Apply 状态:"
+          echo "  - apply_final_status: ${{ steps.patch_sync_parse.outputs.apply_final_status }}"
+          echo "  - apply_conflicts_A: ${{ steps.patch_sync_parse.outputs.apply_conflicts_A }}"
+          echo "  - apply_conflicts_B: ${{ steps.patch_sync_parse.outputs.apply_conflicts_B }}"
+          echo "  - lock_update_blocked: ${{ steps.patch_sync_parse.outputs.lock_update_blocked }}"
+          echo "  - force_update_lock: ${{ steps.patch_sync_parse.outputs.force_update_lock }}"
+          echo ""
+          
+          # Warn 处理（Category B 等）
+          if [ "$SHOULD_WARN" == "true" ]; then
+            echo "::warning::OpenMemory patch sync has warnings - $SUMMARY"
+          fi
+          
+          # Fail 处理（Category A 或 error 状态）
+          if [ "$SHOULD_FAIL" == "true" ]; then
+            echo ""
+            echo "::error::OpenMemory patch sync check failed"
+            echo "::error::$SUMMARY"
+            echo "::error::Conflict artifacts: ${{ steps.patch_sync_parse.outputs.conflict_artifacts_dir }}"
+            exit 1
+          fi
+          
+          echo ""
+          echo "[OK] OpenMemory patch sync check passed"
+
+      # ========================================================================
+      # OpenMemory Upstream Drift Check (Allowed Failure)
+      # - 保持 warning/非阻塞
+      # - Security priority (exit=1): 在 Summary 中突出显示，创建高优先级 Issue
+      # - 冻结状态 (exit=3): 需要人工 override
+      # ========================================================================
+      - name: Run OpenMemory upstream drift check
+        id: openmemory_drift_check
+        timeout-minutes: 2
+        continue-on-error: true
+        env:
+          # 人工 override 环境变量（通过 workflow_dispatch 输入）
+          OPENMEMORY_FREEZE_OVERRIDE: ${{ github.event.inputs.openmemory_freeze_override || 'false' }}
+          OPENMEMORY_FREEZE_OVERRIDE_REASON: ${{ github.event.inputs.openmemory_freeze_override_reason || '' }}
+        run: |
+          echo "::group::OpenMemory Upstream Drift Check"
+          
+          # 显示 override 状态
+          if [ "$OPENMEMORY_FREEZE_OVERRIDE" == "true" ]; then
+            echo "Freeze Override requested: $OPENMEMORY_FREEZE_OVERRIDE_REASON"
+          fi
+          
+          # 运行 drift check 脚本
+          python scripts/openmemory_upstream_drift_check.py
+          DRIFT_EXIT_CODE=$?
+          echo "::endgroup::"
+          
+          # 保存原始退出码
+          echo "drift_exit_code=$DRIFT_EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          # 显示报告摘要
+          if [ -f ".artifacts/openmemory-upstream-drift.json" ]; then
+            echo "=== Drift Report Summary ==="
+            cat .artifacts/openmemory-upstream-drift.json | head -40
+          fi
+          
+          # 使用统一的解析脚本提取字段（减少 bash 解析脆弱性）
+          echo "::group::Parse Drift Report"
+          python scripts/openmemory_drift_parse.py .artifacts/openmemory-upstream-drift.json --github-output $GITHUB_OUTPUT
+          echo "::endgroup::"
+          
+          # 根据退出码输出警告
+          if [ $DRIFT_EXIT_CODE -eq 1 ]; then
+            echo "::warning::OpenMemory upstream has security updates available!"
+          elif [ $DRIFT_EXIT_CODE -eq 3 ]; then
+            echo "::warning::OpenMemory upgrade is frozen and requires manual override!"
+          fi
+          
+          # 始终返回 0（continue-on-error 仅影响 step outcome，不影响 outputs）
+          exit 0
+
+      - name: Upload OpenMemory upstream drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openmemory-upstream-drift-${{ github.run_number }}
+          path: |
+            .artifacts/openmemory-upstream-drift.json
+            .artifacts/openmemory-security-summary.md
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # ========================================================================
+      # Security Update Notification (当检测到安全更新时创建高优先级 Issue)
+      # ========================================================================
+      - name: Create security update issue
+        if: ${{ steps.openmemory_drift_check.outputs.has_security_update == 'true' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // 尝试读取 security summary 文件
+            let securitySummary = '';
+            try {
+              securitySummary = fs.readFileSync('.artifacts/openmemory-security-summary.md', 'utf8');
+            } catch (e) {
+              console.log('Security summary file not found, using default content');
+            }
+            
+            const title = '🚨 [Security/High] OpenMemory 上游安全更新检测';
+            const body = securitySummary || `## Security Update Detected
+
+            Nightly build #${{ github.run_number }} 检测到 OpenMemory 上游存在安全更新。
+
+            ### 详情
+            - **检测时间**: ${new Date().toISOString()}
+            - **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - **Priority**: ${{ steps.openmemory_drift_check.outputs.priority }}
+            - **Frozen**: ${{ steps.openmemory_drift_check.outputs.is_frozen }}
+
+            ### 建议操作
+            1. 查看 [drift report artifact](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            2. 评估安全更新内容
+            3. 按照 \`make openmemory-upgrade-check\` 流程进行升级
+
+            ---
+            *此 Issue 由 Nightly CI 自动创建，标记为高优先级*
+            `;
+
+            // 检查是否已存在相同标题的 open issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security,openmemory'
+            });
+
+            // 查找任何 security+openmemory 的 open issue
+            const existingIssue = issues.data.find(i => 
+              i.title.includes('[Security') && i.title.includes('OpenMemory')
+            );
+            
+            if (existingIssue) {
+              console.log(`Issue already exists: #${existingIssue.number}`);
+              // 添加评论更新
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: `🚨 **再次检测到安全更新** (Run #${{ github.run_number }})\n\n` +
+                      `- Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\n` +
+                      `- Priority: ${{ steps.openmemory_drift_check.outputs.priority }}\n\n` +
+                      `请尽快处理此安全更新！`
+              });
+              
+              // 确保高优先级标签存在
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue.number,
+                  labels: ['priority:high']
+                });
+              } catch (e) {
+                console.log('Could not add priority:high label:', e.message);
+              }
+            } else {
+              // 创建新 issue（带高优先级标签）
+              const newIssue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['security', 'openmemory', 'nightly-ci', 'priority:high']
+              });
+              console.log(`Created new issue: #${newIssue.data.number}`);
+            }
+        continue-on-error: true
+
+      # ========================================================================
+      # Freeze Override Required Notification (当需要人工 override 时)
+      # ========================================================================
+      - name: Notify freeze override required
+        if: ${{ steps.openmemory_drift_check.outputs.needs_override == 'true' }}
+        run: |
+          echo "::warning::OpenMemory 升级处于冻结状态，如需检查上游更新，请使用以下参数重新运行 workflow:"
+          echo ""
+          echo "  workflow_dispatch inputs:"
+          echo "    openmemory_freeze_override: true"
+          echo "    openmemory_freeze_override_reason: '具体原因'"
+          echo ""
+          echo "或通过 gh CLI:"
+          echo "  gh workflow run nightly.yml -f openmemory_freeze_override=true -f openmemory_freeze_override_reason='reason'"
 
       - name: Upload verification results
         if: always()
@@ -389,6 +672,8 @@ jobs:
           TEST_PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
           # Full 层: 不跳过一致性检查，执行完整验证
           STEP3_SKIP_CHECK: "0"
+          # Nightly: 启用 SHA256 校验（检测数据一致性问题）
+          STEP3_INDEX_VERIFY_SHA256: "1"
           # 可通过以下变量调整采样大小（预算受限时减小）
           STEP3_SMOKE_INDEX_SAMPLE_SIZE: "30"
           STEP3_SMOKE_LIMIT: "50"
@@ -419,6 +704,119 @@ jobs:
           if-no-files-found: ignore
 
       # ========================================================================
+      # Step3 Nightly Rebuild - 标准化流程（full rebuild + gate + activate）
+      # ========================================================================
+      # Nightly 强执行流程：
+      #   1. 保存当前 active collection（用于回滚）
+      #   2. full rebuild 生成带 version_tag 的新 collection（不覆盖旧）
+      #   3. 执行 seek_query --query-set nightly_default 门禁检查
+      #   4. 门禁通过后调用 set_active_collection 激活
+      #   5. 失败输出明确回滚指令（回到旧 active_collection）
+      # ========================================================================
+      - name: Run Step3 Nightly Rebuild
+        id: step3_nightly_rebuild
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_nightly_rebuild == 'true' }}
+        timeout-minutes: 30
+        env:
+          STEP3_PGVECTOR_DSN: postgresql://postgres:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+          STEP3_INDEX_BACKEND: pgvector
+          STEP3_PG_SCHEMA: step3
+          STEP3_PG_TABLE: chunks
+          STEP3_PGVECTOR_COLLECTION_STRATEGY: single_table
+          STEP3_PGVECTOR_AUTO_INIT: "1"
+          # Nightly Rebuild 启用 SHA256 校验
+          STEP3_INDEX_VERIFY_SHA256: "1"
+          # 门禁配置
+          STEP3_NIGHTLY_QUERY_SET: nightly_default
+          STEP3_NIGHTLY_MIN_OVERLAP: "0.5"
+          STEP3_NIGHTLY_TOP_K: "10"
+          # 允许 Nightly 实际切换 active collection（仅 Nightly 可设置）
+          STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH: "1"
+        run: |
+          echo "::group::Step3 Nightly Rebuild"
+          mkdir -p .artifacts/step3-nightly-rebuild
+          
+          # 执行 Nightly Rebuild 流程
+          make step3-nightly-rebuild JSON_OUTPUT=1 2>&1 | tee .artifacts/step3-nightly-rebuild/nightly-rebuild-output.txt
+          REBUILD_EXIT_CODE=${PIPESTATUS[0]}
+          
+          echo "::endgroup::"
+          
+          # 解析结果
+          if [ -f ".artifacts/step3-nightly-rebuild/nightly-rebuild.json" ]; then
+            echo "::group::Nightly Rebuild Result"
+            cat .artifacts/step3-nightly-rebuild/nightly-rebuild.json
+            echo "::endgroup::"
+            
+            # 提取关键信息
+            REBUILD_SUCCESS=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print('true' if d.get('success') else 'false')" 2>/dev/null || echo "false")
+            NEW_COLLECTION=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print(d.get('collection',{}).get('new','unknown'))" 2>/dev/null || echo "unknown")
+            OLD_COLLECTION=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print(d.get('collection',{}).get('old','none'))" 2>/dev/null || echo "none")
+            GATE_PASSED=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print('true' if d.get('gate',{}).get('passed') else 'false')" 2>/dev/null || echo "false")
+            GATE_PROFILE=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print(d.get('gate',{}).get('profile','unknown'))" 2>/dev/null || echo "unknown")
+            GATE_VERSION=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print(d.get('gate',{}).get('version','unknown'))" 2>/dev/null || echo "unknown")
+            ROLLBACK_CMD=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print(d.get('rollback',{}).get('command',''))" 2>/dev/null || echo "")
+            
+            echo "rebuild_success=$REBUILD_SUCCESS" >> $GITHUB_OUTPUT
+            echo "new_collection=$NEW_COLLECTION" >> $GITHUB_OUTPUT
+            echo "old_collection=$OLD_COLLECTION" >> $GITHUB_OUTPUT
+            echo "gate_passed=$GATE_PASSED" >> $GITHUB_OUTPUT
+            echo "gate_profile=$GATE_PROFILE" >> $GITHUB_OUTPUT
+            echo "gate_version=$GATE_VERSION" >> $GITHUB_OUTPUT
+            
+            # 写入 metadata.json 包含 gate profile/version 信息
+            GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            python3 -c "
+          import json
+          data = {
+              'timestamp': '$TIMESTAMP',
+              'git_sha': '$GIT_SHA',
+              'workflow_run': '${{ github.run_number }}',
+              'rebuild_success': $REBUILD_SUCCESS,
+              'collection': {
+                  'old': '$OLD_COLLECTION',
+                  'new': '$NEW_COLLECTION'
+              },
+              'gate': {
+                  'passed': $GATE_PASSED,
+                  'profile': '$GATE_PROFILE',
+                  'version': '$GATE_VERSION'
+              },
+              'env': {
+                  'STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH': '1',
+                  'STEP3_NIGHTLY_QUERY_SET': '$STEP3_NIGHTLY_QUERY_SET',
+                  'STEP3_NIGHTLY_MIN_OVERLAP': '$STEP3_NIGHTLY_MIN_OVERLAP',
+                  'STEP3_NIGHTLY_TOP_K': '$STEP3_NIGHTLY_TOP_K'
+              }
+          }
+          with open('.artifacts/step3-nightly-rebuild/metadata.json', 'w') as f:
+              json.dump(data, f, indent=2)
+          "
+            
+            if [ "$REBUILD_SUCCESS" != "true" ]; then
+              echo "::error::Step3 Nightly Rebuild 失败"
+              if [ -n "$ROLLBACK_CMD" ]; then
+                echo "::warning::回滚指令: $ROLLBACK_CMD"
+              fi
+            else
+              echo "::notice::Step3 Nightly Rebuild 成功: $NEW_COLLECTION (gate profile: $GATE_PROFILE, version: $GATE_VERSION)"
+            fi
+          fi
+          
+          exit $REBUILD_EXIT_CODE
+
+      - name: Upload Step3 Nightly Rebuild results
+        if: always() && (github.event_name == 'schedule' || github.event.inputs.run_nightly_rebuild == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-step3-rebuild-results-${{ github.run_number }}
+          path: |
+            .artifacts/step3-nightly-rebuild/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # ========================================================================
       # Step3 Dual-Read 比较测试 - 验证 primary/shadow 后端一致性
       # ========================================================================
       - name: Run Step3 Dual-Read Test
@@ -439,49 +837,69 @@ jobs:
           echo "::group::Step3 Dual-Read Test"
           mkdir -p .artifacts/dual-read
           
-          # 固定查询列表（用于双读一致性验证）
-          QUERIES=(
-            "bug fix"
-            "性能优化"
-            "数据库连接"
-            "内存泄漏"
-            "安全漏洞修复"
-          )
+          # 获取 git SHA（用于阈值版本追踪）
+          GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+          THRESHOLD_VERSION="$(date -u +"%Y%m%dT%H%M%S")-${GIT_SHA}"
           
-          echo "执行 ${#QUERIES[@]} 个固定查询的双读比较测试..."
-          
-          # 创建临时查询文件
-          QUERY_FILE=$(mktemp)
-          for q in "${QUERIES[@]}"; do
-            echo "$q" >> "$QUERY_FILE"
-          done
-          
-          # 执行双读比较测试
+          # 使用内置查询集执行双读比较测试
+          # seek_query 输出现在包含聚合 gate 摘要（fail/warn/pass 数、最差 recommendation、触发项统计）
+          # 查询列表定义在 seek_query.py 的 BUILTIN_QUERY_SETS["nightly_default"]
           cd apps/step3_seekdb_rag_hybrid
           python -m seek_query \
-            --query-file "$QUERY_FILE" \
+            --query-set nightly_default \
             --dual-read \
             --dual-read-min-overlap 0.5 \
+            --dual-read-report \
             --top-k 10 \
             --json 2>&1 | tee ../../.artifacts/dual-read/dual-read-results.json
           
           DUAL_READ_EXIT_CODE=${PIPESTATUS[0]}
           
-          # 清理临时文件
-          rm -f "$QUERY_FILE"
+          # 解析 seek_query 输出，提取聚合 gate 摘要
+          cd ../..
+          GATE_SUMMARY=$(python3 -c "import json; f=open('.artifacts/dual-read/dual-read-results.json','r'); data=json.load(f); gate=data.get('aggregate_gate',{}); summary={'passed':gate.get('passed',True),'fail_count':gate.get('fail_count',0),'warn_count':gate.get('warn_count',0),'pass_count':gate.get('pass_count',0),'error_count':gate.get('error_count',0),'worst_recommendation':gate.get('worst_recommendation','safe_to_switch'),'violation_summary':gate.get('violation_summary',None)}; print(json.dumps(summary))" 2>/dev/null || echo '{"passed": true, "error": "parse_failed"}')
           
-          # 记录测试元数据
-          cat > ../../.artifacts/dual-read/metadata.json << EOF
+          # 提取阈值来源信息
+          THRESHOLDS_SOURCE=$(python3 -c "import json; f=open('.artifacts/dual-read/dual-read-results.json','r'); data=json.load(f); tm=data.get('thresholds_metadata',{}); si={}; ct=tm.get('compare_thresholds',{}); src=ct.get('source',{}); si={'primary_source':src.get('primary_source','default'),'env_keys_used':src.get('env_keys_used',[]),'cli_overrides':src.get('cli_overrides',[])}; gt=tm.get('gate_thresholds',{}); si['gate_source']=gt.get('source','cli') if gt else 'cli'; print(json.dumps(si))" 2>/dev/null || echo '{}')
+          
+          # 记录测试元数据（含阈值来源和版本）
+          cat > .artifacts/dual-read/metadata.json << 'METADATA_EOF'
           {
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "queries_count": ${#QUERIES[@]},
-            "exit_code": $DUAL_READ_EXIT_CODE,
+            "timestamp": "TIMESTAMP_PLACEHOLDER",
+            "query_set": "nightly_default",
+            "exit_code": EXIT_CODE_PLACEHOLDER,
             "primary_strategy": "single_table",
             "shadow_strategy": "per_table",
-            "shadow_table": "chunks_shadow"
+            "shadow_table": "chunks_shadow",
+            "gate_summary": GATE_SUMMARY_PLACEHOLDER,
+            "thresholds": {
+              "version": "THRESHOLD_VERSION_PLACEHOLDER",
+              "git_sha": "GIT_SHA_PLACEHOLDER",
+              "source": THRESHOLDS_SOURCE_PLACEHOLDER,
+              "cli_args": {
+                "dual_read_min_overlap": 0.5,
+                "top_k": 10
+              }
+            }
           }
-          EOF
+          METADATA_EOF
           
+          # 替换占位符
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          sed -i "s|TIMESTAMP_PLACEHOLDER|$TIMESTAMP|g" .artifacts/dual-read/metadata.json
+          sed -i "s|EXIT_CODE_PLACEHOLDER|$DUAL_READ_EXIT_CODE|g" .artifacts/dual-read/metadata.json
+          sed -i "s|GATE_SUMMARY_PLACEHOLDER|$GATE_SUMMARY|g" .artifacts/dual-read/metadata.json
+          sed -i "s|THRESHOLD_VERSION_PLACEHOLDER|$THRESHOLD_VERSION|g" .artifacts/dual-read/metadata.json
+          sed -i "s|GIT_SHA_PLACEHOLDER|$GIT_SHA|g" .artifacts/dual-read/metadata.json
+          sed -i "s|THRESHOLDS_SOURCE_PLACEHOLDER|$THRESHOLDS_SOURCE|g" .artifacts/dual-read/metadata.json
+          
+          echo "::endgroup::"
+          
+          # 显示 gate 摘要到 CI 日志
+          echo "::group::Dual-Read Gate Summary"
+          echo "Gate Summary: $GATE_SUMMARY"
+          echo "Thresholds Source: $THRESHOLDS_SOURCE"
+          echo "Thresholds Version: $THRESHOLD_VERSION"
           echo "::endgroup::"
           
           if [ $DUAL_READ_EXIT_CODE -ne 0 ]; then
@@ -499,8 +917,69 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # ========================================================================
+      # Step3 PGVector 迁移演练集成测试
+      # ========================================================================
+      - name: Run Step3 PGVector Migration Drill Test
+        id: step3_migration_drill
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_step3_migration_drill == 'true' }}
+        timeout-minutes: 15
+        env:
+          TEST_PGVECTOR_DSN: postgresql://postgres:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+        run: |
+          echo "::group::Step3 PGVector Migration Drill Test"
+          pip install -q -r apps/step3_seekdb_rag_hybrid/requirements.dev.txt
+          make test-step3-pgvector-migration-drill 2>&1 | tee /tmp/step3-migration-drill-output.txt
+          echo "::endgroup::"
+
+      - name: Collect Step3 Migration Drill diagnostics on failure
+        if: failure() && steps.step3_migration_drill.outcome == 'failure'
+        run: |
+          mkdir -p .artifacts/step3-diagnostics
+          echo "=== Step3 Migration Drill Diagnostics ===" > .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          echo "" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          
+          # PostgreSQL 诊断信息
+          echo "=== pg_extension ===" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "SELECT extname, extversion FROM pg_extension;" \
+            >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          echo "=== Schemas (\\dn) ===" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\dn" \
+            >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          echo "=== Tables (\\dt step3_test.*) ===" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\dt step3_test.*" \
+            >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          echo "=== Indexes (\\di step3_test.*) ===" >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\di step3_test.*" \
+            >> .artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true
+          
+          # 收集测试输出
+          cp /tmp/step3-migration-drill-output.txt .artifacts/step3-diagnostics/ 2>/dev/null || true
+
+      - name: Upload Step3 Migration Drill results
+        if: always() && (github.event_name == 'schedule' || github.event.inputs.run_step3_migration_drill == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-step3-migration-drill-results-${{ github.run_number }}
+          path: |
+            .artifacts/test-results/step3-pgvector-migration-drill.xml
+            .artifacts/step3-diagnostics/migration-drill-diagnostics.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Collect Unified Stack logs on failure
-        if: failure() && (steps.verify_unified.outcome == 'failure' || steps.gateway_integration.outcome == 'failure' || steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure')
+        if: failure() && (steps.verify_unified.outcome == 'failure' || steps.gateway_integration.outcome == 'failure' || steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_nightly_rebuild.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure' || steps.step3_migration_drill.outcome == 'failure')
         env:
           GATEWAY_URL: http://localhost:8787
           OPENMEMORY_URL: http://localhost:8080
@@ -512,9 +991,14 @@ jobs:
           cp .artifacts/test-results/step3-pgvector.xml .artifacts/unified-stack/ 2>/dev/null || true
           # 收集 Step3 Migrate 日志
           cp -r .artifacts/step3-migrate .artifacts/unified-stack/ 2>/dev/null || true
-          docker compose -p engram -f docker-compose.unified.yml config > .artifacts/unified-stack/compose-config.yml 2>&1 || true
-          docker compose -p engram -f docker-compose.unified.yml ps > .artifacts/unified-stack/compose-ps.txt 2>&1 || true
-          docker compose -p engram -f docker-compose.unified.yml logs --no-color > .artifacts/unified-stack/compose-logs.txt 2>&1 || true
+          # 收集 compose 配置和日志（统一位置）
+          docker compose -p engram -f docker-compose.unified.yml config > .artifacts/compose-config.yml 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml ps > .artifacts/compose-ps.txt 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml logs --no-color > .artifacts/compose-logs.txt 2>&1 || true
+          # 同时保留在 unified-stack 子目录（向后兼容）
+          cp .artifacts/compose-config.yml .artifacts/unified-stack/ 2>/dev/null || true
+          cp .artifacts/compose-ps.txt .artifacts/unified-stack/ 2>/dev/null || true
+          cp .artifacts/compose-logs.txt .artifacts/unified-stack/ 2>/dev/null || true
           # Health check outputs
           echo "=== Gateway Health Check ===" > .artifacts/unified-stack/health-checks.txt
           curl -v ${GATEWAY_URL}/health >> .artifacts/unified-stack/health-checks.txt 2>&1 || true
@@ -524,9 +1008,17 @@ jobs:
           # Collect pytest reports
           cp -r apps/step2_openmemory_gateway/gateway/.pytest_cache .artifacts/unified-stack/ 2>/dev/null || true
           cp apps/step2_openmemory_gateway/gateway/pytest-report.* .artifacts/unified-stack/ 2>/dev/null || true
+          # 汇总 openmemory-sync 报告
+          echo '{"check":' > .artifacts/openmemory-sync-report.json
+          cat .artifacts/openmemory-sync-check-report.json 2>/dev/null || echo 'null' >> .artifacts/openmemory-sync-report.json
+          echo ',"apply":' >> .artifacts/openmemory-sync-report.json
+          cat .artifacts/openmemory-sync-apply-report.json 2>/dev/null || echo 'null' >> .artifacts/openmemory-sync-report.json
+          echo ',"verify":' >> .artifacts/openmemory-sync-report.json
+          cat .artifacts/openmemory-sync-verify-report.json 2>/dev/null || echo 'null' >> .artifacts/openmemory-sync-report.json
+          echo '}' >> .artifacts/openmemory-sync-report.json
 
       - name: Collect Step3 diagnostics on failure
-        if: failure() && (steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure')
+        if: failure() && (steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_nightly_rebuild.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure' || steps.step3_migration_drill.outcome == 'failure')
         run: |
           mkdir -p .artifacts/step3-diagnostics
           echo "=== Step3 Diagnostics ===" > .artifacts/step3-diagnostics/diagnostics.txt
@@ -562,9 +1054,12 @@ jobs:
           
           # 收集 Step3 迁移 dry-run JSON（如存在）
           cp .artifacts/step3-migrate/*.json .artifacts/step3-diagnostics/ 2>/dev/null || true
+          
+          # 收集 Step3 Nightly Rebuild 结果（如存在）
+          cp -r .artifacts/step3-nightly-rebuild .artifacts/step3-diagnostics/ 2>/dev/null || true
 
       - name: Upload Step3 diagnostics on failure
-        if: failure() && (steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure')
+        if: failure() && (steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_nightly_rebuild.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure')
         uses: actions/upload-artifact@v4
         with:
           name: step3-diagnostics-${{ github.run_number }}
@@ -605,12 +1100,30 @@ jobs:
       # ========================================================================
       # Final: Upload all artifacts on failure
       # ========================================================================
+      - name: Collect Step3 smoke JSON on failure (final)
+        if: failure()
+        run: |
+          mkdir -p .artifacts/step3-smoke
+          cp /tmp/step3_smoke_*.json .artifacts/step3-smoke/ 2>/dev/null || true
+
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: nightly-failure-logs-${{ github.run_number }}
-          path: .artifacts/**
+          path: |
+            .artifacts/openmemory-sync-report.json
+            .artifacts/compose-config.yml
+            .artifacts/compose-logs.txt
+            .artifacts/compose-ps.txt
+            .artifacts/step3-smoke/
+            .artifacts/step3-diagnostics/
+            .artifacts/unified-stack/
+            .artifacts/build/
+            .artifacts/step1-integration/
+            .artifacts/openmemory-sync-check-report.json
+            .artifacts/openmemory-sync-apply-report.json
+            .artifacts/openmemory-sync-verify-report.json
           retention-days: 14
 
       # ========================================================================
@@ -621,6 +1134,14 @@ jobs:
         run: |
           echo "## Nightly Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Security Alert（突出显示）
+          if [ "${{ steps.openmemory_drift_check.outputs.has_security_update }}" == "true" ]; then
+            echo "> [!CAUTION]" >> $GITHUB_STEP_SUMMARY
+            echo "> **Security Update Available**: OpenMemory 上游存在安全更新，请尽快评估升级！" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Deploy | ${{ steps.deploy.outcome }} |" >> $GITHUB_STEP_SUMMARY
@@ -628,13 +1149,56 @@ jobs:
           echo "| Re-deploy | ${{ steps.redeploy.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Verify Unified | ${{ steps.verify_unified.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| OpenMemory Patch Check | ${{ steps.openmemory_patch_check.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| OpenMemory Drift Check | ${{ steps.openmemory_drift_check.outcome }} (allowed failure) |" >> $GITHUB_STEP_SUMMARY
           echo "| Gateway Integration | ${{ steps.gateway_integration.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Step3 PGVector | ${{ steps.step3_pgvector.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Step3 Migrate (dry-run) | ${{ steps.step3_migrate.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Step3 Smoke Test | ${{ steps.step3_smoke.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Step3 Nightly Rebuild | ${{ steps.step3_nightly_rebuild.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Step3 Dual-Read | ${{ steps.step3_dual_read.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Step3 Migration Drill | ${{ steps.step3_migration_drill.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docker Build | ${{ steps.verify_build.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # OpenMemory Sync Check 详情
+          echo "### OpenMemory Sync Check" >> $GITHUB_STEP_SUMMARY
+          SYNC_STATUS="${{ steps.patch_sync_parse.outputs.overall_status }}"
+          if [ "$SYNC_STATUS" == "error" ]; then
+            echo "> [!CAUTION]" >> $GITHUB_STEP_SUMMARY
+            echo "> **状态: ERROR** - 存在必须修复的问题" >> $GITHUB_STEP_SUMMARY
+          elif [ "$SYNC_STATUS" == "warn" ]; then
+            echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
+            echo "> **状态: WARN** - 存在需要关注的问题" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
+            echo "> **状态: OK** - 所有检查通过" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 指标 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Category A 冲突 | ${{ steps.patch_sync_parse.outputs.category_mismatch_A }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Category B 冲突 | ${{ steps.patch_sync_parse.outputs.category_mismatch_B }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Category C 冲突 | ${{ steps.patch_sync_parse.outputs.category_mismatch_C }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 冲突文件数 | ${{ steps.patch_sync_parse.outputs.conflict_files_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 冲突产物目录 | \`${{ steps.patch_sync_parse.outputs.conflict_artifacts_dir }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| strict_patch_files | ${{ steps.patch_sync_parse.outputs.strict_patch_files }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Drift Check 详情
+          if [ -f ".artifacts/openmemory-upstream-drift.json" ]; then
+            echo "### OpenMemory Upstream Drift" >> $GITHUB_STEP_SUMMARY
+            PRIORITY="${{ steps.openmemory_drift_check.outputs.priority }}"
+            IS_FROZEN="${{ steps.openmemory_drift_check.outputs.is_frozen }}"
+            echo "- Priority: **${PRIORITY:-unknown}**" >> $GITHUB_STEP_SUMMARY
+            echo "- Frozen: **${IS_FROZEN:-unknown}**" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.openmemory_drift_check.outputs.has_security_update }}" == "true" ]; then
+              echo "- 🚨 **Action Required**: Security update detected (High Priority Issue created)" >> $GITHUB_STEP_SUMMARY
+            fi
+            if [ "${{ steps.openmemory_drift_check.outputs.needs_override }}" == "true" ]; then
+              echo "- ⚠️ **Freeze Override Required**: 升级已冻结，需要人工 override" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
           
           # 输入参数（仅 workflow_dispatch）
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
@@ -645,5 +1209,7 @@ jobs:
             echo "- run_step3_pgvector_tests: ${{ github.event.inputs.run_step3_pgvector_tests }}" >> $GITHUB_STEP_SUMMARY
             echo "- run_step3_migration_rehearsal: ${{ github.event.inputs.run_step3_migration_rehearsal }}" >> $GITHUB_STEP_SUMMARY
             echo "- run_step3_smoke_with_check: ${{ github.event.inputs.run_step3_smoke_with_check }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_nightly_rebuild: ${{ github.event.inputs.run_nightly_rebuild }}" >> $GITHUB_STEP_SUMMARY
             echo "- run_dual_read_test: ${{ github.event.inputs.run_dual_read_test }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_step3_migration_drill: ${{ github.event.inputs.run_step3_migration_drill }}" >> $GITHUB_STEP_SUMMARY
           fi

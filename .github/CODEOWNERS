@@ -1,0 +1,33 @@
+# CODEOWNERS - 自动分配 PR Reviewer
+# 格式: 路径模式 @用户名 或 @组织/团队名
+# 详见: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ============================================================================
+# Step1: Logbook Postgres 组件
+# ============================================================================
+/apps/step1_logbook_postgres/                    @engram/step1-owners
+
+# ============================================================================
+# Step2: OpenMemory Gateway 组件
+# ============================================================================
+/apps/step2_openmemory_gateway/                  @engram/step2-owners
+
+# ============================================================================
+# Step3: SeekDB RAG Hybrid 组件
+# ============================================================================
+/apps/step3_seekdb_rag_hybrid/                   @engram/step3-owners
+
+# ============================================================================
+# OpenMemory 上游库及补丁配置
+# ============================================================================
+/libs/OpenMemory/                                @engram/openmemory-owners
+/OpenMemory.upstream.lock.json                   @engram/openmemory-owners
+/openmemory_patches.json                         @engram/openmemory-owners
+
+# ============================================================================
+# 基础设施: Docker Compose、脚本、构建配置
+# ============================================================================
+/compose/                                        @engram/infra-owners
+/docker-compose.unified.yml                      @engram/infra-owners
+/scripts/                                        @engram/infra-owners
+/Makefile                                        @engram/infra-owners

@@ -18,19 +18,23 @@
         deploy up down migrate migrate-step1 migrate-om verify-permissions check-db-config \
         up-step1 down-step1 up-openmemory down-openmemory up-gateway down-gateway \
         logs-step1 logs-openmemory logs-gateway ps-step1 ps-openmemory ps-gateway \
-        test test-precheck test-step1 test-step1-unit test-step1-integration test-step3 test-step3-unit test-step3-all test-step3-pgvector test-step3-pgvector-e2e \
+        test test-precheck test-step1 test-step1-unit test-step1-integration test-step3 test-step3-unit test-step3-all test-step3-pgvector test-step3-pgvector-e2e test-step3-pgvector-migration-drill \
         test-gateway-integration test-gateway-integration-full logs ps \
-        clean-step1 clean-gateway clean-all step1-smoke step3-run-smoke \
+        clean-step1 clean-gateway clean-all step1-smoke step3-run-smoke step3-nightly-rebuild \
         step1-backfill-evidence step1-backfill-chunking step1-backfill-all \
         step3-deps step3-index step3-query step3-check \
         step3-migrate-dry-run step3-migrate-replay-small \
         openmemory-upgrade-check openmemory-build openmemory-pre-upgrade-backup \
-        openmemory-pre-upgrade-backup-full openmemory-upgrade-prod openmemory-rollback \
+        openmemory-pre-upgrade-backup-full openmemory-pre-upgrade-snapshot-lib \
+        openmemory-upgrade-prod openmemory-rollback \
         openmemory-sync openmemory-sync-check openmemory-sync-apply openmemory-sync-verify openmemory-sync-suggest \
+        openmemory-schema-validate openmemory-lock-format-check \
         openmemory-upstream-fetch openmemory-upstream-sync \
-        openmemory-test-multi-schema \
+        openmemory-upgrade-preview openmemory-upgrade-sync openmemory-upgrade-promote \
+        openmemory-test-multi-schema openmemory-audit openmemory-vendor-check \
         verify-build verify-build-static \
-        verify-unified verify-stepwise verify-all verify-pgvector
+        verify-unified verify-stepwise verify-all verify-pgvector verify-local \
+        release-precheck release-backup-dev release-backup-prod release-rollback-db
 
 # ============================================================================
 # COMPOSE_PROJECT_NAME 自动命名策略
@@ -71,6 +75,8 @@ help: ## 显示帮助信息
 	@echo "  STEP3_PGVECTOR_DSN                    PGVector 连接字符串（\033[32m推荐显式设置\033[0m）"
 	@echo "  STEP3_PGVECTOR_COLLECTION_STRATEGY    Collection 策略（single_table/per_table/routing，Makefile 默认 single_table）"
 	@echo "  STEP3_PGVECTOR_AUTO_INIT              是否自动初始化 pgvector（1/0，默认 1）"
+	@echo "  STEP3_CHUNKING_VERSION                分块版本号（默认 v1-2026-01）"
+	@echo "  STEP3_INDEX_VERIFY_SHA256             是否校验内容 SHA256（1/0，默认 0，nightly 建议启用）"
 	@echo "  STEP3_ALLOW_POSTGRES_DSN              是否允许读取 POSTGRES_DSN（默认 0，避免误用非 Step3 权限账号）"
 	@echo ""
 	@echo "Step3 DSN 解析优先级:"
@@ -80,9 +86,10 @@ help: ## 显示帮助信息
 	@echo "  4. POSTGRES_HOST/PORT/USER/PASSWORD/DB 组合（fallback，打印提示）"
 	@echo ""
 	@echo "Step3 已废弃别名（计划于 2026-Q3 移除）:"
-	@echo "  STEP3_SCHEMA   -> 请改用 STEP3_PG_SCHEMA"
-	@echo "  STEP3_TABLE    -> 请改用 STEP3_PG_TABLE"
-	@echo "  STEP3_AUTO_INIT -> 请改用 STEP3_PGVECTOR_AUTO_INIT"
+	@echo "  STEP3_SCHEMA     -> 请改用 STEP3_PG_SCHEMA"
+	@echo "  STEP3_TABLE      -> 请改用 STEP3_PG_TABLE"
+	@echo "  STEP3_AUTO_INIT  -> 请改用 STEP3_PGVECTOR_AUTO_INIT"
+	@echo "  CHUNKING_VERSION -> 请改用 STEP3_CHUNKING_VERSION"
 	@echo ""
 	@echo "说明:"
 	@echo "  - Step1 schema: 固定为 identity/logbook/scm/analysis/governance"
@@ -352,11 +359,12 @@ verify-permissions: ## 验证数据库权限配置
 	@echo "权限验证"
 	@echo "========================================"
 	@echo "目标 schema: $${OM_PG_SCHEMA:-openmemory}"
+	@mkdir -p .artifacts
 	@$(DOCKER_COMPOSE) exec -T postgres \
 		psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-engram} \
 		-c "SET om.target_schema = '$${OM_PG_SCHEMA:-openmemory}'" \
-		-f /docker-entrypoint-initdb.d/99_verify_permissions.sql 2>&1 | tee /tmp/verify_output.txt
-	@if grep -q 'FAIL:' /tmp/verify_output.txt; then \
+		-f /docker-entrypoint-initdb.d/99_verify_permissions.sql 2>&1 | tee .artifacts/verify-permissions.txt
+	@if grep -q 'FAIL:' .artifacts/verify-permissions.txt; then \
 		echo ''; \
 		echo '[ERROR] 权限验证失败！请检查上方输出中的 FAIL 消息。'; \
 		exit 1; \
@@ -442,12 +450,31 @@ test-step1-integration: ## 运行 Step1 集成测试（需要 Docker）
 	@echo "Step1 集成测试（Docker Compose）"
 	@echo "========================================"
 	@mkdir -p .artifacts/test-results
-	@if [ -z "$${MINIO_ROOT_USER}" ]; then export MINIO_ROOT_USER=minioadmin; fi; \
-	if [ -z "$${MINIO_ROOT_PASSWORD}" ]; then export MINIO_ROOT_PASSWORD=minioadmin; fi; \
-	MINIO_ROOT_USER=$${MINIO_ROOT_USER:-minioadmin} \
+	@# 设置 MinIO 凭证（默认 minioadmin）
+	@# 设置服务账号密码（测试环境默认值，生产环境应显式设置）
+	@MINIO_ROOT_USER=$${MINIO_ROOT_USER:-minioadmin} \
 	MINIO_ROOT_PASSWORD=$${MINIO_ROOT_PASSWORD:-minioadmin} \
+	MINIO_APP_USER=$${MINIO_APP_USER:-} \
+	MINIO_APP_PASSWORD=$${MINIO_APP_PASSWORD:-} \
+	MINIO_OPS_USER=$${MINIO_OPS_USER:-} \
+	MINIO_OPS_PASSWORD=$${MINIO_OPS_PASSWORD:-} \
+	STEP1_MIGRATOR_PASSWORD=$${STEP1_MIGRATOR_PASSWORD:-step1_migrator_test_pwd} \
+	STEP1_SVC_PASSWORD=$${STEP1_SVC_PASSWORD:-step1_svc_test_pwd} \
+	OPENMEMORY_MIGRATOR_PASSWORD=$${OPENMEMORY_MIGRATOR_PASSWORD:-om_migrator_test_pwd} \
+	OPENMEMORY_SVC_PASSWORD=$${OPENMEMORY_SVC_PASSWORD:-om_svc_test_pwd} \
+	POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-postgres} \
 	PYTEST_ADDOPTS="--junitxml=/app/.artifacts/test-results/step1-integration.xml --durations=20" \
-	$(DOCKER_COMPOSE) --profile minio --profile test up --exit-code-from step1_test
+	$(DOCKER_COMPOSE) --profile minio --profile test up --exit-code-from step1_test; \
+	EXIT_CODE=$$?; \
+	if [ $$EXIT_CODE -ne 0 ]; then \
+		echo "[FAIL] Step1 集成测试失败，收集诊断信息..."; \
+		mkdir -p .artifacts/test-results/diagnostics; \
+		$(DOCKER_COMPOSE) config > .artifacts/test-results/diagnostics/compose-config.yml 2>&1 || true; \
+		$(DOCKER_COMPOSE) ps > .artifacts/test-results/diagnostics/compose-ps.txt 2>&1 || true; \
+		$(DOCKER_COMPOSE) logs --no-color --tail=500 > .artifacts/test-results/diagnostics/compose-logs.txt 2>&1 || true; \
+		echo "[DIAG] 诊断信息已保存到 .artifacts/test-results/diagnostics/"; \
+		exit $$EXIT_CODE; \
+	fi
 	@echo "[OK] Step1 集成测试完成"
 
 test-step3: ## 运行 Step3 分块稳定性测试
@@ -475,6 +502,7 @@ test-step3-unit: ## 运行 Step3 单元测试（不需要真实 Postgres）
 			tests/test_collection_naming.py \
 			tests/test_dual_read_unit.py \
 			tests/test_env_compat.py \
+			tests/test_gate_profiles.py \
 			--junitxml=../../.artifacts/test-results/step3-unit.xml --durations=20
 	@echo "[OK] Step3 单元测试完成"
 
@@ -528,6 +556,45 @@ test-step3-pgvector-e2e: ## 运行 Step3 PGVector 端到端最小集成测试（
 	pytest -v tests/test_pgvector_e2e_minimal.py \
 		--junitxml=../../.artifacts/test-results/step3-pgvector-e2e.xml --durations=20
 	@echo "[OK] Step3 PGVector E2E 测试完成"
+
+test-step3-pgvector-migration-drill: ## 运行 Step3 PGVector 迁移演练集成测试（Nightly/手动触发，需设置 TEST_PGVECTOR_DSN）
+	@echo "========================================"
+	@echo "Step3 PGVector 迁移演练集成测试"
+	@echo "========================================"
+	@echo "说明: 此测试执行完整的 per_table -> shared_table 迁移演练"
+	@echo "      建议仅在 Nightly 或手动触发时运行（耗时较长）"
+	@echo ""
+	@if [ -z "$${TEST_PGVECTOR_DSN}" ]; then \
+		echo "[INFO] TEST_PGVECTOR_DSN 未设置，自动构建连接字符串..."; \
+		export TEST_PGVECTOR_DSN="postgresql://$${POSTGRES_USER:-postgres}:$${POSTGRES_PASSWORD:-postgres}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB:-engram}"; \
+		echo "       TEST_PGVECTOR_DSN=$${TEST_PGVECTOR_DSN%@*}@..."; \
+	fi; \
+	mkdir -p .artifacts/test-results && \
+	mkdir -p .artifacts/step3-diagnostics && \
+	pip install -q -r apps/step3_seekdb_rag_hybrid/requirements.dev.txt && \
+	cd apps/step3_seekdb_rag_hybrid && \
+	TEST_PGVECTOR_DSN=$${TEST_PGVECTOR_DSN} \
+	pytest -v tests/test_pgvector_migration_drill_integration.py \
+		--junitxml=../../.artifacts/test-results/step3-pgvector-migration-drill.xml --durations=20 || { \
+		echo ""; \
+		echo "[FAIL] 迁移演练测试失败，收集诊断信息..."; \
+		echo "=== Step3 Migration Drill Diagnostics ===" > ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		echo "Timestamp: $$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		echo "" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		echo "=== pg_extension ===" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		psql "$${TEST_PGVECTOR_DSN}" -c "SELECT extname, extversion FROM pg_extension;" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true; \
+		echo "" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		echo "=== Schemas ===" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		psql "$${TEST_PGVECTOR_DSN}" -c "\dn" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true; \
+		echo "" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		echo "=== Tables (step3_test.*) ===" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		psql "$${TEST_PGVECTOR_DSN}" -c "\dt step3_test.*" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true; \
+		echo "" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		echo "=== Indexes (step3_test.*) ===" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt; \
+		psql "$${TEST_PGVECTOR_DSN}" -c "\di step3_test.*" >> ../../.artifacts/step3-diagnostics/migration-drill-diagnostics.txt 2>&1 || true; \
+		exit 1; \
+	}
+	@echo "[OK] Step3 PGVector 迁移演练测试完成"
 
 test-gateway-integration: ## 运行 Gateway 集成测试（需要统一栈运行，纯 HTTP 验证）
 	@echo "========================================"
@@ -638,7 +705,13 @@ openmemory-sync-check: ## 检查 OpenMemory 一致性（目录结构/关键文�
 openmemory-sync-apply: ## 应用补丁（默认 dry-run，DRY_RUN=0 实际执行）
 	@echo "========================================"
 	@if [ "$${DRY_RUN:-1}" = "0" ]; then \
-		echo "OpenMemory 补丁应用（实际执行）"; \
+		if [ "$${FORCE_UPDATE_LOCK:-0}" = "1" ]; then \
+			echo "OpenMemory 补丁应用（实际执行 + 强制更新 lock）"; \
+			echo "[WARN] FORCE_UPDATE_LOCK=1 将跳过 verify 检查"; \
+		else \
+			echo "OpenMemory 补丁应用（实际执行）"; \
+			echo "[INFO] 更新 lock 前将执行 verify 检查"; \
+		fi; \
 	else \
 		echo "OpenMemory 补丁预览（dry-run）"; \
 	fi
@@ -646,6 +719,7 @@ openmemory-sync-apply: ## 应用补丁（默认 dry-run，DRY_RUN=0 实际执行
 	@if [ "$${DRY_RUN:-1}" = "0" ]; then \
 		python scripts/openmemory_sync.py apply --no-dry-run \
 			$${CATEGORIES:+--categories $${CATEGORIES}} \
+			$${FORCE_UPDATE_LOCK:+--force-update-lock} \
 			$${JSON_OUTPUT:+--json}; \
 	else \
 		python scripts/openmemory_sync.py apply --dry-run \
@@ -665,6 +739,47 @@ openmemory-sync-suggest: ## 输出 OpenMemory 升级建议
 	@echo "========================================"
 	@python scripts/openmemory_sync.py suggest $${JSON_OUTPUT:+--json}
 
+openmemory-schema-validate: ## 校验 OpenMemory 治理文件 JSON Schema（默认 warn 模式）
+	@echo "========================================"
+	@if [ "$${SCHEMA_STRICT:-0}" = "1" ]; then \
+		echo "OpenMemory JSON Schema 校验（严格模式）"; \
+	else \
+		echo "OpenMemory JSON Schema 校验（警告模式）"; \
+	fi
+	@echo "========================================"
+	@echo "配置:"
+	@echo "  SCHEMA_STRICT = $${SCHEMA_STRICT:-0}（设为 1 启用严格模式）"
+	@echo ""
+	@if [ "$${SCHEMA_STRICT:-0}" = "1" ]; then \
+		python scripts/openmemory_sync.py schema-validate --schema-strict $${JSON_OUTPUT:+--json}; \
+	else \
+		python scripts/openmemory_sync.py schema-validate --schema-warn-only $${JSON_OUTPUT:+--json}; \
+	fi
+
+openmemory-lock-format-check: ## 检查 OpenMemory.upstream.lock.json 格式一致性（2空格缩进、键排序、尾换行）
+	@echo "========================================"
+	@echo "OpenMemory Lock 文件格式检查"
+	@echo "========================================"
+	@echo "规范格式: 2空格缩进、键排序、UTF-8、尾换行"
+	@echo ""
+	@LOCK_FILE="OpenMemory.upstream.lock.json"; \
+	TEMP_FILE="$$(mktemp)"; \
+	python3 -c "import json; d=json.load(open('$$LOCK_FILE')); json.dump(d, open('$$TEMP_FILE','w'), indent=2, ensure_ascii=False, sort_keys=True); open('$$TEMP_FILE','a').write('\n')"; \
+	if diff -q "$$LOCK_FILE" "$$TEMP_FILE" > /dev/null 2>&1; then \
+		echo "[OK] $$LOCK_FILE 格式正确"; \
+		rm -f "$$TEMP_FILE"; \
+	else \
+		echo "[FAIL] $$LOCK_FILE 格式不符合规范"; \
+		echo ""; \
+		echo "差异详情:"; \
+		diff "$$LOCK_FILE" "$$TEMP_FILE" || true; \
+		echo ""; \
+		echo "修复方法:"; \
+		echo "  python3 -c \"import json; d=json.load(open('$$LOCK_FILE')); json.dump(d, open('$$LOCK_FILE','w'), indent=2, ensure_ascii=False, sort_keys=True); open('$$LOCK_FILE','a').write('\\\\n')\""; \
+		rm -f "$$TEMP_FILE"; \
+		exit 1; \
+	fi
+
 # ============================================================================
 # OpenMemory 上游获取与同步
 # ============================================================================
@@ -677,8 +792,14 @@ openmemory-sync-suggest: ## 输出 OpenMemory 升级建议
 #   EXCLUDE_PATTERNS      额外排除模式（逗号分隔）
 #   FORCE_SYNC            强制覆盖补丁冲突（设置为 1）
 #   DRY_RUN               预览模式（默认 1，设置为 0 执行实际同步）
+#   SYNC_STRATEGY         冲突处理策略（clean/3way/manual，默认 clean）
 #   OUTPUT_DIR            fetch 输出目录（默认临时目录）
 #   JSON_OUTPUT           JSON 格式输出（设置为 1）
+#
+# 冲突处理策略:
+#   clean   失败则停止，需要手动解决（默认）
+#   3way    尝试三方合并，无冲突自动落盘，有冲突生成 .conflict 文件
+#   manual  生成冲突文件供人工审查
 #
 # 示例:
 #   make openmemory-upstream-fetch                           # 获取当前 lock 版本
@@ -686,6 +807,7 @@ openmemory-sync-suggest: ## 输出 OpenMemory 升级建议
 #   make openmemory-upstream-sync                            # 预览同步
 #   make openmemory-upstream-sync DRY_RUN=0                  # 执行同步
 #   make openmemory-upstream-sync DRY_RUN=0 FORCE_SYNC=1     # 强制同步
+#   make openmemory-upstream-sync DRY_RUN=0 SYNC_STRATEGY=3way  # 三方合并同步
 # ============================================================================
 
 openmemory-upstream-fetch: ## 获取 OpenMemory 上游代码（下载到临时目录）
@@ -716,6 +838,7 @@ openmemory-upstream-sync: ## 同步 OpenMemory 上游代码到本地（默认 dr
 	@echo "  UPSTREAM_REF_TYPE = $${UPSTREAM_REF_TYPE:-<从 lock 文件读取>}"
 	@echo "  DRY_RUN           = $${DRY_RUN:-1}"
 	@echo "  FORCE_SYNC        = $${FORCE_SYNC:-0}"
+	@echo "  SYNC_STRATEGY     = $${SYNC_STRATEGY:-clean}"
 	@echo "  EXCLUDE_PATTERNS  = $${EXCLUDE_PATTERNS:-<默认排除列表>}"
 	@echo ""
 	@if [ "$${DRY_RUN:-1}" = "0" ]; then \
@@ -725,6 +848,7 @@ openmemory-upstream-sync: ## 同步 OpenMemory 上游代码到本地（默认 dr
 			$${UPSTREAM_REF_TYPE:+--ref-type $${UPSTREAM_REF_TYPE}} \
 			$${EXCLUDE_PATTERNS:+--exclude $${EXCLUDE_PATTERNS}} \
 			$${FORCE_SYNC:+--force} \
+			$${SYNC_STRATEGY:+--strategy $${SYNC_STRATEGY}} \
 			$${JSON_OUTPUT:+--json}; \
 	else \
 		python scripts/openmemory_sync.py sync \
@@ -734,6 +858,119 @@ openmemory-upstream-sync: ## 同步 OpenMemory 上游代码到本地（默认 dr
 			$${EXCLUDE_PATTERNS:+--exclude $${EXCLUDE_PATTERNS}} \
 			$${JSON_OUTPUT:+--json}; \
 	fi
+
+# ============================================================================
+# OpenMemory 升级流程三步曲
+# ============================================================================
+# 标准化升级流程:
+#   1. openmemory-upgrade-preview  - 预览同步变更，生成冲突报告
+#   2. openmemory-upgrade-sync     - 执行实际同步（不更新 lock 的 upstream_ref）
+#   3. openmemory-upgrade-promote  - 验证通过后更新 lock 文件
+#
+# 使用示例:
+#   make openmemory-upgrade-preview UPSTREAM_REF=v1.4.0  # 预览 v1.4.0 变更
+#   make openmemory-upgrade-sync UPSTREAM_REF=v1.4.0     # 同步 v1.4.0（不更新 ref）
+#   make openmemory-upgrade-promote                      # 验证通过后提升 lock
+#
+# 冲突处理:
+#   - 冲突报告输出到 .artifacts/openmemory-patch-conflicts/sync_conflicts.json
+#   - Category A 冲突阻止流程继续，需手动解决
+# ============================================================================
+
+openmemory-upgrade-preview: ## 预览 OpenMemory 上游同步变更（dry-run + 生成冲突报告）
+	@echo "========================================"
+	@echo "OpenMemory 升级预览 (Step 1/3)"
+	@echo "========================================"
+	@echo "配置:"
+	@echo "  UPSTREAM_REF      = $${UPSTREAM_REF:-<从 lock 文件读取>}"
+	@echo "  UPSTREAM_REF_TYPE = $${UPSTREAM_REF_TYPE:-<从 lock 文件读取>}"
+	@echo "  SYNC_STRATEGY     = $${SYNC_STRATEGY:-clean}"
+	@echo ""
+	@mkdir -p .artifacts/openmemory-patch-conflicts
+	@python scripts/openmemory_sync.py sync \
+		--dry-run \
+		$${UPSTREAM_REF:+--ref $${UPSTREAM_REF}} \
+		$${UPSTREAM_REF_TYPE:+--ref-type $${UPSTREAM_REF_TYPE}} \
+		$${SYNC_STRATEGY:+--strategy $${SYNC_STRATEGY}} \
+		$${JSON_OUTPUT:+--json} && SYNC_OK=1 || SYNC_OK=0; \
+	echo ""; \
+	if [ -f .artifacts/openmemory-patch-conflicts/sync_conflicts.json ]; then \
+		echo "[INFO] 冲突报告: .artifacts/openmemory-patch-conflicts/sync_conflicts.json"; \
+		echo ""; \
+		python -c "import json; d=json.load(open('.artifacts/openmemory-patch-conflicts/sync_conflicts.json')); print('冲突文件数:', len(d.get('conflict_files',[]))); print('Category A:', d.get('category_stats',{}).get('A',0)); print('Category B:', d.get('category_stats',{}).get('B',0)); print('Category C:', d.get('category_stats',{}).get('C',0))" 2>/dev/null || true; \
+	fi; \
+	echo ""; \
+	echo "========================================"
+	@echo "下一步操作:"
+	@echo "  1. 如无冲突或冲突可接受，执行: make openmemory-upgrade-sync"
+	@echo "  2. 如有 Category A 冲突，需手动解决后重试"
+	@echo "  3. 同步完成后执行: make openmemory-upgrade-promote"
+	@echo "========================================"
+
+openmemory-upgrade-sync: ## 执行 OpenMemory 上游同步（不更新 lock 的 upstream_ref）
+	@echo "========================================"
+	@echo "OpenMemory 升级同步 (Step 2/3)"
+	@echo "========================================"
+	@echo "配置:"
+	@echo "  UPSTREAM_REF      = $${UPSTREAM_REF:-<从 lock 文件读取>}"
+	@echo "  UPSTREAM_REF_TYPE = $${UPSTREAM_REF_TYPE:-<从 lock 文件读取>}"
+	@echo "  SYNC_STRATEGY     = $${SYNC_STRATEGY:-clean}"
+	@echo "  FORCE_SYNC        = $${FORCE_SYNC:-0}"
+	@echo ""
+	@echo "[INFO] 使用 --no-update-ref，upstream_ref 将在 promote 阶段更新"
+	@echo ""
+	@mkdir -p .artifacts/openmemory-patch-conflicts
+	@python scripts/openmemory_sync.py sync \
+		--no-dry-run \
+		--no-update-ref \
+		$${UPSTREAM_REF:+--ref $${UPSTREAM_REF}} \
+		$${UPSTREAM_REF_TYPE:+--ref-type $${UPSTREAM_REF_TYPE}} \
+		$${SYNC_STRATEGY:+--strategy $${SYNC_STRATEGY}} \
+		$${FORCE_SYNC:+--force} \
+		$${JSON_OUTPUT:+--json}
+	@echo ""
+	@echo "========================================"
+	@echo "[OK] 同步完成"
+	@echo ""
+	@echo "下一步操作:"
+	@echo "  1. 执行验证: make openmemory-sync-verify && make openmemory-test-multi-schema"
+	@echo "  2. 验证通过后: make openmemory-upgrade-promote"
+	@echo "========================================"
+
+openmemory-upgrade-promote: ## 验证通过后更新 lock 文件（需先通过 verify + test-multi-schema）
+	@echo "========================================"
+	@echo "OpenMemory 升级提升 (Step 3/3)"
+	@echo "========================================"
+	@echo ""
+	@echo "[1/3] 执行补丁落地校验..."
+	@$(MAKE) openmemory-sync-verify || { \
+		echo ""; \
+		echo "[ERROR] openmemory-sync-verify 失败，无法继续 promote"; \
+		echo "        请先修复问题后重试"; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "[2/3] 执行多 Schema 隔离测试..."
+	@$(MAKE) openmemory-test-multi-schema || { \
+		echo ""; \
+		echo "[ERROR] openmemory-test-multi-schema 失败，无法继续 promote"; \
+		echo "        请先修复问题后重试"; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "[3/3] 更新 lock 文件..."
+	@python scripts/openmemory_sync.py promote \
+		$${UPSTREAM_REF:+--ref $${UPSTREAM_REF}} \
+		$${UPSTREAM_REF_TYPE:+--ref-type $${UPSTREAM_REF_TYPE}} \
+		$${JSON_OUTPUT:+--json}
+	@echo ""
+	@echo "========================================"
+	@echo "[OK] 升级流程完成！"
+	@echo ""
+	@echo "Lock 文件已更新，建议执行:"
+	@echo "  git diff OpenMemory.upstream.lock.json"
+	@echo "  git add OpenMemory.upstream.lock.json && git commit -m 'chore(openmemory): upgrade to <version>'"
+	@echo "========================================"
 
 # ============================================================================
 # OpenMemory 升级检查
@@ -789,7 +1026,33 @@ openmemory-pre-upgrade-backup-full: ## 升级前强制备份（生产环境用 b
 	@echo ""
 	@echo "[OK] 全库备份完成，可以继续升级"
 
-openmemory-upgrade-check: openmemory-pre-upgrade-backup openmemory-build ## OpenMemory 升级验证（更新 upstream.lock.json 后必跑）
+# 升级前库快照（归档 libs/OpenMemory）
+openmemory-pre-upgrade-snapshot-lib: ## 升级前归档 libs/OpenMemory（生成 tarball + SHA256）
+	@echo "========================================"
+	@echo "升级前库快照（libs/OpenMemory）"
+	@echo "========================================"
+	@echo "配置:"
+	@echo "  SNAPSHOT_SKIP    = $${SNAPSHOT_SKIP:-0}（设为 1 跳过）"
+	@echo "  SNAPSHOT_ARTIFACTS = $${SNAPSHOT_ARTIFACTS:-0}（设为 1 输出到 .artifacts/）"
+	@echo ""
+	@if [ "$${SNAPSHOT_SKIP:-0}" = "1" ]; then \
+		echo "[INFO] SNAPSHOT_SKIP=1，跳过库快照"; \
+	else \
+		chmod +x scripts/openmemory_snapshot_lib.sh; \
+		if [ "$${SNAPSHOT_ARTIFACTS:-0}" = "1" ]; then \
+			./scripts/openmemory_snapshot_lib.sh --artifacts $${JSON_OUTPUT:+--json}; \
+		else \
+			./scripts/openmemory_snapshot_lib.sh $${JSON_OUTPUT:+--json}; \
+		fi; \
+		echo ""; \
+		echo "[OK] 库快照完成"; \
+	fi
+
+# openmemory-upgrade-check 依赖链:
+#   1. openmemory-pre-upgrade-snapshot-lib: 归档当前 libs/OpenMemory（可通过 SNAPSHOT_SKIP=1 跳过）
+#   2. openmemory-pre-upgrade-backup: 备份数据库 schema
+#   3. openmemory-build: 构建新镜像
+openmemory-upgrade-check: openmemory-pre-upgrade-snapshot-lib openmemory-pre-upgrade-backup openmemory-build ## OpenMemory 升级验证（更新 upstream.lock.json 后必跑）
 	@echo "========================================"
 	@echo "OpenMemory 升级验证"
 	@echo "========================================"
@@ -903,10 +1166,37 @@ openmemory-upgrade-prod: openmemory-pre-upgrade-backup-full openmemory-build ## 
 	@echo "  3. make restore BACKUP_FILE=./backups/<刚才的备份文件>"
 
 # 回滚 OpenMemory 升级
-openmemory-rollback: ## 回滚 OpenMemory 升级（需指定 BACKUP_FILE 和 LOCK_COMMIT）
+openmemory-rollback: ## 回滚 OpenMemory 升级（需指定 BACKUP_FILE，可选 LOCK_COMMIT）
 	@if [ -z "$(BACKUP_FILE)" ]; then \
-		echo "错误: 请指定 BACKUP_FILE（升级前的备份文件）"; \
-		echo "用法: make openmemory-rollback BACKUP_FILE=./backups/xxx.sql LOCK_COMMIT=abc123"; \
+		echo "========================================"; \
+		echo "[ERROR] 请指定 BACKUP_FILE（升级前的备份文件）"; \
+		echo "========================================"; \
+		echo ""; \
+		echo "用法:"; \
+		echo "  make openmemory-rollback BACKUP_FILE=./backups/xxx.sql"; \
+		echo "  make openmemory-rollback BACKUP_FILE=./backups/xxx.sql LOCK_COMMIT=abc123"; \
+		echo ""; \
+		echo "参数说明:"; \
+		echo "  BACKUP_FILE  升级前的数据库备份文件（必需）"; \
+		echo "  LOCK_COMMIT  要回退的 OpenMemory.upstream.lock.json 的 commit（可选）"; \
+		echo ""; \
+		echo "可用的备份文件:"; \
+		ls -lt ./backups/*.sql 2>/dev/null | head -10 || echo "  （无备份文件）"; \
+		echo ""; \
+		echo "提示:"; \
+		echo "  - 建议在升级前使用 make release-backup-dev/prod 创建备份"; \
+		echo "  - 查看最近的备份文件: ls -lt ./backups/*.sql"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(BACKUP_FILE)" ]; then \
+		echo "========================================"; \
+		echo "[ERROR] 备份文件不存在: $(BACKUP_FILE)"; \
+		echo "========================================"; \
+		echo ""; \
+		echo "可用的备份文件:"; \
+		ls -lt ./backups/*.sql 2>/dev/null | head -10 || echo "  （无备份文件）"; \
+		echo ""; \
 		exit 1; \
 	fi
 	@echo "========================================"
@@ -998,6 +1288,98 @@ openmemory-test-multi-schema: ## 运行 OpenMemory 多 Schema 隔离测试
 	@echo "========================================"
 
 # ============================================================================
+# OpenMemory Artifact Audit
+# ============================================================================
+# 审计 OpenMemory 相关 Docker 镜像的 digest 和状态
+# 用于 CI 追踪构建产物一致性
+#
+# 环境变量:
+#   COMPOSE_PROJECT_NAME   Docker Compose 项目名（默认 engram）
+#   JSON_OUTPUT            输出 JSON 到 stdout（设置为 1）
+#
+# 输出:
+#   .artifacts/openmemory-artifact-audit.json
+# ============================================================================
+
+openmemory-audit: ## 审计 OpenMemory 镜像 digest（输出到 .artifacts/）
+	@echo "========================================"
+	@echo "OpenMemory Artifact Audit"
+	@echo "========================================"
+	@mkdir -p .artifacts
+	@if [ "$${JSON_OUTPUT:-0}" = "1" ]; then \
+		python scripts/openmemory_artifact_audit.py --json; \
+	else \
+		python scripts/openmemory_artifact_audit.py \
+			--compose-project $(COMPOSE_PROJECT_NAME) \
+			--output .artifacts/openmemory-artifact-audit.json; \
+	fi
+
+# ============================================================================
+# Release 统一入口命令
+# ============================================================================
+# 提供发布流程的统一入口，简化 CI/CD 和手动操作
+#
+# 使用流程:
+#   1. make release-precheck        # 配置预检
+#   2. make release-backup-dev      # 开发环境备份（或 release-backup-prod）
+#   3. 执行升级操作...
+#   4. make release-rollback-db BACKUP_FILE=xxx  # 如需回滚
+# ============================================================================
+
+release-precheck: ## 发布预检（调用 scripts/db_ops.sh precheck）
+	@echo "========================================"
+	@echo "Release 预检"
+	@echo "========================================"
+	@chmod +x scripts/db_ops.sh
+	@./scripts/db_ops.sh precheck
+
+release-backup-dev: ## 发布前备份（开发环境，仅备份 OM schema）
+	@echo "========================================"
+	@echo "Release 备份（开发环境）"
+	@echo "========================================"
+	@chmod +x scripts/db_ops.sh
+	@./scripts/db_ops.sh pre-upgrade
+
+release-backup-prod: ## 发布前备份（生产环境，全库备份）
+	@echo "========================================"
+	@echo "Release 备份（生产环境）"
+	@echo "========================================"
+	@chmod +x scripts/db_ops.sh
+	@./scripts/db_ops.sh pre-upgrade --full
+
+release-rollback-db: ## 发布回滚（恢复数据库，需指定 BACKUP_FILE）
+	@if [ -z "$(BACKUP_FILE)" ]; then \
+		echo "========================================"; \
+		echo "[ERROR] 请指定 BACKUP_FILE"; \
+		echo "========================================"; \
+		echo ""; \
+		echo "用法:"; \
+		echo "  make release-rollback-db BACKUP_FILE=./backups/xxx.sql"; \
+		echo ""; \
+		echo "可用的备份文件:"; \
+		ls -lt ./backups/*.sql 2>/dev/null | head -10 || echo "  （无备份文件）"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(BACKUP_FILE)" ]; then \
+		echo "========================================"; \
+		echo "[ERROR] 备份文件不存在: $(BACKUP_FILE)"; \
+		echo "========================================"; \
+		echo ""; \
+		echo "可用的备份文件:"; \
+		ls -lt ./backups/*.sql 2>/dev/null | head -10 || echo "  （无备份文件）"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "========================================"
+	@echo "Release 回滚（恢复数据库）"
+	@echo "========================================"
+	@echo "  备份文件: $(BACKUP_FILE)"
+	@echo ""
+	@chmod +x scripts/db_ops.sh
+	@./scripts/db_ops.sh restore $(BACKUP_FILE) --yes
+
+# ============================================================================
 # CI/CD 命令
 # ============================================================================
 
@@ -1007,6 +1389,56 @@ ci-precheck: ## CI 预检（用于 CI/CD 流水线）
 	@./scripts/db_ops.sh precheck
 	@echo ""
 	@echo "CI 预检通过"
+
+openmemory-vendor-check: ## 检查 OpenMemory vendor 结构（CI required check）
+	@echo "========================================"
+	@echo "OpenMemory Vendor Structure Check"
+	@echo "========================================"
+	@FAIL=0; \
+	echo "[1/4] Checking vendor mode (no .git subdir)..."; \
+	if [ -d libs/OpenMemory/.git ]; then \
+		echo "[ERROR] libs/OpenMemory/.git exists - expected vendor mode, not submodule"; \
+		FAIL=1; \
+	else \
+		echo "  [OK] Vendor mode confirmed (no .git subdir)"; \
+	fi; \
+	echo "[2/4] Checking critical files exist..."; \
+	if [ ! -f libs/OpenMemory/packages/openmemory-js/package.json ]; then \
+		echo "[ERROR] libs/OpenMemory/packages/openmemory-js/package.json not found"; \
+		FAIL=1; \
+	else \
+		echo "  [OK] libs/OpenMemory/packages/openmemory-js/package.json exists"; \
+	fi; \
+	echo "[3/4] Checking governance files..."; \
+	if [ ! -f OpenMemory.upstream.lock.json ]; then \
+		echo "[ERROR] OpenMemory.upstream.lock.json not found"; \
+		FAIL=1; \
+	else \
+		echo "  [OK] OpenMemory.upstream.lock.json exists"; \
+	fi; \
+	if [ ! -f openmemory_patches.json ]; then \
+		echo "[ERROR] openmemory_patches.json not found"; \
+		FAIL=1; \
+	else \
+		echo "  [OK] openmemory_patches.json exists"; \
+	fi; \
+	echo "[4/4] Checking files are tracked by git..."; \
+	if ! git ls-files --error-unmatch libs/OpenMemory/packages/openmemory-js/package.json >/dev/null 2>&1; then \
+		echo "[ERROR] libs/OpenMemory/packages/openmemory-js/package.json is not tracked by git"; \
+		FAIL=1; \
+	else \
+		echo "  [OK] libs/OpenMemory/packages/openmemory-js/package.json is tracked"; \
+	fi; \
+	echo ""; \
+	if [ "$$FAIL" -eq 1 ]; then \
+		echo "========================================"; \
+		echo "[FAIL] OpenMemory vendor structure check failed"; \
+		echo "========================================"; \
+		exit 1; \
+	fi; \
+	echo "========================================"; \
+	echo "[OK] OpenMemory vendor structure check passed"; \
+	echo "========================================"
 
 ci-backup: ## CI 备份（部署前自动备份）
 	@echo "CI 部署前备份..."
@@ -1114,6 +1546,105 @@ verify-all: ## 综合验证（静态检查 + stepwise 模式，适用于本地/C
 	@echo "提示: 运行 pytest 集成测试请使用:"
 	@echo "  make test-gateway-integration       # 纯 HTTP 验证（默认）"
 	@echo "  make test-gateway-integration-full  # 含降级测试（需 Docker 权限）"
+
+# ============================================================================
+# 本地聚合验证（verify-local）
+# ============================================================================
+# 依次执行：
+#   1. verify-build-static    - Dockerfile/compose 静态检查
+#   2. deploy                 - 启动统一栈
+#   3. verify-unified         - pgvector + HTTP 验证
+#   4. test-step3-pgvector    - Step3 PGVector 集成测试
+#   5. test-gateway-integration - Gateway HTTP 集成测试
+#
+# 失败时自动收集诊断信息到 .artifacts/verify-local-diag/:
+#   - compose-logs.txt    - Docker Compose 日志
+#   - compose-ps.txt      - 服务状态
+#   - compose-config.yml  - 渲染后的 Compose 配置
+#   - pg-extension.txt    - PostgreSQL 扩展信息
+#
+# 环境变量（可选覆盖）:
+#   SKIP_DEPLOY=1         - 跳过 deploy（假设服务已运行）
+#
+# 注意：不启动长期前台进程，所有检查同步完成后返回
+# ============================================================================
+
+# 诊断收集辅助目标（内部使用）
+_verify-local-collect-diag:
+	@echo ""
+	@echo "[DIAG] 收集诊断信息到 .artifacts/verify-local-diag/..."
+	@mkdir -p .artifacts/verify-local-diag
+	@echo "=== Timestamp: $$(date -u +'%Y-%m-%dT%H:%M:%SZ') ===" > .artifacts/verify-local-diag/summary.txt
+	@echo "" >> .artifacts/verify-local-diag/summary.txt
+	@echo "=== Docker Compose PS ===" >> .artifacts/verify-local-diag/summary.txt
+	@$(DOCKER_COMPOSE) ps >> .artifacts/verify-local-diag/summary.txt 2>&1 || true
+	@$(DOCKER_COMPOSE) ps > .artifacts/verify-local-diag/compose-ps.txt 2>&1 || true
+	@echo "[DIAG] 收集 compose config..."
+	@$(DOCKER_COMPOSE) config > .artifacts/verify-local-diag/compose-config.yml 2>&1 || true
+	@echo "[DIAG] 收集 compose logs（最后 500 行）..."
+	@$(DOCKER_COMPOSE) logs --no-color --tail=500 > .artifacts/verify-local-diag/compose-logs.txt 2>&1 || true
+	@echo "[DIAG] 收集 pg_extension 信息..."
+	@$(DOCKER_COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-engram} \
+		-c "SELECT extname, extversion FROM pg_extension ORDER BY extname;" \
+		> .artifacts/verify-local-diag/pg-extension.txt 2>&1 || echo "PostgreSQL 不可用" > .artifacts/verify-local-diag/pg-extension.txt
+	@echo "[DIAG] 收集 schema 列表..."
+	@$(DOCKER_COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-engram} \
+		-c "\dn" >> .artifacts/verify-local-diag/pg-extension.txt 2>&1 || true
+	@echo ""
+	@echo "[DIAG] 诊断信息已保存到 .artifacts/verify-local-diag/"
+	@echo "  - summary.txt"
+	@echo "  - compose-ps.txt"
+	@echo "  - compose-config.yml"
+	@echo "  - compose-logs.txt"
+	@echo "  - pg-extension.txt"
+
+verify-local: ## 本地聚合验证（静态检查 + deploy + 集成测试，失败收集诊断）
+	@echo "========================================"
+	@echo "本地聚合验证（verify-local）"
+	@echo "========================================"
+	@echo ""
+	@echo "执行步骤："
+	@echo "  1. verify-build-static"
+	@echo "  2. deploy（SKIP_DEPLOY=1 可跳过）"
+	@echo "  3. verify-unified"
+	@echo "  4. test-step3-pgvector"
+	@echo "  5. test-gateway-integration"
+	@echo ""
+	@mkdir -p .artifacts/verify-local-diag
+	@echo "[1/5] 执行静态构建边界检查..."
+	@$(MAKE) verify-build-static || { $(MAKE) _verify-local-collect-diag; echo "[FAIL] verify-build-static 失败"; exit 1; }
+	@echo "[OK] verify-build-static 通过"
+	@echo ""
+	@if [ "$${SKIP_DEPLOY:-0}" = "1" ]; then \
+		echo "[2/5] 跳过 deploy（SKIP_DEPLOY=1）"; \
+	else \
+		echo "[2/5] 启动统一栈（deploy）..."; \
+		$(MAKE) deploy || { $(MAKE) _verify-local-collect-diag; echo "[FAIL] deploy 失败"; exit 1; }; \
+		echo "[OK] deploy 完成"; \
+	fi
+	@echo ""
+	@echo "[3/5] 执行统一栈验证（verify-unified）..."
+	@$(MAKE) verify-unified || { $(MAKE) _verify-local-collect-diag; echo "[FAIL] verify-unified 失败"; exit 1; }
+	@echo "[OK] verify-unified 通过"
+	@echo ""
+	@echo "[4/5] 执行 Step3 PGVector 集成测试..."
+	@$(MAKE) test-step3-pgvector || { $(MAKE) _verify-local-collect-diag; echo "[FAIL] test-step3-pgvector 失败"; exit 1; }
+	@echo "[OK] test-step3-pgvector 通过"
+	@echo ""
+	@echo "[5/5] 执行 Gateway 集成测试..."
+	@$(MAKE) test-gateway-integration || { $(MAKE) _verify-local-collect-diag; echo "[FAIL] test-gateway-integration 失败"; exit 1; }
+	@echo "[OK] test-gateway-integration 通过"
+	@echo ""
+	@echo "========================================"
+	@echo "[OK] 本地聚合验证全部通过！"
+	@echo "========================================"
+	@echo ""
+	@echo "已完成检查:"
+	@echo "  [✓] verify-build-static"
+	@echo "  [✓] deploy"
+	@echo "  [✓] verify-unified"
+	@echo "  [✓] test-step3-pgvector"
+	@echo "  [✓] test-gateway-integration"
 
 # ============================================================================
 # Step1 冒烟测试
@@ -1238,6 +1769,7 @@ step3-index: step3-deps ## Step3 索引同步（支持 env/参数透传，--json
 	export STEP3_PG_TABLE=$${STEP3_PG_TABLE:-chunks}; \
 	export STEP3_PGVECTOR_COLLECTION_STRATEGY=$${STEP3_PGVECTOR_COLLECTION_STRATEGY:-single_table}; \
 	export STEP3_PGVECTOR_AUTO_INIT=$${STEP3_PGVECTOR_AUTO_INIT:-1}; \
+	export STEP3_INDEX_VERIFY_SHA256=$${STEP3_INDEX_VERIFY_SHA256:-0}; \
 	cd apps/step3_seekdb_rag_hybrid && \
 		python -m seek_indexer \
 			--mode $${INDEX_MODE:-incremental} \
@@ -1290,7 +1822,7 @@ step3-check: step3-deps ## Step3 一致性校验（支持 --json 输出）
 	export STEP3_PGVECTOR_AUTO_INIT=$${STEP3_PGVECTOR_AUTO_INIT:-1}; \
 	cd apps/step3_seekdb_rag_hybrid && \
 		python -m seek_consistency_check \
-			--chunking-version $${CHUNKING_VERSION:-v1-2026-01} \
+			--chunking-version $${STEP3_CHUNKING_VERSION:-$${CHUNKING_VERSION:-v1-2026-01}} \
 			$${PROJECT_KEY:+--project-key $${PROJECT_KEY}} \
 			$${SAMPLE_RATIO:+--sample-ratio $${SAMPLE_RATIO}} \
 			$${LIMIT:+--limit $${LIMIT}} \
@@ -1350,6 +1882,7 @@ step3-run-smoke: step3-deps ## Step3 冒烟测试（CI 验证索引/检索功能
 	export STEP3_PG_TABLE=$${STEP3_PG_TABLE:-chunks}; \
 	export STEP3_PGVECTOR_COLLECTION_STRATEGY=$${STEP3_PGVECTOR_COLLECTION_STRATEGY:-single_table}; \
 	export STEP3_PGVECTOR_AUTO_INIT=$${STEP3_PGVECTOR_AUTO_INIT:-1}; \
+	export STEP3_INDEX_VERIFY_SHA256=$${STEP3_INDEX_VERIFY_SHA256:-0}; \
 	if [ -z "$${STEP3_PGVECTOR_DSN}" ]; then \
 		export STEP3_PGVECTOR_DSN="postgresql://$${POSTGRES_USER:-postgres}:$${POSTGRES_PASSWORD:-postgres}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB:-engram}"; \
 	fi; \
@@ -1360,9 +1893,11 @@ step3-run-smoke: step3-deps ## Step3 冒烟测试（CI 验证索引/检索功能
 	echo "  STEP3_PG_TABLE                     = $${STEP3_PG_TABLE}"; \
 	echo "  STEP3_PGVECTOR_COLLECTION_STRATEGY = $${STEP3_PGVECTOR_COLLECTION_STRATEGY}"; \
 	echo "  STEP3_PGVECTOR_AUTO_INIT           = $${STEP3_PGVECTOR_AUTO_INIT}"; \
+	echo "  STEP3_INDEX_VERIFY_SHA256          = $${STEP3_INDEX_VERIFY_SHA256}"; \
 	echo "  STEP3_PGVECTOR_DSN                 = $${STEP3_PGVECTOR_DSN%@*}@..."; \
 	echo "  SMOKE_QUERY                        = '$${SMOKE_QUERY}'"; \
 	echo ""; \
+	mkdir -p .artifacts/step3-smoke; \
 	echo "[1/4] 检查服务状态..."; \
 	if ! $(DOCKER_COMPOSE) ps --status running | grep -q postgres; then \
 		echo '{"ok":false,"code":"SERVICE_NOT_RUNNING","message":"PostgreSQL 服务未运行，请先执行 make deploy"}'; \
@@ -1378,15 +1913,16 @@ step3-run-smoke: step3-deps ## Step3 冒烟测试（CI 验证索引/检索功能
 	STEP3_PGVECTOR_DSN=$${STEP3_PGVECTOR_DSN} \
 	STEP3_PGVECTOR_COLLECTION_STRATEGY=$${STEP3_PGVECTOR_COLLECTION_STRATEGY} \
 	STEP3_PGVECTOR_AUTO_INIT=$${STEP3_PGVECTOR_AUTO_INIT} \
+	STEP3_INDEX_VERIFY_SHA256=$${STEP3_INDEX_VERIFY_SHA256} \
 	python -m seek_indexer \
 		--mode incremental \
 		--source all \
 		--batch-size 50 \
-		--json 2>&1 | tee /tmp/step3_smoke_index.json; \
+		--json 2>&1 | tee ../../.artifacts/step3-smoke/index.json; \
 	INDEX_EXIT_CODE=$$?; \
 	if [ $$INDEX_EXIT_CODE -ne 0 ]; then \
 		echo "[FAIL] 索引同步失败 (exit_code=$$INDEX_EXIT_CODE)"; \
-		cat /tmp/step3_smoke_index.json; \
+		cat ../../.artifacts/step3-smoke/index.json; \
 		exit $$INDEX_EXIT_CODE; \
 	fi; \
 	echo "[OK] 索引同步完成"; \
@@ -1402,11 +1938,11 @@ step3-run-smoke: step3-deps ## Step3 冒烟测试（CI 验证索引/检索功能
 	python -m seek_query \
 		--query "$${SMOKE_QUERY}" \
 		--top-k 5 \
-		--json 2>&1 | tee /tmp/step3_smoke_query.json; \
+		--json 2>&1 | tee ../../.artifacts/step3-smoke/query.json; \
 	QUERY_EXIT_CODE=$$?; \
 	if [ $$QUERY_EXIT_CODE -ne 0 ]; then \
 		echo "[FAIL] 检索验证失败 (exit_code=$$QUERY_EXIT_CODE)"; \
-		cat /tmp/step3_smoke_query.json; \
+		cat ../../.artifacts/step3-smoke/query.json; \
 		exit $$QUERY_EXIT_CODE; \
 	fi; \
 	echo "[OK] 检索验证完成"; \
@@ -1425,12 +1961,12 @@ step3-run-smoke: step3-deps ## Step3 冒烟测试（CI 验证索引/检索功能
 		STEP3_PGVECTOR_COLLECTION_STRATEGY=$${STEP3_PGVECTOR_COLLECTION_STRATEGY} \
 		STEP3_PGVECTOR_AUTO_INIT=$${STEP3_PGVECTOR_AUTO_INIT} \
 		python -m seek_consistency_check \
-			--chunking-version $${CHUNKING_VERSION:-v1-2026-01} \
+			--chunking-version $${STEP3_CHUNKING_VERSION:-$${CHUNKING_VERSION:-v1-2026-01}} \
 			--check-index \
 			--index-sample-size $${SMOKE_INDEX_SAMPLE_SIZE} \
 			--skip-artifacts \
 			--limit $${SMOKE_LIMIT} \
-			--json 2>&1 | tee /tmp/step3_smoke_check.json; \
+			--json 2>&1 | tee ../../.artifacts/step3-smoke/check.json; \
 		CHECK_EXIT_CODE=$$?; \
 		if [ $$CHECK_EXIT_CODE -ne 0 ]; then \
 			echo "[WARN] 一致性检查发现问题 (exit_code=$$CHECK_EXIT_CODE)"; \
@@ -1450,6 +1986,98 @@ step3-run-smoke: step3-deps ## Step3 冒烟测试（CI 验证索引/检索功能
 		echo "  - 一致性检查: 已执行"; \
 	fi; \
 	echo '{"ok":true,"message":"Step3 冒烟测试通过"}'
+
+# ============================================================================
+# Step3 Nightly Rebuild（标准化流程）
+# ============================================================================
+# Nightly 索引重建标准化流程:
+#   1. 保存当前 active collection（用于回滚）
+#   2. full rebuild 生成带 version_tag 的新 collection
+#   3. 执行 seek_query --query-set 门禁检查
+#   4. 门禁通过后激活新 collection
+#   5. 失败时输出回滚指令
+#
+# 环境变量:
+#   STEP3_NIGHTLY_QUERY_SET        门禁查询集（默认 nightly_default）
+#   STEP3_NIGHTLY_MIN_OVERLAP      门禁最小 overlap 阈值（默认 0.5）
+#   STEP3_NIGHTLY_TOP_K            门禁查询返回数量（默认 10）
+#   STEP3_NIGHTLY_SKIP_GATE        跳过门禁检查（设置为 1）
+#   STEP3_NIGHTLY_VERSION_TAG      版本标签（默认自动生成时间戳）
+#   DRY_RUN                        Dry-run 模式（设置为 1）
+#
+# 示例:
+#   make step3-nightly-rebuild                              # 使用默认配置
+#   make step3-nightly-rebuild QUERY_SET=nightly_default    # 指定查询集
+#   make step3-nightly-rebuild DRY_RUN=1                    # Dry-run 模式
+#   make step3-nightly-rebuild VERSION_TAG=v2.0.0           # 指定版本标签
+# ============================================================================
+
+step3-nightly-rebuild: step3-deps ## Step3 Nightly Rebuild（full rebuild + gate + activate）
+	@echo "========================================"
+	@echo "Step3 Nightly Rebuild"
+	@echo "========================================"
+	@echo "流程:"
+	@echo "  1. 获取当前 active collection"
+	@echo "  2. Full rebuild 生成新 collection"
+	@echo "  3. 执行门禁检查 (query-set)"
+	@echo "  4. 门禁通过后激活新 collection"
+	@echo ""
+	@# 设置环境变量
+	@export STEP3_PG_SCHEMA=$${STEP3_PG_SCHEMA:-step3}; \
+	export STEP3_PG_TABLE=$${STEP3_PG_TABLE:-chunks}; \
+	export STEP3_PGVECTOR_COLLECTION_STRATEGY=$${STEP3_PGVECTOR_COLLECTION_STRATEGY:-single_table}; \
+	export STEP3_PGVECTOR_AUTO_INIT=$${STEP3_PGVECTOR_AUTO_INIT:-1}; \
+	export STEP3_INDEX_VERIFY_SHA256=$${STEP3_INDEX_VERIFY_SHA256:-1}; \
+	if [ -z "$${STEP3_PGVECTOR_DSN}" ]; then \
+		export STEP3_PGVECTOR_DSN="postgresql://$${POSTGRES_USER:-postgres}:$${POSTGRES_PASSWORD:-postgres}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB:-engram}"; \
+	fi; \
+	NIGHTLY_QUERY_SET="$${STEP3_NIGHTLY_QUERY_SET:-$${QUERY_SET:-nightly_default}}"; \
+	NIGHTLY_MIN_OVERLAP="$${STEP3_NIGHTLY_MIN_OVERLAP:-0.5}"; \
+	NIGHTLY_TOP_K="$${STEP3_NIGHTLY_TOP_K:-10}"; \
+	echo "配置信息:"; \
+	echo "  STEP3_PG_SCHEMA                    = $${STEP3_PG_SCHEMA}"; \
+	echo "  STEP3_PGVECTOR_COLLECTION_STRATEGY = $${STEP3_PGVECTOR_COLLECTION_STRATEGY}"; \
+	echo "  STEP3_PGVECTOR_DSN                 = $${STEP3_PGVECTOR_DSN%@*}@..."; \
+	echo "  QUERY_SET                          = $${NIGHTLY_QUERY_SET}"; \
+	echo "  MIN_OVERLAP                        = $${NIGHTLY_MIN_OVERLAP}"; \
+	echo "  TOP_K                              = $${NIGHTLY_TOP_K}"; \
+	echo "  DRY_RUN                            = $${DRY_RUN:-0}"; \
+	echo "  SKIP_GATE                          = $${STEP3_NIGHTLY_SKIP_GATE:-0}"; \
+	echo ""; \
+	mkdir -p .artifacts/step3-nightly-rebuild; \
+	cd apps/step3_seekdb_rag_hybrid && \
+	STEP3_PG_SCHEMA=$${STEP3_PG_SCHEMA} \
+	STEP3_PG_TABLE=$${STEP3_PG_TABLE} \
+	STEP3_PGVECTOR_DSN=$${STEP3_PGVECTOR_DSN} \
+	STEP3_PGVECTOR_COLLECTION_STRATEGY=$${STEP3_PGVECTOR_COLLECTION_STRATEGY} \
+	STEP3_PGVECTOR_AUTO_INIT=$${STEP3_PGVECTOR_AUTO_INIT} \
+	STEP3_INDEX_VERIFY_SHA256=$${STEP3_INDEX_VERIFY_SHA256} \
+	python scripts/step3_nightly_rebuild.py \
+		--query-set "$${NIGHTLY_QUERY_SET}" \
+		--min-overlap $${NIGHTLY_MIN_OVERLAP} \
+		--top-k $${NIGHTLY_TOP_K} \
+		$${PROJECT_KEY:+--project-key $${PROJECT_KEY}} \
+		$${VERSION_TAG:+--version-tag $${VERSION_TAG}} \
+		$${DRY_RUN:+--dry-run} \
+		$${STEP3_NIGHTLY_SKIP_GATE:+--skip-gate} \
+		$${JSON_OUTPUT:+--json} \
+		$${VERBOSE:+--verbose} \
+		2>&1 | tee ../../.artifacts/step3-nightly-rebuild/nightly-rebuild.json; \
+	REBUILD_EXIT_CODE=$${PIPESTATUS[0]}; \
+	echo ""; \
+	if [ $$REBUILD_EXIT_CODE -ne 0 ]; then \
+		echo "========================================"; \
+		echo "[FAIL] Step3 Nightly Rebuild 失败"; \
+		echo "========================================"; \
+		echo ""; \
+		echo "请检查 .artifacts/step3-nightly-rebuild/nightly-rebuild.json 获取详细信息"; \
+		echo "如需回滚，请查看输出中的回滚指令"; \
+		exit $$REBUILD_EXIT_CODE; \
+	fi; \
+	echo "========================================"; \
+	echo "[OK] Step3 Nightly Rebuild 完成"; \
+	echo "========================================"; \
+	echo "  结果保存到 .artifacts/step3-nightly-rebuild/"
 
 # ============================================================================
 # Step3 Collection 迁移命令

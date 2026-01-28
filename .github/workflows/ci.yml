@@ -2,21 +2,50 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main, master, develop]
+  workflow_dispatch:
+    inputs:
+      run_step3_migrate_dry_run:
+        description: '执行 Step3 迁移 dry-run 测试'
+        required: false
+        type: boolean
+        default: false
+      run_dual_read_test:
+        description: '执行 dual-read 集成测试'
+        required: false
+        type: boolean
+        default: false
 
 # ==============================================================================
-# 环境变量分层说明 (CI = fast + standard)
+# CI 分层策略说明 (2026-01 更新)
 # ==============================================================================
-# Fast 层 (precheck/unit tests): 不设置集成测试开关
-# Standard 层 (integration tests):
-#   - RUN_INTEGRATION_TESTS=1
-#   - HTTP_ONLY_MODE=1
-#   - SKIP_DEGRADATION_TEST=1
-#   - SKIP_JSONRPC 保持未设置/false
-# Full 层: 见 nightly.yml
+#
+# Fast 层 (PR 必跑，无依赖变更检测):
+#   - ci-precheck: 配置预检
+#   - verify-build-static: Dockerfile/compose 静态检查
+#   - 对应组件 unit tests: 仅当组件代码变更时执行
+#
+# Standard 层 (PR 条件跑，需变更检测):
+#   - unified-standard: 当 stack/step/openmemory_governance 变化时执行
+#   - 包含: deploy + verify-unified + integration tests
+#   - 环境变量:
+#     - RUN_INTEGRATION_TESTS=1
+#     - HTTP_ONLY_MODE=1
+#     - SKIP_DEGRADATION_TEST=1
+#     - SKIP_JSONRPC 保持未设置/false
+#
+# Full 层 (Nightly 必跑): 见 nightly.yml
+#
 # ==============================================================================
+# Fast 层组件 Unit Tests 触发条件
+# ==============================================================================
+# - python-step1-unit: step1_changed
+# - python-gateway-unit: gateway_changed
+# - python-step3: step3_changed
+# - openmemory-sdk: openmemory_sdk_changed
+# - openmemory-governance-check: openmemory_governance_changed
 #
 # ==============================================================================
 # Standard 层 Step3 测试内容 (初始校准预算 2026-01)
@@ -56,10 +85,18 @@ jobs:
       stack_changed: ${{ steps.filter.outputs.stack_changed }}
       openmemory_sdk_changed: ${{ steps.filter.outputs.openmemory_sdk_changed }}
       openmemory_governance_changed: ${{ steps.filter.outputs.openmemory_governance_changed }}
+      # upstream_ref 变更检测（用于强制要求完整验证）
+      upstream_ref_changed: ${{ steps.check_upstream_ref.outputs.changed }}
+      # PR label 检测输出
+      has_migrate_dry_run_label: ${{ steps.check_labels.outputs.has_migrate_dry_run_label }}
+      has_dual_read_label: ${{ steps.check_labels.outputs.has_dual_read_label }}
+      has_freeze_override_label: ${{ steps.check_labels.outputs.has_freeze_override_label }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # 需要获取前一个 commit 来比较 upstream_ref
 
       - name: Detect file changes
         uses: dorny/paths-filter@v3
@@ -89,15 +126,77 @@ jobs:
               - 'openmemory_patches.json'
               - 'libs/OpenMemory/**'
 
+      - name: Check PR labels
+        id: check_labels
+        run: |
+          # 检测 PR labels: ci:step3-migrate-dry-run, ci:dual-read, openmemory:freeze-override
+          HAS_MIGRATE_LABEL="false"
+          HAS_DUAL_READ_LABEL="false"
+          HAS_FREEZE_OVERRIDE_LABEL="false"
+          
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            # 获取 PR labels
+            LABELS="${{ join(github.event.pull_request.labels.*.name, ',') }}"
+            echo "PR Labels: $LABELS"
+            
+            if echo "$LABELS" | grep -q "ci:step3-migrate-dry-run"; then
+              HAS_MIGRATE_LABEL="true"
+              echo "Found label: ci:step3-migrate-dry-run"
+            fi
+            
+            if echo "$LABELS" | grep -q "ci:dual-read"; then
+              HAS_DUAL_READ_LABEL="true"
+              echo "Found label: ci:dual-read"
+            fi
+            
+            if echo "$LABELS" | grep -q "openmemory:freeze-override"; then
+              HAS_FREEZE_OVERRIDE_LABEL="true"
+              echo "Found label: openmemory:freeze-override"
+            fi
+          fi
+          
+          echo "has_migrate_dry_run_label=$HAS_MIGRATE_LABEL" >> $GITHUB_OUTPUT
+          echo "has_dual_read_label=$HAS_DUAL_READ_LABEL" >> $GITHUB_OUTPUT
+          echo "has_freeze_override_label=$HAS_FREEZE_OVERRIDE_LABEL" >> $GITHUB_OUTPUT
+
+      - name: Check if upstream_ref changed
+        id: check_upstream_ref
+        run: |
+          # ==================================================================
+          # 检测 OpenMemory.upstream.lock.json 中的 upstream_ref 是否变更
+          # ==================================================================
+          # 重要: lock 的 upstream_ref 是 CI 判定上游版本变更的唯一信号
+          # openmemory_sync.py sync --no-dry-run 默认会更新此字段
+          # 如需手动同步但不触发 CI 强制验证，使用 --no-update-ref 参数
+          # ==================================================================
+          # 用于强制要求 openmemory-sync-check + verify + multi-schema test 全部通过
+          CHANGED=false
+          
+          if git show HEAD^:OpenMemory.upstream.lock.json > /tmp/old_lock.json 2>/dev/null; then
+            OLD_REF=$(python3 -c "import json; print(json.load(open('/tmp/old_lock.json')).get('upstream_ref', ''))" 2>/dev/null || echo "")
+            NEW_REF=$(python3 -c "import json; print(json.load(open('OpenMemory.upstream.lock.json')).get('upstream_ref', ''))" 2>/dev/null || echo "")
+            
+            echo "Old upstream_ref: $OLD_REF"
+            echo "New upstream_ref: $NEW_REF"
+            
+            if [ "$OLD_REF" != "$NEW_REF" ] && [ -n "$NEW_REF" ]; then
+              echo "::notice::upstream_ref changed from '$OLD_REF' to '$NEW_REF' - will enforce full verification"
+              CHANGED=true
+            fi
+          else
+            echo "No previous OpenMemory.upstream.lock.json found (new file or first commit)"
+          fi
+          
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+
   # ============================================================================
-  # 静态预检（无需 Docker）
+  # Fast 层: 静态预检（PR 必跑，无条件执行）
   # ============================================================================
   precheck-static:
-    name: Precheck & Static Build Verify
+    name: "[Fast] Precheck & Static Build Verify"
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [detect-changes]
-    if: ${{ needs.detect-changes.outputs.stack_changed == 'true' || needs.detect-changes.outputs.step1_changed == 'true' || needs.detect-changes.outputs.gateway_changed == 'true' || needs.detect-changes.outputs.step3_changed == 'true' }}
+    # Fast 层: 始终执行，不依赖变更检测
 
     steps:
       - name: Checkout repository
@@ -109,15 +208,119 @@ jobs:
       - name: Verify build static (Dockerfile/compose config check)
         run: make verify-build-static
 
-      - name: Check deprecated env var usage (warning mode)
+      - name: Check deprecated env var usage
+        env:
+          # ======================================================================
+          # 环境变量漂移检查 - 分阶段开关
+          # ======================================================================
+          # 短期策略（当前）: 
+          #   - 基线已有违规: warning 模式，不阻止 CI
+          #   - 新增违规: fail 模式（ENV_DRIFT_FAIL_ON_NEW=1）
+          # 中期策略（迁移完成后启用）:
+          #   - 非文档/兼容层路径全面 fail（ENV_DRIFT_STRICT=1）
+          # 完成策略（完全迁移后）:
+          #   - 全面 fail（ENV_DRIFT_FAIL=1）
+          # ======================================================================
+          ENV_DRIFT_FAIL_ON_NEW: "1"
+          # ENV_DRIFT_STRICT: "0"    # 中期：启用后对非文档路径全面 fail
+          # ENV_DRIFT_FAIL: "0"      # 完成：启用后对所有违规 fail
         run: python scripts/check_env_var_drift.py
-        # 初期 warning 模式，不阻止 CI；迁移完成后改为 --fail
+
+      - name: Verify OpenMemory vendor structure
+        run: |
+          echo "========================================"
+          echo "OpenMemory Vendor Structure Check"
+          echo "========================================"
+          FAIL=0
+          
+          # 1. 确保是 vendor 模式（无 .git 子目录）
+          echo "[1/4] Checking vendor mode (no .git subdir)..."
+          if [ -d libs/OpenMemory/.git ]; then
+            echo "::error::libs/OpenMemory/.git exists - expected vendor mode, not submodule"
+            FAIL=1
+          else
+            echo "  [OK] Vendor mode confirmed (no .git subdir)"
+          fi
+          
+          # 2. 确保关键文件存在
+          echo "[2/4] Checking critical files exist..."
+          if [ ! -f libs/OpenMemory/packages/openmemory-js/package.json ]; then
+            echo "::error::libs/OpenMemory/packages/openmemory-js/package.json not found"
+            FAIL=1
+          else
+            echo "  [OK] libs/OpenMemory/packages/openmemory-js/package.json exists"
+          fi
+          
+          # 3. 确保治理文件存在
+          echo "[3/4] Checking governance files..."
+          if [ ! -f OpenMemory.upstream.lock.json ]; then
+            echo "::error::OpenMemory.upstream.lock.json not found"
+            FAIL=1
+          else
+            echo "  [OK] OpenMemory.upstream.lock.json exists"
+          fi
+          if [ ! -f openmemory_patches.json ]; then
+            echo "::error::openmemory_patches.json not found"
+            FAIL=1
+          else
+            echo "  [OK] openmemory_patches.json exists"
+          fi
+          
+          # 4. 确保关键文件已被 git 追踪
+          echo "[4/4] Checking files are tracked by git..."
+          if ! git ls-files --error-unmatch libs/OpenMemory/packages/openmemory-js/package.json >/dev/null 2>&1; then
+            echo "::error::libs/OpenMemory/packages/openmemory-js/package.json is not tracked by git"
+            FAIL=1
+          else
+            echo "  [OK] libs/OpenMemory/packages/openmemory-js/package.json is tracked"
+          fi
+          
+          # 汇总结果
+          echo ""
+          if [ "$FAIL" -eq 1 ]; then
+            echo "========================================"
+            echo "[FAIL] OpenMemory vendor structure check failed"
+            echo "========================================"
+            exit 1
+          fi
+          echo "========================================"
+          echo "[OK] OpenMemory vendor structure check passed"
+          echo "========================================"
+
+      - name: Verify OpenMemory.upstream.lock.json format
+        run: |
+          echo "========================================"
+          echo "OpenMemory Lock 文件格式检查"
+          echo "========================================"
+          echo "规范格式: 2空格缩进、键排序、UTF-8、尾换行"
+          echo ""
+          
+          LOCK_FILE="OpenMemory.upstream.lock.json"
+          TEMP_FILE="$(mktemp)"
+          
+          # 生成规范格式的临时文件
+          python3 -c "import json; d=json.load(open('$LOCK_FILE')); json.dump(d, open('$TEMP_FILE','w'), indent=2, ensure_ascii=False, sort_keys=True); open('$TEMP_FILE','a').write('\n')"
+          
+          if diff -q "$LOCK_FILE" "$TEMP_FILE" > /dev/null 2>&1; then
+            echo "[OK] $LOCK_FILE 格式正确"
+            rm -f "$TEMP_FILE"
+          else
+            echo "::error::$LOCK_FILE 格式不符合规范"
+            echo ""
+            echo "差异详情:"
+            diff "$LOCK_FILE" "$TEMP_FILE" || true
+            echo ""
+            echo "修复方法:"
+            echo "  python3 -c \"import json; d=json.load(open('$LOCK_FILE')); json.dump(d, open('$LOCK_FILE','w'), indent=2, ensure_ascii=False, sort_keys=True); open('$LOCK_FILE','a').write('\\n')\""
+            rm -f "$TEMP_FILE"
+            exit 1
+          fi
 
   # ============================================================================
-  # Python 单元测试 - Step1
+  # Fast 层: Python 单元测试 - Step1 (条件执行)
   # ============================================================================
   python-step1-unit:
-    name: Step1 Unit Tests
+    name: "[Fast] Step1 Unit Tests"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [detect-changes]
@@ -154,10 +357,10 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================================
-  # Python 单元测试 - Gateway
+  # Fast 层: Python 单元测试 - Gateway (条件执行)
   # ============================================================================
   python-gateway-unit:
-    name: Gateway Unit Tests
+    name: "[Fast] Gateway Unit Tests"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [detect-changes]
@@ -203,10 +406,10 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================================
-  # Python 测试 - Step3 分块稳定性
+  # Fast 层: Python 测试 - Step3 分块稳定性 (条件执行)
   # ============================================================================
   python-step3:
-    name: Step3 Chunking Tests
+    name: "[Fast] Step3 Chunking Tests"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [detect-changes]
@@ -243,10 +446,10 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================================
-  # OpenMemory 治理检查（lock/patch 文件一致性）
+  # Fast 层: OpenMemory 治理检查（lock/patch 文件一致性，条件执行）
   # ============================================================================
   openmemory-governance-check:
-    name: OpenMemory Governance Check
+    name: "[Fast] OpenMemory Governance Check"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [detect-changes]
@@ -256,41 +459,231 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check OpenMemory freeze status
+        id: freeze_check
+        env:
+          HAS_FREEZE_OVERRIDE: ${{ needs.detect-changes.outputs.has_freeze_override_label }}
+        run: |
+          echo "========================================"
+          echo "OpenMemory Freeze Status Check"
+          echo "========================================"
+          
+          # 读取冻结状态
+          IS_FROZEN=$(python3 -c "import json; print(json.load(open('OpenMemory.upstream.lock.json')).get('freeze_status', {}).get('is_frozen', False))" 2>/dev/null || echo "False")
+          FREEZE_REASON=$(python3 -c "import json; print(json.load(open('OpenMemory.upstream.lock.json')).get('freeze_status', {}).get('freeze_reason') or 'N/A')" 2>/dev/null || echo "N/A")
+          FREEZE_EXPIRES=$(python3 -c "import json; print(json.load(open('OpenMemory.upstream.lock.json')).get('freeze_status', {}).get('freeze_expires_at') or 'N/A')" 2>/dev/null || echo "N/A")
+          
+          echo "is_frozen: $IS_FROZEN"
+          echo "freeze_reason: $FREEZE_REASON"
+          echo "freeze_expires_at: $FREEZE_EXPIRES"
+          echo "has_freeze_override_label: $HAS_FREEZE_OVERRIDE"
+          echo ""
+          
+          # 如果已冻结且没有 override label，则失败
+          if [ "$IS_FROZEN" == "True" ]; then
+            echo "::warning::OpenMemory 当前处于冻结状态"
+            echo "  冻结原因: $FREEZE_REASON"
+            echo "  到期时间: $FREEZE_EXPIRES"
+            echo ""
+            
+            if [ "$HAS_FREEZE_OVERRIDE" != "true" ]; then
+              echo "::error::OpenMemory 处于冻结状态且 PR 未添加 openmemory:freeze-override label"
+              echo ""
+              echo "========================================" >> $GITHUB_STEP_SUMMARY
+              echo "## :no_entry: OpenMemory Freeze Check Failed" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "OpenMemory 当前处于 **冻结状态**，不允许修改相关文件。" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| 字段 | 值 |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+              echo "| 冻结状态 | \`is_frozen: true\` |" >> $GITHUB_STEP_SUMMARY
+              echo "| 冻结原因 | $FREEZE_REASON |" >> $GITHUB_STEP_SUMMARY
+              echo "| 到期时间 | $FREEZE_EXPIRES |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### :bulb: 如何解决" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**方法 1: 等待冻结期结束**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "如果冻结有到期时间，请等待冻结期结束后再提交。" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**方法 2: 添加 Override Label（需要说明原因）**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "1. 在 PR 中添加 label: \`openmemory:freeze-override\`" >> $GITHUB_STEP_SUMMARY
+              echo "2. 在 PR 描述中添加 **Override Reason** 说明：" >> $GITHUB_STEP_SUMMARY
+              echo "   \`\`\`" >> $GITHUB_STEP_SUMMARY
+              echo "   ## OpenMemory Freeze Override" >> $GITHUB_STEP_SUMMARY
+              echo "   **Override Reason**: [说明为什么需要在冻结期间修改]" >> $GITHUB_STEP_SUMMARY
+              echo "   \`\`\`" >> $GITHUB_STEP_SUMMARY
+              echo "3. 重新运行 CI workflow" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**方法 3: 重新运行 Workflow**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "添加 label 后，使用以下方式重新运行：" >> $GITHUB_STEP_SUMMARY
+              echo "- GitHub UI: 点击 'Re-run all jobs' 按钮" >> $GITHUB_STEP_SUMMARY
+              echo "- GitHub CLI: \`gh run rerun ${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> :warning: **注意**: 冻结期间的修改需要技术负责人审批" >> $GITHUB_STEP_SUMMARY
+              echo "========================================" >> $GITHUB_STEP_SUMMARY
+              
+              exit 1
+            else
+              echo "::notice::检测到 openmemory:freeze-override label，允许在冻结期间继续"
+              echo ""
+              echo "========================================" >> $GITHUB_STEP_SUMMARY
+              echo "## :warning: OpenMemory Freeze Override Active" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "PR 使用了 \`openmemory:freeze-override\` label 绕过冻结检查。" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| 字段 | 值 |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+              echo "| 冻结原因 | $FREEZE_REASON |" >> $GITHUB_STEP_SUMMARY
+              echo "| Override | :white_check_mark: 已启用 |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> :memo: 请确保 PR 描述中已填写 **Override Reason**" >> $GITHUB_STEP_SUMMARY
+              echo "========================================" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "[OK] OpenMemory 未处于冻结状态，继续执行"
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run openmemory_sync unit tests
+        run: |
+          echo "=== OpenMemory Sync Unit Tests ==="
+          pytest scripts/tests/test_openmemory_sync.py -v --tb=short
+
       - name: Create artifacts directory
-        run: mkdir -p .artifacts
+        run: mkdir -p .artifacts/openmemory-patch-conflicts
+
+      - name: Run OpenMemory schema validation (warn mode)
+        id: schema_validate
+        run: |
+          echo "=== OpenMemory JSON Schema Validation (warn mode) ==="
+          # 先以 warn 模式运行，后续切换为 strict 模式
+          # 要切换为 strict 模式：将 --schema-warn-only 改为 --schema-strict
+          python scripts/openmemory_sync.py schema-validate --schema-warn-only --json > .artifacts/openmemory-schema-validate.json 2>&1 || true
+          cat .artifacts/openmemory-schema-validate.json
+          
+          # 检查是否有 schema 校验错误（当前为 warn 模式，不阻止 CI）
+          if grep -q '"overall_status": "error"' .artifacts/openmemory-schema-validate.json 2>/dev/null; then
+            echo "::warning::OpenMemory schema validation has errors (warn mode - not blocking CI)"
+          fi
 
       - name: Run OpenMemory sync check
+        env:
+          # upstream_ref_changed 时启用严格 patch 文件校验
+          OPENMEMORY_PATCH_FILES_REQUIRED: ${{ needs.detect-changes.outputs.upstream_ref_changed }}
         id: sync_check
         run: |
-          echo "=== OpenMemory Sync Check ===" | tee .artifacts/openmemory-sync-report.json
-          JSON_OUTPUT=1 make openmemory-sync-check 2>&1 | tee -a .artifacts/openmemory-sync-report.json
-          echo "" >> .artifacts/openmemory-sync-report.json
+          echo "=== OpenMemory Sync Check ==="
+          python scripts/openmemory_sync.py check --json > .artifacts/openmemory-sync-check.json 2>&1 || true
+          cat .artifacts/openmemory-sync-check.json
 
-      - name: Run OpenMemory sync apply (dry-run)
+      - name: Run OpenMemory sync apply (dry-run with manual strategy)
         id: sync_apply
         run: |
-          echo "=== OpenMemory Sync Apply (dry-run) ===" | tee -a .artifacts/openmemory-sync-report.json
-          JSON_OUTPUT=1 make openmemory-sync-apply 2>&1 | tee -a .artifacts/openmemory-sync-report.json
+          echo "=== OpenMemory Sync Apply (dry-run, strategy=manual) ==="
+          # CI 仅执行 dry-run，不使用 --force-update-lock（该标志仅用于紧急手动修复）
+          python scripts/openmemory_sync.py apply --dry-run --strategy manual --json > .artifacts/openmemory-sync-apply.json 2>&1 || true
+          cat .artifacts/openmemory-sync-apply.json
 
-      - name: Upload governance check report
+      - name: Run OpenMemory sync verify
+        id: sync_verify
+        run: |
+          echo "=== OpenMemory Sync Verify ==="
+          python scripts/openmemory_sync.py verify --json > .artifacts/openmemory-sync-verify.json 2>&1 || true
+          cat .artifacts/openmemory-sync-verify.json
+
+      - name: Upload governance check report (always, before potential fail)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: openmemory-governance-report-${{ github.run_number }}
-          path: .artifacts/openmemory-sync-report.json
+          path: |
+            .artifacts/openmemory-schema-validate.json
+            .artifacts/openmemory-sync-check.json
+            .artifacts/openmemory-sync-apply.json
+            .artifacts/openmemory-sync-verify.json
+            .artifacts/openmemory-patch-conflicts/
           retention-days: 14
           if-no-files-found: warn
 
+      - name: Parse sync results and check for errors
+        id: sync_parse
+        if: always()
+        run: |
+          echo "=== Parse OpenMemory Sync Results ==="
+          python scripts/openmemory_sync_parse.py \
+            --check .artifacts/openmemory-sync-check.json \
+            --apply .artifacts/openmemory-sync-apply.json \
+            --verify .artifacts/openmemory-sync-verify.json \
+            --github-output $GITHUB_OUTPUT
+
+      - name: Check for overall_status error (hard fail after artifacts upload)
+        if: always()
+        run: |
+          echo "=== OpenMemory Sync Status Check ==="
+          
+          # 从解析脚本输出中读取状态
+          SHOULD_FAIL="${{ steps.sync_parse.outputs.should_fail }}"
+          SHOULD_WARN="${{ steps.sync_parse.outputs.should_warn }}"
+          OVERALL_STATUS="${{ steps.sync_parse.outputs.overall_status }}"
+          SUMMARY="${{ steps.sync_parse.outputs.summary }}"
+          
+          # 输出关键字段
+          echo "Overall Status: $OVERALL_STATUS"
+          echo "Should Fail: $SHOULD_FAIL"
+          echo "Should Warn: $SHOULD_WARN"
+          echo "Summary: $SUMMARY"
+          echo ""
+          echo "Verify 状态:"
+          echo "  - verify_final_status: ${{ steps.sync_parse.outputs.verify_final_status }}"
+          echo "  - category_mismatch_A: ${{ steps.sync_parse.outputs.category_mismatch_A }}"
+          echo "  - category_mismatch_B: ${{ steps.sync_parse.outputs.category_mismatch_B }}"
+          echo "  - category_mismatch_C: ${{ steps.sync_parse.outputs.category_mismatch_C }}"
+          echo "  - missing_count: ${{ steps.sync_parse.outputs.missing_count }}"
+          echo "  - conflict_files_count: ${{ steps.sync_parse.outputs.conflict_files_count }}"
+          echo "  - conflict_artifacts_dir: ${{ steps.sync_parse.outputs.conflict_artifacts_dir }}"
+          echo "  - strict_patch_files: ${{ steps.sync_parse.outputs.strict_patch_files }}"
+          echo ""
+          echo "Apply 状态:"
+          echo "  - apply_final_status: ${{ steps.sync_parse.outputs.apply_final_status }}"
+          echo "  - apply_conflicts_A: ${{ steps.sync_parse.outputs.apply_conflicts_A }}"
+          echo "  - apply_conflicts_B: ${{ steps.sync_parse.outputs.apply_conflicts_B }}"
+          echo "  - lock_update_blocked: ${{ steps.sync_parse.outputs.lock_update_blocked }}"
+          echo "  - force_update_lock: ${{ steps.sync_parse.outputs.force_update_lock }}"
+          echo ""
+          
+          # Warn 处理（Category B 等）
+          if [ "$SHOULD_WARN" == "true" ]; then
+            echo "::warning::OpenMemory sync has warnings - $SUMMARY"
+          fi
+          
+          # Fail 处理（Category A 或 error 状态）
+          if [ "$SHOULD_FAIL" == "true" ]; then
+            echo ""
+            echo "::error::OpenMemory governance check failed"
+            echo "::error::$SUMMARY"
+            echo "::error::Conflict artifacts: ${{ steps.sync_parse.outputs.conflict_artifacts_dir }}"
+            exit 1
+          fi
+          
+          echo ""
+          echo "[OK] OpenMemory governance check passed"
+
   # ============================================================================
-  # 统一栈集成测试（需要 Docker）- Standard 层
+  # Standard 层: 统一栈集成测试（需要 Docker，PR 条件跑）
+  # 触发条件: stack/step1/gateway/step3/openmemory_governance 任一变化
   # ============================================================================
   unified-standard:
-    name: Unified Stack Integration Test (Standard)
+    name: "[Standard] Unified Stack Integration Test"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [detect-changes, precheck-static, python-step1-unit, python-gateway-unit, python-step3, openmemory-governance-check]
@@ -300,7 +693,8 @@ jobs:
        needs.detect-changes.outputs.step1_changed == 'true' ||
        needs.detect-changes.outputs.gateway_changed == 'true' ||
        needs.detect-changes.outputs.step3_changed == 'true' ||
-       needs.detect-changes.outputs.openmemory_governance_changed == 'true')
+       needs.detect-changes.outputs.openmemory_governance_changed == 'true' ||
+       needs.detect-changes.outputs.upstream_ref_changed == 'true')
 
     env:
       # 服务账号密码（CI 测试固定值）
@@ -325,6 +719,59 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Check OpenMemory freeze status (when governance changed)
+        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        env:
+          HAS_FREEZE_OVERRIDE: ${{ needs.detect-changes.outputs.has_freeze_override_label }}
+        run: |
+          echo "========================================"
+          echo "OpenMemory Freeze Status Check (Standard Layer)"
+          echo "========================================"
+          
+          # 读取冻结状态
+          IS_FROZEN=$(python3 -c "import json; print(json.load(open('OpenMemory.upstream.lock.json')).get('freeze_status', {}).get('is_frozen', False))" 2>/dev/null || echo "False")
+          FREEZE_REASON=$(python3 -c "import json; print(json.load(open('OpenMemory.upstream.lock.json')).get('freeze_status', {}).get('freeze_reason') or 'N/A')" 2>/dev/null || echo "N/A")
+          FREEZE_EXPIRES=$(python3 -c "import json; print(json.load(open('OpenMemory.upstream.lock.json')).get('freeze_status', {}).get('freeze_expires_at') or 'N/A')" 2>/dev/null || echo "N/A")
+          
+          echo "is_frozen: $IS_FROZEN"
+          echo "freeze_reason: $FREEZE_REASON"
+          echo "freeze_expires_at: $FREEZE_EXPIRES"
+          echo "has_freeze_override_label: $HAS_FREEZE_OVERRIDE"
+          echo ""
+          
+          # 如果已冻结且没有 override label，则失败
+          if [ "$IS_FROZEN" == "True" ]; then
+            echo "::warning::OpenMemory 当前处于冻结状态"
+            
+            if [ "$HAS_FREEZE_OVERRIDE" != "true" ]; then
+              echo "::error::OpenMemory 处于冻结状态且 PR 未添加 openmemory:freeze-override label"
+              echo ""
+              echo "========================================" >> $GITHUB_STEP_SUMMARY
+              echo "## :no_entry: OpenMemory Freeze Check Failed (Standard Layer)" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "OpenMemory 当前处于 **冻结状态**，不允许修改相关文件。" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| 字段 | 值 |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+              echo "| 冻结状态 | \`is_frozen: true\` |" >> $GITHUB_STEP_SUMMARY
+              echo "| 冻结原因 | $FREEZE_REASON |" >> $GITHUB_STEP_SUMMARY
+              echo "| 到期时间 | $FREEZE_EXPIRES |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### :bulb: 如何解决" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "1. 在 PR 中添加 label: \`openmemory:freeze-override\`" >> $GITHUB_STEP_SUMMARY
+              echo "2. 在 PR 描述中填写 **Override Reason**" >> $GITHUB_STEP_SUMMARY
+              echo "3. 重新运行: \`gh run rerun ${{ github.run_id }}\` 或点击 'Re-run all jobs'" >> $GITHUB_STEP_SUMMARY
+              echo "========================================" >> $GITHUB_STEP_SUMMARY
+              
+              exit 1
+            else
+              echo "::notice::检测到 openmemory:freeze-override label，允许在冻结期间继续"
+            fi
+          else
+            echo "[OK] OpenMemory 未处于冻结状态"
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -376,38 +823,176 @@ jobs:
           mkdir -p .artifacts
           make verify-unified VERIFY_JSON_OUT=.artifacts/verify-results.json
 
+      - name: Run OpenMemory artifact audit
+        run: make openmemory-audit
+
       - name: Run OpenMemory patch check
-        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        # 当 openmemory_governance_changed 或 upstream_ref_changed 时执行
+        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true' || needs.detect-changes.outputs.upstream_ref_changed == 'true'
         id: openmemory_patch_check
+        env:
+          # upstream_ref_changed 时启用严格 patch 文件校验
+          OPENMEMORY_PATCH_FILES_REQUIRED: ${{ needs.detect-changes.outputs.upstream_ref_changed }}
         run: |
           mkdir -p .artifacts/openmemory-patch-conflicts
-          python scripts/openmemory_sync.py apply --dry-run --strategy manual --json > .artifacts/openmemory-sync-report.json 2>&1 || true
-          # 检查状态，但不立即失败，先让产物上传
-          python scripts/openmemory_sync.py check --json >> .artifacts/openmemory-sync-report.json 2>&1
+          
+          # 标记是否为 upstream_ref 变更（需要更严格的检查）
+          UPSTREAM_REF_CHANGED="${{ needs.detect-changes.outputs.upstream_ref_changed }}"
+          if [ "$UPSTREAM_REF_CHANGED" == "true" ]; then
+            echo "::notice::upstream_ref changed - enforcing strict validation (OPENMEMORY_PATCH_FILES_REQUIRED=true)"
+          fi
+          
+          # Run sync check（strict_patch_files 通过环境变量控制）
+          python scripts/openmemory_sync.py check --json > .artifacts/openmemory-sync-check.json 2>&1 || true
+          
+          # Run sync apply with manual strategy to generate conflict files
+          # CI 仅执行 dry-run，不使用 --force-update-lock（该标志仅用于紧急手动修复）
+          python scripts/openmemory_sync.py apply --dry-run --strategy manual --json > .artifacts/openmemory-sync-apply.json 2>&1 || true
+          
+          # Run sync verify - this checks if patched_files checksums match
+          python scripts/openmemory_sync.py verify --json > .artifacts/openmemory-sync-verify.json 2>&1 || true
+          
+          # Display summaries
+          echo "=== Sync Check Result ==="
+          cat .artifacts/openmemory-sync-check.json | head -50
+          echo ""
+          echo "=== Sync Apply Result ==="
+          cat .artifacts/openmemory-sync-apply.json | head -50
+          echo ""
+          echo "=== Sync Verify Result ==="
+          cat .artifacts/openmemory-sync-verify.json | head -50
 
-      - name: Upload OpenMemory patch conflicts
-        if: always() && needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+      - name: Upload OpenMemory patch conflicts (before potential fail)
+        if: always() && (needs.detect-changes.outputs.openmemory_governance_changed == 'true' || needs.detect-changes.outputs.upstream_ref_changed == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: openmemory-patch-conflicts-${{ github.run_number }}
           path: |
             .artifacts/openmemory-patch-conflicts/
-            .artifacts/openmemory-sync-report.json
+            .artifacts/openmemory-sync-check.json
+            .artifacts/openmemory-sync-apply.json
+            .artifacts/openmemory-sync-verify.json
           retention-days: 14
-          if-no-files-found: ignore
+          if-no-files-found: warn
+
+      - name: Parse OpenMemory patch check results
+        id: patch_check_parse
+        if: always() && (needs.detect-changes.outputs.openmemory_governance_changed == 'true' || needs.detect-changes.outputs.upstream_ref_changed == 'true')
+        run: |
+          echo "=== Parse OpenMemory Patch Check Results ==="
+          python scripts/openmemory_sync_parse.py \
+            --check .artifacts/openmemory-sync-check.json \
+            --apply .artifacts/openmemory-sync-apply.json \
+            --verify .artifacts/openmemory-sync-verify.json \
+            --github-output $GITHUB_OUTPUT
+
+      - name: Fail if OpenMemory patch check has errors
+        if: always() && (needs.detect-changes.outputs.openmemory_governance_changed == 'true' || needs.detect-changes.outputs.upstream_ref_changed == 'true')
+        run: |
+          UPSTREAM_REF_CHANGED="${{ needs.detect-changes.outputs.upstream_ref_changed }}"
+          
+          # upstream_ref 变更时强制执行更严格的检查
+          if [ "$UPSTREAM_REF_CHANGED" == "true" ]; then
+            echo "=========================================="
+            echo "upstream_ref changed - ENFORCING STRICT VALIDATION"
+            echo "Required: openmemory-sync-check + verify + multi-schema test"
+            echo "=========================================="
+          fi
+          
+          # 从解析脚本输出中读取状态
+          SHOULD_FAIL="${{ steps.patch_check_parse.outputs.should_fail }}"
+          SHOULD_WARN="${{ steps.patch_check_parse.outputs.should_warn }}"
+          OVERALL_STATUS="${{ steps.patch_check_parse.outputs.overall_status }}"
+          SUMMARY="${{ steps.patch_check_parse.outputs.summary }}"
+          
+          # 输出关键字段
+          echo ""
+          echo "=== OpenMemory Patch Check Status ==="
+          echo "Overall Status: $OVERALL_STATUS"
+          echo "Should Fail: $SHOULD_FAIL"
+          echo "Should Warn: $SHOULD_WARN"
+          echo "Summary: $SUMMARY"
+          echo ""
+          echo "Verify 状态:"
+          echo "  - verify_final_status: ${{ steps.patch_check_parse.outputs.verify_final_status }}"
+          echo "  - category_mismatch_A: ${{ steps.patch_check_parse.outputs.category_mismatch_A }}"
+          echo "  - category_mismatch_B: ${{ steps.patch_check_parse.outputs.category_mismatch_B }}"
+          echo "  - category_mismatch_C: ${{ steps.patch_check_parse.outputs.category_mismatch_C }}"
+          echo "  - missing_count: ${{ steps.patch_check_parse.outputs.missing_count }}"
+          echo "  - conflict_files_count: ${{ steps.patch_check_parse.outputs.conflict_files_count }}"
+          echo "  - conflict_artifacts_dir: ${{ steps.patch_check_parse.outputs.conflict_artifacts_dir }}"
+          echo "  - strict_patch_files: ${{ steps.patch_check_parse.outputs.strict_patch_files }}"
+          echo ""
+          echo "Apply 状态:"
+          echo "  - apply_final_status: ${{ steps.patch_check_parse.outputs.apply_final_status }}"
+          echo "  - apply_conflicts_A: ${{ steps.patch_check_parse.outputs.apply_conflicts_A }}"
+          echo "  - apply_conflicts_B: ${{ steps.patch_check_parse.outputs.apply_conflicts_B }}"
+          echo "  - lock_update_blocked: ${{ steps.patch_check_parse.outputs.lock_update_blocked }}"
+          echo "  - force_update_lock: ${{ steps.patch_check_parse.outputs.force_update_lock }}"
+          echo ""
+          
+          # Warn 处理（Category B 等）
+          if [ "$SHOULD_WARN" == "true" ]; then
+            echo "::warning::OpenMemory patch check has warnings - $SUMMARY"
+          fi
+          
+          # Fail 处理（Category A 或 error 状态）
+          if [ "$SHOULD_FAIL" == "true" ]; then
+            echo ""
+            echo "::error::OpenMemory patch check failed"
+            echo "::error::$SUMMARY"
+            echo "::error::Conflict artifacts: ${{ steps.patch_check_parse.outputs.conflict_artifacts_dir }}"
+            if [ "$UPSTREAM_REF_CHANGED" == "true" ]; then
+              echo ""
+              echo "::error::upstream_ref change requires ALL checks to pass!"
+              echo "::error::Please fix sync-check and sync-verify errors before merging."
+            fi
+            exit 1
+          fi
+          
+          echo ""
+          echo "[OK] OpenMemory patch check passed"
 
       - name: Run Gateway integration tests
         run: make test-gateway-integration
 
       - name: Run OpenMemory multi-schema isolation test
-        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        # 当 openmemory_governance_changed 或 upstream_ref_changed 时强制执行
+        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true' || needs.detect-changes.outputs.upstream_ref_changed == 'true'
+        id: openmemory_multi_schema
         env:
           OM_PG_HOST: localhost
           OM_PG_PORT: "5432"
           OM_PG_DB: engram
           OM_PG_USER: postgres
           OM_PG_PASSWORD: postgres
-        run: make openmemory-test-multi-schema
+        run: |
+          UPSTREAM_REF_CHANGED="${{ needs.detect-changes.outputs.upstream_ref_changed }}"
+          if [ "$UPSTREAM_REF_CHANGED" == "true" ]; then
+            echo "::notice::upstream_ref changed - multi-schema test is REQUIRED"
+          fi
+          make openmemory-test-multi-schema
+
+      # ========================================================================
+      # upstream_ref 变更强制验证（确保所有必需检查通过）
+      # ========================================================================
+      - name: Verify upstream_ref change requirements
+        if: needs.detect-changes.outputs.upstream_ref_changed == 'true'
+        run: |
+          echo "=========================================="
+          echo "upstream_ref CHANGE VERIFICATION"
+          echo "=========================================="
+          echo ""
+          echo "Required checks for upstream_ref change:"
+          echo "  1. openmemory-sync-check    [PASSED - previous step]"
+          echo "  2. openmemory-sync-verify   [PASSED - previous step]"
+          echo "  3. multi-schema test        [PASSED - previous step]"
+          echo ""
+          echo "All required checks passed for upstream_ref change!"
+          echo ""
+          echo "Note: If any of the above steps failed, the workflow would"
+          echo "have stopped before reaching this point."
+          echo "=========================================="
 
       - name: Run Step3 smoke test
         if: needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true'
@@ -429,6 +1014,61 @@ jobs:
         run: |
           pip install -q -r apps/step3_seekdb_rag_hybrid/requirements.dev.txt
           make test-step3-pgvector
+
+      # ========================================================================
+      # Step3 Nightly Rebuild Gate (DRY_RUN=1，不实际切换)
+      # ========================================================================
+      # 在 Standard 层执行 nightly-rebuild 流程的 dry-run 验证：
+      # - 验证 rebuild 流程逻辑正确
+      # - 验证 gate 门禁检查可通过
+      # - 不设置 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH（任何 accidental activate 会被代码拒绝）
+      # ========================================================================
+      - name: Run Step3 Nightly Rebuild Gate (DRY_RUN)
+        if: needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true'
+        id: step3_nightly_rebuild_gate
+        env:
+          STEP3_PGVECTOR_DSN: postgresql://postgres:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+          STEP3_INDEX_BACKEND: pgvector
+          STEP3_PG_SCHEMA: step3_test
+          STEP3_PG_TABLE: chunks_test
+          STEP3_PGVECTOR_COLLECTION_STRATEGY: single_table
+          STEP3_PGVECTOR_AUTO_INIT: "1"
+          # 门禁配置
+          STEP3_NIGHTLY_QUERY_SET: nightly_default
+          STEP3_NIGHTLY_MIN_OVERLAP: "0.5"
+          STEP3_NIGHTLY_TOP_K: "10"
+          # 注意：不设置 STEP3_ALLOW_ACTIVE_COLLECTION_SWITCH
+          # 这意味着任何 accidental activate 调用都会被代码拒绝
+        run: |
+          echo "::group::Step3 Nightly Rebuild Gate (DRY_RUN)"
+          mkdir -p .artifacts/step3-nightly-rebuild-gate
+          
+          # 执行 Nightly Rebuild 流程（DRY_RUN 模式）
+          make step3-nightly-rebuild DRY_RUN=1 JSON_OUTPUT=1 2>&1 | tee .artifacts/step3-nightly-rebuild-gate/gate-output.txt
+          GATE_EXIT_CODE=${PIPESTATUS[0]}
+          
+          echo "::endgroup::"
+          
+          # 解析结果
+          if [ -f ".artifacts/step3-nightly-rebuild/nightly-rebuild.json" ]; then
+            cp .artifacts/step3-nightly-rebuild/nightly-rebuild.json .artifacts/step3-nightly-rebuild-gate/ 2>/dev/null || true
+            
+            GATE_PASSED=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print('true' if d.get('gate',{}).get('passed') else 'false')" 2>/dev/null || echo "unknown")
+            GATE_PROFILE=$(python3 -c "import json; d=json.load(open('.artifacts/step3-nightly-rebuild/nightly-rebuild.json')); print(d.get('gate',{}).get('profile','unknown'))" 2>/dev/null || echo "unknown")
+            
+            echo "gate_passed=$GATE_PASSED" >> $GITHUB_OUTPUT
+            echo "gate_profile=$GATE_PROFILE" >> $GITHUB_OUTPUT
+            
+            if [ "$GATE_PASSED" == "true" ]; then
+              echo "::notice::Step3 Nightly Rebuild Gate (DRY_RUN) 通过 (profile: $GATE_PROFILE)"
+            else
+              echo "::warning::Step3 Nightly Rebuild Gate (DRY_RUN) 未通过 (profile: $GATE_PROFILE)"
+            fi
+          fi
+          
+          # DRY_RUN 模式下，门禁失败不阻止 CI（仅作为信息参考）
+          # 如需强制门禁，可移除此行
+          exit 0
 
       - name: Collect Step3 smoke test results
         if: always() && (needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true')
@@ -487,6 +1127,7 @@ jobs:
           name: unified-verification-results
           path: |
             .artifacts/verify-results.json
+            .artifacts/openmemory-artifact-audit.json
             .artifacts/step3-smoke/
             .artifacts/test-results/step3-pgvector.xml
           retention-days: 14
@@ -520,19 +1161,47 @@ jobs:
           echo "=== OpenMemory Health Check ===" >> .artifacts/health-checks.txt
           curl -v ${OPENMEMORY_URL}/health >> .artifacts/health-checks.txt 2>&1 || true
 
+      - name: Collect OpenMemory sync report on failure
+        if: failure()
+        run: |
+          # 汇总 openmemory-sync 相关报告到统一文件
+          echo '{"check":' > .artifacts/openmemory-sync-report.json
+          cat .artifacts/openmemory-sync-check.json 2>/dev/null || echo 'null' >> .artifacts/openmemory-sync-report.json
+          echo ',"apply":' >> .artifacts/openmemory-sync-report.json
+          cat .artifacts/openmemory-sync-apply.json 2>/dev/null || echo 'null' >> .artifacts/openmemory-sync-report.json
+          echo ',"verify":' >> .artifacts/openmemory-sync-report.json
+          cat .artifacts/openmemory-sync-verify.json 2>/dev/null || echo 'null' >> .artifacts/openmemory-sync-report.json
+          echo '}' >> .artifacts/openmemory-sync-report.json
+
+      - name: Collect Step3 smoke JSON on failure
+        if: failure()
+        run: |
+          mkdir -p .artifacts/step3-smoke
+          cp /tmp/step3_smoke_*.json .artifacts/step3-smoke/ 2>/dev/null || true
+
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ci-failure-logs-${{ github.run_number }}
-          path: .artifacts/**
+          path: |
+            .artifacts/openmemory-sync-report.json
+            .artifacts/compose-config.yml
+            .artifacts/compose-logs.txt
+            .artifacts/compose-ps.txt
+            .artifacts/health-checks.txt
+            .artifacts/step3-smoke/
+            .artifacts/step3-diagnostics/
+            .artifacts/openmemory-sync-check.json
+            .artifacts/openmemory-sync-apply.json
+            .artifacts/openmemory-sync-verify.json
           retention-days: 7
 
   # ============================================================================
-  # OpenMemory SDK 测试 - Python & Node
+  # Fast 层: OpenMemory SDK 测试 - Python & Node (条件执行)
   # ============================================================================
   openmemory-sdk:
-    name: OpenMemory SDK Tests
+    name: "[Fast] OpenMemory SDK Tests"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [detect-changes]
@@ -599,3 +1268,143 @@ jobs:
           path: .artifacts/openmemory-sdk/
           retention-days: 14
           if-no-files-found: ignore
+
+  # ============================================================================
+  # Optional: Step3 迁移 Dry-Run 测试（可选执行，避免每次 PR 必跑的时间成本）
+  # ============================================================================
+  # 触发条件（需满足全部）：
+  #   1. step3_changed 或 stack_changed
+  #   2. 以下任一条件：
+  #      - workflow_dispatch 输入 run_step3_migrate_dry_run=true
+  #      - PR 有 label: ci:step3-migrate-dry-run
+  #
+  # 作用：
+  #   - 验证 PGVector collection 迁移脚本在当前代码下可正常执行（dry-run）
+  #   - 输出迁移计划 JSON 到 .artifacts/step3-migrate/
+  #   - 可选执行 dual-read 集成测试
+  # ============================================================================
+  step3-migrate-dry-run:
+    name: "[Optional] Step3 Migrate Dry-Run"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [detect-changes, precheck-static, unified-standard]
+    # 条件：(step3/stack 变更) 且 (有 label 或 workflow_dispatch 输入)
+    if: |
+      !failure() && !cancelled() &&
+      (needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true') &&
+      (needs.detect-changes.outputs.has_migrate_dry_run_label == 'true' || github.event.inputs.run_step3_migrate_dry_run == 'true')
+
+    env:
+      # PostgreSQL 配置（复用 unified-standard 的栈）
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: engram
+      # Step3 配置（隔离测试表）
+      STEP3_PG_SCHEMA: step3_test
+      STEP3_PG_TABLE: chunks_test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-step3-migrate-${{ hashFiles('apps/step3_seekdb_rag_hybrid/requirements.txt', 'apps/step3_seekdb_rag_hybrid/requirements.dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-step3-migrate-
+            ${{ runner.os }}-pip-step3-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -q -r apps/step3_seekdb_rag_hybrid/requirements.txt
+          pip install -q -r apps/step3_seekdb_rag_hybrid/requirements.dev.txt
+          # 安装 engram_step1
+          pip install -q -e apps/step1_logbook_postgres/scripts
+
+      - name: Start PostgreSQL for migration test
+        run: |
+          # 启动 PostgreSQL 服务
+          docker compose -p engram -f docker-compose.unified.yml up -d postgres
+          echo "等待 PostgreSQL 启动..."
+          sleep 10
+          # 等待 PostgreSQL 就绪
+          timeout 60 bash -c 'until docker compose -p engram -f docker-compose.unified.yml exec -T postgres pg_isready -U postgres > /dev/null 2>&1; do sleep 2; done'
+          echo "[OK] PostgreSQL 已就绪"
+
+      - name: Initialize test schema
+        run: |
+          # 创建测试 schema 和表
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres psql -U postgres -d engram -c "
+            CREATE SCHEMA IF NOT EXISTS step3_test;
+            CREATE EXTENSION IF NOT EXISTS vector;
+          "
+          echo "[OK] 测试 schema 已创建"
+
+      - name: Run Step3 migrate dry-run
+        id: migrate_dry_run
+        env:
+          STEP3_PG_HOST: localhost
+          STEP3_PG_PORT: "5432"
+          STEP3_PG_DB: engram
+          STEP3_PG_USER: postgres
+          STEP3_PG_PASSWORD: postgres
+        run: |
+          mkdir -p .artifacts/step3-migrate
+          echo "========================================"
+          echo "Step3 Migrate Dry-Run"
+          echo "========================================"
+          echo "配置:"
+          echo "  STEP3_PG_SCHEMA = $STEP3_PG_SCHEMA"
+          echo "  STEP3_PG_TABLE  = $STEP3_PG_TABLE"
+          echo ""
+          
+          # 执行 shared-table dry-run
+          echo "[1/2] shared-table dry-run..."
+          cd apps/step3_seekdb_rag_hybrid/scripts
+          python pgvector_collection_migrate.py shared-table --dry-run --json \
+            2>&1 | tee ../../../.artifacts/step3-migrate/shared-table-dryrun.json
+          
+          echo ""
+          echo "[2/2] table-per-collection dry-run..."
+          python pgvector_collection_migrate.py table-per-collection --dry-run --json --batch-size 1000 \
+            2>&1 | tee ../../../.artifacts/step3-migrate/table-per-collection-dryrun.json
+          
+          echo ""
+          echo "[OK] Step3 迁移 dry-run 完成"
+
+      - name: Run dual-read integration test (optional)
+        if: needs.detect-changes.outputs.has_dual_read_label == 'true' || github.event.inputs.run_dual_read_test == 'true'
+        env:
+          TEST_PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/engram
+        run: |
+          echo "========================================"
+          echo "Step3 Dual-Read Integration Test"
+          echo "========================================"
+          cd apps/step3_seekdb_rag_hybrid
+          pytest -v tests/test_dual_read_integration.py \
+            --junitxml=../../.artifacts/step3-migrate/dual-read-integration.xml \
+            --durations=20 || echo "[WARN] dual-read 测试失败，但不阻止 CI"
+
+      - name: Upload Step3 migrate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step3-migrate-dry-run-${{ github.run_number }}
+          path: |
+            .artifacts/step3-migrate/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Stop services
+        if: always()
+        run: |
+          docker compose -p engram -f docker-compose.unified.yml down || true

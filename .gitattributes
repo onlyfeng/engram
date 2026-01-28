@@ -1,0 +1,57 @@
+# ==============================================================================
+# Engram .gitattributes
+# ==============================================================================
+# 定义文件属性和 Git LFS 追踪规则
+
+# ------------------------------------------------------------------------------
+# Git LFS - 大文件追踪（安全网配置）
+# ------------------------------------------------------------------------------
+# 若未来需要将大文件纳入版本控制，自动使用 LFS
+# 注意：需先运行 `git lfs install` 启用 LFS
+# 当前 archives/ 目录及压缩文件已被 .gitignore 排除
+
+# 压缩文件
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+*.tar.bz2 filter=lfs diff=lfs merge=lfs -text
+*.tar.xz filter=lfs diff=lfs merge=lfs -text
+*.rar filter=lfs diff=lfs merge=lfs -text
+*.7z filter=lfs diff=lfs merge=lfs -text
+
+# archives 目录下所有文件
+archives/** filter=lfs diff=lfs merge=lfs -text
+
+# 二进制文件
+*.whl filter=lfs diff=lfs merge=lfs -text
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.dll filter=lfs diff=lfs merge=lfs -text
+*.so filter=lfs diff=lfs merge=lfs -text
+*.dylib filter=lfs diff=lfs merge=lfs -text
+
+# 数据库文件
+*.sqlite filter=lfs diff=lfs merge=lfs -text
+*.sqlite3 filter=lfs diff=lfs merge=lfs -text
+*.db filter=lfs diff=lfs merge=lfs -text
+
+# ------------------------------------------------------------------------------
+# 文本文件规范化
+# ------------------------------------------------------------------------------
+# 确保跨平台换行符一致性
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+
+# Windows 批处理保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
