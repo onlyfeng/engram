@@ -1692,5 +1692,356 @@ class TestBackfillMetadataContainsWatermarkInfo:
         assert "cursor_before" in metadata
 
 
+class TestBackfillWindowLimits:
+    """回填窗口限制测试 - 验证超限拒绝与边界值通过"""
+
+    def test_validate_backfill_window_within_limits(self):
+        """测试窗口在限制内时通过校验"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            BackfillWindowExceededError,
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        # 在限制范围内，不应抛出异常
+        validate_backfill_window(
+            total_window_seconds=86400,  # 1 天
+            chunk_count=10,
+            config=None,
+        )
+
+    def test_validate_backfill_window_at_boundary(self):
+        """测试窗口正好等于限制值时通过（边界值测试）"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        # 正好等于限制值，应该通过
+        validate_backfill_window(
+            total_window_seconds=DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+            chunk_count=DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+            config=None,
+        )
+
+    def test_validate_backfill_window_exceeds_window_seconds(self):
+        """测试窗口秒数超限被拒绝"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            BackfillWindowExceededError,
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+        )
+        
+        # 超过窗口秒数限制
+        with pytest.raises(BackfillWindowExceededError) as exc_info:
+            validate_backfill_window(
+                total_window_seconds=DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS + 1,
+                chunk_count=10,
+                config=None,
+            )
+        
+        # 验证错误信息包含正确的约束
+        assert "max_total_window_seconds" in str(exc_info.value)
+        assert exc_info.value.error_type == "BACKFILL_WINDOW_EXCEEDED"
+        
+        # 验证结构化错误详情
+        details = exc_info.value.details
+        assert "errors" in details
+        assert len(details["errors"]) >= 1
+        assert details["errors"][0]["constraint"] == "max_total_window_seconds"
+        assert details["errors"][0]["limit"] == DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS
+        assert details["errors"][0]["actual"] == DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS + 1
+
+    def test_validate_backfill_window_exceeds_chunks(self):
+        """测试 chunk 数量超限被拒绝"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            BackfillWindowExceededError,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        # 超过 chunk 数量限制
+        with pytest.raises(BackfillWindowExceededError) as exc_info:
+            validate_backfill_window(
+                total_window_seconds=86400,  # 1 天（在限制内）
+                chunk_count=DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST + 1,
+                config=None,
+            )
+        
+        # 验证错误信息包含正确的约束
+        assert "max_chunks_per_request" in str(exc_info.value)
+        
+        details = exc_info.value.details
+        assert len(details["errors"]) >= 1
+        
+        # 找到 chunk 限制相关的错误
+        chunk_error = next(
+            (e for e in details["errors"] if e["constraint"] == "max_chunks_per_request"),
+            None
+        )
+        assert chunk_error is not None
+        assert chunk_error["limit"] == DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST
+        assert chunk_error["actual"] == DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST + 1
+
+    def test_validate_backfill_window_exceeds_both_limits(self):
+        """测试同时超过两个限制时包含两个错误"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            BackfillWindowExceededError,
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        # 同时超过两个限制
+        with pytest.raises(BackfillWindowExceededError) as exc_info:
+            validate_backfill_window(
+                total_window_seconds=DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS + 86400,
+                chunk_count=DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST + 50,
+                config=None,
+            )
+        
+        # 验证包含两个错误
+        details = exc_info.value.details
+        assert len(details["errors"]) == 2
+        
+        constraints = {e["constraint"] for e in details["errors"]}
+        assert "max_total_window_seconds" in constraints
+        assert "max_chunks_per_request" in constraints
+
+    def test_backfill_window_exceeded_error_to_dict(self):
+        """测试 BackfillWindowExceededError.to_dict() 结构化输出"""
+        from engram_step1.config import BackfillWindowExceededError
+        
+        error = BackfillWindowExceededError(
+            "测试错误消息",
+            details={
+                "errors": [
+                    {"constraint": "max_total_window_seconds", "limit": 100, "actual": 200}
+                ],
+                "total_window_seconds": 200,
+                "chunk_count": 5,
+            }
+        )
+        
+        error_dict = error.to_dict()
+        
+        assert error_dict["error_type"] == "BACKFILL_WINDOW_EXCEEDED"
+        assert error_dict["message"] == "测试错误消息"
+        assert "details" in error_dict
+        assert error_dict["details"]["total_window_seconds"] == 200
+        assert error_dict["details"]["chunk_count"] == 5
+
+    def test_get_backfill_config_contains_new_fields(self):
+        """测试 get_backfill_config 包含新增的限制配置"""
+        from engram_step1.config import (
+            get_backfill_config,
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        config = get_backfill_config(None)
+        
+        assert "max_total_window_seconds" in config
+        assert "max_chunks_per_request" in config
+        assert config["max_total_window_seconds"] == DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS
+        assert config["max_chunks_per_request"] == DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST
+
+    @patch("engram_step1.config.get_config")
+    def test_get_backfill_config_custom_limits(self, mock_get_config):
+        """测试自定义限制配置读取"""
+        from engram_step1.config import get_backfill_config
+        
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "scm.backfill.repair_window_hours": 24,
+            "scm.backfill.cron_hint": "0 2 * * *",
+            "scm.backfill.max_concurrent_jobs": 4,
+            "scm.backfill.default_update_watermark": False,
+            "scm.backfill.max_total_window_seconds": 604800,  # 7 天
+            "scm.backfill.max_chunks_per_request": 50,
+        }.get(key, default)
+        mock_get_config.return_value = mock_config
+
+        config = get_backfill_config(mock_config)
+        
+        assert config["max_total_window_seconds"] == 604800
+        assert config["max_chunks_per_request"] == 50
+
+    @patch("engram_step1.config.get_backfill_config")
+    def test_validate_with_custom_config_limits(self, mock_get_backfill_config):
+        """测试使用自定义配置限制进行校验"""
+        from engram_step1.config import validate_backfill_window, BackfillWindowExceededError
+        
+        # 设置较小的限制
+        mock_get_backfill_config.return_value = {
+            "max_total_window_seconds": 3600,  # 1 小时
+            "max_chunks_per_request": 5,
+        }
+        
+        # 超过自定义限制
+        with pytest.raises(BackfillWindowExceededError) as exc_info:
+            validate_backfill_window(
+                total_window_seconds=7200,  # 2 小时
+                chunk_count=3,
+                config=None,
+            )
+        
+        details = exc_info.value.details
+        assert details["limits"]["max_total_window_seconds"] == 3600
+
+
+class TestBackfillWindowValidationInRunner:
+    """Runner 中回填窗口校验集成测试"""
+
+    def test_runner_context_default_values(self):
+        """测试 RunnerContext 默认值"""
+        mock_config = MagicMock()
+        repo = RepoSpec.parse("gitlab:123")
+        
+        ctx = RunnerContext(
+            config=mock_config,
+            repo=repo,
+        )
+        
+        # 验证有默认的窗口切分配置
+        assert ctx.window_chunk_hours == DEFAULT_WINDOW_CHUNK_HOURS
+        assert ctx.window_chunk_revs == DEFAULT_WINDOW_CHUNK_REVS
+
+    def test_time_window_exceeds_limit_in_split(self):
+        """测试时间窗口切分后 chunk 数量可能超限"""
+        # 31 天窗口，每 4 小时一个 chunk
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 2, 1, 0, 0, 0, tzinfo=timezone.utc)  # 31 天
+        
+        chunks = split_time_window(since, until, chunk_hours=4)
+        
+        # 31 天 = 744 小时，744 / 4 = 186 个 chunks
+        assert len(chunks) > 100  # 超过默认的 100 个限制
+        
+        # 这种情况应该被 validate_backfill_window 拒绝
+        from engram_step1.config import (
+            validate_backfill_window,
+            BackfillWindowExceededError,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        total_window_seconds = int((until - since).total_seconds())
+        
+        with pytest.raises(BackfillWindowExceededError) as exc_info:
+            validate_backfill_window(
+                total_window_seconds=total_window_seconds,
+                chunk_count=len(chunks),
+                config=None,
+            )
+        
+        # 可能同时超过 window_seconds 和 chunk_count 限制
+        assert len(exc_info.value.details["errors"]) >= 1
+
+    def test_revision_window_exceeds_limit_in_split(self):
+        """测试 revision 窗口切分后 chunk 数量可能超限"""
+        # 大范围 revision 回填
+        chunks = split_revision_window(1, 20000, chunk_size=100)
+        
+        # 20000 / 100 = 200 个 chunks
+        assert len(chunks) == 200
+        assert len(chunks) > 100  # 超过默认限制
+        
+        # 这种情况应该被校验拒绝
+        from engram_step1.config import (
+            validate_backfill_window,
+            BackfillWindowExceededError,
+        )
+        
+        # SVN 使用估算的秒数
+        estimated_seconds = len(chunks) * 100 * 3600  # 估算
+        
+        with pytest.raises(BackfillWindowExceededError):
+            validate_backfill_window(
+                total_window_seconds=estimated_seconds,
+                chunk_count=len(chunks),
+                config=None,
+            )
+
+
+class TestBackfillWindowEdgeCases:
+    """回填窗口边界情况测试"""
+
+    def test_zero_window_seconds_allowed(self):
+        """测试零秒窗口是允许的（空回填）"""
+        from engram_step1.config import validate_backfill_window
+        
+        # 零秒窗口应该通过
+        validate_backfill_window(
+            total_window_seconds=0,
+            chunk_count=0,
+            config=None,
+        )
+
+    def test_single_chunk_allowed(self):
+        """测试单个 chunk 是允许的"""
+        from engram_step1.config import validate_backfill_window
+        
+        validate_backfill_window(
+            total_window_seconds=3600,  # 1 小时
+            chunk_count=1,
+            config=None,
+        )
+
+    def test_exactly_max_window_seconds_minus_one(self):
+        """测试正好小于限制 1 秒时通过"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+        )
+        
+        validate_backfill_window(
+            total_window_seconds=DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS - 1,
+            chunk_count=10,
+            config=None,
+        )
+
+    def test_exactly_max_chunks_minus_one(self):
+        """测试正好小于 chunk 限制 1 时通过"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        validate_backfill_window(
+            total_window_seconds=86400,
+            chunk_count=DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST - 1,
+            config=None,
+        )
+
+    def test_error_details_contains_limits_info(self):
+        """测试错误详情包含限制信息"""
+        from engram_step1.config import (
+            validate_backfill_window,
+            BackfillWindowExceededError,
+            DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS,
+            DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST,
+        )
+        
+        with pytest.raises(BackfillWindowExceededError) as exc_info:
+            validate_backfill_window(
+                total_window_seconds=DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS * 2,
+                chunk_count=10,
+                config=None,
+            )
+        
+        details = exc_info.value.details
+        
+        # 验证 limits 信息
+        assert "limits" in details
+        assert details["limits"]["max_total_window_seconds"] == DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS
+        assert details["limits"]["max_chunks_per_request"] == DEFAULT_BACKFILL_MAX_CHUNKS_PER_REQUEST
+        
+        # 验证实际值
+        assert details["total_window_seconds"] == DEFAULT_BACKFILL_MAX_TOTAL_WINDOW_SECONDS * 2
+        assert details["chunk_count"] == 10
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
