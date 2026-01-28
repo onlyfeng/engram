@@ -1,0 +1,182 @@
+# Engram OpenMemory 独立部署 Docker Compose
+# 仅包含 OpenMemory + Dashboard（可选）
+#
+# 使用方法:
+#   make up-openmemory                            # 从根目录启动
+#   docker compose -f compose/openmemory.yml up -d
+#
+# 后端模式切换（通过 OM_METADATA_BACKEND 环境变量）:
+#   OM_METADATA_BACKEND=sqlite   # 使用 SQLite（默认，无需外部 PostgreSQL）
+#   OM_METADATA_BACKEND=postgres # 使用 PostgreSQL（需配置 OM_PG_* 环境变量）
+#
+# SQLite 模式（默认）:
+#   无需额外配置，数据存储在 openmemory_data volume
+#
+# PostgreSQL 模式:
+#   需要配置以下环境变量：
+#   - OM_PG_HOST: PostgreSQL 主机（如 localhost 或 postgres 服务名）
+#   - OM_PG_PORT: PostgreSQL 端口（默认 5432）
+#   - OM_PG_DB: 数据库名
+#   - OM_PG_USER: 用户名
+#   - OM_PG_PASSWORD: 密码
+#   - OM_PG_SCHEMA: Schema 名（默认 openmemory）
+#
+# 环境变量:
+#   - OM_PORT: OpenMemory 端口（默认 8080）
+#   - DASHBOARD_PORT: Dashboard 端口（默认 3000）
+#   - OM_API_KEY: API 密钥（可选）
+
+version: "3.8"
+
+# OpenMemory PostgreSQL 连接参数（仅 postgres 后端使用）
+x-pg-connection: &pg-connection
+  OM_PG_HOST: ${OM_PG_HOST:-localhost}
+  OM_PG_PORT: ${OM_PG_PORT:-5432}
+  OM_PG_DB: ${OM_PG_DB:-engram}
+  OM_PG_USER: ${OM_PG_USER:-openmemory_svc}
+  OM_PG_PASSWORD: ${OM_PG_PASSWORD:-}
+  OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+  OM_PG_SSL: ${OM_PG_SSL:-disable}
+
+services:
+  # ============================================================================
+  # OpenMemory 主服务
+  # ============================================================================
+  openmemory:
+    build:
+      context: ../libs/OpenMemory/packages/openmemory-js
+      dockerfile: Dockerfile
+    ports:
+      - "${OM_PORT:-8080}:8080"
+    environment:
+      # Core Configuration
+      OM_PORT: ${OM_PORT:-8080}
+      OM_MODE: ${OM_MODE:-standard}
+      OM_TIER: ${OM_TIER:-hybrid}
+      OM_API_KEY: ${OM_API_KEY:-}
+      OM_IDE_MODE: ${OM_IDE_MODE:-false}
+      OM_IDE_ALLOWED_ORIGINS: ${OM_IDE_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+
+      # 后端配置（sqlite 或 postgres）
+      OM_METADATA_BACKEND: ${OM_METADATA_BACKEND:-sqlite}
+      
+      # PostgreSQL 配置（仅 OM_METADATA_BACKEND=postgres 时使用）
+      <<: *pg-connection
+      OM_PG_TABLE: ${OM_PG_TABLE:-openmemory_memories}
+      OM_PG_AUTO_CREATE_DB: ${OM_PG_AUTO_CREATE_DB:-false}
+      OM_PG_AUTO_DDL: ${OM_PG_AUTO_DDL:-true}
+      OM_PG_SET_ROLE: ${OM_PG_SET_ROLE:-}
+
+      # Vector Backend
+      OM_VECTOR_BACKEND: ${OM_VECTOR_BACKEND:-${OM_METADATA_BACKEND:-sqlite}}
+      OM_VECTOR_TABLE: ${OM_VECTOR_TABLE:-openmemory_vectors}
+
+      # Embeddings Configuration
+      OM_EMBEDDINGS: ${OM_EMBEDDINGS:-synthetic}
+      OM_EMBEDDING_FALLBACK: ${OM_EMBEDDING_FALLBACK:-synthetic}
+      OM_EMBED_MODE: ${OM_EMBED_MODE:-simple}
+      OM_VEC_DIM: ${OM_VEC_DIM:-256}
+
+      # OpenAI Provider
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OM_OPENAI_API_KEY: ${OM_OPENAI_API_KEY:-}
+      OM_OPENAI_BASE_URL: ${OM_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OM_OPENAI_MODEL: ${OM_OPENAI_MODEL:-}
+
+      # Gemini Provider
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OM_GEMINI_API_KEY: ${OM_GEMINI_API_KEY:-}
+
+      # Ollama Provider
+      OLLAMA_URL: ${OLLAMA_URL:-http://localhost:11434}
+      OM_OLLAMA_URL: ${OM_OLLAMA_URL:-http://localhost:11434}
+
+      # Memory & Search
+      OM_MIN_SCORE: ${OM_MIN_SCORE:-0.3}
+      OM_MAX_PAYLOAD_SIZE: ${OM_MAX_PAYLOAD_SIZE:-1000000}
+
+      # Auto Reflection
+      OM_AUTO_REFLECT: ${OM_AUTO_REFLECT:-false}
+      OM_REFLECT_INTERVAL: ${OM_REFLECT_INTERVAL:-10}
+      OM_REFLECT_MIN_MEMORIES: ${OM_REFLECT_MIN_MEMORIES:-20}
+
+      # User Summaries
+      OM_USER_SUMMARY_INTERVAL: ${OM_USER_SUMMARY_INTERVAL:-30}
+      OM_USE_SUMMARY_ONLY: ${OM_USE_SUMMARY_ONLY:-true}
+      OM_SUMMARY_MAX_LENGTH: ${OM_SUMMARY_MAX_LENGTH:-200}
+
+      # Decay System
+      OM_DECAY_LAMBDA: ${OM_DECAY_LAMBDA:-0.02}
+      OM_DECAY_INTERVAL_MINUTES: ${OM_DECAY_INTERVAL_MINUTES:-1440}
+      OM_DECAY_RATIO: ${OM_DECAY_RATIO:-0.03}
+      OM_DECAY_REINFORCE_ON_QUERY: ${OM_DECAY_REINFORCE_ON_QUERY:-true}
+    volumes:
+      - openmemory_data:/data
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:8080/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - openmemory-net
+
+  # ============================================================================
+  # OpenMemory 迁移 (one-shot)
+  # 仅在 OM_METADATA_BACKEND=postgres 时需要
+  # 启用方式: --profile migrate 或 COMPOSE_PROFILES=migrate
+  # ============================================================================
+  openmemory_migrate:
+    build:
+      context: ../libs/OpenMemory/packages/openmemory-js
+      dockerfile: Dockerfile
+      target: builder
+    profiles:
+      - migrate
+    working_dir: /app
+    environment:
+      OM_METADATA_BACKEND: postgres
+      <<: *pg-connection
+      OM_PG_AUTO_CREATE_DB: ${OM_PG_AUTO_CREATE_DB:-false}
+      OM_PG_SET_ROLE: ${OM_PG_SET_ROLE_MIGRATE:-openmemory_migrator}
+    command: ["npm", "run", "migrate"]
+    networks:
+      - openmemory-net
+    restart: "no"
+
+  # ============================================================================
+  # Dashboard（可选，默认不启动）
+  # 启用方式: --profile dashboard 或 COMPOSE_PROFILES=dashboard
+  # ============================================================================
+  dashboard:
+    profiles:
+      - dashboard
+    build:
+      context: ../libs/OpenMemory/dashboard
+      dockerfile: Dockerfile
+    ports:
+      - '${DASHBOARD_PORT:-3000}:3000'
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:${OM_PORT:-8080}
+      NEXT_PUBLIC_API_KEY: ${OM_API_KEY:-}
+    depends_on:
+      openmemory:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - openmemory-net
+
+networks:
+  openmemory-net:
+    driver: bridge
+
+volumes:
+  openmemory_data:
+    driver: local

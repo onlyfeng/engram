@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "OpenMemory.upstream.lock.json",
+  "description": "Engram 项目对 OpenMemory 上游依赖的锁定与追踪文件，用于升级同步、补丁管理和回滚",
+  "upstream_url": "https://github.com/CaviraOSS/OpenMemory",
+  "upstream_ref": "v1.3.0",
+  "upstream_ref_type": "tag",
+  "upstream_commit_sha": null,
+  "upstream_commit_sha_note": "由 openmemory_sync.py fetch/sync 命令自动写入，格式: 40 位 hex",
+  "upstream_commit_date": null,
+  "upstream_commit_date_note": "由 openmemory_sync.py fetch/sync 命令自动写入，格式: ISO 8601",
+  "upstream_note": "基线版本通过代码特征推断为 1.3.x，无完整 git 历史可用",
+  "archive_info": {
+    "sha256": null,
+    "sha256_note": "由 openmemory_sync.py fetch/sync 命令自动写入，GitHub archive 的 SHA256 校验和",
+    "ref": null,
+    "ref_type": null
+  },
+  "local_patchset_id": "engram-patches-20260128-001",
+  "local_patchset_version": "1.0.0",
+  "patched_files": [
+    {
+      "path": "libs/OpenMemory/packages/openmemory-js/src/core/migrate.ts",
+      "patch_count": 9,
+      "categories": {
+        "A_must_keep": 6,
+        "B_upstreamable": 3,
+        "C_removable": 0
+      },
+      "summary": "数据库名称校验、Schema 安全预检、时态知识图谱表结构、RLS 角色支持"
+    },
+    {
+      "path": "libs/OpenMemory/packages/openmemory-js/src/core/db.ts",
+      "patch_count": 7,
+      "categories": {
+        "A_must_keep": 4,
+        "B_upstreamable": 2,
+        "C_removable": 1
+      },
+      "summary": "安全校验函数、RLS 权限分离、时态表结构、Valkey 向量后端"
+    },
+    {
+      "path": "libs/OpenMemory/packages/openmemory-js/tests/test_multi_schema.ts",
+      "patch_count": 4,
+      "categories": {
+        "A_must_keep": 3,
+        "B_upstreamable": 1,
+        "C_removable": 0
+      },
+      "summary": "多租户隔离测试、迁移幂等性测试、Step1 边界隔离测试"
+    }
+  ],
+  "components": {
+    "openmemory_js_path": "libs/OpenMemory/packages/openmemory-js",
+    "dashboard_path": "libs/OpenMemory/dashboard",
+    "vscode_extension_path": "libs/OpenMemory/apps/vscode-extension",
+    "tools_path": "libs/OpenMemory/tools",
+    "docs_path": "libs/OpenMemory/docs"
+  },
+  "patches_manifest": {
+    "file": "openmemory_patches.json",
+    "description": "详细补丁清单，包含每个修改点的位置、分类、原因和上游化潜力评估"
+  },
+  "last_sync_at": "2026-01-29T01:14:49.339667Z",
+  "last_sync_by": "engram-sync-tool",
+  "sync_method": "manual",
+  "engram_required_envs": [
+    {
+      "name": "OM_PG_SCHEMA",
+      "required": true,
+      "constraint": "!= 'public'",
+      "description": "多租户隔离必须使用非 public schema"
+    },
+    {
+      "name": "OM_PG_AUTO_CREATE_DB",
+      "required": false,
+      "default": "false",
+      "description": "是否自动创建数据库（开发环境可启用）"
+    },
+    {
+      "name": "OM_PG_AUTO_DDL",
+      "required": false,
+      "default": "false",
+      "description": "是否自动执行 DDL（生产环境应禁用）"
+    },
+    {
+      "name": "OM_PG_SET_ROLE",
+      "required": false,
+      "default": null,
+      "description": "连接后切换的 PostgreSQL 角色（用于 RLS 权限隔离）"
+    },
+    {
+      "name": "OM_TEMPORAL_ENABLED",
+      "required": false,
+      "default": "true",
+      "description": "是否启用时态知识图谱功能"
+    }
+  ],
+  "upgrade_checklist": [
+    "1. 备份当前 libs/OpenMemory 目录",
+    "2. 检查上游 CHANGELOG 中的 breaking changes",
+    "3. 拉取新版本到临时目录",
+    "4. 对比 patched_files 中的文件，识别冲突",
+    "5. 应用 openmemory_patches.json 中的 Category A 补丁",
+    "6. 运行 test_multi_schema.ts 验证隔离性",
+    "7. 更新 upstream_ref 和 last_sync_at",
+    "8. 更新 local_patchset_id 版本号"
+  ],
+  "rollback_procedure": [
+    "1. 检查 archives/ 目录中的备份",
+    "2. 恢复 libs/OpenMemory 到上一版本",
+    "3. 回滚 upstream_ref 和 last_sync_at",
+    "4. 验证系统功能正常"
+  ],
+  "metadata": {
+    "format_version": "1.0.0",
+    "created_at": "2026-01-28T00:00:00Z",
+    "created_by": "engram-task-executor",
+    "tool_compatible": [
+      "engram-sync",
+      "git-patch",
+      "diff3"
+    ]
+  },
+  "artifacts": {
+    "description": "上游源包和构建产物的校验信息",
+    "upstream_source": {
+      "path": "libs/OpenMemory",
+      "sha256": null,
+      "sha256_note": "上游 tarball/zip 整体 SHA256，由 fetch 命令计算写入"
+    }
+  },
+  "checksums": {
+    "description": "补丁文件的 SHA256 校验和，用于验证补丁落地状态",
+    "patched_files": {
+      "libs/OpenMemory/packages/openmemory-js/src/core/migrate.ts": {
+        "after": "0ad1e89c081bf40e2e7b529711d898d1e7be0125ce6a0deeaf24774bae0cdfdc",
+        "base": null,
+        "base_note": "上游原始文件 SHA256，升级时由 fetch 命令写入"
+      },
+      "libs/OpenMemory/packages/openmemory-js/src/core/db.ts": {
+        "after": "98466042950364393969ee6c4f64db8da9bbf202d8a94916af39ea4bf92df8d8",
+        "base": null,
+        "base_note": "上游原始文件 SHA256，升级时由 fetch 命令写入"
+      },
+      "libs/OpenMemory/packages/openmemory-js/tests/test_multi_schema.ts": {
+        "after": "f0ca30adf6f145058903016e8bc4c93801d0e15ca8275296e1e9e4000eae5c62",
+        "base": null,
+        "base_note": "上游原始文件 SHA256，升级时由 fetch 命令写入"
+      }
+    }
+  },
+  "upgrade_policy": {
+    "description": "升级策略与规则",
+    "check_frequency": "weekly",
+    "check_frequency_note": "建议每周检查上游是否有新版本",
+    "merge_frequency": "monthly",
+    "merge_frequency_note": "正常情况下每月合并一次上游更新",
+    "security_exception": {
+      "enabled": true,
+      "description": "安全漏洞修复例外：CVE 或安全公告发布后 48 小时内必须评估并决定是否紧急升级",
+      "max_response_hours": 48
+    },
+    "freeze_rules": {
+      "description": "升级冻结规则",
+      "conditions": [
+        "统一栈迁移进行中（unified_stack_migration_in_progress=true）",
+        "重大版本发布前 7 天冻结期",
+        "关键补丁（Category A）与上游存在不可调和冲突时"
+      ],
+      "override_authority": "tech-lead",
+      "override_authority_note": "冻结期间如需紧急升级，需技术负责人批准"
+    },
+    "conflict_resolution": {
+      "description": "升级冲突处理策略",
+      "priority_order": [
+        "1. 安全修复优先",
+        "2. Category A 补丁必须保留",
+        "3. 尝试将 Category B 补丁上游化",
+        "4. Category C 补丁可按需调整或移除"
+      ]
+    }
+  }
+}

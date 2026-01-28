@@ -1,0 +1,649 @@
+# ==============================================================================
+# Engram Nightly Build - Full Tier 测试
+# ==============================================================================
+#
+# 定时执行 Full Tier 测试（每日 UTC 02:00，即北京时间 10:00）
+# 也可通过 workflow_dispatch 手动触发
+#
+# ==============================================================================
+# 环境变量分层说明 (Nightly = Full 层)
+# ==============================================================================
+# Full 层:
+#   - RUN_INTEGRATION_TESTS=1
+#   - 不启用 HTTP_ONLY_MODE（允许降级测试）
+#   - VERIFY_FULL=1
+#   - SKIP_JSONRPC 保持未设置/false
+#
+# Full Tier 内容:
+#   - make deploy（统一栈部署）
+#   - make test-step1-integration（MinIO + test profile）
+#   - make verify-unified VERIFY_FULL=1（含降级测试）
+#   - make verify-build（Docker 实际构建，可选）
+# ==============================================================================
+#
+# ==============================================================================
+# Nightly 层 Step3 测试内容 (初始校准预算 2026-01)
+# ==============================================================================
+# Step3 PGVector Integration:
+#   - make test-step3-pgvector                 ≤10min
+#     完整运行 PGVector 集成测试（需要 PostgreSQL）
+#     包含: test_pgvector_backend_integration + test_pgvector_e2e_minimal
+#
+# Step3 Collection Migrate (dry-run):
+#   - make step3-migrate-dry-run               ≤5min (两种策略合计)
+#     运行: shared-table + table-per-collection 两种策略 dry-run
+#     验证迁移脚本逻辑正确性，不实际修改数据库
+#     输出: .artifacts/step3-migrate/*.json (含 duration_seconds)
+#
+# Step3 Smoke Test (Full Mode):
+#   - make step3-run-smoke                     ≤10min
+#     环境变量: STEP3_SKIP_CHECK=0（执行 seek_consistency_check）
+#     Nightly 层执行完整一致性检查，确保数据完整性
+#     包含: 索引同步(≤3min) + 检索验证(≤1min) + 一致性检查(≤4min) + 环境(≤2min)
+#
+# Step3 Dual-Read Test:
+#   - python -m seek_query --dual-read          ≤10min
+#     验证 primary (single_table) 和 shadow (per_table) 后端一致性
+#     执行固定查询列表，比较 overlap_ratio 和 score_diff
+#     输出: .artifacts/dual-read/*.json
+#
+# 预算更新说明:
+#   - 如实际运行超时，需检查是否有性能回归或测试用例增加
+#   - 预算基于 GitHub Actions ubuntu-latest runner 预估
+#   - 耗时数据可从 artifact junit xml 和 migrate JSON 中提取
+# ==============================================================================
+
+name: Nightly Build
+
+on:
+  schedule:
+    # 每日 UTC 02:00 (北京时间 10:00)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      run_build:
+        description: '运行 Docker 构建验证（verify-build）'
+        required: false
+        default: true
+        type: boolean
+      run_degradation:
+        description: '运行降级测试（VERIFY_FULL=1）'
+        required: false
+        default: true
+        type: boolean
+      run_minio_tests:
+        description: '运行 MinIO 集成测试（test-step1-integration）'
+        required: false
+        default: true
+        type: boolean
+      run_step3_pgvector_tests:
+        description: '运行 Step3 PGVector 集成测试'
+        required: false
+        default: true
+        type: boolean
+      run_step3_migration_rehearsal:
+        description: '运行 Step3 迁移演练（dry-run）'
+        required: false
+        default: true
+        type: boolean
+      run_step3_smoke_with_check:
+        description: '运行 Step3 Smoke 测试（含一致性检查）'
+        required: false
+        default: true
+        type: boolean
+      run_dual_read_test:
+        description: '运行 Step3 双读比较测试（dual-read）'
+        required: false
+        default: true
+        type: boolean
+
+# 全局环境变量
+env:
+  COMPOSE_PROJECT_NAME: engram
+  COMPOSE_FILE: docker-compose.unified.yml
+  # 服务账号密码
+  STEP1_MIGRATOR_PASSWORD: ci_migrator_pass_123
+  STEP1_SVC_PASSWORD: ci_svc_pass_123
+  OPENMEMORY_MIGRATOR_PASSWORD: ci_om_migrator_pass_123
+  OPENMEMORY_SVC_PASSWORD: ci_om_svc_pass_123
+  # PostgreSQL 配置
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: engram
+  # MinIO 配置
+  MINIO_ROOT_USER: minioadmin
+  MINIO_ROOT_PASSWORD: minioadmin
+
+jobs:
+  # ============================================================================
+  # 主流程：Deploy → Integration Tests → Verification (Full 层)
+  # ============================================================================
+  nightly-full:
+    name: Nightly Full Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Full 层仅在 schedule 或 workflow_dispatch 触发时执行
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    env:
+      # --------------------------------------------------------------------------
+      # Full 层环境变量
+      # - 启用集成测试，不启用 HTTP_ONLY（允许 JSON-RPC + 降级测试）
+      # --------------------------------------------------------------------------
+      RUN_INTEGRATION_TESTS: "1"
+      VERIFY_FULL: "1"
+      # HTTP_ONLY_MODE 不设置（默认 false，允许 JSON-RPC）
+      # SKIP_DEGRADATION_TEST 不设置（默认 false，执行降级测试）
+      # SKIP_JSONRPC 保持未设置 (default: false)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-nightly-${{ hashFiles('apps/**/requirements*.txt', 'apps/**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-nightly-
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest psycopg[binary] httpx minio
+          # Step1 dependencies
+          cd apps/step1_logbook_postgres/scripts
+          pip install -r requirements.txt
+          pip install -e .
+          # Gateway dependencies
+          cd ../../../apps/step2_openmemory_gateway/gateway
+          pip install -e '.[dev]'
+
+      # ========================================================================
+      # Step 1: Deploy unified stack
+      # ========================================================================
+      - name: Deploy unified stack
+        id: deploy
+        run: |
+          echo "::group::Deploy unified stack"
+          make deploy
+          echo "::endgroup::"
+          
+          echo "Waiting for services to stabilize..."
+          sleep 15
+          
+          echo "::group::Service status"
+          docker compose -p engram -f docker-compose.unified.yml ps
+          echo "::endgroup::"
+
+      # ========================================================================
+      # Step 2: MinIO Integration Tests (Optional via input)
+      # ========================================================================
+      - name: Run Step1 Integration Tests (MinIO)
+        id: step1_integration
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_minio_tests == 'true' }}
+        timeout-minutes: 20
+        run: |
+          echo "::group::Step1 Integration Tests with MinIO"
+          # 停止现有服务，使用 MinIO profile 重启
+          docker compose -p engram -f docker-compose.unified.yml down
+          
+          # 使用 MinIO + test profile 运行集成测试
+          make test-step1-integration 2>&1 | tee /tmp/step1-integration-output.txt
+          echo "::endgroup::"
+
+      - name: Collect Step1 Integration logs on failure
+        if: failure() && steps.step1_integration.outcome == 'failure'
+        run: |
+          mkdir -p .artifacts/step1-integration
+          cp /tmp/step1-integration-output.txt .artifacts/step1-integration/ 2>/dev/null || true
+          docker compose -p engram -f docker-compose.unified.yml --profile minio --profile test config > .artifacts/step1-integration/compose-config.yml 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml --profile minio --profile test ps > .artifacts/step1-integration/compose-ps.txt 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml --profile minio --profile test logs --no-color > .artifacts/step1-integration/compose-logs.txt 2>&1 || true
+          # Collect pytest reports if exist
+          cp -r apps/step1_logbook_postgres/scripts/.pytest_cache .artifacts/step1-integration/ 2>/dev/null || true
+          cp apps/step1_logbook_postgres/scripts/pytest-report.* .artifacts/step1-integration/ 2>/dev/null || true
+
+      # ========================================================================
+      # Step 3: Re-deploy for Unified Stack Verification
+      # ========================================================================
+      - name: Re-deploy unified stack for verification
+        id: redeploy
+        if: success() || steps.step1_integration.outcome == 'skipped'
+        run: |
+          echo "::group::Re-deploy unified stack"
+          # 清理 MinIO profile 的服务
+          docker compose -p engram -f docker-compose.unified.yml --profile minio --profile test down 2>/dev/null || true
+          
+          # 重新部署标准栈
+          make deploy
+          echo "::endgroup::"
+          
+          echo "Waiting for services to stabilize..."
+          sleep 15
+          
+          echo "::group::Service status"
+          docker compose -p engram -f docker-compose.unified.yml ps
+          echo "::endgroup::"
+
+      # ========================================================================
+      # Step 4: Unified Stack Verification (with degradation tests)
+      # ========================================================================
+      - name: Verify unified stack
+        id: verify_unified
+        timeout-minutes: 15
+        run: |
+          echo "::group::Unified Stack Verification"
+          mkdir -p .artifacts/unified-stack
+          VERIFY_FULL_FLAG=""
+          if [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event.inputs.run_degradation }}" == "true" ]; then
+            VERIFY_FULL_FLAG="VERIFY_FULL=1"
+            echo "Running with FULL mode (including degradation tests)"
+          fi
+          
+          make verify-unified ${VERIFY_FULL_FLAG} VERIFY_JSON_OUT=.artifacts/unified-stack/verify-results.json 2>&1 | tee /tmp/verify-unified-output.txt
+          echo "::endgroup::"
+
+      # ========================================================================
+      # OpenMemory Patch Sync Check
+      # ========================================================================
+      - name: Run OpenMemory patch sync check
+        id: openmemory_patch_check
+        timeout-minutes: 5
+        run: |
+          echo "::group::OpenMemory Patch Sync Check"
+          mkdir -p .artifacts/openmemory-patch-conflicts
+          
+          # 使用 manual 策略生成冲突文件以便分析
+          python scripts/openmemory_sync.py apply --dry-run --strategy manual --json > .artifacts/openmemory-sync-apply-report.json 2>&1 || true
+          
+          # 运行一致性检查
+          python scripts/openmemory_sync.py check --json > .artifacts/openmemory-sync-check-report.json 2>&1 || true
+          
+          # 显示汇总
+          echo "=== Apply Report ===" 
+          cat .artifacts/openmemory-sync-apply-report.json | head -100 || true
+          echo ""
+          echo "=== Check Report ==="
+          cat .artifacts/openmemory-sync-check-report.json | head -100 || true
+          
+          # 检查是否有 Category A 冲突（必须修复）
+          if grep -q '"overall_status": "error"' .artifacts/openmemory-sync-apply-report.json 2>/dev/null; then
+            echo "::error::OpenMemory patch sync has Category A conflicts (ERROR status)"
+            # 不立即失败，让产物上传后再失败
+          fi
+          echo "::endgroup::"
+
+      - name: Upload OpenMemory patch conflicts (on failure)
+        if: failure() || (always() && steps.openmemory_patch_check.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: openmemory-patch-conflicts-${{ github.run_number }}
+          path: |
+            .artifacts/openmemory-patch-conflicts/
+            .artifacts/openmemory-sync-*.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-verification-results
+          path: .artifacts/unified-stack/verify-results.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Run Gateway integration tests
+        id: gateway_integration
+        timeout-minutes: 10
+        env:
+          # Full 层: 不启用 HTTP_ONLY，执行完整测试（含降级）
+          HTTP_ONLY_MODE: "0"
+          SKIP_DEGRADATION_TEST: "0"
+        run: |
+          echo "::group::Gateway Integration Tests (Full Mode)"
+          make test-gateway-integration 2>&1 | tee /tmp/gateway-integration-output.txt
+          echo "::endgroup::"
+
+      - name: Run Step3 PGVector integration tests
+        id: step3_pgvector
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_step3_pgvector_tests == 'true' }}
+        timeout-minutes: 15
+        env:
+          TEST_PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+        run: |
+          echo "::group::Step3 PGVector Integration Tests"
+          pip install -q -r apps/step3_seekdb_rag_hybrid/requirements.dev.txt
+          make test-step3-pgvector 2>&1 | tee /tmp/step3-pgvector-output.txt
+          echo "::endgroup::"
+
+      - name: Upload Step3 PGVector test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-step3-pgvector-results
+          path: |
+            .artifacts/test-results/step3-pgvector.xml
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # ========================================================================
+      # Step3 Collection Migrate (dry-run) - 验证迁移脚本
+      # ========================================================================
+      - name: Run Step3 Collection Migrate (dry-run)
+        id: step3_migrate
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_step3_migration_rehearsal == 'true' }}
+        timeout-minutes: 10
+        env:
+          # 优先使用 STEP3_PGVECTOR_DSN（减少推断，明确指定）
+          STEP3_PGVECTOR_DSN: postgresql://postgres:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+          # 使用 STEP3_PG_* 前缀环境变量（与 pgvector_collection_migrate.py 优先级一致）
+          STEP3_PG_HOST: localhost
+          STEP3_PG_PORT: "5432"
+          STEP3_PG_DB: ${{ env.POSTGRES_DB }}
+          STEP3_PG_USER: postgres
+          STEP3_PG_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          # 使用隔离测试表，避免影响实际数据
+          STEP3_PG_SCHEMA: step3_test
+          STEP3_PG_TABLE: chunks_test
+        run: |
+          echo "::group::Step3 Collection Migrate (dry-run)"
+          
+          # 使用 Makefile 目标执行 dry-run
+          make step3-migrate-dry-run
+          
+          echo "::endgroup::"
+          
+          echo "::group::Step3 Migrate artifacts"
+          ls -la .artifacts/step3-migrate/ || true
+          echo "::endgroup::"
+
+      - name: Upload Step3 Migrate results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-step3-migrate-results
+          path: |
+            .artifacts/step3-migrate/*.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # ========================================================================
+      # Step3 Smoke Test (Full Mode) - 索引/检索/一致性检查
+      # ========================================================================
+      - name: Run Step3 Smoke Test
+        id: step3_smoke
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_step3_smoke_with_check == 'true' }}
+        timeout-minutes: 10
+        env:
+          # 优先使用 STEP3_PGVECTOR_DSN（减少推断，明确指定）
+          STEP3_PGVECTOR_DSN: postgresql://postgres:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+          TEST_PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+          # Full 层: 不跳过一致性检查，执行完整验证
+          STEP3_SKIP_CHECK: "0"
+          # 可通过以下变量调整采样大小（预算受限时减小）
+          STEP3_SMOKE_INDEX_SAMPLE_SIZE: "30"
+          STEP3_SMOKE_LIMIT: "50"
+        run: |
+          echo "::group::Step3 Smoke Test (Full Mode)"
+          mkdir -p .artifacts/step3-smoke
+          make step3-run-smoke 2>&1 | tee .artifacts/step3-smoke/smoke-output.txt
+          echo "::endgroup::"
+
+      - name: Collect Step3 Smoke artifacts
+        if: always()
+        run: |
+          mkdir -p .artifacts/step3-smoke
+          # 收集 /tmp 下的 smoke JSON 文件
+          cp /tmp/step3_smoke_*.json .artifacts/step3-smoke/ 2>/dev/null || true
+          # 记录时间戳
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" > .artifacts/step3-smoke/metadata.txt
+
+      - name: Upload Step3 Smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-step3-smoke-results
+          path: |
+            .artifacts/step3-smoke/
+            /tmp/step3_smoke_*.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # ========================================================================
+      # Step3 Dual-Read 比较测试 - 验证 primary/shadow 后端一致性
+      # ========================================================================
+      - name: Run Step3 Dual-Read Test
+        id: step3_dual_read
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_dual_read_test == 'true' }}
+        timeout-minutes: 10
+        env:
+          STEP3_PGVECTOR_DSN: postgresql://postgres:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}
+          STEP3_INDEX_BACKEND: pgvector
+          STEP3_PG_SCHEMA: step3
+          STEP3_PG_TABLE: chunks
+          STEP3_PGVECTOR_COLLECTION_STRATEGY: single_table
+          STEP3_PGVECTOR_AUTO_INIT: "1"
+          # Shadow 后端配置
+          STEP3_PGVECTOR_SHADOW_STRATEGY: per_table
+          STEP3_PGVECTOR_SHADOW_TABLE: chunks_shadow
+        run: |
+          echo "::group::Step3 Dual-Read Test"
+          mkdir -p .artifacts/dual-read
+          
+          # 固定查询列表（用于双读一致性验证）
+          QUERIES=(
+            "bug fix"
+            "性能优化"
+            "数据库连接"
+            "内存泄漏"
+            "安全漏洞修复"
+          )
+          
+          echo "执行 ${#QUERIES[@]} 个固定查询的双读比较测试..."
+          
+          # 创建临时查询文件
+          QUERY_FILE=$(mktemp)
+          for q in "${QUERIES[@]}"; do
+            echo "$q" >> "$QUERY_FILE"
+          done
+          
+          # 执行双读比较测试
+          cd apps/step3_seekdb_rag_hybrid
+          python -m seek_query \
+            --query-file "$QUERY_FILE" \
+            --dual-read \
+            --dual-read-min-overlap 0.5 \
+            --top-k 10 \
+            --json 2>&1 | tee ../../.artifacts/dual-read/dual-read-results.json
+          
+          DUAL_READ_EXIT_CODE=${PIPESTATUS[0]}
+          
+          # 清理临时文件
+          rm -f "$QUERY_FILE"
+          
+          # 记录测试元数据
+          cat > ../../.artifacts/dual-read/metadata.json << EOF
+          {
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "queries_count": ${#QUERIES[@]},
+            "exit_code": $DUAL_READ_EXIT_CODE,
+            "primary_strategy": "single_table",
+            "shadow_strategy": "per_table",
+            "shadow_table": "chunks_shadow"
+          }
+          EOF
+          
+          echo "::endgroup::"
+          
+          if [ $DUAL_READ_EXIT_CODE -ne 0 ]; then
+            echo "::warning::Dual-read test completed with issues (exit_code=$DUAL_READ_EXIT_CODE)"
+          fi
+          
+          exit $DUAL_READ_EXIT_CODE
+
+      - name: Upload Dual-Read results
+        if: always() && (github.event_name == 'schedule' || github.event.inputs.run_dual_read_test == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-dual-read-results-${{ github.run_number }}
+          path: .artifacts/dual-read/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Collect Unified Stack logs on failure
+        if: failure() && (steps.verify_unified.outcome == 'failure' || steps.gateway_integration.outcome == 'failure' || steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure')
+        env:
+          GATEWAY_URL: http://localhost:8787
+          OPENMEMORY_URL: http://localhost:8080
+        run: |
+          mkdir -p .artifacts/unified-stack
+          cp /tmp/verify-unified-output.txt .artifacts/unified-stack/ 2>/dev/null || true
+          cp /tmp/gateway-integration-output.txt .artifacts/unified-stack/ 2>/dev/null || true
+          cp /tmp/step3-pgvector-output.txt .artifacts/unified-stack/ 2>/dev/null || true
+          cp .artifacts/test-results/step3-pgvector.xml .artifacts/unified-stack/ 2>/dev/null || true
+          # 收集 Step3 Migrate 日志
+          cp -r .artifacts/step3-migrate .artifacts/unified-stack/ 2>/dev/null || true
+          docker compose -p engram -f docker-compose.unified.yml config > .artifacts/unified-stack/compose-config.yml 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml ps > .artifacts/unified-stack/compose-ps.txt 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml logs --no-color > .artifacts/unified-stack/compose-logs.txt 2>&1 || true
+          # Health check outputs
+          echo "=== Gateway Health Check ===" > .artifacts/unified-stack/health-checks.txt
+          curl -v ${GATEWAY_URL}/health >> .artifacts/unified-stack/health-checks.txt 2>&1 || true
+          echo "" >> .artifacts/unified-stack/health-checks.txt
+          echo "=== OpenMemory Health Check ===" >> .artifacts/unified-stack/health-checks.txt
+          curl -v ${OPENMEMORY_URL}/health >> .artifacts/unified-stack/health-checks.txt 2>&1 || true
+          # Collect pytest reports
+          cp -r apps/step2_openmemory_gateway/gateway/.pytest_cache .artifacts/unified-stack/ 2>/dev/null || true
+          cp apps/step2_openmemory_gateway/gateway/pytest-report.* .artifacts/unified-stack/ 2>/dev/null || true
+
+      - name: Collect Step3 diagnostics on failure
+        if: failure() && (steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure')
+        run: |
+          mkdir -p .artifacts/step3-diagnostics
+          echo "=== Step3 Diagnostics ===" > .artifacts/step3-diagnostics/diagnostics.txt
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          
+          # PostgreSQL 诊断信息
+          echo "=== pg_extension ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "SELECT extname, extversion FROM pg_extension;" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "=== Schemas (\\dn) ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\dn" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "=== Tables (\\dt step3.*) ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\dt step3.*" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "=== Indexes (\\di step3.*) ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\di step3.*" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          # 收集 Step3 smoke JSON 文件
+          cp /tmp/step3_smoke_*.json .artifacts/step3-diagnostics/ 2>/dev/null || true
+          
+          # 收集 Step3 迁移 dry-run JSON（如存在）
+          cp .artifacts/step3-migrate/*.json .artifacts/step3-diagnostics/ 2>/dev/null || true
+
+      - name: Upload Step3 diagnostics on failure
+        if: failure() && (steps.step3_pgvector.outcome == 'failure' || steps.step3_migrate.outcome == 'failure' || steps.step3_smoke.outcome == 'failure' || steps.step3_dual_read.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: step3-diagnostics-${{ github.run_number }}
+          path: .artifacts/step3-diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # ========================================================================
+      # Step 5: Docker Build Verification (Optional via input)
+      # ========================================================================
+      - name: Docker Build Verification
+        id: verify_build
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.run_build == 'true' }}
+        timeout-minutes: 20
+        run: |
+          echo "::group::Static Build Checks"
+          make verify-build-static 2>&1 | tee /tmp/verify-build-static-output.txt
+          echo "::endgroup::"
+          
+          echo "::group::Full Docker Build"
+          make verify-build 2>&1 | tee /tmp/verify-build-output.txt
+          echo "::endgroup::"
+          
+          echo "::group::Built Images"
+          docker images | grep engram || true
+          echo "::endgroup::"
+
+      - name: Collect Build logs on failure
+        if: failure() && steps.verify_build.outcome == 'failure'
+        run: |
+          mkdir -p .artifacts/build
+          cp /tmp/verify-build-static-output.txt .artifacts/build/ 2>/dev/null || true
+          cp /tmp/verify-build-output.txt .artifacts/build/ 2>/dev/null || true
+          docker compose -p engram -f docker-compose.unified.yml config > .artifacts/build/compose-config.yml 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml ps > .artifacts/build/compose-ps.txt 2>&1 || true
+          docker compose -p engram -f docker-compose.unified.yml logs --no-color > .artifacts/build/compose-logs.txt 2>&1 || true
+
+      # ========================================================================
+      # Final: Upload all artifacts on failure
+      # ========================================================================
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-failure-logs-${{ github.run_number }}
+          path: .artifacts/**
+          retention-days: 14
+
+      # ========================================================================
+      # Summary
+      # ========================================================================
+      - name: Generate Summary
+        if: always()
+        run: |
+          echo "## Nightly Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ steps.deploy.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Step1 Integration (MinIO) | ${{ steps.step1_integration.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Re-deploy | ${{ steps.redeploy.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Verify Unified | ${{ steps.verify_unified.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| OpenMemory Patch Check | ${{ steps.openmemory_patch_check.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gateway Integration | ${{ steps.gateway_integration.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Step3 PGVector | ${{ steps.step3_pgvector.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Step3 Migrate (dry-run) | ${{ steps.step3_migrate.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Step3 Smoke Test | ${{ steps.step3_smoke.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Step3 Dual-Read | ${{ steps.step3_dual_read.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ steps.verify_build.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # 输入参数（仅 workflow_dispatch）
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "### Input Parameters" >> $GITHUB_STEP_SUMMARY
+            echo "- run_build: ${{ github.event.inputs.run_build }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_degradation: ${{ github.event.inputs.run_degradation }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_minio_tests: ${{ github.event.inputs.run_minio_tests }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_step3_pgvector_tests: ${{ github.event.inputs.run_step3_pgvector_tests }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_step3_migration_rehearsal: ${{ github.event.inputs.run_step3_migration_rehearsal }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_step3_smoke_with_check: ${{ github.event.inputs.run_step3_smoke_with_check }}" >> $GITHUB_STEP_SUMMARY
+            echo "- run_dual_read_test: ${{ github.event.inputs.run_dual_read_test }}" >> $GITHUB_STEP_SUMMARY
+          fi

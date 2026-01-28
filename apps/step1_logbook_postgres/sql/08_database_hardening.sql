@@ -1,0 +1,71 @@
+-- ============================================================
+-- Engram Step1: 数据库级权限硬化脚本
+-- ============================================================
+--
+-- 本脚本用于收紧数据库级别的权限配置，阻止 PUBLIC 默认权限滥用。
+--
+-- 注意：本脚本中使用 current_database() 动态获取数据库名，
+-- 但某些语句（如 REVOKE/GRANT ON DATABASE）不支持动态 SQL，
+-- 需要由 db_bootstrap.py 通过 Python 动态构建并执行。
+--
+-- 本文件仅作为文档和参考，实际执行由 db_bootstrap.py 完成。
+--
+-- 硬化措施：
+--   1. REVOKE CREATE, TEMP ON DATABASE <db> FROM PUBLIC
+--      - 禁止未授权用户创建临时对象或使用临时连接
+--   2. GRANT CONNECT ON DATABASE <db> TO 登录角色
+--      - 仅授权特定登录角色连接数据库
+--   3. GRANT CREATE, TEMP ON DATABASE <db> TO 迁移角色
+--      - 迁移角色需要 CREATE/TEMP 权限执行 DDL
+--
+-- 角色授权策略：
+--   - 登录角色（可连接）: step1_svc, step1_migrator, openmemory_svc, openmemory_migrator_login
+--   - DDL 角色（需要 CREATE/TEMP）: engram_migrator, openmemory_migrator
+--     这些是 NOLOGIN 角色，由对应的 LOGIN 角色继承
+--
+-- 执行方式：
+--   不建议直接用 psql 执行本文件（因为 DATABASE 名需要动态替换）
+--   推荐通过 db_bootstrap.py 执行：
+--     python db_bootstrap.py --admin-dsn "postgresql://..."
+--
+-- ============================================================
+
+-- 以下为文档化的 SQL 语句（实际执行见 db_bootstrap.py）
+
+-- ===========================================
+-- 1. 撤销 PUBLIC 的数据库级默认权限
+-- ===========================================
+-- PostgreSQL 默认授予 PUBLIC 组以下权限：
+--   - CONNECT: 允许连接到数据库
+--   - TEMP/TEMPORARY: 允许创建临时表
+-- 这会导致任何有效登录角色都能连接任意数据库
+--
+-- REVOKE CREATE ON DATABASE current_database() FROM PUBLIC;
+-- REVOKE TEMP ON DATABASE current_database() FROM PUBLIC;
+-- 或合并为：
+-- REVOKE CREATE, TEMP ON DATABASE current_database() FROM PUBLIC;
+
+-- ===========================================
+-- 2. 显式授予登录角色 CONNECT 权限
+-- ===========================================
+-- 撤销 PUBLIC 的 CONNECT 后，需要显式授权
+-- GRANT CONNECT ON DATABASE <db> TO step1_svc;
+-- GRANT CONNECT ON DATABASE <db> TO step1_migrator;
+-- GRANT CONNECT ON DATABASE <db> TO openmemory_svc;
+-- GRANT CONNECT ON DATABASE <db> TO openmemory_migrator_login;
+
+-- ===========================================
+-- 3. 授予迁移角色 CREATE/TEMP 权限
+-- ===========================================
+-- 迁移角色需要执行 DDL 操作（创建/修改表结构等）
+-- NOLOGIN 角色的权限会被对应的 LOGIN 角色继承
+--
+-- GRANT CREATE, TEMP ON DATABASE <db> TO engram_migrator;
+-- GRANT CREATE, TEMP ON DATABASE <db> TO openmemory_migrator;
+
+-- ===========================================
+-- 备注：Schema 级权限
+-- ===========================================
+-- Schema 级权限（CREATE ON SCHEMA, USAGE ON SCHEMA）
+-- 在 04_roles_and_grants.sql 和 05_openmemory_roles_and_grants.sql 中配置
+-- 本脚本仅处理 DATABASE 级别权限

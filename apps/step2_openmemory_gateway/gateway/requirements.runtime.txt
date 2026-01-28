@@ -1,0 +1,8 @@
+# Memory Gateway 运行时依赖（纯第三方包）
+# 用于 Docker 分层构建优化 - 此层变化最少，可最大化缓存利用
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+httpx>=0.24.0
+psycopg[binary]>=3.1.0
+pyyaml>=6.0

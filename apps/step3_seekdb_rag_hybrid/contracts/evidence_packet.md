@@ -1,0 +1,150 @@
+# Evidence Packet（证据包）规范（Step3 输出）
+
+目的：任何 Agent 的结论必须可被人审与复盘。
+
+## 结构
+1. Claim（结论）
+2. Evidence（证据列表）
+   - artifact_uri
+   - sha256
+   - source_id（rev/commit/event_id/attachment_id）
+   - excerpt（最多 25 行或 2000 字，避免长贴）
+
+### artifact_uri 允许的 Scheme
+
+| Scheme | 说明 | 可解析性 |
+|--------|------|----------|
+| `memory://` | Step1 内置存储（patch_blobs 或 attachments） | 本地可解析，直接查库 |
+| `file://` | 本地文件路径 | 仅限同机/挂载卷 |
+| `svn://` | SVN 仓库版本引用 | 需 SVN 客户端访问 |
+| `git://` | Git 仓库 commit 引用 | 需 Git 客户端访问 |
+| `https://` | HTTP(S) 远程资源 | 需网络可达 |
+
+### memory:// URI 格式规范
+
+`memory://` scheme 支持两种资源类型：
+
+| 资源类型 | URI 格式 | 查询的表 | 说明 |
+|----------|----------|----------|------|
+| patch_blobs | `memory://patch_blobs/<source_type>/<source_id>/<sha256>` | `scm.patch_blobs` | SCM 补丁/diff 内容 |
+| attachments | `memory://attachments/<attachment_id>/<sha256>` | `logbook.attachments` | 通用附件（截图、文档等） |
+
+**示例**：
+- `memory://patch_blobs/git/1:abc123/e3b0c44298fc...` - Git commit 的 diff
+- `memory://attachments/12345/e3b0c44298fc...` - logbook 条目的附件
+
+**禁止的 Scheme**：`http://`（非加密）、`data://`（禁止内嵌大段内容）、`ftp://`
+
+### 回溯步骤
+
+当需要验证或复盘证据时，按以下步骤回溯原文：
+
+1. **解析 artifact_uri**：提取 scheme 与路径
+2. **校验 sha256**：若本地有缓存，比对 hash 确认未篡改
+3. **按 scheme 获取内容**：
+   - `memory://patch_blobs/...` → 查询 `scm.patch_blobs` 表，获取 `uri` 字段指向的制品
+   - `memory://attachments/...` → 查询 `logbook.attachments` 表，获取 `uri` 字段指向的制品
+   - `file://` → 读取本地文件系统
+   - `svn://` → 执行 `svn cat <url>@<rev>` 获取指定版本内容
+   - `git://` → 执行 `git show <commit>:<path>` 或调用 GitLab API
+   - `https://` → HTTP GET 获取，若需认证则使用配置的 token
+4. **比对摘要**：将获取的全文与 `excerpt` 对比，确认引用准确
+5. **标记状态**：若 URI 不可达或 hash 不匹配，在 Evidence 中标记 `status: invalid`
+
+### memory:// URI 回溯详细流程
+
+```
+memory://patch_blobs/{source_type}/{source_id}/{sha256}
+    │
+    ├─> SELECT uri FROM scm.patch_blobs WHERE sha256 = '{sha256}'
+    │
+    └─> 读取 uri 指向的制品（artifact key 或 file://）
+
+memory://attachments/{attachment_id}/{sha256}
+    │
+    ├─> SELECT uri FROM logbook.attachments WHERE attachment_id = {attachment_id}
+    │
+    ├─> 校验 sha256 一致性
+    │
+    └─> 读取 uri 指向的制品（artifact key 或 file://）
+```
+
+3. Reasoning（推理过程摘要）
+4. Risk & Next Steps（风险与下一步）
+5. Verification（验证方法与通过标准）
+
+说明：证据原文不入库，只引用指针；必要时在制品库/仓库中查看全文。
+
+## Step3 Chunk 输出与 Step1 Evidence URI 对应关系
+
+Step3 分块模块（`step3_chunking.py`）的输出字段遵循 Step1 URI 规范（`engram_step1/uri.py`），确保 chunk 结果可直接用于 evidence 引用。
+
+### ChunkResult 字段映射
+
+| Step3 ChunkResult 字段 | Step1 Evidence 规范 | 说明 |
+|------------------------|---------------------|------|
+| `artifact_uri` | Canonical Evidence URI | 遵循 `memory://patch_blobs/...` 或 `memory://attachments/...` 格式 |
+| `sha256` | 完整 SHA256 | 64 位十六进制，用于内容校验 |
+| `source_id` | `<repo_id>:<rev/sha>` | 与 Step1 patch_blobs 的 source_id 格式一致 |
+| `source_type` | `svn` / `git` / `logbook` | 来源类型标识 |
+
+### artifact_uri Canonical 格式
+
+Step3 chunk 的 `artifact_uri` 字段使用 Step1 定义的 Canonical Evidence URI 格式：
+
+| 资源类型 | Canonical 格式 | Step1 构建函数 |
+|----------|----------------|----------------|
+| patch_blobs | `memory://patch_blobs/<source_type>/<source_id>/<sha256>` | `build_evidence_uri()` |
+| attachments | `memory://attachments/<attachment_id>/<sha256>` | `build_attachment_evidence_uri()` |
+
+### 使用示例
+
+```python
+# 方式 1: Step3 自动构建（推荐）
+chunks = chunk_diff(
+    content=diff_content,
+    source_type="git",
+    source_id="1:abc123",
+    sha256="e3b0c44298fc...",
+    artifact_uri="",  # 留空，由 Step3 自动构建
+)
+# chunk.artifact_uri => "memory://patch_blobs/git/1:abc123/e3b0c44298fc..."
+
+# 方式 2: 调用方传入 evidence_uri（优先级最高）
+from engram_step1.uri import build_evidence_uri
+
+evidence_uri = build_evidence_uri("git", "1:abc123", "e3b0c44298fc...")
+chunks = chunk_diff(
+    content=diff_content,
+    source_type="git",
+    source_id="1:abc123",
+    sha256="e3b0c44298fc...",
+    artifact_uri="",
+    evidence_uri=evidence_uri,  # 直接使用 Step1 构建的 URI
+)
+
+# 方式 3: 附件类型
+from step3_chunking import generate_attachment_artifact_uri
+
+attachment_uri = generate_attachment_artifact_uri(
+    attachment_id=12345,
+    sha256="e3b0c44298fc...",
+)
+# => "memory://attachments/12345/e3b0c44298fc..."
+```
+
+### evidence_refs_json 集成
+
+Step3 chunk 输出可直接用于 governance/analysis 模块的 `evidence_refs_json`：
+
+```python
+# 从 chunk 构建 evidence reference
+evidence_ref = {
+    "artifact_uri": chunk.artifact_uri,  # 已是 canonical 格式
+    "sha256": chunk.sha256,
+    "source_id": chunk.source_id,
+    "source_type": chunk.source_type,
+    "kind": "patch",
+    "excerpt": chunk.excerpt,
+}
+```

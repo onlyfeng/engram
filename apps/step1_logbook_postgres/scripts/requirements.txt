@@ -1,0 +1,10 @@
+psycopg[binary]
+pyyaml
+tomli;python_version<"3.11"
+requests
+typer>=0.9.0
+
+# Testing dependencies
+pytest>=7.0
+pytest-cov
+requests-mock

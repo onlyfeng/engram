@@ -1,0 +1,601 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# ==============================================================================
+# 环境变量分层说明 (CI = fast + standard)
+# ==============================================================================
+# Fast 层 (precheck/unit tests): 不设置集成测试开关
+# Standard 层 (integration tests):
+#   - RUN_INTEGRATION_TESTS=1
+#   - HTTP_ONLY_MODE=1
+#   - SKIP_DEGRADATION_TEST=1
+#   - SKIP_JSONRPC 保持未设置/false
+# Full 层: 见 nightly.yml
+# ==============================================================================
+#
+# ==============================================================================
+# Standard 层 Step3 测试内容 (初始校准预算 2026-01)
+# ==============================================================================
+# Step3 Unit Tests:
+#   - make test-step3-unit                     ≤5min
+#     运行 Step3 分块稳定性单元测试（不依赖真实 Postgres）
+#
+# Step3 Smoke Test (可选，仅当 step3/stack 变更时):
+#   - make step3-run-smoke                     ≤8min
+#     环境变量: STEP3_SKIP_CHECK=1（跳过 seek_consistency_check）
+#     Standard 层不执行一致性检查，加速 CI 反馈
+#     包含: 索引同步(≤3min) + 检索验证(≤1min) + 环境初始化(≤4min)
+#
+# Step3 PGVector Integration:
+#   - make test-step3-pgvector                 ≤10min
+#     运行 PGVector 集成测试（需要 PostgreSQL）
+#     包含: test_pgvector_backend_integration + test_pgvector_e2e_minimal
+#
+# 预算更新说明:
+#   - 如实际运行超时，需检查是否有性能回归或测试用例增加
+#   - 预算基于 GitHub Actions ubuntu-latest runner 预估
+# ==============================================================================
+
+jobs:
+  # ============================================================================
+  # 变更检测 - 使用 dorny/paths-filter 检测文件变更
+  # ============================================================================
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      step1_changed: ${{ steps.filter.outputs.step1_changed }}
+      gateway_changed: ${{ steps.filter.outputs.gateway_changed }}
+      step3_changed: ${{ steps.filter.outputs.step3_changed }}
+      stack_changed: ${{ steps.filter.outputs.stack_changed }}
+      openmemory_sdk_changed: ${{ steps.filter.outputs.openmemory_sdk_changed }}
+      openmemory_governance_changed: ${{ steps.filter.outputs.openmemory_governance_changed }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect file changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            step1_changed:
+              - 'apps/step1_logbook_postgres/**'
+            gateway_changed:
+              - 'apps/step2_openmemory_gateway/**'
+              - 'compose/gateway.yml'
+              - 'docker-compose.unified.yml'
+            step3_changed:
+              - 'apps/step3_seekdb_rag_hybrid/**'
+            stack_changed:
+              - 'docker-compose.unified.yml'
+              - 'compose/**'
+              - 'Makefile'
+              - 'scripts/**'
+            openmemory_sdk_changed:
+              - 'libs/OpenMemory/packages/openmemory-py/**'
+              - 'libs/OpenMemory/packages/openmemory-js/**'
+              - 'libs/OpenMemory/packages/openmemory-js/src/core/**'
+              - 'libs/OpenMemory/packages/openmemory-js/tests/**'
+            openmemory_governance_changed:
+              - 'OpenMemory.upstream.lock.json'
+              - 'openmemory_patches.json'
+              - 'libs/OpenMemory/**'
+
+  # ============================================================================
+  # 静态预检（无需 Docker）
+  # ============================================================================
+  precheck-static:
+    name: Precheck & Static Build Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.stack_changed == 'true' || needs.detect-changes.outputs.step1_changed == 'true' || needs.detect-changes.outputs.gateway_changed == 'true' || needs.detect-changes.outputs.step3_changed == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run CI precheck
+        run: make ci-precheck
+
+      - name: Verify build static (Dockerfile/compose config check)
+        run: make verify-build-static
+
+      - name: Check deprecated env var usage (warning mode)
+        run: python scripts/check_env_var_drift.py
+        # 初期 warning 模式，不阻止 CI；迁移完成后改为 --fail
+
+  # ============================================================================
+  # Python 单元测试 - Step1
+  # ============================================================================
+  python-step1-unit:
+    name: Step1 Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.step1_changed == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-step1-${{ hashFiles('apps/step1_logbook_postgres/scripts/requirements.txt', 'apps/step1_logbook_postgres/scripts/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-step1-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies and run unit tests
+        run: make test-step1-unit
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-step1-unit
+          path: .artifacts/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ============================================================================
+  # Python 单元测试 - Gateway
+  # ============================================================================
+  python-gateway-unit:
+    name: Gateway Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.gateway_changed == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-gateway-${{ hashFiles('apps/step2_openmemory_gateway/gateway/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-gateway-
+            ${{ runner.os }}-pip-
+
+      - name: Install Step1 dependency (engram_step1)
+        run: |
+          cd apps/step1_logbook_postgres/scripts
+          pip install -e .
+
+      - name: Install Gateway and run unit tests
+        run: |
+          mkdir -p .artifacts/test-results
+          cd apps/step2_openmemory_gateway/gateway
+          pip install -e '.[dev]'
+          pytest -q --junitxml=../../../.artifacts/test-results/gateway-unit.xml --durations=20
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-gateway-unit
+          path: .artifacts/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ============================================================================
+  # Python 测试 - Step3 分块稳定性
+  # ============================================================================
+  python-step3:
+    name: Step3 Chunking Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.step3_changed == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-step3-${{ hashFiles('apps/step3_seekdb_rag_hybrid/requirements.txt', 'apps/step3_seekdb_rag_hybrid/requirements.dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-step3-
+            ${{ runner.os }}-pip-
+
+      - name: Run Step3 unit tests
+        run: make test-step3-unit
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-step3
+          path: .artifacts/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ============================================================================
+  # OpenMemory 治理检查（lock/patch 文件一致性）
+  # ============================================================================
+  openmemory-governance-check:
+    name: OpenMemory Governance Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.openmemory_governance_changed == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Create artifacts directory
+        run: mkdir -p .artifacts
+
+      - name: Run OpenMemory sync check
+        id: sync_check
+        run: |
+          echo "=== OpenMemory Sync Check ===" | tee .artifacts/openmemory-sync-report.json
+          JSON_OUTPUT=1 make openmemory-sync-check 2>&1 | tee -a .artifacts/openmemory-sync-report.json
+          echo "" >> .artifacts/openmemory-sync-report.json
+
+      - name: Run OpenMemory sync apply (dry-run)
+        id: sync_apply
+        run: |
+          echo "=== OpenMemory Sync Apply (dry-run) ===" | tee -a .artifacts/openmemory-sync-report.json
+          JSON_OUTPUT=1 make openmemory-sync-apply 2>&1 | tee -a .artifacts/openmemory-sync-report.json
+
+      - name: Upload governance check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openmemory-governance-report-${{ github.run_number }}
+          path: .artifacts/openmemory-sync-report.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ============================================================================
+  # 统一栈集成测试（需要 Docker）- Standard 层
+  # ============================================================================
+  unified-standard:
+    name: Unified Stack Integration Test (Standard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [detect-changes, precheck-static, python-step1-unit, python-gateway-unit, python-step3, openmemory-governance-check]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.detect-changes.outputs.stack_changed == 'true' ||
+       needs.detect-changes.outputs.step1_changed == 'true' ||
+       needs.detect-changes.outputs.gateway_changed == 'true' ||
+       needs.detect-changes.outputs.step3_changed == 'true' ||
+       needs.detect-changes.outputs.openmemory_governance_changed == 'true')
+
+    env:
+      # 服务账号密码（CI 测试固定值）
+      STEP1_MIGRATOR_PASSWORD: ci_migrator_pass_123
+      STEP1_SVC_PASSWORD: ci_svc_pass_123
+      OPENMEMORY_MIGRATOR_PASSWORD: ci_om_migrator_pass_123
+      OPENMEMORY_SVC_PASSWORD: ci_om_svc_pass_123
+      # PostgreSQL 配置
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: engram
+      # --------------------------------------------------------------------------
+      # Standard 层环境变量
+      # - 启用集成测试，HTTP-only 模式（跳过 JSON-RPC）
+      # - 跳过降级测试（降级测试在 Full 层执行）
+      # --------------------------------------------------------------------------
+      RUN_INTEGRATION_TESTS: "1"
+      HTTP_ONLY_MODE: "1"
+      SKIP_DEGRADATION_TEST: "1"
+      # SKIP_JSONRPC 保持未设置 (default: false)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js (for multi-schema test)
+        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-integration-${{ hashFiles('apps/**/requirements*.txt', 'apps/**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-integration-
+            ${{ runner.os }}-pip-
+
+      - name: Cache npm dependencies (for multi-schema test)
+        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-openmemory-js-${{ hashFiles('libs/OpenMemory/packages/openmemory-js/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-openmemory-js-
+            ${{ runner.os }}-npm-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest psycopg[binary] httpx
+
+      - name: Start unified stack
+        run: make deploy
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for services to stabilize..."
+          sleep 10
+          # 检查服务状态
+          docker compose -p engram -f docker-compose.unified.yml ps
+
+      - name: Verify unified stack
+        run: |
+          mkdir -p .artifacts
+          make verify-unified VERIFY_JSON_OUT=.artifacts/verify-results.json
+
+      - name: Run OpenMemory patch check
+        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        id: openmemory_patch_check
+        run: |
+          mkdir -p .artifacts/openmemory-patch-conflicts
+          python scripts/openmemory_sync.py apply --dry-run --strategy manual --json > .artifacts/openmemory-sync-report.json 2>&1 || true
+          # 检查状态，但不立即失败，先让产物上传
+          python scripts/openmemory_sync.py check --json >> .artifacts/openmemory-sync-report.json 2>&1
+
+      - name: Upload OpenMemory patch conflicts
+        if: always() && needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openmemory-patch-conflicts-${{ github.run_number }}
+          path: |
+            .artifacts/openmemory-patch-conflicts/
+            .artifacts/openmemory-sync-report.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Run Gateway integration tests
+        run: make test-gateway-integration
+
+      - name: Run OpenMemory multi-schema isolation test
+        if: needs.detect-changes.outputs.openmemory_governance_changed == 'true'
+        env:
+          OM_PG_HOST: localhost
+          OM_PG_PORT: "5432"
+          OM_PG_DB: engram
+          OM_PG_USER: postgres
+          OM_PG_PASSWORD: postgres
+        run: make openmemory-test-multi-schema
+
+      - name: Run Step3 smoke test
+        if: needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true'
+        env:
+          STEP3_INDEX_BACKEND: pgvector
+          # 优先使用 STEP3_PGVECTOR_DSN（减少推断，明确指定）
+          STEP3_PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+          # 使用 STEP3_PG_* 前缀环境变量（与 nightly.yml 保持一致）
+          # 隔离测试表，避免影响实际数据
+          STEP3_PG_SCHEMA: step3_test
+          STEP3_PG_TABLE: chunks_test
+          STEP3_PGVECTOR_COLLECTION_STRATEGY: single_table
+          STEP3_SKIP_CHECK: "1"
+        run: make step3-run-smoke
+
+      - name: Run Step3 PGVector integration tests
+        env:
+          TEST_PGVECTOR_DSN: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+        run: |
+          pip install -q -r apps/step3_seekdb_rag_hybrid/requirements.dev.txt
+          make test-step3-pgvector
+
+      - name: Collect Step3 smoke test results
+        if: always() && (needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true')
+        run: |
+          mkdir -p .artifacts/step3-smoke
+          cp /tmp/step3_smoke_*.json .artifacts/step3-smoke/ 2>/dev/null || true
+
+      - name: Collect Step3 diagnostics on failure
+        if: failure() && (needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true')
+        run: |
+          mkdir -p .artifacts/step3-diagnostics
+          echo "=== Step3 Diagnostics ===" > .artifacts/step3-diagnostics/diagnostics.txt
+          echo "Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          
+          # PostgreSQL 诊断信息
+          echo "=== pg_extension ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "SELECT extname, extversion FROM pg_extension;" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "=== Schemas (\\dn) ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\dn" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "=== Tables (\\dt step3.*) ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\dt step3.*" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          echo "" >> .artifacts/step3-diagnostics/diagnostics.txt
+          echo "=== Indexes (\\di step3.*) ===" >> .artifacts/step3-diagnostics/diagnostics.txt
+          docker compose -p engram -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d engram -c "\di step3.*" \
+            >> .artifacts/step3-diagnostics/diagnostics.txt 2>&1 || true
+          
+          # 收集 Step3 smoke JSON 文件
+          cp /tmp/step3_smoke_*.json .artifacts/step3-diagnostics/ 2>/dev/null || true
+
+      - name: Upload Step3 diagnostics on failure
+        if: failure() && (needs.detect-changes.outputs.step3_changed == 'true' || needs.detect-changes.outputs.stack_changed == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: step3-diagnostics-${{ github.run_number }}
+          path: .artifacts/step3-diagnostics/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unified-verification-results
+          path: |
+            .artifacts/verify-results.json
+            .artifacts/step3-smoke/
+            .artifacts/test-results/step3-pgvector.xml
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Collect docker compose config on failure
+        if: failure()
+        run: |
+          mkdir -p .artifacts
+          docker compose -p engram -f docker-compose.unified.yml config > .artifacts/compose-config.yml 2>&1 || true
+
+      - name: Collect docker compose status on failure
+        if: failure()
+        run: |
+          docker compose -p engram -f docker-compose.unified.yml ps > .artifacts/compose-ps.txt 2>&1 || true
+
+      - name: Collect docker compose logs on failure
+        if: failure()
+        run: |
+          docker compose -p engram -f docker-compose.unified.yml logs --no-color > .artifacts/compose-logs.txt 2>&1 || true
+
+      - name: Collect health check outputs on failure
+        if: failure()
+        env:
+          GATEWAY_URL: http://localhost:8787
+          OPENMEMORY_URL: http://localhost:8080
+        run: |
+          echo "=== Gateway Health Check ===" > .artifacts/health-checks.txt
+          curl -v ${GATEWAY_URL}/health >> .artifacts/health-checks.txt 2>&1 || true
+          echo "" >> .artifacts/health-checks.txt
+          echo "=== OpenMemory Health Check ===" >> .artifacts/health-checks.txt
+          curl -v ${OPENMEMORY_URL}/health >> .artifacts/health-checks.txt 2>&1 || true
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-logs-${{ github.run_number }}
+          path: .artifacts/**
+          retention-days: 7
+
+  # ============================================================================
+  # OpenMemory SDK 测试 - Python & Node
+  # ============================================================================
+  openmemory-sdk:
+    name: OpenMemory SDK Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [detect-changes]
+    if: ${{ needs.detect-changes.outputs.openmemory_sdk_changed == 'true' }}
+
+    env:
+      # SQLite 内存模式，用于 SDK 单元测试
+      OM_DB_URL: "sqlite://:memory:"
+      OM_TIER: "local"
+      OM_VEC_DIM: "1536"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-openmemory-sdk-${{ hashFiles('libs/OpenMemory/packages/openmemory-py/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-openmemory-sdk-
+            ${{ runner.os }}-pip-
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-openmemory-sdk-${{ hashFiles('libs/OpenMemory/packages/openmemory-js/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-openmemory-sdk-
+            ${{ runner.os }}-npm-
+
+      - name: Create artifacts directory
+        run: mkdir -p .artifacts/openmemory-sdk
+
+      - name: Run Python SDK tests
+        run: |
+          cd libs/OpenMemory/packages/openmemory-py
+          pip install -e .[dev]
+          pytest tests/test_omnibus.py -v 2>&1 | tee ../../../../.artifacts/openmemory-sdk/python-sdk-test.log
+
+      - name: Run Node SDK tests
+        run: |
+          cd libs/OpenMemory/packages/openmemory-js
+          npm ci
+          npx tsx tests/test_omnibus.ts 2>&1 | tee ../../../../.artifacts/openmemory-sdk/node-sdk-test.log
+
+      - name: Upload SDK test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openmemory-sdk-test-results
+          path: .artifacts/openmemory-sdk/
+          retention-days: 14
+          if-no-files-found: ignore

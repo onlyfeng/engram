@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "文档迁移映射配置 - 逐条列出源文件到目标文件的映射",
+  "version": "1.0.0",
+  "created_at": "2026-01-28",
+  "description": "将分散在各 apps/stepN/ 下的文档集中迁移到 docs/ 目录",
+  
+  "target_directories": {
+    "step1": "docs/steps/step1/",
+    "step2": "docs/steps/step2/",
+    "step3": "docs/steps/step3/",
+    "contracts": "docs/contracts/"
+  },
+  
+  "file_mappings": [
+    {
+      "source": "apps/step1_logbook_postgres/docs/00_overview.md",
+      "target": "docs/steps/step1/00_overview.md",
+      "step": "step1"
+    },
+    {
+      "source": "apps/step1_logbook_postgres/docs/01_architecture.md",
+      "target": "docs/steps/step1/01_architecture.md",
+      "step": "step1"
+    },
+    {
+      "source": "apps/step1_logbook_postgres/docs/02_tools_contract.md",
+      "target": "docs/steps/step1/02_tools_contract.md",
+      "step": "step1"
+    },
+    {
+      "source": "apps/step2_openmemory_gateway/docs/00_overview.md",
+      "target": "docs/steps/step2/00_overview.md",
+      "step": "step2"
+    },
+    {
+      "source": "apps/step2_openmemory_gateway/docs/01_openmemory_deploy_windows.md",
+      "target": "docs/steps/step2/01_openmemory_deploy_windows.md",
+      "step": "step2"
+    },
+    {
+      "source": "apps/step2_openmemory_gateway/docs/02_mcp_integration_cursor.md",
+      "target": "docs/steps/step2/02_mcp_integration_cursor.md",
+      "step": "step2"
+    },
+    {
+      "source": "apps/step2_openmemory_gateway/docs/03_memory_contract.md",
+      "target": "docs/steps/step2/03_memory_contract.md",
+      "step": "step2"
+    },
+    {
+      "source": "apps/step2_openmemory_gateway/docs/04_governance_switch.md",
+      "target": "docs/steps/step2/04_governance_switch.md",
+      "step": "step2"
+    },
+    {
+      "source": "apps/step2_openmemory_gateway/docs/05_failure_degradation.md",
+      "target": "docs/steps/step2/05_failure_degradation.md",
+      "step": "step2"
+    },
+    {
+      "source": "apps/step2_openmemory_gateway/docs/06_gateway_design.md",
+      "target": "docs/steps/step2/06_gateway_design.md",
+      "step": "step2"
+    },
+    {
+      "source": "apps/step3_seekdb_rag_hybrid/docs/00_overview.md",
+      "target": "docs/steps/step3/00_overview.md",
+      "step": "step3"
+    },
+    {
+      "source": "apps/step3_seekdb_rag_hybrid/docs/01_seekdb_deploy.md",
+      "target": "docs/steps/step3/01_seekdb_deploy.md",
+      "step": "step3"
+    },
+    {
+      "source": "apps/step3_seekdb_rag_hybrid/docs/02_indexing_pipeline.md",
+      "target": "docs/steps/step3/02_indexing_pipeline.md",
+      "step": "step3"
+    },
+    {
+      "source": "apps/step3_seekdb_rag_hybrid/docs/03_hybrid_retrieval.md",
+      "target": "docs/steps/step3/03_hybrid_retrieval.md",
+      "step": "step3"
+    },
+    {
+      "source": "apps/step3_seekdb_rag_hybrid/contracts/evidence_packet.md",
+      "target": "docs/contracts/evidence_packet.md",
+      "step": "step3",
+      "category": "contracts"
+    }
+  ],
+  
+  "reference_rewrite_rules": {
+    "$comment": "需要重写文档引用的文件清单",
+    "files": [
+      {
+        "path": "apps/step1_logbook_postgres/scripts/artifact_cli.py",
+        "reason": "直接引用 docs/02_tools_contract.md",
+        "current_reference": "docs/02_tools_contract.md",
+        "new_reference": "docs/steps/step1/02_tools_contract.md"
+      },
+      {
+        "path": "apps/step2_openmemory_gateway/templates/.mcp.json",
+        "reason": "模板配置文件，可能需要更新相关文档路径说明",
+        "current_reference": null,
+        "new_reference": null,
+        "action": "review"
+      },
+      {
+        "path": "apps/step2_openmemory_gateway/gateway/gateway/memory_card.py",
+        "reason": "Memory Card 生成器，文档中提及的字段规范可能需要对应文档引用",
+        "current_reference": null,
+        "new_reference": null,
+        "action": "review"
+      },
+      {
+        "path": "apps/step3_seekdb_rag_hybrid/templates/seek_indexer_stub.py",
+        "reason": "索引同步脚本模板，注释中引用 Evidence Packet 结构",
+        "current_reference": "contracts/evidence_packet.md (implicit)",
+        "new_reference": "docs/contracts/evidence_packet.md",
+        "action": "review"
+      },
+      {
+        "path": "apps/step3_seekdb_rag_hybrid/templates/seek_query_stub.py",
+        "reason": "查询脚本模板，可能引用文档",
+        "current_reference": null,
+        "new_reference": null,
+        "action": "review"
+      },
+      {
+        "path": "apps/step3_seekdb_rag_hybrid/seek_query.py",
+        "reason": "证据检索工具，输出 Evidence Packet 格式",
+        "current_reference": null,
+        "new_reference": "docs/contracts/evidence_packet.md",
+        "action": "review"
+      },
+      {
+        "path": "libs/OpenMemory/ARCHITECTURE.md",
+        "reason": "架构文档可能引用 step 目录结构",
+        "current_reference": null,
+        "new_reference": null,
+        "action": "review"
+      }
+    ]
+  },
+  
+  "summary": {
+    "total_source_files": 15,
+    "step1_files": 3,
+    "step2_files": 7,
+    "step3_files": 4,
+    "contracts_files": 1,
+    "files_requiring_reference_update": 7
+  }
+}

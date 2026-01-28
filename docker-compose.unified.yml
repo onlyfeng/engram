@@ -1,0 +1,1423 @@
+# Engram 统一部署 Docker Compose
+# 包含完整的 Step1 + OpenMemory + Gateway 服务栈
+#
+# ============================================================================
+# 核心策略（IMPORTANT）
+# ============================================================================
+# 1. public schema 仅用于 pgvector 扩展，业务数据存放在独立 schema
+#    - OpenMemory: openmemory schema
+#    - Step3 Seek Index: step3 schema（chunks 表 + 向量/全文索引）
+# 2. OM_PG_SCHEMA 禁止设为 public（precheck 服务会强制拦截）
+# 3. 迁移先于运行：openmemory_migrate 完成 DDL 后 openmemory 才启动
+# 4. 最小权限角色分离：migrator 角色执行迁移 DDL，app 角色仅运行时 DML
+#
+# 依赖链:
+#   precheck -> postgres (healthy) -> bootstrap_roles -> step1_migrate -> openmemory_migrate -> permissions_verify -> openmemory
+#
+# 权限修复（已有 volume）:
+#   docker compose up bootstrap_roles
+#
+# ============================================================================
+#
+# 可选组件:
+#   minio (profile: minio) -> minio_init (one-shot)
+#   scm_sync (profile: scm_sync) -> scm_scheduler, scm_worker, scm_reaper
+#   dashboard (profile: dashboard) -> OpenMemory Web UI（需先同步上游源码）
+#
+# 使用方法:
+#   docker compose -f docker-compose.unified.yml up -d
+#   # 启用 MinIO:
+#   docker compose -f docker-compose.unified.yml --profile minio up -d
+#   # 启用 SCM 同步:
+#   docker compose -f docker-compose.unified.yml --profile scm_sync up -d
+#   # 启用 Dashboard（需先从上游同步源码到 libs/OpenMemory/dashboard/）:
+#   docker compose -f docker-compose.unified.yml --profile dashboard up -d
+#   # 同时启用多个 profile:
+#   docker compose -f docker-compose.unified.yml --profile minio --profile scm_sync up -d
+#   # 或设置环境变量: COMPOSE_PROFILES=minio,scm_sync,dashboard
+#
+# 环境变量参考:
+#   - PROJECT_KEY: 项目标识（必填，用于 Step1 表前缀）
+#   - POSTGRES_DB: 数据库名称（强烈建议设为 PROJECT_KEY 值，实现"每项目一库"隔离）
+#     ⚠️ 示例: PROJECT_KEY=proj_a 时应同时设置 POSTGRES_DB=proj_a
+#     ⚠️ 默认值 'engram' 仅适用于单项目/开发环境，多项目生产部署必须显式设置
+#   - OM_PG_SCHEMA: OpenMemory schema 名称（默认: openmemory，禁止设为 public）
+#   - POSTGRES_PASSWORD: PostgreSQL 密码（建议修改默认值）
+#   - OPENMEMORY_API_KEY: OpenMemory API 密钥（可选）
+#   - MINIO_ROOT_USER / MINIO_ROOT_PASSWORD: MinIO 凭证（启用 minio profile 时必填）
+#   - MINIO_BUCKET: MinIO bucket 名称（默认: engram）
+#
+# 多项目部署示例（每项目一库 + 独立 project name）:
+#   # 方式 1: 使用 Makefile（推荐）
+#   PROJECT_KEY=proj_a POSTGRES_DB=proj_a make deploy
+#   PROJECT_KEY=proj_b POSTGRES_DB=proj_b make deploy
+#
+#   # 方式 2: 手动指定 COMPOSE_PROJECT_NAME
+#   COMPOSE_PROJECT_NAME=proj_a PROJECT_KEY=proj_a POSTGRES_DB=proj_a docker compose -f docker-compose.unified.yml up -d
+#   COMPOSE_PROJECT_NAME=proj_b PROJECT_KEY=proj_b POSTGRES_DB=proj_b docker compose -f docker-compose.unified.yml up -d
+#
+# 容器命名说明:
+#   - 容器名由 COMPOSE_PROJECT_NAME 自动生成: ${PROJECT_NAME}_${SERVICE}_${INSTANCE}
+#   - 例: proj_a_openmemory_1, proj_b_openmemory_1
+#   - 移除固定 container_name 后支持同机多实例并行运行
+
+version: "3.8"
+
+x-postgres-env: &postgres-env
+  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  # ⚠️ POSTGRES_DB 应与 PROJECT_KEY 保持一致（每项目一库方案）
+  # 默认值 'engram' 仅适用于单项目/开发环境
+  POSTGRES_DB: ${POSTGRES_DB:-engram}
+
+# 服务账号密码（由 00_init_service_accounts.sh 在首次初始化时创建 LOGIN 角色）
+# 说明：
+# - 统一栈默认强制要求设置这些密码，避免回退到 postgres 超级用户。
+# - 这些环境变量也会传入 postgres 容器以便 init 脚本执行（docker-entrypoint-initdb.d）。
+# - Step3 服务账号为可选（仅当配置密码时创建）
+x-service-account-passwords: &service-account-passwords
+  STEP1_MIGRATOR_PASSWORD: ${STEP1_MIGRATOR_PASSWORD:?STEP1_MIGRATOR_PASSWORD is required}
+  STEP1_SVC_PASSWORD: ${STEP1_SVC_PASSWORD:?STEP1_SVC_PASSWORD is required}
+  OPENMEMORY_MIGRATOR_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:?OPENMEMORY_MIGRATOR_PASSWORD is required}
+  OPENMEMORY_SVC_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:?OPENMEMORY_SVC_PASSWORD is required}
+  # Step3 服务账号密码（可选，仅当设置时创建对应 LOGIN 角色）
+  STEP3_MIGRATOR_PASSWORD: ${STEP3_MIGRATOR_PASSWORD:-}
+  STEP3_SVC_PASSWORD: ${STEP3_SVC_PASSWORD:-}
+
+# OpenMemory PostgreSQL 连接通用参数（host/port/db/schema）
+# 注意：OM_PG_USER/OM_PG_PASSWORD 需在具体服务中明确设置（migrator/app 分离）。
+x-pg-connection: &pg-connection
+  OM_PG_HOST: postgres
+  OM_PG_PORT: "5432"
+  # ⚠️ 与 POSTGRES_DB 保持一致（每项目一库）
+  OM_PG_DB: ${POSTGRES_DB:-engram}
+  # ============================================================================
+  # OpenMemory Schema 配置（统一默认值：openmemory）
+  # ============================================================================
+  # 默认使用独立 schema: openmemory（与 05_openmemory_roles_and_grants.sql 一致）
+  # 此默认值为统一栈的推荐配置，各组件（db_migrate.py, db_ops.sh, gateway）均以此为准。
+  # 如需多租户隔离，可覆盖为 ${PROJECT_KEY}_openmemory，但需同步修改 05 脚本。
+  OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+  OM_PG_SSL: disable
+
+# OpenMemory 迁移连接（DDL）：直接以 openmemory_migrator_login 登录（最小权限）
+x-om-migrator-connection: &om-migrator-connection
+  <<: *pg-connection
+  OM_PG_USER: ${OPENMEMORY_MIGRATOR_USER:-openmemory_migrator_login}
+  OM_PG_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:?OPENMEMORY_MIGRATOR_PASSWORD is required}
+
+# OpenMemory 运行连接（DML）：直接以 openmemory_svc 登录（最小权限）
+x-om-app-connection: &om-app-connection
+  <<: *pg-connection
+  OM_PG_USER: ${OPENMEMORY_SVC_USER:-openmemory_svc}
+  OM_PG_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:?OPENMEMORY_SVC_PASSWORD is required}
+
+# MinIO 配置（敏感凭证通过环境变量传入，不固化在仓库）
+x-minio-env: &minio-env
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required when using minio profile}
+  MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required when using minio profile}
+
+# MinIO 应用用户配置（用于最小权限隔离，生产环境建议配置独立应用用户）
+x-minio-app-env: &minio-app-env
+  # 应用用户凭证（可选，不设置则跳过应用用户创建）
+  MINIO_APP_USER: ${MINIO_APP_USER:-}
+  MINIO_APP_PASSWORD: ${MINIO_APP_PASSWORD:-}
+  # 允许访问的前缀列表（逗号分隔）
+  MINIO_ALLOWED_PREFIXES: ${MINIO_ALLOWED_PREFIXES:-scm/,attachments/,exports/,tmp/}
+
+# MinIO Ops 用户配置（用于 GC/迁移等运维操作，需要 Delete/List 权限）
+x-minio-ops-env: &minio-ops-env
+  # 是否创建 ops 用户（默认 false）
+  MINIO_CREATE_OPS_USER: ${MINIO_CREATE_OPS_USER:-false}
+  # Ops 用户凭证（MINIO_CREATE_OPS_USER=true 时必填）
+  MINIO_OPS_USER: ${MINIO_OPS_USER:-}
+  MINIO_OPS_PASSWORD: ${MINIO_OPS_PASSWORD:-}
+
+# MinIO HTTPS/TLS 配置（生产环境强制启用）
+# 证书挂载路径: /certs/public.crt 和 /certs/private.key
+x-minio-tls-env: &minio-tls-env
+  # 是否强制 HTTPS（生产环境应设为 true）
+  MINIO_FORCE_HTTPS: ${MINIO_FORCE_HTTPS:-false}
+  # TLS 证书路径（容器内路径）
+  MINIO_CERTS_DIR: ${MINIO_CERTS_DIR:-/certs}
+
+# MinIO Audit/日志配置预留（不默认启用）
+# 配置模板: apps/step1_logbook_postgres/scripts/ops/minio_audit_webhook.json
+#
+# 安全启用检查清单:
+#   1. MINIO_AUDIT_WEBHOOK_ENDPOINT 使用 HTTPS（生产必须）
+#   2. MINIO_AUDIT_WEBHOOK_AUTH_TOKEN 使用强随机 token（建议 32+ 字符）
+#   3. 如需双向 TLS，配置 MINIO_AUDIT_CLIENT_CERT/KEY
+#   4. queue_dir 已持久化到 minio_audit_queue volume（断电不丢失）
+x-minio-audit-env: &minio-audit-env
+  # Audit Webhook 端点（留空则不启用，生产环境应使用 https://）
+  MINIO_AUDIT_WEBHOOK_ENDPOINT: ${MINIO_AUDIT_WEBHOOK_ENDPOINT:-}
+  # Webhook 认证 Token（生产环境必填，建议 32+ 字符的随机字符串）
+  MINIO_AUDIT_WEBHOOK_AUTH_TOKEN: ${MINIO_AUDIT_WEBHOOK_AUTH_TOKEN:-}
+  # 双向 TLS 客户端证书（可选，用于 mTLS 认证）
+  MINIO_AUDIT_CLIENT_CERT: ${MINIO_AUDIT_CLIENT_CERT:-}
+  MINIO_AUDIT_CLIENT_KEY: ${MINIO_AUDIT_CLIENT_KEY:-}
+  # 队列目录（持久化，防止断电丢失审计日志）
+  MINIO_AUDIT_QUEUE_DIR: ${MINIO_AUDIT_QUEUE_DIR:-/data/.audit_queue}
+  # 队列大小（默认 10000 条）
+  MINIO_AUDIT_QUEUE_SIZE: ${MINIO_AUDIT_QUEUE_SIZE:-10000}
+
+services:
+  # ============================================================================
+  # 配置预检服务 (one-shot)
+  # 在任何迁移前验证环境变量配置的安全性
+  # ============================================================================
+  precheck:
+    image: alpine:3.19
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    environment:
+      OM_METADATA_BACKEND: postgres
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+      POSTGRES_DB: ${POSTGRES_DB:-engram}
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+      # 服务账号密码（预检时仅检查是否设置）
+      STEP1_MIGRATOR_PASSWORD: ${STEP1_MIGRATOR_PASSWORD:-}
+      STEP1_SVC_PASSWORD: ${STEP1_SVC_PASSWORD:-}
+      OPENMEMORY_MIGRATOR_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:-}
+      OPENMEMORY_SVC_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:-}
+    command: >
+      sh -c '
+        echo "========================================"
+        echo "Engram 配置预检 (Compose 层)"
+        echo "========================================"
+        echo ""
+        
+        FAILED=0
+        
+        # ========================================
+        # 1. 检查 OM_PG_SCHEMA 是否为 public（禁止配置）
+        # ========================================
+        if [ "$${OM_PG_SCHEMA}" = "public" ]; then
+          echo "[FAIL] OM_PG_SCHEMA=public 是禁止的配置！"
+          echo "       原因: public schema 无法安全隔离，DROP SCHEMA CASCADE 会破坏数据库"
+          FAILED=1
+        else
+          echo "[OK] OM_PG_SCHEMA=$${OM_PG_SCHEMA} (非 public)"
+        fi
+        
+        # ========================================
+        # 2. 检查必需的服务账号密码环境变量
+        # ========================================
+        echo ""
+        echo "检查服务账号密码..."
+        
+        if [ -z "$${STEP1_MIGRATOR_PASSWORD}" ]; then
+          echo "[FAIL] STEP1_MIGRATOR_PASSWORD 未设置"
+          FAILED=1
+        else
+          echo "[OK] STEP1_MIGRATOR_PASSWORD 已设置"
+        fi
+        
+        if [ -z "$${STEP1_SVC_PASSWORD}" ]; then
+          echo "[FAIL] STEP1_SVC_PASSWORD 未设置"
+          FAILED=1
+        else
+          echo "[OK] STEP1_SVC_PASSWORD 已设置"
+        fi
+        
+        if [ -z "$${OPENMEMORY_MIGRATOR_PASSWORD}" ]; then
+          echo "[FAIL] OPENMEMORY_MIGRATOR_PASSWORD 未设置"
+          FAILED=1
+        else
+          echo "[OK] OPENMEMORY_MIGRATOR_PASSWORD 已设置"
+        fi
+        
+        if [ -z "$${OPENMEMORY_SVC_PASSWORD}" ]; then
+          echo "[FAIL] OPENMEMORY_SVC_PASSWORD 未设置"
+          FAILED=1
+        else
+          echo "[OK] OPENMEMORY_SVC_PASSWORD 已设置"
+        fi
+        
+        # ========================================
+        # 3. 显示当前配置摘要
+        # ========================================
+        echo ""
+        echo "当前配置:"
+        echo "  POSTGRES_DB=$${POSTGRES_DB}"
+        echo "  PROJECT_KEY=$${PROJECT_KEY}"
+        echo "  OM_METADATA_BACKEND=$${OM_METADATA_BACKEND}"
+        echo "  OM_PG_SCHEMA=$${OM_PG_SCHEMA}"
+        
+        # ========================================
+        # 4. 结果判定与修复命令输出
+        # ========================================
+        echo ""
+        if [ "$${FAILED}" = "1" ]; then
+          echo "========================================"
+          echo "[FATAL] 预检失败！请修复以上问题后重试。"
+          echo "========================================"
+          echo ""
+          echo "修复命令示例:"
+          echo ""
+          echo "  # 1. 设置必需的环境变量（在 .env 文件或 shell 中）:"
+          echo "  export STEP1_MIGRATOR_PASSWORD=your_secure_password_1"
+          echo "  export STEP1_SVC_PASSWORD=your_secure_password_2"
+          echo "  export OPENMEMORY_MIGRATOR_PASSWORD=your_secure_password_3"
+          echo "  export OPENMEMORY_SVC_PASSWORD=your_secure_password_4"
+          echo ""
+          echo "  # 2. 如果 OM_PG_SCHEMA 配置错误:"
+          echo "  export OM_PG_SCHEMA=openmemory"
+          echo ""
+          echo "  # 3. 重新启动服务栈:"
+          echo "  docker compose -f docker-compose.unified.yml up -d"
+          echo ""
+          exit 1
+        fi
+        
+        echo "========================================"
+        echo "[OK] Compose 层预检通过！"
+        echo "========================================"
+      '
+    restart: "no"
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # PostgreSQL 数据库（带 pgvector 扩展）
+  # ============================================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    environment:
+      <<: *postgres-env
+      <<: *service-account-passwords
+      # OpenMemory 配置（供 05_openmemory_roles_and_grants.sh 读取）
+      OM_METADATA_BACKEND: postgres
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Step1 SQL 初始化脚本（首次启动时执行）
+      - ./apps/step1_logbook_postgres/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      precheck:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # 角色权限初始化 (one-shot)
+  # 以 superuser 身份执行角色和权限脚本，确保权限配置正确
+  #
+  # 用途：
+  #   - 首次部署：在迁移前初始化所有角色和权限
+  #   - 已有 volume：修复权限漂移（docker compose up bootstrap_roles）
+  #
+  # 执行内容（全部幂等）：
+  #   1. 04_roles_and_grants.sql     - Engram 角色和权限
+  #   2. 05_openmemory_roles_and_grants.sql - OpenMemory schema 和权限
+  #   3. 06_step3_roles_and_grants.sql - Step3 schema 和权限
+  #   4. 99_verify_permissions.sql   - 权限验证（失败则服务退出）
+  # ============================================================================
+  bootstrap_roles:
+    image: pgvector/pgvector:pg16
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+    volumes:
+      - ./apps/step1_logbook_postgres/sql/03_pgvector_extension.sql:/sql/03_pgvector_extension.sql:ro
+      - ./apps/step1_logbook_postgres/sql/04_roles_and_grants.sql:/sql/04_roles_and_grants.sql:ro
+      - ./apps/step1_logbook_postgres/sql/05_openmemory_roles_and_grants.sql:/sql/05_openmemory_roles_and_grants.sql:ro
+      - ./apps/step1_logbook_postgres/sql/06_step3_roles_and_grants.sql:/sql/06_step3_roles_and_grants.sql:ro
+      - ./apps/step1_logbook_postgres/sql/99_verify_permissions.sql:/sql/99_verify_permissions.sql:ro
+    command: >
+      bash -c "
+        echo '========================================'
+        echo '角色权限初始化 (bootstrap_roles)'
+        echo '========================================'
+        echo '目标 schema: $${OM_PG_SCHEMA}'
+        echo ''
+        
+        # 等待数据库就绪（健康检查已通过，但为了稳妥再确认一次）
+        until pg_isready -h postgres -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram}; do
+          echo '等待数据库就绪...'
+          sleep 1
+        done
+        
+        echo '[1/5] 执行 03_pgvector_extension.sql（创建 pgvector 扩展）...'
+        psql -h postgres -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram} \
+          -f /sql/03_pgvector_extension.sql 2>&1 || { echo '[ERROR] 03 脚本执行失败'; exit 1; }
+        
+        echo ''
+        echo '[2/5] 执行 04_roles_and_grants.sql...'
+        psql -h postgres -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram} \
+          -f /sql/04_roles_and_grants.sql 2>&1 || { echo '[ERROR] 04 脚本执行失败'; exit 1; }
+        
+        echo ''
+        echo '[3/5] 执行 05_openmemory_roles_and_grants.sql...'
+        psql -h postgres -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram} \
+          -c \"SET om.target_schema = '$${OM_PG_SCHEMA}'\" \
+          -f /sql/05_openmemory_roles_and_grants.sql 2>&1 || { echo '[ERROR] 05 脚本执行失败'; exit 1; }
+        
+        echo ''
+        echo '[4/5] 执行 06_step3_roles_and_grants.sql...'
+        psql -h postgres -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram} \
+          -f /sql/06_step3_roles_and_grants.sql 2>&1 || { echo '[ERROR] 06 脚本执行失败'; exit 1; }
+        
+        echo ''
+        echo '[5/5] 执行 99_verify_permissions.sql...'
+        psql -h postgres -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram} \
+          -c \"SET om.target_schema = '$${OM_PG_SCHEMA}'\" \
+          -f /sql/99_verify_permissions.sql 2>&1 | tee /tmp/verify_output.txt
+        
+        # 检查是否有 FAIL
+        if grep -q 'FAIL:' /tmp/verify_output.txt; then
+          echo ''
+          echo '[ERROR] 权限验证失败！请检查上方输出中的 FAIL 消息。'
+          exit 1
+        fi
+        
+        echo ''
+        echo '========================================'
+        echo '[OK] 角色权限初始化完成！'
+        echo '========================================'
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - engram-net
+    restart: "no"
+
+  # ============================================================================
+  # Step1 数据库迁移 (one-shot)
+  # 用于非首次启动时的 schema 升级
+  # ============================================================================
+  step1_migrate:
+    image: python:3.12-slim
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    working_dir: /app
+    volumes:
+      - ./apps/step1_logbook_postgres:/app:ro
+    environment:
+      # 配置 DSN 直接连接（跳过配置文件）
+      ENGRAM_STEP1_CONFIG: ""
+      # OpenMemory 同库部署探测（触发 db_migrate.py 自动应用 05_openmemory_roles_and_grants.sql）
+      OM_METADATA_BACKEND: postgres
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+      # 提供 OpenMemory migrator 密码（供 db_migrate.py 在需要时以最小权限账号执行 05 脚本）
+      OPENMEMORY_MIGRATOR_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:?OPENMEMORY_MIGRATOR_PASSWORD is required}
+      # Step1 migrator 密码（用于 DSN）
+      STEP1_MIGRATOR_PASSWORD: ${STEP1_MIGRATOR_PASSWORD:?STEP1_MIGRATOR_PASSWORD is required}
+    command: >
+      bash -c "
+        pip install --quiet psycopg[binary] tomli &&
+        cd /app/scripts &&
+        python db_migrate.py --quiet --dsn 'postgresql://step1_migrator:${STEP1_MIGRATOR_PASSWORD}@postgres:5432/${POSTGRES_DB:-engram}'
+      "
+    depends_on:
+      bootstrap_roles:
+        condition: service_completed_successfully
+    networks:
+      - engram-net
+    restart: "no"
+
+  # ============================================================================
+  # OpenMemory 数据库迁移 (one-shot)
+  # 执行 multi-user tenant 等 schema 迁移
+  #
+  # ============================================================================
+  # 升级与回滚策略（重要）
+  # ============================================================================
+  #
+  # 升级前必须备份（强制要求）:
+  #   - 开发/测试环境: make backup-om 或 ./scripts/db_ops.sh pre-upgrade
+  #   - 生产环境: make backup-full 或 ./scripts/db_ops.sh pre-upgrade --full
+  #
+  # 不可逆迁移说明:
+  #   以下类型的迁移是不可逆的，一旦执行无法通过代码回滚：
+  #   - 删除列（DROP COLUMN）
+  #   - 重命名表/列（RENAME TABLE/COLUMN）
+  #   - 修改数据类型（ALTER TYPE）
+  #   - 删除表（DROP TABLE）
+  #   - 删除索引后数据变更
+  #
+  # 回滚策略:
+  #   对于不可逆迁移，唯一回滚策略是：从备份恢复
+  #   1. 回退 OpenMemory.upstream.lock.json 到之前的 commit ref
+  #   2. 重新构建镜像: make openmemory-build
+  #   3. 恢复备份: make restore BACKUP_FILE=./backups/xxx.sql
+  #
+  # 安全配置说明：
+  #   - OM_PG_AUTO_CREATE_DB: 控制是否自动创建数据库（默认 false）
+  #     生产/统一栈使用 POSTGRES_DB 由 PostgreSQL 初始化脚本创建
+  #     仅开发环境需要时可覆盖为 true
+  #   - OM_PG_AUTO_DDL: 由 db.ts 运行时使用（默认 false），此处不涉及
+  # ============================================================================
+  openmemory_migrate:
+    build:
+      context: ./libs/OpenMemory/packages/openmemory-js
+      dockerfile: Dockerfile
+      target: builder
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    working_dir: /app
+    environment:
+      OM_METADATA_BACKEND: postgres
+      <<: *om-migrator-connection
+      # 生产/统一栈不自动创建数据库（由 PostgreSQL POSTGRES_DB 环境变量创建）
+      # 开发环境如需自动创建，可覆盖为 true
+      OM_PG_AUTO_CREATE_DB: ${OM_PG_AUTO_CREATE_DB:-false}
+      # ============================================================================
+      # 会话角色切换（与 05_openmemory_roles_and_grants.sql 默认权限强绑定）
+      # 迁移会话使用 openmemory_migrator 角色执行 DDL，拥有 schema 的完整 DDL 权限
+      # 若旧环境未配置此角色，删除该行或设为空字符串以禁用 SET ROLE
+      # ============================================================================
+      OM_PG_SET_ROLE: ${OM_PG_SET_ROLE_MIGRATE:-openmemory_migrator}
+    command: ["npm", "run", "migrate"]
+    depends_on:
+      step1_migrate:
+        condition: service_completed_successfully
+    networks:
+      - engram-net
+    restart: "no"
+
+  # ============================================================================
+  # 权限验证 (one-shot)
+  # 验证角色权限配置是否正确（迁移完成后执行）
+  #
+  # 执行 99_verify_permissions.sql 检查：
+  #   1. 角色是否存在（engram_* 和 openmemory_* 角色）
+  #   2. public schema 无 CREATE 权限（所有应用角色）
+  #   3. 目标 OM schema 存在且权限正确
+  #   4. step1_migrator 默认权限配置
+  # ============================================================================
+  permissions_verify:
+    image: pgvector/pgvector:pg16
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+    volumes:
+      - ./apps/step1_logbook_postgres/sql/99_verify_permissions.sql:/verify.sql:ro
+    command: >
+      bash -c "
+        echo '========================================'
+        echo '权限验证'
+        echo '========================================'
+        echo '目标 schema: $${OM_PG_SCHEMA}'
+        echo ''
+        
+        # 执行权限验证脚本，通过 SET om.target_schema 传入目标 schema
+        psql -h postgres -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram} \
+          -c \"SET om.target_schema = '$${OM_PG_SCHEMA}'\" \
+          -f /verify.sql 2>&1 | tee /tmp/verify_output.txt
+        
+        # 检查是否有 FAIL 或 WARNING
+        if grep -q 'FAIL:' /tmp/verify_output.txt; then
+          echo ''
+          echo '[ERROR] 权限验证失败！请检查上方输出中的 FAIL 消息。'
+          exit 1
+        fi
+        
+        echo ''
+        echo '[OK] 权限验证通过'
+      "
+    depends_on:
+      openmemory_migrate:
+        condition: service_completed_successfully
+    networks:
+      - engram-net
+    restart: "no"
+
+  # ============================================================================
+  # OpenMemory 主服务
+  #
+  # 数据库初始化说明：
+  #   生产/统一栈中，数据库和表由 openmemory_migrate 服务预先创建。
+  #   运行时不依赖自动建库/建表（OM_PG_AUTO_* 均为 false）。
+  # ============================================================================
+  openmemory:
+    build:
+      context: ./libs/OpenMemory/packages/openmemory-js
+      dockerfile: Dockerfile
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    ports:
+      - "${OM_PORT:-8080}:8080"
+    environment:
+      # Core Configuration
+      OM_PORT: ${OM_PORT:-8080}
+      OM_MODE: ${OM_MODE:-standard}
+      OM_TIER: ${OM_TIER:-hybrid}
+      OM_API_KEY: ${OM_API_KEY:-}
+      OM_IDE_MODE: ${OM_IDE_MODE:-false}
+      OM_IDE_ALLOWED_ORIGINS: ${OM_IDE_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+
+      # 使用 PostgreSQL 作为元数据后端
+      OM_METADATA_BACKEND: postgres
+      <<: *om-app-connection
+      OM_PG_TABLE: ${OM_PG_TABLE:-openmemory_memories}
+      # 生产/统一栈默认关闭运行时自动建库/建表（依赖 openmemory_migrate）
+      OM_PG_AUTO_CREATE_DB: "false"
+      OM_PG_AUTO_DDL: "false"
+      # ============================================================================
+      # 会话角色切换（与 05_openmemory_roles_and_grants.sql 默认权限强绑定）
+      # 运行时会话使用 openmemory_app 角色执行 DML，仅拥有读写权限（无 DDL）
+      # 若旧环境未配置此角色，删除该行或设为空字符串以禁用 SET ROLE
+      # ============================================================================
+      OM_PG_SET_ROLE: ${OM_PG_SET_ROLE_APP:-openmemory_app}
+
+      # Vector Backend
+      OM_VECTOR_BACKEND: ${OM_VECTOR_BACKEND:-postgres}
+      OM_VECTOR_TABLE: ${OM_VECTOR_TABLE:-openmemory_vectors}
+
+      # Embeddings Configuration
+      OM_EMBEDDINGS: ${OM_EMBEDDINGS:-synthetic}
+      OM_EMBEDDING_FALLBACK: ${OM_EMBEDDING_FALLBACK:-synthetic}
+      OM_EMBED_MODE: ${OM_EMBED_MODE:-simple}
+      OM_VEC_DIM: ${OM_VEC_DIM:-256}
+
+      # OpenAI Provider
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OM_OPENAI_API_KEY: ${OM_OPENAI_API_KEY:-}
+      OM_OPENAI_BASE_URL: ${OM_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OM_OPENAI_MODEL: ${OM_OPENAI_MODEL:-}
+
+      # Gemini Provider
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OM_GEMINI_API_KEY: ${OM_GEMINI_API_KEY:-}
+
+      # Ollama Provider
+      OLLAMA_URL: ${OLLAMA_URL:-http://localhost:11434}
+      OM_OLLAMA_URL: ${OM_OLLAMA_URL:-http://localhost:11434}
+
+      # Memory & Search
+      OM_MIN_SCORE: ${OM_MIN_SCORE:-0.3}
+      OM_MAX_PAYLOAD_SIZE: ${OM_MAX_PAYLOAD_SIZE:-1000000}
+
+      # Auto Reflection
+      OM_AUTO_REFLECT: ${OM_AUTO_REFLECT:-false}
+      OM_REFLECT_INTERVAL: ${OM_REFLECT_INTERVAL:-10}
+      OM_REFLECT_MIN_MEMORIES: ${OM_REFLECT_MIN_MEMORIES:-20}
+
+      # User Summaries
+      OM_USER_SUMMARY_INTERVAL: ${OM_USER_SUMMARY_INTERVAL:-30}
+      OM_USE_SUMMARY_ONLY: ${OM_USE_SUMMARY_ONLY:-true}
+      OM_SUMMARY_MAX_LENGTH: ${OM_SUMMARY_MAX_LENGTH:-200}
+
+      # Decay System
+      OM_DECAY_LAMBDA: ${OM_DECAY_LAMBDA:-0.02}
+      OM_DECAY_INTERVAL_MINUTES: ${OM_DECAY_INTERVAL_MINUTES:-1440}
+      OM_DECAY_RATIO: ${OM_DECAY_RATIO:-0.03}
+      OM_DECAY_REINFORCE_ON_QUERY: ${OM_DECAY_REINFORCE_ON_QUERY:-true}
+    volumes:
+      - openmemory_data:/data
+    depends_on:
+      permissions_verify:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:8080/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # Memory Gateway 服务
+  # 桥接 Step1 Logbook 与 OpenMemory
+  # ============================================================================
+  gateway:
+    build:
+      # context 必须为项目根目录，以便 Dockerfile 可以 COPY apps/step1_logbook_postgres/scripts
+      context: .
+      dockerfile: apps/step2_openmemory_gateway/gateway/Dockerfile
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    ports:
+      - "${GATEWAY_PORT:-8787}:8787"
+    environment:
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+      POSTGRES_DSN: "postgresql://step1_svc:${STEP1_SVC_PASSWORD:?STEP1_SVC_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-engram}"
+      OPENMEMORY_BASE_URL: http://openmemory:8080
+      OPENMEMORY_API_KEY: ${OM_API_KEY:-}
+      GATEWAY_PORT: "8787"
+      DEFAULT_TEAM_SPACE: ${DEFAULT_TEAM_SPACE:-}
+      PRIVATE_SPACE_PREFIX: ${PRIVATE_SPACE_PREFIX:-private:}
+    # 注意: step1 包已在 Dockerfile 中 COPY 并安装到镜像内 (/step1_scripts)
+    # 生产环境不挂载 volume，避免覆盖镜像内版本导致行为漂移
+    # 开发环境如需热更新，可手动添加: ./apps/step1_logbook_postgres/scripts:/step1_scripts:ro
+    depends_on:
+      openmemory:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:8787/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # Outbox Worker 服务
+  # 从 Step1 Outbox 消费事件并推送到 OpenMemory
+  # ============================================================================
+  worker:
+    build:
+      # context 必须为项目根目录，以便 Dockerfile 可以 COPY apps/step1_logbook_postgres/scripts
+      context: .
+      dockerfile: apps/step2_openmemory_gateway/gateway/Dockerfile
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    command: ["python", "-m", "gateway.outbox_worker"]
+    environment:
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+      POSTGRES_DSN: "postgresql://step1_svc:${STEP1_SVC_PASSWORD:?STEP1_SVC_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-engram}"
+      OPENMEMORY_BASE_URL: http://openmemory:8080
+      OPENMEMORY_API_KEY: ${OM_API_KEY:-}
+      # Worker 配置
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-5}
+      WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}
+      WORKER_LEASE_TIMEOUT: ${WORKER_LEASE_TIMEOUT:-300}
+    # 注意: step1 包已在 Dockerfile 中 COPY 并安装到镜像内 (/step1_scripts)
+    # 生产环境不挂载 volume，避免覆盖镜像内版本导致行为漂移
+    # 开发环境如需热更新，可手动添加: ./apps/step1_logbook_postgres/scripts:/step1_scripts:ro
+    depends_on:
+      openmemory:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # Dashboard（可选，默认不启动）
+  # OpenMemory Web UI
+  # 启用方式: --profile dashboard 或 COMPOSE_PROFILES=dashboard
+  #
+  # 注意: libs/OpenMemory/dashboard/ 目前只有 Dockerfile 占位，
+  #       完整源码需从上游 OpenMemory 仓库同步后才能构建。
+  #       同步步骤:
+  #         1. 从上游 OpenMemory 仓库复制 dashboard 完整目录到 libs/OpenMemory/dashboard/
+  #         2. 确保包含 package.json、package-lock.json、src/、public/ 等
+  #         3. 启用 profile: docker compose --profile dashboard up -d
+  # ============================================================================
+  dashboard:
+    profiles:
+      - dashboard
+    build:
+      context: ./libs/OpenMemory/dashboard
+      dockerfile: Dockerfile
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    ports:
+      - '${DASHBOARD_PORT:-3000}:3000'
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:${OM_PORT:-8080}
+      NEXT_PUBLIC_API_KEY: ${OM_API_KEY:-}
+    depends_on:
+      openmemory:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # MinIO 对象存储（可选，仅开发/CI 使用）
+  # 启用方式: --profile minio 或 COMPOSE_PROFILES=minio
+  #
+  # HTTPS/TLS 配置（生产环境强制）：
+  #   1. 设置 MINIO_FORCE_HTTPS=true
+  #   2. 挂载证书目录到 /certs（包含 public.crt 和 private.key）
+  #   3. 端点自动切换为 https://minio:9000
+  #
+  # Audit 日志配置（可选）：
+  #   参考 apps/step1_logbook_postgres/scripts/ops/minio_audit_webhook.json
+  # ============================================================================
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    profiles:
+      - minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      <<: *minio-env
+      <<: *minio-tls-env
+      <<: *minio-audit-env
+    volumes:
+      - minio_data:/data
+      # TLS 证书挂载（可选，生产环境使用）
+      # 需要包含 public.crt 和 private.key 文件
+      # 取消注释以启用 HTTPS:
+      # - ${MINIO_CERTS_PATH:-./certs/minio}:/certs:ro
+    healthcheck:
+      # 开发环境: HTTP 健康检查
+      # 生产环境: 如启用 HTTPS，需修改为 curl --insecure https://localhost:9000/minio/health/live
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # MinIO 初始化 (one-shot)
+  # 创建 bucket、强制设置 private policy、配置应用用户最小权限、生命周期规则
+  #
+  # 安全策略：
+  #   1. Bucket 强制设为 private（禁止匿名访问）
+  #   2. 应用用户仅授予指定前缀的读写权限（最小权限原则）
+  #   3. 支持 HTTPS endpoint 连接（生产环境）
+  #
+  # Policy 模板: apps/step1_logbook_postgres/scripts/ops/minio_bucket_policy.json
+  # ============================================================================
+  minio_init:
+    image: minio/mc:RELEASE.2024-01-16T02-50-27Z
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    profiles:
+      - minio
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-engram}
+      # 应用用户配置（可选，不设置则跳过）
+      MINIO_APP_USER: ${MINIO_APP_USER:-}
+      MINIO_APP_PASSWORD: ${MINIO_APP_PASSWORD:-}
+      MINIO_ALLOWED_PREFIXES: ${MINIO_ALLOWED_PREFIXES:-scm/,attachments/,exports/,tmp/}
+      # Ops 用户配置（用于 GC/迁移，需要 Delete/List 权限）
+      MINIO_CREATE_OPS_USER: ${MINIO_CREATE_OPS_USER:-false}
+      MINIO_OPS_USER: ${MINIO_OPS_USER:-}
+      MINIO_OPS_PASSWORD: ${MINIO_OPS_PASSWORD:-}
+      # HTTPS 配置
+      MINIO_FORCE_HTTPS: ${MINIO_FORCE_HTTPS:-false}
+      # Audit Webhook 配置预留（不默认启用）
+      MINIO_AUDIT_WEBHOOK_ENDPOINT: ${MINIO_AUDIT_WEBHOOK_ENDPOINT:-}
+      MINIO_AUDIT_WEBHOOK_AUTH_TOKEN: ${MINIO_AUDIT_WEBHOOK_AUTH_TOKEN:-}
+    volumes:
+      # 挂载 policy 模板文件
+      - ./apps/step1_logbook_postgres/scripts/ops:/ops:ro
+      # 挂载生命周期规则模板
+      - ./apps/step1_logbook_postgres/templates:/templates:ro
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        echo "========================================"
+        echo "MinIO 初始化"
+        echo "========================================"
+        
+        # 根据 HTTPS 配置选择 endpoint
+        if [ "$${MINIO_FORCE_HTTPS}" = "true" ]; then
+          MINIO_ENDPOINT="https://minio:9000"
+          MC_INSECURE="--insecure"
+          echo "[INFO] 使用 HTTPS endpoint: $${MINIO_ENDPOINT}"
+        else
+          MINIO_ENDPOINT="http://minio:9000"
+          MC_INSECURE=""
+          echo "[INFO] 使用 HTTP endpoint: $${MINIO_ENDPOINT}"
+        fi
+        
+        # 配置 mc 客户端别名
+        mc $${MC_INSECURE} alias set myminio "$${MINIO_ENDPOINT}" "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        
+        # 创建 bucket（如不存在）
+        if ! mc $${MC_INSECURE} ls myminio/"$${MINIO_BUCKET}" > /dev/null 2>&1; then
+          echo "[INFO] 创建 bucket: $${MINIO_BUCKET}"
+          mc $${MC_INSECURE} mb myminio/"$${MINIO_BUCKET}"
+        else
+          echo "[INFO] Bucket 已存在: $${MINIO_BUCKET}"
+        fi
+        
+        # ========================================================================
+        # 步骤 1: 强制设置 bucket 为 PRIVATE（禁止匿名访问）
+        # ========================================================================
+        echo "[INFO] 强制设置 bucket policy 为 private..."
+        mc $${MC_INSECURE} anonymous set none myminio/"$${MINIO_BUCKET}"
+        echo "[OK] Bucket 已设为 private（禁止匿名访问）"
+        
+        # ========================================================================
+        # 步骤 2: 创建应用用户并授予最小权限（如配置了应用用户）
+        # Policy 类型: app（无 DeleteObject，用于普通应用）
+        # Policy 生成脚本: /ops/generate_policy.sh (Shell) 或 generate_s3_policy.py (Python/CI)
+        # ========================================================================
+        if [ -n "$${MINIO_APP_USER}" ] && [ -n "$${MINIO_APP_PASSWORD}" ]; then
+          echo "[INFO] 配置应用用户: $${MINIO_APP_USER}"
+          
+          # 创建应用用户（如不存在）
+          if ! mc $${MC_INSECURE} admin user info myminio "$${MINIO_APP_USER}" > /dev/null 2>&1; then
+            echo "[INFO] 创建应用用户..."
+            mc $${MC_INSECURE} admin user add myminio "$${MINIO_APP_USER}" "$${MINIO_APP_PASSWORD}"
+          else
+            echo "[INFO] 应用用户已存在"
+          fi
+          
+          # 使用 generate_policy.sh 脚本生成 app policy（无 DeleteObject，最小权限）
+          echo "[INFO] 生成 app policy（无 DeleteObject）..."
+          chmod +x /ops/generate_policy.sh
+          /ops/generate_policy.sh app "$${MINIO_BUCKET}" "$${MINIO_ALLOWED_PREFIXES}" /tmp/app_policy.json
+          
+          # 创建并绑定 policy
+          POLICY_NAME="engram-app-$${MINIO_BUCKET}"
+          mc $${MC_INSECURE} admin policy create myminio "$${POLICY_NAME}" /tmp/app_policy.json 2>/dev/null || \
+            mc $${MC_INSECURE} admin policy remove myminio "$${POLICY_NAME}" && \
+            mc $${MC_INSECURE} admin policy create myminio "$${POLICY_NAME}" /tmp/app_policy.json
+          
+          mc $${MC_INSECURE} admin policy attach myminio "$${POLICY_NAME}" --user="$${MINIO_APP_USER}"
+          
+          echo "[OK] 应用用户 $${MINIO_APP_USER} 已配置 app policy（无 DeleteObject）"
+          echo "     允许前缀: $${MINIO_ALLOWED_PREFIXES}"
+        else
+          echo "[SKIP] 未配置 MINIO_APP_USER，跳过应用用户创建"
+          echo "       生产环境建议配置独立应用用户以实现最小权限隔离"
+        fi
+        
+        # ========================================================================
+        # 步骤 2b: 创建 Ops 用户并授予完整权限（用于 GC/迁移）
+        # Policy 类型: ops（含 DeleteObject/ListBucket，用于 GC/迁移）
+        # Policy 生成脚本: /ops/generate_policy.sh (Shell) 或 generate_s3_policy.py (Python/CI)
+        # ========================================================================
+        if [ "$${MINIO_CREATE_OPS_USER}" = "true" ]; then
+          if [ -z "$${MINIO_OPS_USER}" ] || [ -z "$${MINIO_OPS_PASSWORD}" ]; then
+            echo "[ERROR] MINIO_CREATE_OPS_USER=true 但 MINIO_OPS_USER 或 MINIO_OPS_PASSWORD 未设置"
+            exit 1
+          fi
+          
+          echo "[INFO] 配置 Ops 用户: $${MINIO_OPS_USER}"
+          
+          # 创建 ops 用户（如不存在）
+          if ! mc $${MC_INSECURE} admin user info myminio "$${MINIO_OPS_USER}" > /dev/null 2>&1; then
+            echo "[INFO] 创建 Ops 用户..."
+            mc $${MC_INSECURE} admin user add myminio "$${MINIO_OPS_USER}" "$${MINIO_OPS_PASSWORD}"
+          else
+            echo "[INFO] Ops 用户已存在"
+          fi
+          
+          # 使用 generate_policy.sh 脚本生成 ops policy（含 Delete/List 权限）
+          echo "[INFO] 生成 ops policy（含 Delete/List 权限）..."
+          chmod +x /ops/generate_policy.sh
+          /ops/generate_policy.sh ops "$${MINIO_BUCKET}" "$${MINIO_ALLOWED_PREFIXES}" /tmp/ops_policy.json
+          
+          # 创建并绑定 ops policy
+          OPS_POLICY_NAME="engram-ops-$${MINIO_BUCKET}"
+          mc $${MC_INSECURE} admin policy create myminio "$${OPS_POLICY_NAME}" /tmp/ops_policy.json 2>/dev/null || \
+            mc $${MC_INSECURE} admin policy remove myminio "$${OPS_POLICY_NAME}" && \
+            mc $${MC_INSECURE} admin policy create myminio "$${OPS_POLICY_NAME}" /tmp/ops_policy.json
+          
+          mc $${MC_INSECURE} admin policy attach myminio "$${OPS_POLICY_NAME}" --user="$${MINIO_OPS_USER}"
+          
+          echo "[OK] Ops 用户 $${MINIO_OPS_USER} 已配置 ops policy（含 Delete/List）"
+          echo "     允许前缀: $${MINIO_ALLOWED_PREFIXES}"
+        else
+          echo "[SKIP] MINIO_CREATE_OPS_USER != true，跳过 Ops 用户创建"
+          echo "       GC/迁移操作需要 ops 用户，请设置 MINIO_CREATE_OPS_USER=true"
+        fi
+        
+        # ========================================================================
+        # 步骤 3: 设置生命周期规则 (ILM)
+        # 从 templates/s3_lifecycle_policy.json 导入规则
+        # ========================================================================
+        echo "[INFO] 设置生命周期规则 (ILM)..."
+        
+        # 检查模板文件是否存在
+        if [ -f "/templates/s3_lifecycle_policy.json" ]; then
+          echo "[INFO] 从模板导入: /templates/s3_lifecycle_policy.json"
+          mc $${MC_INSECURE} ilm import myminio/"$${MINIO_BUCKET}" < /templates/s3_lifecycle_policy.json || echo "[WARN] 设置生命周期规则失败"
+        else
+          echo "[WARN] 模板文件不存在: /templates/s3_lifecycle_policy.json"
+          echo "[WARN] 跳过生命周期规则设置"
+        fi
+        
+        # ========================================================================
+        # 步骤 3b: 验证生命周期规则已生效
+        # ========================================================================
+        echo "[INFO] 验证生命周期规则..."
+        ILM_OUTPUT=$$(mc $${MC_INSECURE} ilm ls myminio/"$${MINIO_BUCKET}" 2>&1)
+        ILM_EXIT_CODE=$$?
+        
+        if [ $${ILM_EXIT_CODE} -eq 0 ]; then
+          echo "$${ILM_OUTPUT}"
+          
+          # 验证关键规则存在
+          RULES_VERIFIED=0
+          if echo "$${ILM_OUTPUT}" | grep -q "tmp-cleanup-7d"; then
+            echo "[OK] 规则 tmp-cleanup-7d 已生效"
+            RULES_VERIFIED=$$((RULES_VERIFIED + 1))
+          fi
+          if echo "$${ILM_OUTPUT}" | grep -q "exports-cleanup-90d"; then
+            echo "[OK] 规则 exports-cleanup-90d 已生效"
+            RULES_VERIFIED=$$((RULES_VERIFIED + 1))
+          fi
+          if echo "$${ILM_OUTPUT}" | grep -q "trash-cleanup-30d"; then
+            echo "[OK] 规则 trash-cleanup-30d 已生效"
+            RULES_VERIFIED=$$((RULES_VERIFIED + 1))
+          fi
+          if echo "$${ILM_OUTPUT}" | grep -q "abort-incomplete-multipart-1d"; then
+            echo "[OK] 规则 abort-incomplete-multipart-1d 已生效"
+            RULES_VERIFIED=$$((RULES_VERIFIED + 1))
+          fi
+          
+          if [ $${RULES_VERIFIED} -ge 4 ]; then
+            echo "[OK] 所有 $${RULES_VERIFIED} 条生命周期规则已验证"
+          else
+            echo "[WARN] 仅验证到 $${RULES_VERIFIED} 条规则（预期 4 条）"
+          fi
+        else
+          echo "[WARN] 无法列出生命周期规则: $${ILM_OUTPUT}"
+        fi
+        
+        # ========================================================================
+        # 步骤 4: 配置 Audit Webhook（如已配置）
+        # 安全配置: TLS + Token + 持久化队列
+        # ========================================================================
+        if [ -n "$${MINIO_AUDIT_WEBHOOK_ENDPOINT}" ]; then
+          echo "[INFO] 配置 Audit Webhook..."
+          
+          # 安全检查: 生产环境强制 HTTPS
+          if echo "$${MINIO_AUDIT_WEBHOOK_ENDPOINT}" | grep -q "^http://"; then
+            echo "[WARN] Audit Webhook 使用 HTTP，生产环境应使用 HTTPS"
+          fi
+          
+          # 安全检查: Token 长度
+          if [ -n "$${MINIO_AUDIT_WEBHOOK_AUTH_TOKEN}" ]; then
+            TOKEN_LEN=$$(printf '%s' "$${MINIO_AUDIT_WEBHOOK_AUTH_TOKEN}" | wc -c)
+            if [ "$${TOKEN_LEN}" -lt 32 ]; then
+              echo "[WARN] Audit Webhook Token 长度 < 32，建议使用更强的 token"
+            fi
+          else
+            echo "[WARN] Audit Webhook 未配置 auth_token，生产环境建议配置"
+          fi
+          
+          # 构建配置命令（支持可选的 mTLS 证书）
+          AUDIT_CONFIG="endpoint=$${MINIO_AUDIT_WEBHOOK_ENDPOINT}"
+          
+          if [ -n "$${MINIO_AUDIT_WEBHOOK_AUTH_TOKEN}" ]; then
+            AUDIT_CONFIG="$${AUDIT_CONFIG} auth_token=$${MINIO_AUDIT_WEBHOOK_AUTH_TOKEN}"
+          fi
+          
+          if [ -n "$${MINIO_AUDIT_CLIENT_CERT}" ] && [ -n "$${MINIO_AUDIT_CLIENT_KEY}" ]; then
+            AUDIT_CONFIG="$${AUDIT_CONFIG} client_cert=$${MINIO_AUDIT_CLIENT_CERT} client_key=$${MINIO_AUDIT_CLIENT_KEY}"
+            echo "[INFO] 启用 mTLS 客户端证书认证"
+          fi
+          
+          # 配置持久化队列（防止断电丢失）
+          AUDIT_CONFIG="$${AUDIT_CONFIG} queue_dir=$${MINIO_AUDIT_QUEUE_DIR:-/data/.audit_queue}"
+          AUDIT_CONFIG="$${AUDIT_CONFIG} queue_size=$${MINIO_AUDIT_QUEUE_SIZE:-10000}"
+          
+          # 应用配置
+          mc $${MC_INSECURE} admin config set myminio audit_webhook:engram $${AUDIT_CONFIG} || {
+            echo "[ERROR] 配置 Audit Webhook 失败"
+            exit 1
+          }
+          
+          # 重启服务使配置生效
+          mc $${MC_INSECURE} admin service restart myminio || echo "[WARN] 重启 MinIO 服务失败"
+          
+          echo "[OK] Audit Webhook 已配置"
+          echo "     Endpoint: $${MINIO_AUDIT_WEBHOOK_ENDPOINT}"
+          echo "     Queue Dir: $${MINIO_AUDIT_QUEUE_DIR:-/data/.audit_queue}"
+        else
+          echo "[SKIP] 未配置 MINIO_AUDIT_WEBHOOK_ENDPOINT，Audit Webhook 未启用"
+          echo "       参考: apps/step1_logbook_postgres/scripts/ops/minio_audit_webhook.json"
+        fi
+        
+        echo ""
+        echo "========================================"
+        echo "[OK] MinIO 初始化完成！"
+        echo "========================================"
+        echo "  - Bucket: $${MINIO_BUCKET} (private)"
+        echo "  - API: $${MINIO_ENDPOINT}"
+        echo "  - Console: http://localhost:$${MINIO_CONSOLE_PORT:-9001}"
+        if [ -n "$${MINIO_APP_USER}" ]; then
+          echo "  - App User: $${MINIO_APP_USER} (policy: app, no Delete)"
+        fi
+        if [ "$${MINIO_CREATE_OPS_USER}" = "true" ]; then
+          echo "  - Ops User: $${MINIO_OPS_USER} (policy: ops, with Delete/List)"
+        fi
+        if [ -n "$${MINIO_APP_USER}" ] || [ "$${MINIO_CREATE_OPS_USER}" = "true" ]; then
+          echo "  - Allowed Prefixes: $${MINIO_ALLOWED_PREFIXES}"
+        fi
+    restart: "no"
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # Step1 工具服务（可选，用于 CI/运维操作）
+  # 启用方式: --profile tools 或 COMPOSE_PROFILES=minio,tools
+  # 用途: 供 CI 运行 step1_cli.py / artifact_* 等脚本
+  # 使用: docker compose --profile tools exec step1_tools python step1_cli.py ...
+  #
+  # GC/迁移操作需要 ops 凭证（有 DeleteObject 权限）：
+  #   ENGRAM_S3_USE_OPS=true docker compose --profile tools exec step1_tools python artifact_gc.py
+  # ============================================================================
+  step1_tools:
+    image: python:3.12-slim
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    profiles:
+      - tools
+      - minio
+    working_dir: /app/scripts
+    volumes:
+      - ./apps/step1_logbook_postgres/scripts:/app/scripts:ro
+    environment:
+      # 数据库配置
+      POSTGRES_DSN: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-engram}"
+      # MinIO/S3 对象存储配置（指向 minio 服务）
+      # 开发环境默认 HTTP，生产环境通过 ENGRAM_S3_ENDPOINT 覆盖为 https://minio:9000
+      ENGRAM_S3_ENDPOINT: ${ENGRAM_S3_ENDPOINT:-http://minio:9000}
+      ENGRAM_S3_BUCKET: ${MINIO_BUCKET:-engram}
+      ENGRAM_S3_REGION: "us-east-1"
+      # ========================================================================
+      # S3 凭证选择（app 或 ops）
+      # 默认使用 app 凭证（无 DeleteObject 权限）
+      # GC/迁移操作需要设置 ENGRAM_S3_USE_OPS=true 使用 ops 凭证
+      # ========================================================================
+      ENGRAM_S3_USE_OPS: ${ENGRAM_S3_USE_OPS:-false}
+      # App 用户凭证（默认，无 Delete 权限）
+      ENGRAM_S3_APP_ACCESS_KEY: ${MINIO_APP_USER:-${MINIO_ROOT_USER:-minioadmin}}
+      ENGRAM_S3_APP_SECRET_KEY: ${MINIO_APP_PASSWORD:-${MINIO_ROOT_PASSWORD:-minioadmin}}
+      # Ops 用户凭证（GC/迁移用，有 Delete 权限）
+      ENGRAM_S3_OPS_ACCESS_KEY: ${MINIO_OPS_USER:-}
+      ENGRAM_S3_OPS_SECRET_KEY: ${MINIO_OPS_PASSWORD:-}
+      # HTTPS SSL 验证（开发环境可设为 false 跳过自签名证书验证，生产应为 true）
+      ENGRAM_S3_VERIFY_SSL: ${ENGRAM_S3_VERIFY_SSL:-true}
+      # 项目标识
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+    command: >
+      bash -c "
+        pip install --quiet psycopg[binary] boto3 typer pyyaml requests &&
+        pip install --quiet -e /app/scripts &&
+        
+        # 根据 ENGRAM_S3_USE_OPS 选择凭证
+        if [ \"$${ENGRAM_S3_USE_OPS}\" = \"true\" ]; then
+          if [ -z \"$${ENGRAM_S3_OPS_ACCESS_KEY}\" ] || [ -z \"$${ENGRAM_S3_OPS_SECRET_KEY}\" ]; then
+            echo '[ERROR] ENGRAM_S3_USE_OPS=true but MINIO_OPS_USER/PASSWORD not configured'
+            exit 1
+          fi
+          export ENGRAM_S3_ACCESS_KEY=\"$${ENGRAM_S3_OPS_ACCESS_KEY}\"
+          export ENGRAM_S3_SECRET_KEY=\"$${ENGRAM_S3_OPS_SECRET_KEY}\"
+          echo '[step1_tools] Using OPS credentials (with Delete permission)'
+        else
+          export ENGRAM_S3_ACCESS_KEY=\"$${ENGRAM_S3_APP_ACCESS_KEY}\"
+          export ENGRAM_S3_SECRET_KEY=\"$${ENGRAM_S3_APP_SECRET_KEY}\"
+          echo '[step1_tools] Using APP credentials (no Delete permission)'
+        fi
+        
+        echo '[step1_tools] Ready. Use docker compose exec to run commands.'
+        sleep infinity
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - engram-net
+    restart: unless-stopped
+
+  # ============================================================================
+  # SCM 同步服务（可选，用于 SCM 增量同步）
+  # 启用方式: --profile scm_sync 或 COMPOSE_PROFILES=scm_sync
+  #
+  # 包含三个服务：
+  # - scm_scheduler: 调度器，周期性扫描仓库状态并入队同步任务
+  # - scm_worker: 工作进程，从队列获取任务并执行同步
+  # - scm_reaper: 清理器，清理过期/卡住的任务
+  #
+  # 环境变量说明:
+  #   - POSTGRES_DSN: 数据库连接字符串（自动构建）
+  #   - PROJECT_KEY: 项目标识
+  #   - SCM_SCHEDULER_*: 调度器配置
+  #   - SCM_WORKER_*: Worker 配置
+  #   - SCM_REAPER_*: Reaper 配置
+  #
+  # 敏感凭证（必须通过环境变量注入，禁止写入配置文件）:
+  #   - GITLAB_PRIVATE_TOKEN / GITLAB_TOKEN: GitLab 访问令牌
+  #   - SVN_USERNAME / SVN_PASSWORD: SVN 凭证
+  #   - STEP1_SVC_PASSWORD: 数据库服务账号密码
+  #
+  # 可选并发参数:
+  #   - SCM_SCHEDULER_GLOBAL_CONCURRENCY: 全局并发数（默认 10）
+  #   - SCM_SCHEDULER_PER_INSTANCE_CONCURRENCY: 单实例并发数（默认 3）
+  #   - SCM_SCHEDULER_PER_TENANT_CONCURRENCY: 单租户并发数（默认 5）
+  #   - SCM_WORKER_PARALLELISM: Worker 内部并行度（默认 1）
+  #   - SCM_WORKER_BATCH_SIZE: 单次处理批大小（默认 50）
+  #   - SCM_WORKER_LOCK_TIMEOUT: 分布式锁超时秒数（默认 300）
+  #
+  # 配置文件挂载（可选）:
+  #   挂载 config.toml 到 /app/config/config.toml 覆盖默认配置
+  #   示例: - ./my-config.toml:/app/config/config.toml:ro
+  # ============================================================================
+  scm_scheduler:
+    image: python:3.12-slim
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    profiles:
+      - scm_sync
+    working_dir: /app/scripts
+    volumes:
+      - ./apps/step1_logbook_postgres/scripts:/app/scripts:ro
+      # 可选：挂载自定义配置文件（取消注释启用）
+      # - ${SCM_CONFIG_PATH:-./apps/step1_logbook_postgres/templates/config.example.toml}:/app/config/config.toml:ro
+    environment:
+      # 数据库配置
+      POSTGRES_DSN: "postgresql://step1_svc:${STEP1_SVC_PASSWORD:?STEP1_SVC_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-engram}"
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+      # 配置文件路径（可选，环境变量优先级更高）
+      ENGRAM_STEP1_CONFIG: ${ENGRAM_STEP1_CONFIG:-}
+      # ========================================================================
+      # Scheduler 并发/限流配置
+      # ========================================================================
+      SCM_SCHEDULER_GLOBAL_CONCURRENCY: ${SCM_SCHEDULER_GLOBAL_CONCURRENCY:-10}
+      SCM_SCHEDULER_PER_INSTANCE_CONCURRENCY: ${SCM_SCHEDULER_PER_INSTANCE_CONCURRENCY:-3}
+      SCM_SCHEDULER_PER_TENANT_CONCURRENCY: ${SCM_SCHEDULER_PER_TENANT_CONCURRENCY:-5}
+      SCM_SCHEDULER_SCAN_INTERVAL_SECONDS: ${SCM_SCHEDULER_SCAN_INTERVAL_SECONDS:-60}
+      SCM_SCHEDULER_MAX_ENQUEUE_PER_SCAN: ${SCM_SCHEDULER_MAX_ENQUEUE_PER_SCAN:-100}
+      SCM_SCHEDULER_ERROR_BUDGET_THRESHOLD: ${SCM_SCHEDULER_ERROR_BUDGET_THRESHOLD:-0.3}
+      SCM_SCHEDULER_PAUSE_DURATION_SECONDS: ${SCM_SCHEDULER_PAUSE_DURATION_SECONDS:-300}
+      # ========================================================================
+      # 熔断器配置 (CircuitBreakerConfig)
+      # 环境变量 SCM_CB_* 优先于配置文件 scm.circuit_breaker.*
+      # ========================================================================
+      SCM_CB_FAILURE_RATE_THRESHOLD: ${SCM_CB_FAILURE_RATE_THRESHOLD:-0.3}
+      SCM_CB_RATE_LIMIT_THRESHOLD: ${SCM_CB_RATE_LIMIT_THRESHOLD:-0.2}
+      SCM_CB_TIMEOUT_RATE_THRESHOLD: ${SCM_CB_TIMEOUT_RATE_THRESHOLD:-0.2}
+      SCM_CB_OPEN_DURATION_SECONDS: ${SCM_CB_OPEN_DURATION_SECONDS:-300}
+      SCM_CB_HALF_OPEN_MAX_REQUESTS: ${SCM_CB_HALF_OPEN_MAX_REQUESTS:-3}
+      SCM_CB_RECOVERY_SUCCESS_COUNT: ${SCM_CB_RECOVERY_SUCCESS_COUNT:-2}
+      # ========================================================================
+      # 日志配置
+      # ========================================================================
+      LOG_LEVEL: ${SCM_SCHEDULER_LOG_LEVEL:-INFO}
+      PYTHONUNBUFFERED: "1"
+    command: >
+      bash -c "
+        pip install --quiet psycopg[binary] tomli requests &&
+        pip install --quiet -e /app/scripts &&
+        echo '[scm_scheduler] Starting scheduler service...' &&
+        python scm_sync_scheduler.py run --loop
+      "
+    depends_on:
+      step1_migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # 检查进程是否存活（scheduler 无 HTTP 端点，使用进程检查）
+      test: ["CMD-SHELL", "pgrep -f 'scm_sync_scheduler' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - engram-net
+
+  scm_worker:
+    image: python:3.12-slim
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    profiles:
+      - scm_sync
+    working_dir: /app/scripts
+    volumes:
+      - ./apps/step1_logbook_postgres/scripts:/app/scripts:ro
+      # 可选：挂载自定义配置文件（取消注释启用）
+      # - ${SCM_CONFIG_PATH:-./apps/step1_logbook_postgres/templates/config.example.toml}:/app/config/config.toml:ro
+    environment:
+      # 数据库配置
+      POSTGRES_DSN: "postgresql://step1_svc:${STEP1_SVC_PASSWORD:?STEP1_SVC_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-engram}"
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+      # 配置文件路径（可选，环境变量优先级更高）
+      ENGRAM_STEP1_CONFIG: ${ENGRAM_STEP1_CONFIG:-}
+      # ========================================================================
+      # Worker 核心配置
+      # ========================================================================
+      SCM_WORKER_LEASE_SECONDS: ${SCM_WORKER_LEASE_SECONDS:-300}
+      SCM_WORKER_RENEW_INTERVAL_SECONDS: ${SCM_WORKER_RENEW_INTERVAL_SECONDS:-60}
+      SCM_WORKER_MAX_RENEW_FAILURES: ${SCM_WORKER_MAX_RENEW_FAILURES:-3}
+      POLL_INTERVAL: ${SCM_WORKER_POLL_INTERVAL:-10}
+      # ========================================================================
+      # Worker 并发参数（可选）
+      # ========================================================================
+      # Worker 内部并行度（默认 1，单任务串行执行）
+      SCM_WORKER_PARALLELISM: ${SCM_WORKER_PARALLELISM:-1}
+      # 单次处理批大小（影响内存占用）
+      SCM_WORKER_BATCH_SIZE: ${SCM_WORKER_BATCH_SIZE:-50}
+      # 分布式锁超时秒数
+      SCM_WORKER_LOCK_TIMEOUT: ${SCM_WORKER_LOCK_TIMEOUT:-300}
+      # ========================================================================
+      # GitLab 凭证（敏感信息，必须通过环境变量注入）
+      # 支持两种环境变量名：GITLAB_PRIVATE_TOKEN 或 GITLAB_TOKEN
+      # ========================================================================
+      GITLAB_PRIVATE_TOKEN: ${GITLAB_PRIVATE_TOKEN:-${GITLAB_TOKEN:-}}
+      GITLAB_URL: ${GITLAB_URL:-}
+      # ========================================================================
+      # SVN 凭证（敏感信息，必须通过环境变量注入）
+      # ========================================================================
+      SVN_USERNAME: ${SVN_USERNAME:-}
+      SVN_PASSWORD: ${SVN_PASSWORD:-}
+      # ========================================================================
+      # 日志配置
+      # ========================================================================
+      LOG_LEVEL: ${SCM_WORKER_LOG_LEVEL:-INFO}
+      PYTHONUNBUFFERED: "1"
+    command: >
+      bash -c "
+        pip install --quiet psycopg[binary] tomli requests &&
+        pip install --quiet -e /app/scripts &&
+        echo '[scm_worker] Starting worker service...' &&
+        python scm_sync_worker.py --loop
+      "
+    depends_on:
+      step1_migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # 检查进程是否存活
+      test: ["CMD-SHELL", "pgrep -f 'scm_sync_worker' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - engram-net
+
+  scm_reaper:
+    image: python:3.12-slim
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    profiles:
+      - scm_sync
+    working_dir: /app/scripts
+    volumes:
+      - ./apps/step1_logbook_postgres/scripts:/app/scripts:ro
+    environment:
+      # 数据库配置
+      POSTGRES_DSN: "postgresql://step1_svc:${STEP1_SVC_PASSWORD:?STEP1_SVC_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-engram}"
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+      # ========================================================================
+      # Reaper 配置
+      # ========================================================================
+      SCM_REAPER_INTERVAL_SECONDS: ${SCM_REAPER_INTERVAL_SECONDS:-60}
+      SCM_REAPER_JOB_GRACE_SECONDS: ${SCM_REAPER_JOB_GRACE_SECONDS:-60}
+      SCM_REAPER_RUN_MAX_SECONDS: ${SCM_REAPER_RUN_MAX_SECONDS:-3600}
+      SCM_REAPER_LOCK_GRACE_SECONDS: ${SCM_REAPER_LOCK_GRACE_SECONDS:-120}
+      # ========================================================================
+      # 日志配置
+      # ========================================================================
+      LOG_LEVEL: ${SCM_REAPER_LOG_LEVEL:-INFO}
+      PYTHONUNBUFFERED: "1"
+    command: >
+      bash -c "
+        pip install --quiet psycopg[binary] tomli typer requests &&
+        pip install --quiet -e /app/scripts &&
+        echo '[scm_reaper] Starting reaper service...' &&
+        python scm_sync_reaper.py loop \
+          --interval $${SCM_REAPER_INTERVAL_SECONDS:-60} \
+          --job-grace-seconds $${SCM_REAPER_JOB_GRACE_SECONDS:-60} \
+          --run-max-seconds $${SCM_REAPER_RUN_MAX_SECONDS:-3600} \
+          --lock-grace-seconds $${SCM_REAPER_LOCK_GRACE_SECONDS:-120}
+      "
+    depends_on:
+      step1_migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # 检查进程是否存活
+      test: ["CMD-SHELL", "pgrep -f 'scm_sync_reaper' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - engram-net
+
+  # ============================================================================
+  # Step1 集成测试服务（可选，用于 CI/本地测试）
+  # 启用方式: --profile test 或 COMPOSE_PROFILES=minio,test
+  #
+  # 测试内容：
+  # - 制品存储（artifact_store）读写
+  # - 审计（artifact_audit）完整性检查
+  # - 垃圾回收（artifact_gc）
+  # - OpenMemory 角色权限验证（openmemory_svc / openmemory_migrator_login）
+  # ============================================================================
+  step1_test:
+    image: python:3.12-slim
+    # container_name 已移除，由 COMPOSE_PROJECT_NAME 自动命名
+    profiles:
+      - test
+    working_dir: /app
+    volumes:
+      - ./apps/step1_logbook_postgres:/app:ro
+    environment:
+      # 数据库配置
+      POSTGRES_DSN: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-engram}"
+      # MinIO 配置
+      ENGRAM_S3_ENDPOINT: "http://minio:9000"
+      ENGRAM_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      ENGRAM_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      ENGRAM_S3_BUCKET: ${MINIO_BUCKET:-engram-test}
+      ENGRAM_S3_REGION: "us-east-1"
+      # OpenMemory schema 配置（用于角色权限测试）
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+      # 启用集成测试
+      ENGRAM_UNIFIED_INTEGRATION: "1"
+      ENGRAM_MINIO_INTEGRATION: "1"
+      ENGRAM_UNIFIED_SKIP_DOCKER: "1"
+    command: >
+      bash -c "
+        pip install --quiet psycopg[binary] boto3 pytest requests &&
+        cd /app/scripts &&
+        pip install --quiet -e . &&
+        echo '=======================================' &&
+        echo 'Step1 集成测试' &&
+        echo '=======================================' &&
+        python -m pytest tests/test_unified_stack_integration.py -v --tb=short
+      "
+    depends_on:
+      step1_migrate:
+        condition: service_completed_successfully
+      minio_init:
+        condition: service_completed_successfully
+    networks:
+      - engram-net
+    restart: "no"
+
+networks:
+  engram-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  openmemory_data:
+    driver: local
+  minio_data:
+    driver: local

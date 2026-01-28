@@ -1,0 +1,22 @@
+# Memory Gateway 开发依赖
+# 包含运行时依赖 + 本地 editable 包 + 测试工具
+
+# 继承运行时依赖
+-r requirements.runtime.txt
+
+# ---------- Step1 本地包依赖 (Editable 安装) ----------
+# 
+# Gateway 依赖 engram_step1 包的以下模块:
+#   - engram_step1.config    (Config, get_config)
+#   - engram_step1.db        (get_connection, query_knowledge_candidates)
+#   - engram_step1.errors    (ErrorCode, DatabaseError)
+#   - engram_step1.governance
+#   - engram_step1.outbox
+#   - engram_step1.migrate   (run_all_checks, run_migrate)
+#
+# 安装方式:
+#   - 本地开发/CI: pip install -e ../../step1_logbook_postgres/scripts
+#   - Production (Docker): pip wheel + pip install (见 Dockerfile)
+#
+# 注意: editable 安装 (-e) 仅用于本地开发和 CI 测试，不进入生产镜像
+-e ../../step1_logbook_postgres/scripts

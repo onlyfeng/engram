@@ -1,0 +1,13 @@
+# Step3 SeekDB RAG Hybrid - 运行时依赖
+#
+# PostgreSQL + pgvector 向量检索后端
+# 使用 psycopg v3 (不是 psycopg2)
+
+# PostgreSQL 驱动 (psycopg v3 with binary)
+psycopg[binary]>=3.1.0
+
+# pgvector Python 绑定
+pgvector>=0.2.0
+
+# OpenAI Embedding (可选，EMBEDDING_PROVIDER=openai 时需要)
+openai>=1.0.0

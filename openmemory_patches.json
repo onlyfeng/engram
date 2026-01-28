@@ -1,0 +1,356 @@
+{
+  "baseline": {
+    "project": "OpenMemory (CaviraOSS/OpenMemory)",
+    "reference": "https://github.com/CaviraOSS/OpenMemory",
+    "estimated_version": "1.3.x",
+    "note": "上游基线通过代码特征推断，无 git 历史可用"
+  },
+  "analysis_date": "2026-01-28",
+  "patch_generation": {
+    "method": "diff -u",
+    "description": "由于非 git repo，使用 diff -u 基于 base 快照生成补丁",
+    "commands": {
+      "generate_single": "diff -u <base_file> <patched_file> > patches/openmemory/<category>/<patch_name>.patch",
+      "generate_all": "scripts/generate_om_patches.sh",
+      "apply_single": "patch -p1 < patches/openmemory/<category>/<patch_name>.patch",
+      "apply_all": "scripts/apply_om_patches.sh",
+      "verify": "sha256sum patches/openmemory/**/*.patch"
+    },
+    "base_snapshot_note": "需要上游原始文件作为 base 快照，存放于 archives/openmemory-base-<version>/ 或从上游 tarball 解压"
+  },
+  "patches": [
+    {
+      "file": "libs/OpenMemory/packages/openmemory-js/src/core/migrate.ts",
+      "changes": [
+        {
+          "id": "migrate-001",
+          "location": "lines 11-42",
+          "description": "DB_NAME_PATTERN 正则 + validateDbName() 数据库名称白名单校验",
+          "category": "A",
+          "reason": "Engram 安全约束：防止 SQL 注入，与 Step1 db_migrate.py 保持一致的命名规范",
+          "impact": "高 - 核心安全防线",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/migrate-001-db-name-validation.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-002",
+          "location": "lines 44-54",
+          "description": "quoteIdentifier() 标识符转义函数",
+          "category": "B",
+          "reason": "通用安全功能，可提交上游 PR 增强原项目安全性",
+          "impact": "中 - 防止保留字冲突和注入",
+          "upstream_potential": true,
+          "patch_file": "patches/openmemory/B/migrate-002-quote-identifier.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-003",
+          "location": "lines 56-110",
+          "description": "ensureDatabaseExists() 自动创建数据库功能 (OM_PG_AUTO_CREATE_DB)",
+          "category": "B",
+          "reason": "便利功能，可配置化后提交上游",
+          "impact": "低 - 开发便利性",
+          "upstream_potential": true,
+          "patch_file": "patches/openmemory/B/migrate-003-ensure-db-exists.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-004",
+          "location": "lines 112-151",
+          "description": "precheck_schema_safety() 禁止 public schema 预检",
+          "category": "A",
+          "reason": "Engram 强制约束：多租户隔离安全要求，防止与其他应用冲突",
+          "impact": "高 - 多租户隔离核心约束",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/migrate-004-schema-safety-precheck.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-005",
+          "location": "lines 400-416",
+          "description": "ensure_schema_exists() 确保目标 schema 存在",
+          "category": "B",
+          "reason": "幂等初始化，可提交上游",
+          "impact": "中 - 迁移可靠性",
+          "upstream_potential": true,
+          "patch_file": "patches/openmemory/B/migrate-005-ensure-schema-exists.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-006",
+          "location": "lines 418-608",
+          "description": "bootstrap_pg_schema() 完整 PG schema 初始化（含 temporal_facts/edges 表）",
+          "category": "A",
+          "reason": "Engram 扩展功能：时态知识图谱表结构为 Engram 特有",
+          "impact": "高 - 时态推理核心表",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/migrate-006-pg-temporal-schema.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-007",
+          "location": "lines 610-767",
+          "description": "bootstrap_sqlite_schema() 完整 SQLite schema 初始化",
+          "category": "A",
+          "reason": "与 PG 版本对应的 SQLite 实现，含时态表",
+          "impact": "高 - 双后端一致性",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/migrate-007-sqlite-temporal-schema.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-008",
+          "location": "lines 813-825",
+          "description": "OM_PG_SET_ROLE 连接角色设置 (RLS 支持)",
+          "category": "A",
+          "reason": "Engram 权限分离：支持 Row-Level Security 角色切换",
+          "impact": "高 - 企业级权限隔离",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/migrate-008-rls-role-support.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "migrate-009",
+          "location": "lines 769-777",
+          "description": "run_migrations() 入口增加 precheck_schema_safety 调用",
+          "category": "A",
+          "reason": "强制执行 Engram 安全策略",
+          "impact": "高 - 安全入口控制",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/migrate-009-precheck-entry.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        }
+      ]
+    },
+    {
+      "file": "libs/OpenMemory/packages/openmemory-js/src/core/db.ts",
+      "changes": [
+        {
+          "id": "db-001",
+          "location": "lines 11-54",
+          "description": "DB_NAME_PATTERN + validateDbName() + quoteIdentifier() 重复定义",
+          "category": "C",
+          "reason": "与 migrate.ts 重复，应抽取到共享模块 (utils/security.ts)",
+          "impact": "低 - 代码重复，维护负担",
+          "upstream_potential": false,
+          "refactor_suggestion": "提取到 src/core/utils/db_security.ts 共享",
+          "patch_file": "patches/openmemory/C/db-001-duplicated-validation.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "db-002",
+          "location": "lines 125-151",
+          "description": "OM_PG_SET_ROLE 连接时角色设置",
+          "category": "A",
+          "reason": "Engram RLS 权限分离支持",
+          "impact": "高 - 运行时权限隔离",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/db-002-rls-connection-role.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "db-003",
+          "location": "lines 200-324",
+          "description": "OM_PG_AUTO_DDL + OM_PG_AUTO_CREATE_DB 自动建表逻辑",
+          "category": "B",
+          "reason": "可配置化功能，默认关闭，生产环境使用 migrate 脚本",
+          "impact": "中 - 开发便利性 vs 生产安全",
+          "upstream_potential": true,
+          "patch_file": "patches/openmemory/B/db-003-auto-ddl-create-db.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "db-004",
+          "location": "lines 270-296",
+          "description": "temporal_facts + temporal_edges 表及索引创建",
+          "category": "A",
+          "reason": "Engram 时态知识图谱核心表结构",
+          "impact": "高 - 时态推理功能基础",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/db-004-temporal-tables-pg.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "db-005",
+          "location": "lines 590-648 (SQLite)",
+          "description": "SQLite 版 temporal_facts + temporal_edges 表及索引",
+          "category": "A",
+          "reason": "与 PG 对应的 SQLite 实现",
+          "impact": "高 - 双后端一致性",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/db-005-temporal-tables-sqlite.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "db-006",
+          "location": "lines 328-336, 678-684",
+          "description": "ValkeyVectorStore 向量后端支持",
+          "category": "B",
+          "reason": "扩展向量存储后端，可配置化提交上游",
+          "impact": "中 - 向量存储灵活性",
+          "upstream_potential": true,
+          "patch_file": "patches/openmemory/B/db-006-valkey-vector-store.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "db-007",
+          "location": "lines 210-216",
+          "description": "数据库名称预校验 (init 阶段)",
+          "category": "A",
+          "reason": "Engram 安全策略在连接前拦截非法名称",
+          "impact": "高 - 早期失败检测",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/db-007-dbname-prevalidation.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        }
+      ]
+    },
+    {
+      "file": "libs/OpenMemory/packages/openmemory-js/tests/test_multi_schema.ts",
+      "changes": [
+        {
+          "id": "test-001",
+          "location": "entire file (1-422)",
+          "description": "多 Schema 隔离集成测试套件",
+          "category": "A",
+          "reason": "Engram 多租户隔离验证测试，验证 tenant_a 与 tenant_b 数据完全隔离",
+          "impact": "高 - 多租户正确性验证",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/test-001-multi-schema-suite.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "test-002",
+          "location": "testSchemaIsolation()",
+          "description": "Schema 隔离测试用例",
+          "category": "A",
+          "reason": "验证不同租户 schema 间数据不可见",
+          "impact": "高 - 隔离性验证",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/test-002-schema-isolation.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "test-003",
+          "location": "testMigrationIdempotency()",
+          "description": "迁移幂等性测试",
+          "category": "B",
+          "reason": "通用测试，可作为上游质量保证",
+          "impact": "中 - 迁移可靠性",
+          "upstream_potential": true,
+          "patch_file": "patches/openmemory/B/test-003-migration-idempotency.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        },
+        {
+          "id": "test-004",
+          "location": "testStep1Isolation()",
+          "description": "与 Step1 governance/logbook schema 隔离测试",
+          "category": "A",
+          "reason": "Engram 特有：验证 OpenMemory 与 Step1 基础设施 schema 隔离",
+          "impact": "高 - 系统边界验证",
+          "upstream_potential": false,
+          "patch_file": "patches/openmemory/A/test-004-step1-isolation.patch",
+          "patch_sha256": null,
+          "applies_to_ref": "v1.3.0"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_patches": 20,
+    "category_A_must_keep": 14,
+    "category_B_upstreamable": 5,
+    "category_C_removable": 1,
+    "category_A_details": "必须保留的 Engram 约束：多租户隔离、public schema 禁用、RLS 角色支持、时态知识图谱表、安全校验",
+    "category_B_details": "可上游化改进：quoteIdentifier、ensureDatabaseExists、幂等初始化、ValkeyVectorStore、幂等测试",
+    "category_C_details": "可移除/重构：db.ts 与 migrate.ts 重复的 validateDbName/quoteIdentifier 定义（应提取共享）",
+    "bundle_sha256": null,
+    "bundle_sha256_note": "所有 .patch 文件的联合 SHA256，由 scripts/generate_om_patches.sh 生成后写入"
+  },
+  "patch_files_manifest": {
+    "description": "补丁文件清单，按分类组织",
+    "base_dir": "patches/openmemory",
+    "categories": {
+      "A": {
+        "path": "patches/openmemory/A",
+        "count": 14,
+        "files": [
+          "migrate-001-db-name-validation.patch",
+          "migrate-004-schema-safety-precheck.patch",
+          "migrate-006-pg-temporal-schema.patch",
+          "migrate-007-sqlite-temporal-schema.patch",
+          "migrate-008-rls-role-support.patch",
+          "migrate-009-precheck-entry.patch",
+          "db-002-rls-connection-role.patch",
+          "db-004-temporal-tables-pg.patch",
+          "db-005-temporal-tables-sqlite.patch",
+          "db-007-dbname-prevalidation.patch",
+          "test-001-multi-schema-suite.patch",
+          "test-002-schema-isolation.patch",
+          "test-004-step1-isolation.patch"
+        ]
+      },
+      "B": {
+        "path": "patches/openmemory/B",
+        "count": 5,
+        "files": [
+          "migrate-002-quote-identifier.patch",
+          "migrate-003-ensure-db-exists.patch",
+          "migrate-005-ensure-schema-exists.patch",
+          "db-003-auto-ddl-create-db.patch",
+          "db-006-valkey-vector-store.patch",
+          "test-003-migration-idempotency.patch"
+        ]
+      },
+      "C": {
+        "path": "patches/openmemory/C",
+        "count": 1,
+        "files": [
+          "db-001-duplicated-validation.patch"
+        ]
+      }
+    }
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "action": "提取共享安全模块",
+      "description": "将 validateDbName() 和 quoteIdentifier() 提取到 src/core/utils/db_security.ts，消除 db.ts 和 migrate.ts 间的代码重复"
+    },
+    {
+      "priority": 2,
+      "action": "上游 PR: 标识符转义",
+      "description": "向 CaviraOSS/OpenMemory 提交 quoteIdentifier() 增强 SQL 安全性"
+    },
+    {
+      "priority": 3,
+      "action": "上游 PR: 幂等初始化",
+      "description": "向上游提交 ensure_schema_exists() 等幂等初始化改进"
+    },
+    {
+      "priority": 4,
+      "action": "文档补充",
+      "description": "在 Engram 文档中明确记录 OM_PG_SCHEMA!=public 的强制约束及原因"
+    }
+  ]
+}

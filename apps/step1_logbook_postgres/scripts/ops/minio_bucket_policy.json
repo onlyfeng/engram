@@ -1,0 +1,131 @@
+{
+  "_comment": "MinIO Bucket Policy Templates - app/ops 权限分离",
+  "_description": "两类 policy：app（无 DeleteObject，用于普通应用）；ops（含 Delete/List，用于 GC/迁移）",
+  "_usage": "通过 minio_init 容器自动应用，或手动执行 mc admin policy create/attach",
+  "_generators": {
+    "shell": "generate_policy.sh <type> <bucket> <prefixes> - 用于 minio_init 容器",
+    "python": "generate_s3_policy.py --bucket <bucket> --prefix <prefix> --allowed-prefixes <prefixes> - 用于 CI 验证和开发调试"
+  },
+  "_variables": {
+    "MINIO_BUCKET": "bucket 名称，例如 engram",
+    "MINIO_APP_USER": "应用用户名",
+    "MINIO_OPS_USER": "运维用户名",
+    "MINIO_ALLOWED_PREFIXES": "允许的前缀列表，例如 scm/,attachments/,exports/,tmp/"
+  },
+
+  "app_policy": {
+    "_description": "应用 Policy - 仅允许读写，禁止删除（最小权限原则）",
+    "_policy_name": "engram-app-${MINIO_BUCKET}",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "appAllowListBucketWithPrefix",
+        "Effect": "Allow",
+        "Action": ["s3:ListBucket"],
+        "Resource": ["arn:aws:s3:::${MINIO_BUCKET}"],
+        "Condition": {
+          "StringLike": {
+            "s3:prefix": [
+              "scm/*",
+              "attachments/*",
+              "exports/*",
+              "tmp/*"
+            ]
+          }
+        }
+      },
+      {
+        "Sid": "appAllowObjectOperations",
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:PutObject"
+        ],
+        "Resource": [
+          "arn:aws:s3:::${MINIO_BUCKET}/scm/*",
+          "arn:aws:s3:::${MINIO_BUCKET}/attachments/*",
+          "arn:aws:s3:::${MINIO_BUCKET}/exports/*",
+          "arn:aws:s3:::${MINIO_BUCKET}/tmp/*"
+        ]
+      }
+    ]
+  },
+
+  "ops_policy": {
+    "_description": "运维 Policy - 含 Delete/List 权限，用于 GC/迁移操作",
+    "_policy_name": "engram-ops-${MINIO_BUCKET}",
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "opsAllowListAllBuckets",
+        "Effect": "Allow",
+        "Action": ["s3:ListAllMyBuckets", "s3:GetBucketLocation"],
+        "Resource": ["arn:aws:s3:::*"]
+      },
+      {
+        "Sid": "opsAllowListBucketWithPrefix",
+        "Effect": "Allow",
+        "Action": ["s3:ListBucket"],
+        "Resource": ["arn:aws:s3:::${MINIO_BUCKET}"],
+        "Condition": {
+          "StringLike": {
+            "s3:prefix": [
+              "scm/*",
+              "attachments/*",
+              "exports/*",
+              "tmp/*"
+            ]
+          }
+        }
+      },
+      {
+        "Sid": "opsAllowObjectOperations",
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:GetObjectVersion",
+          "s3:DeleteObjectVersion"
+        ],
+        "Resource": [
+          "arn:aws:s3:::${MINIO_BUCKET}/scm/*",
+          "arn:aws:s3:::${MINIO_BUCKET}/attachments/*",
+          "arn:aws:s3:::${MINIO_BUCKET}/exports/*",
+          "arn:aws:s3:::${MINIO_BUCKET}/tmp/*"
+        ]
+      }
+    ]
+  },
+
+  "deny_insecure_transport": {
+    "_description": "强制 HTTPS 传输（可选，通过 generate_s3_policy.py --deny-insecure-transport 生成）",
+    "Sid": "DenyInsecureTransport",
+    "Effect": "Deny",
+    "Principal": "*",
+    "Action": "s3:*",
+    "Resource": [
+      "arn:aws:s3:::${MINIO_BUCKET}",
+      "arn:aws:s3:::${MINIO_BUCKET}/*"
+    ],
+    "Condition": {
+      "Bool": {
+        "aws:SecureTransport": "false"
+      }
+    }
+  },
+
+  "deny_public_access": {
+    "_description": "拒绝匿名公开访问（可选，通过 mc anonymous set none 实现更可靠）",
+    "Sid": "DenyPublicAccess",
+    "Effect": "Deny",
+    "Principal": "*",
+    "Action": ["s3:GetObject"],
+    "Resource": ["arn:aws:s3:::${MINIO_BUCKET}/*"],
+    "Condition": {
+      "StringNotEquals": {
+        "aws:PrincipalType": "User"
+      }
+    }
+  }
+}

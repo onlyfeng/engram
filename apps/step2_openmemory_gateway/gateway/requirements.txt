@@ -1,0 +1,14 @@
+# Memory Gateway 依赖入口（向后兼容）
+#
+# 此文件作为向后兼容入口，默认指向开发依赖。
+# 
+# 依赖文件结构:
+#   - requirements.runtime.txt : 纯第三方 PyPI 包（用于 Docker 构建）
+#   - requirements.dev.txt     : 运行时依赖 + Step1 editable 安装（用于本地开发/CI）
+#   - requirements.txt         : 向后兼容入口（指向 dev）
+#
+# 使用场景:
+#   - 本地开发/CI: pip install -r requirements.txt (或 requirements.dev.txt)
+#   - Docker 构建: pip install -r requirements.runtime.txt (见 Dockerfile)
+
+-r requirements.dev.txt
