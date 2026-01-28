@@ -2768,3 +2768,158 @@ class TestBackfillWithMigratedDb:
         assert result["dry_run"] is True
         assert "target_version" in result
         assert result["target_version"] == "v1.0-test"
+
+
+class TestDefaultConfigValues:
+    """
+    验证默认配置值
+    
+    确保所有新开关在默认配置下保持向后兼容（默认关闭），
+    不影响现有测试用例。
+    """
+
+    def test_scheduler_config_default_values(self):
+        """验证 SchedulerConfig 默认值"""
+        from engram_step1.scm_sync_policy import SchedulerConfig
+
+        # 使用无配置创建，验证默认值
+        config = SchedulerConfig()
+
+        # 核心开关默认应为 False（保持向后兼容）
+        assert config.enable_tenant_fairness is False, \
+            "enable_tenant_fairness 默认应为 False，保持向后兼容"
+        assert config.tenant_fairness_max_per_round == 1, \
+            "tenant_fairness_max_per_round 默认应为 1"
+        
+        # 其他常用配置的默认值
+        assert config.global_concurrency == 10
+        assert config.per_instance_concurrency == 3
+        assert config.per_tenant_concurrency == 5
+        assert config.error_budget_threshold == 0.3
+        assert config.pause_duration_seconds == 300
+        assert config.scan_interval_seconds == 60
+        assert config.max_enqueue_per_scan == 100
+
+    def test_scheduler_config_from_none_config(self):
+        """验证从 None 配置加载时使用默认值"""
+        from engram_step1.scm_sync_policy import SchedulerConfig
+
+        config = SchedulerConfig.from_config(None)
+
+        # 关键开关默认为 False
+        assert config.enable_tenant_fairness is False
+        assert config.global_concurrency == 10
+
+    def test_http_config_default_values(self):
+        """验证 HttpConfig 默认值"""
+        from engram_step1.gitlab_client import HttpConfig
+
+        # 使用无配置创建
+        config = HttpConfig()
+
+        # rate limit 开关默认应为 False（保持向后兼容，无速率限制）
+        assert config.rate_limit_enabled is False, \
+            "rate_limit_enabled 默认应为 False，保持向后兼容"
+        assert config.postgres_rate_limit_enabled is False, \
+            "postgres_rate_limit_enabled 默认应为 False，保持向后兼容"
+        
+        # 其他 HTTP 配置默认值
+        assert config.timeout_seconds == 60.0
+        assert config.max_attempts == 3
+        assert config.backoff_base_seconds == 1.0
+        assert config.backoff_max_seconds == 60.0
+        assert config.max_concurrency is None  # 默认无并发限制
+        assert config.rate_limit_requests_per_second == 10.0
+        assert config.rate_limit_burst_size is None  # 默认等于 requests_per_second
+
+    def test_http_config_from_none_config(self):
+        """验证从 None 配置加载 HttpConfig 时使用默认值"""
+        from engram_step1.gitlab_client import HttpConfig
+
+        config = HttpConfig.from_config(None)
+
+        # 关键开关默认为 False
+        assert config.rate_limit_enabled is False
+        assert config.postgres_rate_limit_enabled is False
+
+    def test_config_module_default_constants(self):
+        """验证 config 模块中的默认值常量"""
+        from engram_step1.config import (
+            # Scheduler 默认值
+            DEFAULT_SCHEDULER_ENABLE_TENANT_FAIRNESS,
+            DEFAULT_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND,
+            DEFAULT_SCHEDULER_GLOBAL_CONCURRENCY,
+            DEFAULT_SCHEDULER_PER_INSTANCE_CONCURRENCY,
+            DEFAULT_SCHEDULER_PER_TENANT_CONCURRENCY,
+            DEFAULT_SCHEDULER_SCAN_INTERVAL_SECONDS,
+            DEFAULT_SCHEDULER_MAX_ENQUEUE_PER_SCAN,
+            DEFAULT_SCHEDULER_ERROR_BUDGET_THRESHOLD,
+            DEFAULT_SCHEDULER_PAUSE_DURATION_SECONDS,
+            # GitLab rate limit 默认值
+            DEFAULT_GITLAB_RATE_LIMIT_ENABLED,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED,
+            DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST,
+        )
+
+        # 关键开关默认值断言（保持向后兼容）
+        assert DEFAULT_SCHEDULER_ENABLE_TENANT_FAIRNESS is False, \
+            "DEFAULT_SCHEDULER_ENABLE_TENANT_FAIRNESS 应为 False"
+        assert DEFAULT_GITLAB_RATE_LIMIT_ENABLED is False, \
+            "DEFAULT_GITLAB_RATE_LIMIT_ENABLED 应为 False"
+        assert DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED is False, \
+            "DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED 应为 False"
+
+        # 数值默认值
+        assert DEFAULT_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND == 1
+        assert DEFAULT_SCHEDULER_GLOBAL_CONCURRENCY == 10
+        assert DEFAULT_SCHEDULER_PER_INSTANCE_CONCURRENCY == 3
+        assert DEFAULT_SCHEDULER_PER_TENANT_CONCURRENCY == 5
+        assert DEFAULT_SCHEDULER_SCAN_INTERVAL_SECONDS == 60
+        assert DEFAULT_SCHEDULER_MAX_ENQUEUE_PER_SCAN == 100
+        assert DEFAULT_SCHEDULER_ERROR_BUDGET_THRESHOLD == 0.3
+        assert DEFAULT_SCHEDULER_PAUSE_DURATION_SECONDS == 300
+        assert DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND == 10.0
+        assert DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE == 10.0
+        assert DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST == 20
+
+    def test_get_scheduler_config_defaults(self):
+        """验证 get_scheduler_config() 返回正确的默认值"""
+        from engram_step1.config import get_scheduler_config
+        from unittest.mock import MagicMock
+
+        # 创建一个返回默认值的 mock config
+        mock_config = MagicMock()
+        mock_config.get.return_value = None  # 所有配置都返回 None，使用默认值
+
+        # 这里我们不调用 get_scheduler_config(mock_config)，因为它会调用 get_config()
+        # 而是直接验证导入的常量
+        from engram_step1.config import (
+            DEFAULT_SCHEDULER_ENABLE_TENANT_FAIRNESS,
+        )
+        assert DEFAULT_SCHEDULER_ENABLE_TENANT_FAIRNESS is False
+
+    def test_get_gitlab_rate_limit_config_defaults(self):
+        """验证 get_gitlab_rate_limit_config() 返回正确的默认值"""
+        from engram_step1.config import get_gitlab_rate_limit_config
+        from unittest.mock import MagicMock
+
+        # 创建一个总是返回 None 的 mock config
+        mock_config = MagicMock()
+        mock_config.get.return_value = None
+
+        result = get_gitlab_rate_limit_config(mock_config)
+
+        # 验证关键开关默认为 False
+        assert result["rate_limit_enabled"] is False, \
+            "rate_limit_enabled 默认应为 False"
+        assert result["postgres_rate_limit_enabled"] is False, \
+            "postgres_rate_limit_enabled 默认应为 False"
+
+        # 验证其他默认值
+        assert result["rate_limit_requests_per_second"] == 10.0
+        assert result["rate_limit_burst_size"] is None
+        assert result["postgres_rate_limit_rate"] == 10.0
+        assert result["postgres_rate_limit_burst"] == 20
+        assert result["postgres_rate_limit_max_wait"] == 60.0

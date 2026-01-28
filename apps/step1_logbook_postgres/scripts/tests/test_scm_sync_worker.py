@@ -604,6 +604,14 @@ class TestProcessOneJob:
             mock_hb_instance = MagicMock()
             mock_hb_instance.should_abort = True  # 续租失败
             mock_hb_instance.failure_count = 3
+            mock_hb_instance.get_abort_error.return_value = {
+                "error": "Lease lost after 3 consecutive renewal failures. Last error: renew_lease returned False",
+                "error_category": "lease_lost",
+                "failure_count": 3,
+                "max_failures": 3,
+                "job_id": "test-job",
+                "worker_id": "worker-test",
+            }
             mock_hb_instance.__enter__ = MagicMock(return_value=mock_hb_instance)
             mock_hb_instance.__exit__ = MagicMock(return_value=False)
             MockHeartbeat.return_value = mock_hb_instance
@@ -629,6 +637,226 @@ class TestProcessOneJob:
             # 因为 should_abort=True，应该调用 fail_retry 而不是 ack
             mock_fail_retry.assert_called_once()
             mock_ack.assert_not_called()
+
+
+class TestHeartbeatManagerLeaseLost:
+    """HeartbeatManager 续租失败导致任务中止的测试"""
+
+    def test_lease_lost_uses_shared_error_category(self):
+        """续租失败使用共享的 ErrorCategory.LEASE_LOST 常量"""
+        from scm_sync_worker import HeartbeatManager
+        from engram_step1.scm_sync_errors import ErrorCategory
+        
+        with patch('scm_sync_worker.renew_lease') as mock_renew:
+            mock_renew.return_value = False  # 续租一直失败
+            
+            hb = HeartbeatManager(
+                job_id="test-job-lease-lost",
+                worker_id="worker-1",
+                renew_interval_seconds=0.05,  # 50ms 间隔
+                lease_seconds=60,
+                max_failures=2,  # 2 次失败后中止
+            )
+            
+            hb.start()
+            time.sleep(0.2)  # 等待足够时间让续租失败
+            hb.stop()
+            
+            assert hb.should_abort is True
+            
+            # 验证使用共享的 ErrorCategory 常量
+            abort_error = hb.get_abort_error()
+            assert abort_error["error_category"] == ErrorCategory.LEASE_LOST.value
+            assert "lease_lost" == abort_error["error_category"]
+            assert abort_error["failure_count"] >= 2
+
+    def test_lease_lost_triggers_fail_retry_not_ack(self):
+        """续租失败应触发 fail_retry 而不是 ack（lease_lost 是临时错误）"""
+        from engram_step1.scm_sync_errors import (
+            ErrorCategory, 
+            TRANSIENT_ERROR_CATEGORIES,
+            is_transient_error,
+        )
+        
+        # 验证 lease_lost 在临时错误列表中
+        assert ErrorCategory.LEASE_LOST.value in TRANSIENT_ERROR_CATEGORIES
+        
+        # 验证 is_transient_error 返回 True
+        assert is_transient_error(ErrorCategory.LEASE_LOST.value, "") is True
+
+    def test_lease_lost_uses_zero_backoff(self):
+        """续租失败使用 0 秒退避（立即重试）"""
+        from engram_step1.scm_sync_errors import (
+            ErrorCategory,
+            TRANSIENT_ERROR_BACKOFF,
+            get_transient_error_backoff,
+        )
+        
+        # 验证配置中的退避时间为 0
+        assert TRANSIENT_ERROR_BACKOFF[ErrorCategory.LEASE_LOST.value] == 0
+        
+        # 验证 get_transient_error_backoff 返回 0
+        backoff = get_transient_error_backoff(ErrorCategory.LEASE_LOST.value, "")
+        assert backoff == 0
+
+    def test_lease_lost_structured_error_info(self):
+        """续租失败时记录结构化错误信息"""
+        from scm_sync_worker import HeartbeatManager
+        from engram_step1.scm_sync_errors import ErrorCategory
+        
+        with patch('scm_sync_worker.renew_lease') as mock_renew:
+            # 第一次成功，后面失败
+            mock_renew.side_effect = [True, False, False, False]
+            
+            hb = HeartbeatManager(
+                job_id="test-job-structured",
+                worker_id="worker-structured",
+                renew_interval_seconds=0.03,
+                lease_seconds=60,
+                max_failures=2,
+            )
+            
+            hb.start()
+            time.sleep(0.2)
+            hb.stop()
+            
+            # 获取结构化错误信息
+            abort_error = hb.get_abort_error()
+            
+            # 验证必需字段
+            assert "error" in abort_error
+            assert "error_category" in abort_error
+            assert "failure_count" in abort_error
+            assert "max_failures" in abort_error
+            assert "job_id" in abort_error
+            assert "worker_id" in abort_error
+            
+            # 验证字段值
+            assert abort_error["error_category"] == ErrorCategory.LEASE_LOST.value
+            assert abort_error["job_id"] == "test-job-structured"
+            assert abort_error["worker_id"] == "worker-structured"
+            assert abort_error["max_failures"] == 2
+
+    def test_lease_lost_last_error_captured(self):
+        """续租失败时捕获最后一次的错误信息"""
+        from scm_sync_worker import HeartbeatManager
+        
+        with patch('scm_sync_worker.renew_lease') as mock_renew:
+            # 模拟抛出异常的续租失败
+            mock_renew.side_effect = Exception("Connection refused")
+            
+            hb = HeartbeatManager(
+                job_id="test-job-error-capture",
+                worker_id="worker-1",
+                renew_interval_seconds=0.03,
+                lease_seconds=60,
+                max_failures=2,
+            )
+            
+            hb.start()
+            time.sleep(0.15)
+            hb.stop()
+            
+            # 验证最后错误被捕获
+            assert hb.last_error is not None
+            assert "Exception during renew" in hb.last_error
+            assert "Connection refused" in hb.last_error
+
+    def test_process_one_job_lease_lost_calls_fail_retry_with_correct_backoff(self):
+        """process_one_job 在续租失败时调用 fail_retry 并使用正确的退避时间"""
+        from engram_step1.scm_sync_errors import ErrorCategory
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.ack') as mock_ack, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.mark_dead') as mock_mark_dead, \
+             patch('scm_sync_worker.HeartbeatManager') as MockHeartbeat:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-backoff",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "attempts": 1,
+                "max_attempts": 3,
+                "lease_seconds": 300,
+                "payload": {},
+            }
+            
+            # 模拟心跳管理器返回结构化错误
+            mock_hb_instance = MagicMock()
+            mock_hb_instance.should_abort = True
+            mock_hb_instance.failure_count = 3
+            mock_hb_instance.get_abort_error.return_value = {
+                "error": "Lease lost after 3 failures",
+                "error_category": ErrorCategory.LEASE_LOST.value,
+                "failure_count": 3,
+                "max_failures": 3,
+                "job_id": "test-job-backoff",
+                "worker_id": "worker-test",
+            }
+            mock_hb_instance.__enter__ = MagicMock(return_value=mock_hb_instance)
+            mock_hb_instance.__exit__ = MagicMock(return_value=False)
+            MockHeartbeat.return_value = mock_hb_instance
+            
+            mock_fail_retry.return_value = True
+            
+            from scm_sync_worker import process_one_job
+            
+            with patch('scm_sync_worker.execute_sync_job') as mock_execute:
+                mock_execute.return_value = {"success": True}
+                
+                process_one_job(
+                    worker_id="worker-test",
+                    worker_cfg={
+                        "lease_seconds": 300,
+                        "renew_interval_seconds": 60,
+                        "max_renew_failures": 3,
+                    },
+                )
+            
+            # 验证调用 fail_retry 而不是 ack 或 mark_dead
+            mock_fail_retry.assert_called_once()
+            mock_ack.assert_not_called()
+            mock_mark_dead.assert_not_called()
+            
+            # 验证 backoff_seconds 为 0（lease_lost 立即重试）
+            call_kwargs = mock_fail_retry.call_args
+            assert call_kwargs[1].get("backoff_seconds") == 0
+
+    def test_lease_lost_is_not_permanent_error(self):
+        """验证 lease_lost 不是永久性错误（不应调用 mark_dead）"""
+        from engram_step1.scm_sync_errors import (
+            ErrorCategory,
+            PERMANENT_ERROR_CATEGORIES,
+            is_permanent_error,
+        )
+        
+        # 验证 lease_lost 不在永久性错误列表中
+        assert ErrorCategory.LEASE_LOST.value not in PERMANENT_ERROR_CATEGORIES
+        
+        # 验证 is_permanent_error 返回 False
+        assert is_permanent_error(ErrorCategory.LEASE_LOST.value) is False
+
+    def test_default_max_renew_failures_from_shared_module(self):
+        """验证默认 max_failures 使用共享模块的常量"""
+        from scm_sync_worker import HeartbeatManager
+        from engram_step1.scm_sync_errors import DEFAULT_MAX_RENEW_FAILURES
+        
+        with patch('scm_sync_worker.renew_lease') as mock_renew:
+            mock_renew.return_value = True
+            
+            # 不指定 max_failures，使用默认值
+            hb = HeartbeatManager(
+                job_id="test-default",
+                worker_id="worker-1",
+                renew_interval_seconds=100,
+                lease_seconds=60,
+            )
+            
+            # 验证使用共享常量
+            assert hb.max_failures == DEFAULT_MAX_RENEW_FAILURES
+            assert hb.max_failures == 3  # 当前默认值
 
 
 class TestGitLabAuthFallback:
@@ -773,103 +1001,211 @@ class TestGitLabAuthFallback:
 
 
 class TestTransientErrorBackoff:
-    """临时性错误退避策略测试"""
+    """临时性错误退避策略测试（测试 engram_step1.scm_sync_errors 模块）"""
 
     def test_get_transient_error_backoff_rate_limit(self):
         """429 速率限制错误应该返回 120 秒退避"""
-        from scm_sync_worker import _get_transient_error_backoff
+        from engram_step1.scm_sync_errors import get_transient_error_backoff
         
         # 通过 error_category
-        assert _get_transient_error_backoff("rate_limit", "") == 120
+        assert get_transient_error_backoff("rate_limit", "") == 120
         
         # 通过错误消息中的关键词
-        assert _get_transient_error_backoff("", "429 Too Many Requests") == 120
-        assert _get_transient_error_backoff("", "rate limit exceeded") == 120
-        assert _get_transient_error_backoff("", "too many requests") == 120
+        assert get_transient_error_backoff("", "429 Too Many Requests") == 120
+        assert get_transient_error_backoff("", "rate limit exceeded") == 120
+        assert get_transient_error_backoff("", "too many requests") == 120
 
     def test_get_transient_error_backoff_timeout(self):
         """超时错误应该返回 30 秒退避"""
-        from scm_sync_worker import _get_transient_error_backoff
+        from engram_step1.scm_sync_errors import get_transient_error_backoff
         
         # 通过 error_category
-        assert _get_transient_error_backoff("timeout", "") == 30
+        assert get_transient_error_backoff("timeout", "") == 30
         
         # 通过错误消息中的关键词
-        assert _get_transient_error_backoff("", "Request timeout") == 30
-        assert _get_transient_error_backoff("", "Connection timed out") == 30
+        assert get_transient_error_backoff("", "Request timeout") == 30
+        assert get_transient_error_backoff("", "Connection timed out") == 30
 
     def test_get_transient_error_backoff_unknown_default(self):
         """未知错误类型应该返回默认退避时间（60 秒）"""
-        from scm_sync_worker import _get_transient_error_backoff
+        from engram_step1.scm_sync_errors import get_transient_error_backoff
         
         # 空分类和消息
-        assert _get_transient_error_backoff("", "") == 60
+        assert get_transient_error_backoff("", "") == 60
         
         # 未知分类
-        assert _get_transient_error_backoff("unknown_category", "some error") == 60
+        assert get_transient_error_backoff("unknown_category", "some error") == 60
         
         # 不匹配任何关键词的消息
-        assert _get_transient_error_backoff("", "Internal processing error") == 60
+        assert get_transient_error_backoff("", "Internal processing error") == 60
 
     def test_get_transient_error_backoff_server_error(self):
         """服务器错误应该返回 90 秒退避"""
-        from scm_sync_worker import _get_transient_error_backoff
+        from engram_step1.scm_sync_errors import get_transient_error_backoff
         
-        assert _get_transient_error_backoff("server_error", "") == 90
-        assert _get_transient_error_backoff("", "502 Bad Gateway") == 90
-        assert _get_transient_error_backoff("", "503 Service Unavailable") == 90
+        assert get_transient_error_backoff("server_error", "") == 90
+        assert get_transient_error_backoff("", "502 Bad Gateway") == 90
+        assert get_transient_error_backoff("", "503 Service Unavailable") == 90
         # 注意: "504 Gateway Timeout" 包含 "timeout" 关键词，优先匹配为 timeout 类型
-        assert _get_transient_error_backoff("", "504 Gateway Timeout") == 30  # timeout 优先匹配
+        assert get_transient_error_backoff("", "504 Gateway Timeout") == 30  # timeout 优先匹配
 
     def test_get_transient_error_backoff_network(self):
         """网络错误应该返回 60 秒退避"""
-        from scm_sync_worker import _get_transient_error_backoff
+        from engram_step1.scm_sync_errors import get_transient_error_backoff
         
-        assert _get_transient_error_backoff("network", "") == 60
-        assert _get_transient_error_backoff("", "network error") == 60
+        assert get_transient_error_backoff("network", "") == 60
+        assert get_transient_error_backoff("", "network error") == 60
 
     def test_get_transient_error_backoff_connection(self):
         """连接错误应该返回 45 秒退避"""
-        from scm_sync_worker import _get_transient_error_backoff
+        from engram_step1.scm_sync_errors import get_transient_error_backoff
         
-        assert _get_transient_error_backoff("connection", "") == 45
-        assert _get_transient_error_backoff("", "connection refused") == 60  # network 优先匹配
+        assert get_transient_error_backoff("connection", "") == 45
+        assert get_transient_error_backoff("", "connection refused") == 60  # network 优先匹配
 
     def test_is_transient_error(self):
-        """测试 _is_transient_error 函数"""
-        from scm_sync_worker import _is_transient_error
+        """测试 is_transient_error 函数"""
+        from engram_step1.scm_sync_errors import is_transient_error
         
         # 通过 error_category
-        assert _is_transient_error("rate_limit", "") is True
-        assert _is_transient_error("timeout", "") is True
-        assert _is_transient_error("network", "") is True
-        assert _is_transient_error("server_error", "") is True
+        assert is_transient_error("rate_limit", "") is True
+        assert is_transient_error("timeout", "") is True
+        assert is_transient_error("network", "") is True
+        assert is_transient_error("server_error", "") is True
         
         # 通过错误消息
-        assert _is_transient_error("", "429 rate limit") is True
-        assert _is_transient_error("", "connection timeout") is True
+        assert is_transient_error("", "429 rate limit") is True
+        assert is_transient_error("", "connection timeout") is True
         
         # 非临时性错误
-        assert _is_transient_error("auth_error", "") is False
-        assert _is_transient_error("", "permission denied") is False
+        assert is_transient_error("auth_error", "") is False
+        assert is_transient_error("", "permission denied") is False
 
     def test_is_permanent_error(self):
-        """测试 _is_permanent_error 函数"""
-        from scm_sync_worker import _is_permanent_error
+        """测试 is_permanent_error 函数"""
+        from engram_step1.scm_sync_errors import is_permanent_error
         
         # 永久性错误类型
-        assert _is_permanent_error("auth_error") is True
-        assert _is_permanent_error("auth_missing") is True
-        assert _is_permanent_error("auth_invalid") is True
-        assert _is_permanent_error("repo_not_found") is True
-        assert _is_permanent_error("repo_type_unknown") is True
-        assert _is_permanent_error("permission_denied") is True
+        assert is_permanent_error("auth_error") is True
+        assert is_permanent_error("auth_missing") is True
+        assert is_permanent_error("auth_invalid") is True
+        assert is_permanent_error("repo_not_found") is True
+        assert is_permanent_error("repo_type_unknown") is True
+        assert is_permanent_error("permission_denied") is True
         
         # 非永久性错误类型
-        assert _is_permanent_error("rate_limit") is False
-        assert _is_permanent_error("timeout") is False
-        assert _is_permanent_error("") is False
-        assert _is_permanent_error(None) is False
+        assert is_permanent_error("rate_limit") is False
+        assert is_permanent_error("timeout") is False
+        assert is_permanent_error("") is False
+        assert is_permanent_error(None) is False
+    
+    def test_classify_exception_timeout(self):
+        """测试 classify_exception 对超时异常的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        # TimeoutError 异常
+        exc = TimeoutError("Connection timed out")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.TIMEOUT.value
+        assert "timed out" in msg.lower()
+    
+    def test_classify_exception_connection(self):
+        """测试 classify_exception 对连接异常的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        # ConnectionError 异常
+        exc = ConnectionError("Connection refused")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.CONNECTION.value
+        assert "refused" in msg.lower()
+    
+    def test_classify_exception_http_401(self):
+        """测试 classify_exception 对 401 错误的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        exc = Exception("401 Unauthorized: Invalid token")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.AUTH_ERROR.value
+    
+    def test_classify_exception_http_403(self):
+        """测试 classify_exception 对 403 错误的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        exc = Exception("403 Forbidden: Access denied")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.PERMISSION_DENIED.value
+    
+    def test_classify_exception_http_404(self):
+        """测试 classify_exception 对 404 错误的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        exc = Exception("404 Not Found: Repository does not exist")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.REPO_NOT_FOUND.value
+    
+    def test_classify_exception_http_429(self):
+        """测试 classify_exception 对 429 错误的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        exc = Exception("429 Too Many Requests")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.RATE_LIMIT.value
+    
+    def test_classify_exception_http_5xx(self):
+        """测试 classify_exception 对 5xx 错误的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        exc = Exception("502 Bad Gateway")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.SERVER_ERROR.value
+        
+        exc = Exception("503 Service Unavailable")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.SERVER_ERROR.value
+    
+    def test_classify_exception_unknown(self):
+        """测试 classify_exception 对未知异常的分类"""
+        from engram_step1.scm_sync_errors import classify_exception, ErrorCategory
+        
+        exc = Exception("Some unknown error")
+        category, msg = classify_exception(exc)
+        assert category == ErrorCategory.EXCEPTION.value
+    
+    def test_last_error_text(self):
+        """测试 last_error_text 函数"""
+        from engram_step1.scm_sync_errors import last_error_text
+        
+        # None 返回空字符串
+        assert last_error_text(None) == ""
+        
+        # 正常异常返回消息
+        exc = Exception("Test error message")
+        assert last_error_text(exc) == "Test error message"
+        
+        # 长消息被截断
+        long_msg = "x" * 2000
+        exc = Exception(long_msg)
+        result = last_error_text(exc, max_length=100)
+        assert len(result) == 100
+        assert result.endswith("...")
+    
+    def test_error_category_enum(self):
+        """测试 ErrorCategory 枚举定义"""
+        from engram_step1.scm_sync_errors import ErrorCategory
+        
+        # 永久性错误
+        assert ErrorCategory.AUTH_ERROR.value == "auth_error"
+        assert ErrorCategory.AUTH_MISSING.value == "auth_missing"
+        assert ErrorCategory.AUTH_INVALID.value == "auth_invalid"
+        assert ErrorCategory.REPO_NOT_FOUND.value == "repo_not_found"
+        assert ErrorCategory.PERMISSION_DENIED.value == "permission_denied"
+        
+        # 临时性错误
+        assert ErrorCategory.RATE_LIMIT.value == "rate_limit"
+        assert ErrorCategory.TIMEOUT.value == "timeout"
+        assert ErrorCategory.NETWORK.value == "network"
+        assert ErrorCategory.SERVER_ERROR.value == "server_error"
+        assert ErrorCategory.CONNECTION.value == "connection"
 
 
 class TestErrorBackoffInProcessOneJob:
@@ -1869,3 +2205,313 @@ class TestBackoffSecondsPassthrough:
                 if repo_id:
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
+
+
+class TestRetryAfterFieldUsage:
+    """测试同步结果中 retry_after 字段优先使用的逻辑"""
+    
+    def test_retry_after_preferred_over_computed_backoff(self):
+        """当 retry_after 存在时，优先使用它作为 backoff_seconds"""
+        from scm_sync_worker import process_one_job
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.ack') as mock_ack, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.mark_dead') as mock_mark_dead, \
+             patch('scm_sync_worker.renew_lease') as mock_renew, \
+             patch('scm_sync_worker.execute_sync_job') as mock_execute:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-1",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "priority": 100,
+                "payload": {},
+                "attempts": 1,
+            }
+            mock_renew.return_value = True
+            # 返回带有 retry_after 的失败结果
+            # 注意 retry_after=300 应该覆盖 rate_limit 的默认 120s
+            mock_execute.return_value = {
+                "success": False,
+                "error": "Rate limit exceeded, retry after 300s",
+                "error_category": "rate_limit",
+                "retry_after": 300,  # 标准字段：显式指定重试间隔
+                "counts": {"synced_count": 0},
+            }
+            
+            process_one_job(
+                job_types=["gitlab_commits"],
+                worker_id="test-worker",
+            )
+            
+            # 应该使用 retry_after=300 而不是 rate_limit 默认的 120s
+            mock_fail_retry.assert_called_once()
+            call_kwargs = mock_fail_retry.call_args
+            assert call_kwargs[1].get("backoff_seconds") == 300
+    
+    def test_computed_backoff_when_retry_after_absent(self):
+        """当 retry_after 不存在时，使用计算的 backoff"""
+        from scm_sync_worker import process_one_job
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.ack') as mock_ack, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.mark_dead') as mock_mark_dead, \
+             patch('scm_sync_worker.renew_lease') as mock_renew, \
+             patch('scm_sync_worker.execute_sync_job') as mock_execute:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-2",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "priority": 100,
+                "payload": {},
+                "attempts": 1,
+            }
+            mock_renew.return_value = True
+            # 返回不带 retry_after 的失败结果
+            mock_execute.return_value = {
+                "success": False,
+                "error": "Rate limit exceeded",
+                "error_category": "rate_limit",
+                # 无 retry_after 字段
+                "counts": {"synced_count": 0},
+            }
+            
+            process_one_job(
+                job_types=["gitlab_commits"],
+                worker_id="test-worker",
+            )
+            
+            # 应该使用 rate_limit 默认的 120s
+            mock_fail_retry.assert_called_once()
+            call_kwargs = mock_fail_retry.call_args
+            assert call_kwargs[1].get("backoff_seconds") == 120
+    
+    def test_retry_after_zero_uses_computed_backoff(self):
+        """当 retry_after=None 时使用计算的 backoff（None 视为无效）"""
+        from scm_sync_worker import process_one_job
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.ack') as mock_ack, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.mark_dead') as mock_mark_dead, \
+             patch('scm_sync_worker.renew_lease') as mock_renew, \
+             patch('scm_sync_worker.execute_sync_job') as mock_execute:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-3",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "priority": 100,
+                "payload": {},
+                "attempts": 1,
+            }
+            mock_renew.return_value = True
+            mock_execute.return_value = {
+                "success": False,
+                "error": "Timeout error",
+                "error_category": "timeout",
+                "retry_after": None,  # 显式 None
+                "counts": {"synced_count": 0},
+            }
+            
+            process_one_job(
+                job_types=["gitlab_commits"],
+                worker_id="test-worker",
+            )
+            
+            # 应该使用 timeout 默认的 30s
+            mock_fail_retry.assert_called_once()
+            call_kwargs = mock_fail_retry.call_args
+            assert call_kwargs[1].get("backoff_seconds") == 30
+
+
+class TestCountsFieldInSyncResult:
+    """测试同步结果中 counts 字段的正确性"""
+    
+    def test_counts_field_present_in_success_result(self):
+        """成功结果应包含 counts 字段"""
+        from scm_sync_worker import default_sync_handler
+        
+        result = default_sync_handler("unknown_type", 1, "incremental", {})
+        
+        assert "counts" in result
+        assert isinstance(result["counts"], dict)
+    
+    def test_default_handler_includes_error_category(self):
+        """默认处理器应包含 error_category 字段"""
+        from scm_sync_worker import default_sync_handler
+        
+        result = default_sync_handler("unknown_type", 1, "incremental", {})
+        
+        assert "error_category" in result
+        assert result["error_category"] == "unknown_job_type"
+
+
+class TestCircuitBreakerWithRetryAfter:
+    """测试熔断器正确接收 retry_after 参数"""
+    
+    def test_circuit_breaker_receives_retry_after(self):
+        """熔断器应该接收 retry_after 参数"""
+        from scm_sync_worker import process_one_job
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.ack') as mock_ack, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.mark_dead') as mock_mark_dead, \
+             patch('scm_sync_worker.renew_lease') as mock_renew, \
+             patch('scm_sync_worker.execute_sync_job') as mock_execute:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-cb",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "priority": 100,
+                "payload": {},
+                "attempts": 1,
+            }
+            mock_renew.return_value = True
+            mock_execute.return_value = {
+                "success": False,
+                "error": "Rate limited",
+                "error_category": "rate_limit",
+                "retry_after": 180,
+                "counts": {"synced_count": 0},
+            }
+            
+            # 创建 mock circuit breaker
+            mock_cb = MagicMock()
+            
+            process_one_job(
+                job_types=["gitlab_commits"],
+                worker_id="test-worker",
+                circuit_breaker=mock_cb,
+            )
+            
+            # 验证熔断器被调用并接收正确参数
+            mock_cb.record_result.assert_called_once()
+            call_kwargs = mock_cb.record_result.call_args[1]
+            assert call_kwargs.get("success") == False
+            assert call_kwargs.get("error_category") == "rate_limit"
+            assert call_kwargs.get("retry_after") == 180
+
+
+class TestStandardFieldsErrorCategories:
+    """测试各种错误分类场景的标准字段处理"""
+    
+    def test_transient_error_with_retry_after(self):
+        """临时性错误带 retry_after 字段时使用该值"""
+        from scm_sync_worker import process_one_job
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.renew_lease') as mock_renew, \
+             patch('scm_sync_worker.execute_sync_job') as mock_execute:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-te",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "priority": 100,
+                "payload": {},
+                "attempts": 1,
+            }
+            mock_renew.return_value = True
+            mock_execute.return_value = {
+                "success": False,
+                "error": "Server error 503",
+                "error_category": "server_error",
+                "retry_after": 180,  # 服务端指定的重试时间
+                "counts": {"synced_count": 5},
+            }
+            
+            process_one_job(
+                job_types=["gitlab_commits"],
+                worker_id="test-worker",
+            )
+            
+            # 应该使用 retry_after=180 而不是 server_error 默认的 90s
+            mock_fail_retry.assert_called_once()
+            call_kwargs = mock_fail_retry.call_args
+            assert call_kwargs[1].get("backoff_seconds") == 180
+    
+    def test_unknown_error_with_retry_after(self):
+        """未知错误类型带 retry_after 字段时使用该值"""
+        from scm_sync_worker import process_one_job
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.renew_lease') as mock_renew, \
+             patch('scm_sync_worker.execute_sync_job') as mock_execute:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-ue",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "priority": 100,
+                "payload": {},
+                "attempts": 1,
+            }
+            mock_renew.return_value = True
+            mock_execute.return_value = {
+                "success": False,
+                "error": "Unknown error",
+                "error_category": "custom_error",  # 未知分类
+                "retry_after": 45,  # 指定的重试时间
+                "counts": {},
+            }
+            
+            process_one_job(
+                job_types=["gitlab_commits"],
+                worker_id="test-worker",
+            )
+            
+            # 应该使用 retry_after=45 而不是默认的 60s
+            mock_fail_retry.assert_called_once()
+            call_kwargs = mock_fail_retry.call_args
+            assert call_kwargs[1].get("backoff_seconds") == 45
+    
+    def test_permanent_error_ignores_retry_after(self):
+        """永久性错误应调用 mark_dead 而非 fail_retry（不管是否有 retry_after）"""
+        from scm_sync_worker import process_one_job
+        
+        with patch('scm_sync_worker.claim') as mock_claim, \
+             patch('scm_sync_worker.fail_retry') as mock_fail_retry, \
+             patch('scm_sync_worker.mark_dead') as mock_mark_dead, \
+             patch('scm_sync_worker.renew_lease') as mock_renew, \
+             patch('scm_sync_worker.execute_sync_job') as mock_execute:
+            
+            mock_claim.return_value = {
+                "job_id": "test-job-pe",
+                "repo_id": 1,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "priority": 100,
+                "payload": {},
+                "attempts": 1,
+            }
+            mock_renew.return_value = True
+            mock_execute.return_value = {
+                "success": False,
+                "error": "Repository not found",
+                "error_category": "repo_not_found",  # 永久性错误
+                "retry_after": 60,  # 即使有 retry_after 也应该被忽略
+                "counts": {},
+            }
+            
+            process_one_job(
+                job_types=["gitlab_commits"],
+                worker_id="test-worker",
+            )
+            
+            # 永久性错误应调用 mark_dead
+            mock_mark_dead.assert_called_once()
+            mock_fail_retry.assert_not_called()

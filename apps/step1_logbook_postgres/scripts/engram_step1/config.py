@@ -1621,6 +1621,36 @@ DEFAULT_SCHEDULER_MAX_ENQUEUE_PER_SCAN = 100
 DEFAULT_SCHEDULER_ERROR_BUDGET_THRESHOLD = 0.3
 DEFAULT_SCHEDULER_PAUSE_DURATION_SECONDS = 300
 
+# Tenant 公平调度默认值
+DEFAULT_SCHEDULER_ENABLE_TENANT_FAIRNESS = False
+DEFAULT_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND = 1
+
+# Claim 租户公平调度默认值
+DEFAULT_CLAIM_ENABLE_TENANT_FAIR_CLAIM = False
+DEFAULT_CLAIM_MAX_CONSECUTIVE_SAME_TENANT = 3
+DEFAULT_CLAIM_MAX_TENANTS_PER_ROUND = 5
+
+# === GitLab HTTP/Rate Limit 默认值 ===
+
+# HTTP 请求速率限制（内存版令牌桶）
+DEFAULT_GITLAB_RATE_LIMIT_ENABLED = False  # 默认关闭，保持向后兼容
+DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND = 10.0
+DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE = None  # None 表示等于 requests_per_second
+
+# Postgres 分布式速率限制
+DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED = False  # 默认关闭，保持向后兼容
+DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE = 10.0
+DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST = 20
+DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT = 60.0
+
+# Postgres 分布式速率限制（tenant 维度）
+# key 形如: gitlab:<host>:tenant:<id>
+# 用于对每个 tenant 单独限流，避免某个 tenant 耗尽全局配额
+DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED = False  # 默认关闭
+DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE = 5.0  # tenant 级别更保守
+DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST = 10
+DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT = 30.0
+
 
 def get_scheduler_config(config: Optional["Config"] = None) -> dict:
     """
@@ -1634,6 +1664,8 @@ def get_scheduler_config(config: Optional["Config"] = None) -> dict:
     - scm.scheduler.max_enqueue_per_scan: 每次扫描最大入队数，默认 100
     - scm.scheduler.error_budget_threshold: 错误预算阈值，默认 0.3
     - scm.scheduler.pause_duration_seconds: 暂停时长秒数，默认 300
+    - scm.scheduler.enable_tenant_fairness: 启用按 tenant 分桶轮询策略，默认 False
+    - scm.scheduler.tenant_fairness_max_per_round: 每轮每 tenant 最多入队数，默认 1
     
     环境变量覆盖:
     - SCM_SCHEDULER_GLOBAL_CONCURRENCY
@@ -1643,6 +1675,8 @@ def get_scheduler_config(config: Optional["Config"] = None) -> dict:
     - SCM_SCHEDULER_MAX_ENQUEUE_PER_SCAN
     - SCM_SCHEDULER_ERROR_BUDGET_THRESHOLD
     - SCM_SCHEDULER_PAUSE_DURATION_SECONDS
+    - SCM_SCHEDULER_ENABLE_TENANT_FAIRNESS
+    - SCM_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND
     
     配置示例:
         [scm.scheduler]
@@ -1653,6 +1687,9 @@ def get_scheduler_config(config: Optional["Config"] = None) -> dict:
         max_enqueue_per_scan = 100
         error_budget_threshold = 0.3
         pause_duration_seconds = 300
+        # Tenant 公平调度配置
+        enable_tenant_fairness = false
+        tenant_fairness_max_per_round = 1
     
     Args:
         config: 可选的 Config 实例
@@ -1671,6 +1708,19 @@ def get_scheduler_config(config: Optional["Config"] = None) -> dict:
                 return float(env_val)
             return int(env_val)
         return config.get(config_key, default)
+    
+    def _get_env_or_config_bool(env_key: str, config_key: str, default: bool) -> bool:
+        """优先环境变量，否则配置文件，最后默认值（布尔类型）"""
+        env_val = os.environ.get(env_key)
+        if env_val:
+            return env_val.lower() in ("true", "1", "yes", "on")
+        cfg_val = config.get(config_key)
+        if cfg_val is not None:
+            if isinstance(cfg_val, bool):
+                return cfg_val
+            if isinstance(cfg_val, str):
+                return cfg_val.lower() in ("true", "1", "yes", "on")
+        return default
     
     return {
         "global_concurrency": _get_env_or_config(
@@ -1708,6 +1758,90 @@ def get_scheduler_config(config: Optional["Config"] = None) -> dict:
             "SCM_SCHEDULER_PAUSE_DURATION_SECONDS",
             "scm.scheduler.pause_duration_seconds",
             DEFAULT_SCHEDULER_PAUSE_DURATION_SECONDS,
+        ),
+        # Tenant 公平调度配置
+        "enable_tenant_fairness": _get_env_or_config_bool(
+            "SCM_SCHEDULER_ENABLE_TENANT_FAIRNESS",
+            "scm.scheduler.enable_tenant_fairness",
+            DEFAULT_SCHEDULER_ENABLE_TENANT_FAIRNESS,
+        ),
+        "tenant_fairness_max_per_round": _get_env_or_config(
+            "SCM_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND",
+            "scm.scheduler.tenant_fairness_max_per_round",
+            DEFAULT_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND,
+        ),
+    }
+
+
+# === SCM Claim 配置 ===
+
+
+def get_claim_config(config: Optional["Config"] = None) -> dict:
+    """
+    获取 SCM Claim 配置（租户公平调度）
+    
+    配置键名:
+    - scm.claim.enable_tenant_fair_claim: 启用租户公平调度，默认 False
+    - scm.claim.max_consecutive_same_tenant: 单租户最大连续 claim 次数，默认 3
+    - scm.claim.max_tenants_per_round: 每轮选取的最大租户数，默认 5
+    
+    环境变量覆盖:
+    - SCM_CLAIM_ENABLE_TENANT_FAIR_CLAIM
+    - SCM_CLAIM_MAX_CONSECUTIVE_SAME_TENANT
+    - SCM_CLAIM_MAX_TENANTS_PER_ROUND
+    
+    配置示例:
+        [scm.claim]
+        enable_tenant_fair_claim = true       # 启用租户公平调度
+        max_consecutive_same_tenant = 3       # 单租户最大连续 claim 3 次
+        max_tenants_per_round = 5             # 每轮选取最多 5 个租户
+    
+    Args:
+        config: 可选的 Config 实例
+    
+    Returns:
+        Claim 配置字典
+    """
+    if config is None:
+        config = get_config()
+    
+    def _get_env_or_config(env_key: str, config_key: str, default, value_type=int):
+        """优先环境变量，否则配置文件，最后默认值"""
+        env_val = os.environ.get(env_key)
+        if env_val:
+            if value_type == float:
+                return float(env_val)
+            return int(env_val)
+        return config.get(config_key, default)
+    
+    def _get_env_or_config_bool(env_key: str, config_key: str, default: bool) -> bool:
+        """优先环境变量，否则配置文件，最后默认值（布尔类型）"""
+        env_val = os.environ.get(env_key)
+        if env_val:
+            return env_val.lower() in ("true", "1", "yes", "on")
+        cfg_val = config.get(config_key)
+        if cfg_val is not None:
+            if isinstance(cfg_val, bool):
+                return cfg_val
+            if isinstance(cfg_val, str):
+                return cfg_val.lower() in ("true", "1", "yes", "on")
+        return default
+    
+    return {
+        "enable_tenant_fair_claim": _get_env_or_config_bool(
+            "SCM_CLAIM_ENABLE_TENANT_FAIR_CLAIM",
+            "scm.claim.enable_tenant_fair_claim",
+            DEFAULT_CLAIM_ENABLE_TENANT_FAIR_CLAIM,
+        ),
+        "max_consecutive_same_tenant": _get_env_or_config(
+            "SCM_CLAIM_MAX_CONSECUTIVE_SAME_TENANT",
+            "scm.claim.max_consecutive_same_tenant",
+            DEFAULT_CLAIM_MAX_CONSECUTIVE_SAME_TENANT,
+        ),
+        "max_tenants_per_round": _get_env_or_config(
+            "SCM_CLAIM_MAX_TENANTS_PER_ROUND",
+            "scm.claim.max_tenants_per_round",
+            DEFAULT_CLAIM_MAX_TENANTS_PER_ROUND,
         ),
     }
 
@@ -1820,6 +1954,113 @@ def get_http_config(config: Optional["Config"] = None) -> dict:
         "backoff_base_seconds": config.get("scm.http.backoff_base_seconds", DEFAULT_HTTP_BACKOFF_BASE_SECONDS),
         "backoff_max_seconds": config.get("scm.http.backoff_max_seconds", DEFAULT_HTTP_BACKOFF_MAX_SECONDS),
         "max_concurrency": config.get("scm.gitlab.max_concurrency"),
+    }
+
+
+def get_gitlab_rate_limit_config(config: Optional["Config"] = None) -> dict:
+    """
+    获取 GitLab 速率限制配置（统一入口）
+
+    配置键名:
+    - scm.gitlab.rate_limit_enabled: 启用内存版速率限制，默认 False
+    - scm.gitlab.rate_limit_requests_per_second: 每秒请求数，默认 10.0
+    - scm.gitlab.rate_limit_burst_size: 突发容量，默认 None（等于 requests_per_second）
+    - scm.gitlab.postgres_rate_limit_enabled: 启用 Postgres 分布式速率限制，默认 False
+    - scm.gitlab.postgres_rate_limit_rate: Postgres 令牌补充速率，默认 10.0
+    - scm.gitlab.postgres_rate_limit_burst: Postgres 最大令牌容量，默认 20
+    - scm.gitlab.postgres_rate_limit_max_wait: Postgres 最大等待秒数，默认 60.0
+
+    配置示例:
+        [scm.gitlab]
+        # 内存版速率限制（单进程）
+        rate_limit_enabled = false
+        rate_limit_requests_per_second = 10.0
+        rate_limit_burst_size = 10
+
+        # Postgres 分布式速率限制（多 worker）
+        postgres_rate_limit_enabled = false
+        postgres_rate_limit_rate = 10.0
+        postgres_rate_limit_burst = 20
+        postgres_rate_limit_max_wait = 60.0
+
+    注意:
+        这两个速率限制开关默认都为 False，保持向后兼容。
+        关闭时不改变原有逻辑（无速率限制）。
+
+    Args:
+        config: 可选的 Config 实例
+
+    Returns:
+        速率限制配置字典
+    """
+    if config is None:
+        config = get_config()
+
+    def _get_bool_config(key: str, default: bool) -> bool:
+        """获取布尔配置值"""
+        val = config.get(key)
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in ("true", "1", "yes", "on")
+        return default
+
+    def _get_with_default(key: str, default):
+        """获取配置值，None 时返回默认值"""
+        val = config.get(key)
+        return default if val is None else val
+
+    return {
+        # 内存版速率限制
+        "rate_limit_enabled": _get_bool_config(
+            "scm.gitlab.rate_limit_enabled",
+            DEFAULT_GITLAB_RATE_LIMIT_ENABLED,
+        ),
+        "rate_limit_requests_per_second": _get_with_default(
+            "scm.gitlab.rate_limit_requests_per_second",
+            DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND,
+        ),
+        "rate_limit_burst_size": _get_with_default(
+            "scm.gitlab.rate_limit_burst_size",
+            DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE,
+        ),
+        # Postgres 分布式速率限制（实例维度）
+        "postgres_rate_limit_enabled": _get_bool_config(
+            "scm.gitlab.postgres_rate_limit_enabled",
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED,
+        ),
+        "postgres_rate_limit_rate": _get_with_default(
+            "scm.gitlab.postgres_rate_limit_rate",
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE,
+        ),
+        "postgres_rate_limit_burst": _get_with_default(
+            "scm.gitlab.postgres_rate_limit_burst",
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST,
+        ),
+        "postgres_rate_limit_max_wait": _get_with_default(
+            "scm.gitlab.postgres_rate_limit_max_wait",
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT,
+        ),
+        # Postgres 分布式速率限制（tenant 维度）
+        # key 形如: gitlab:<host>:tenant:<id>
+        "tenant_rate_limit_enabled": _get_bool_config(
+            "scm.gitlab.tenant_rate_limit_enabled",
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED,
+        ),
+        "tenant_rate_limit_rate": _get_with_default(
+            "scm.gitlab.tenant_rate_limit_rate",
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE,
+        ),
+        "tenant_rate_limit_burst": _get_with_default(
+            "scm.gitlab.tenant_rate_limit_burst",
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST,
+        ),
+        "tenant_rate_limit_max_wait": _get_with_default(
+            "scm.gitlab.tenant_rate_limit_max_wait",
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT,
+        ),
     }
 
 

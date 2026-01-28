@@ -5,6 +5,7 @@ engram_step1.scm_sync_policy - SCM 同步降级策略控制器
 - 根据 client.stats、unrecoverable_errors、bulk/degraded 分布，输出下一轮同步建议
 - 支持动态调整 diff_mode、batch_size、sleep_seconds、forward_window_seconds 等参数
 - 实现自适应退避策略，在连续错误时自动降级
+- 提供统一的熔断 key 构建函数，确保 scheduler/worker 使用一致的 key
 
 使用示例:
     controller = DegradationController()
@@ -29,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -657,6 +659,15 @@ class SchedulerConfig:
     # 每次扫描最大 enqueue 数量
     max_enqueue_per_scan: int = 100
     
+    # === Tenant 公平调度配置 ===
+    # 启用按 tenant 分桶轮询策略
+    # 当启用时，不同 tenant 的任务将交替入队，避免单个大 tenant 占用全部队列容量
+    enable_tenant_fairness: bool = False
+    
+    # 启用 tenant 公平调度时，每轮每个 tenant 最多入队的任务数
+    # 例如设为 1 表示每个 tenant 轮流入队 1 个任务
+    tenant_fairness_max_per_round: int = 1
+    
     # logical_job_type 优先级（越小越优先）
     # 注意：policy 层使用 logical_job_type，scheduler 入队时会转换为 physical_job_type
     # logical_job_type: commits/mrs/reviews（与 SCM 类型无关的抽象任务类型）
@@ -699,6 +710,8 @@ class SchedulerConfig:
             if env_val:
                 if value_type == float:
                     return float(env_val)
+                elif value_type == bool:
+                    return env_val.lower() in ("true", "1", "yes")
                 return int(env_val)
             if config is not None:
                 return config.get(config_key, default)
@@ -772,6 +785,16 @@ class SchedulerConfig:
             max_enqueue_per_scan=_get_env_or_config(
                 "SCM_SCHEDULER_MAX_ENQUEUE_PER_SCAN",
                 "scm.scheduler.max_enqueue_per_scan", 100
+            ),
+            # Tenant 公平调度配置
+            enable_tenant_fairness=_get_env_or_config(
+                "SCM_SCHEDULER_ENABLE_TENANT_FAIRNESS",
+                "scm.scheduler.enable_tenant_fairness", False,
+                value_type=bool
+            ),
+            tenant_fairness_max_per_round=_get_env_or_config(
+                "SCM_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND",
+                "scm.scheduler.tenant_fairness_max_per_round", 1
             ),
         )
 
@@ -1228,6 +1251,82 @@ def compute_job_priority(
     return priority
 
 
+def _apply_tenant_fairness_ordering(
+    candidates: List[SyncJobCandidate],
+    states: List[RepoSyncState],
+    max_per_round: int = 1,
+) -> List[SyncJobCandidate]:
+    """
+    对候选任务应用按 tenant 分桶轮询排序（纯函数）
+    
+    实现公平调度：不同 tenant 的任务交替出现，避免单个大 tenant 占用全部队列容量。
+    
+    算法：
+    1. 按 tenant_id 将候选任务分组（保持每组内按优先级顺序）
+    2. 使用轮询方式从各 tenant 交替取任务
+    3. 每轮每个 tenant 最多取 max_per_round 个任务
+    4. 对于没有 tenant_id 的任务，归入 "__none__" 组
+    
+    Args:
+        candidates: 已按优先级排序的候选任务列表
+        states: 仓库同步状态列表（用于获取 tenant_id）
+        max_per_round: 每轮每个 tenant 最多取的任务数
+    
+    Returns:
+        重新排序后的候选任务列表
+    """
+    if not candidates or max_per_round <= 0:
+        return candidates
+    
+    # 构建 repo_id -> tenant_id 映射
+    repo_to_tenant: Dict[int, Optional[str]] = {}
+    for state in states:
+        repo_to_tenant[state.repo_id] = state.tenant_id
+    
+    # 按 tenant_id 分组，保持每组内的优先级顺序
+    tenant_buckets: Dict[str, List[SyncJobCandidate]] = {}
+    for candidate in candidates:
+        tenant_id = repo_to_tenant.get(candidate.repo_id) or "__none__"
+        if tenant_id not in tenant_buckets:
+            tenant_buckets[tenant_id] = []
+        tenant_buckets[tenant_id].append(candidate)
+    
+    # 如果只有一个 tenant（或所有任务都没有 tenant_id），保持原顺序
+    if len(tenant_buckets) <= 1:
+        return candidates
+    
+    # 按各 bucket 的第一个任务的优先级排序 bucket 顺序
+    # 这样优先级高的 tenant 会先被处理
+    sorted_tenant_ids = sorted(
+        tenant_buckets.keys(),
+        key=lambda tid: tenant_buckets[tid][0].priority if tenant_buckets[tid] else float('inf')
+    )
+    
+    # 轮询取任务
+    result: List[SyncJobCandidate] = []
+    bucket_indices: Dict[str, int] = {tid: 0 for tid in sorted_tenant_ids}
+    
+    while True:
+        added_this_round = 0
+        
+        for tenant_id in sorted_tenant_ids:
+            bucket = tenant_buckets[tenant_id]
+            start_idx = bucket_indices[tenant_id]
+            
+            # 每轮每个 tenant 最多取 max_per_round 个
+            for _ in range(max_per_round):
+                if bucket_indices[tenant_id] < len(bucket):
+                    result.append(bucket[bucket_indices[tenant_id]])
+                    bucket_indices[tenant_id] += 1
+                    added_this_round += 1
+        
+        # 如果这一轮没有添加任何任务，说明所有 bucket 都已耗尽
+        if added_this_round == 0:
+            break
+    
+    return result
+
+
 def select_jobs_to_enqueue(
     states: List[RepoSyncState],
     job_types: List[str],
@@ -1403,6 +1502,15 @@ def select_jobs_to_enqueue(
     
     # 按优先级排序（越小越优先）
     candidates.sort(key=lambda c: c.priority)
+    
+    # === Tenant 公平调度策略 ===
+    # 如果启用，按 tenant 分桶轮询，确保不同 tenant 交替入队
+    if config.enable_tenant_fairness and candidates:
+        candidates = _apply_tenant_fairness_ordering(
+            candidates, 
+            states, 
+            config.tenant_fairness_max_per_round,
+        )
     
     # 计算可入队的最大数量
     # 1. max_enqueue_per_scan 限制
@@ -1831,11 +1939,33 @@ class CircuitBreakerConfig:
     - open_duration_seconds: 熔断持续时间（秒）
     - half_open_max_requests: 半开状态最大探测请求数
     - recovery_success_count: 半开状态恢复所需连续成功次数
+    
+    小样本保护参数:
+    - min_samples: 最小样本数，低于此值不触发熔断，避免因少量数据导致误判
+    
+    平滑策略参数:
+    - smoothing_alpha: EMA（指数移动平均）平滑系数，范围 (0, 1]
+                       值越小平滑效果越强，对历史数据依赖越大，减少抖动
+                       值为 1.0 时无平滑效果，直接使用当前值
+                       典型值：0.3（较强平滑）、0.5（中等）、0.7（较弱平滑）
+    - enable_smoothing: 是否启用平滑策略，默认 True
+    
+    HALF_OPEN 探测参数说明:
+    - probe_budget_per_interval: 每个扫描周期允许放行的探测任务数
+    - probe_job_types_allowlist: 仅允许这些 job_type 作为探测任务（轻量任务优先）
+                                 为空列表时表示允许所有类型
     """
     # 触发阈值
     failure_rate_threshold: float = 0.3       # 30% 失败率触发熔断
     rate_limit_threshold: float = 0.2         # 20% 429 命中率触发熔断
     timeout_rate_threshold: float = 0.2       # 20% 超时率触发熔断
+    
+    # 小样本保护
+    min_samples: int = 5                      # 至少需要 5 次运行才能评估，避免小样本误判
+    
+    # 平滑策略（减少抖动）
+    enable_smoothing: bool = True             # 启用平滑策略
+    smoothing_alpha: float = 0.5              # EMA 平滑系数，值越小平滑越强
     
     # 统计窗口
     window_count: int = 20                    # 最近 20 次运行
@@ -1854,6 +1984,14 @@ class CircuitBreakerConfig:
     backfill_only_mode: bool = True           # 熔断时是否仅执行 backfill
     backfill_interval_seconds: int = 600      # backfill 间隔（10分钟）
     
+    # HALF_OPEN 探测参数
+    # 每个调度周期允许放行的探测任务数（用于限制 HALF_OPEN 状态下的并发）
+    probe_budget_per_interval: int = 2
+    # 仅允许这些 job_type 作为探测任务（轻量任务优先）
+    # 例如：["commits"] 表示仅允许 commits 类型的任务用于探测
+    # 为空列表时表示允许所有类型
+    probe_job_types_allowlist: List[str] = field(default_factory=lambda: ["commits"])
+    
     @classmethod
     def from_config(cls, config: Optional[Any] = None) -> "CircuitBreakerConfig":
         """
@@ -1863,6 +2001,9 @@ class CircuitBreakerConfig:
         - SCM_CB_FAILURE_RATE_THRESHOLD
         - SCM_CB_RATE_LIMIT_THRESHOLD
         - SCM_CB_TIMEOUT_RATE_THRESHOLD
+        - SCM_CB_MIN_SAMPLES
+        - SCM_CB_ENABLE_SMOOTHING
+        - SCM_CB_SMOOTHING_ALPHA
         - SCM_CB_WINDOW_COUNT
         - SCM_CB_WINDOW_MINUTES
         - SCM_CB_OPEN_DURATION_SECONDS
@@ -1872,6 +2013,8 @@ class CircuitBreakerConfig:
         - SCM_CB_DEGRADED_FORWARD_WINDOW_SECONDS
         - SCM_CB_BACKFILL_ONLY_MODE
         - SCM_CB_BACKFILL_INTERVAL_SECONDS
+        - SCM_CB_PROBE_BUDGET_PER_INTERVAL
+        - SCM_CB_PROBE_JOB_TYPES_ALLOWLIST (逗号分隔)
         """
         import os
         
@@ -1888,6 +2031,20 @@ class CircuitBreakerConfig:
                 return config.get(config_key, default)
             return default
         
+        def _get_list_env_or_config(env_key: str, config_key: str, default: List[str]) -> List[str]:
+            """获取列表类型配置，环境变量用逗号分隔"""
+            env_val = os.environ.get(env_key)
+            if env_val:
+                # 环境变量用逗号分隔，去除空白
+                return [s.strip() for s in env_val.split(",") if s.strip()]
+            if config is not None:
+                val = config.get(config_key, default)
+                if isinstance(val, list):
+                    return val
+                elif isinstance(val, str):
+                    return [s.strip() for s in val.split(",") if s.strip()]
+            return default
+        
         return cls(
             failure_rate_threshold=_get_env_or_config(
                 "SCM_CB_FAILURE_RATE_THRESHOLD",
@@ -1902,6 +2059,22 @@ class CircuitBreakerConfig:
             timeout_rate_threshold=_get_env_or_config(
                 "SCM_CB_TIMEOUT_RATE_THRESHOLD",
                 "scm.circuit_breaker.timeout_rate_threshold", 0.2,
+                value_type=float
+            ),
+            # 小样本保护参数
+            min_samples=_get_env_or_config(
+                "SCM_CB_MIN_SAMPLES",
+                "scm.circuit_breaker.min_samples", 5
+            ),
+            # 平滑策略参数
+            enable_smoothing=_get_env_or_config(
+                "SCM_CB_ENABLE_SMOOTHING",
+                "scm.circuit_breaker.enable_smoothing", True,
+                value_type=bool
+            ),
+            smoothing_alpha=_get_env_or_config(
+                "SCM_CB_SMOOTHING_ALPHA",
+                "scm.circuit_breaker.smoothing_alpha", 0.5,
                 value_type=float
             ),
             window_count=_get_env_or_config(
@@ -1941,6 +2114,15 @@ class CircuitBreakerConfig:
                 "SCM_CB_BACKFILL_INTERVAL_SECONDS",
                 "scm.circuit_breaker.backfill_interval_seconds", 600
             ),
+            probe_budget_per_interval=_get_env_or_config(
+                "SCM_CB_PROBE_BUDGET_PER_INTERVAL",
+                "scm.circuit_breaker.probe_budget_per_interval", 2
+            ),
+            probe_job_types_allowlist=_get_list_env_or_config(
+                "SCM_CB_PROBE_JOB_TYPES_ALLOWLIST",
+                "scm.circuit_breaker.probe_job_types_allowlist",
+                ["commits"]
+            ),
         )
 
 
@@ -1953,6 +2135,11 @@ class CircuitBreakerDecision:
     熔断决策数据结构
     
     包含是否允许同步、建议的降级参数等
+    
+    HALF_OPEN 探测模式说明:
+    - is_probe_mode: 是否为探测模式（HALF_OPEN 状态下为 True）
+    - probe_budget: 本次允许放行的探测任务数
+    - probe_job_types_allowlist: 允许作为探测任务的 job_type 列表
     """
     # 核心决策
     allow_sync: bool = True                   # 是否允许同步
@@ -1972,6 +2159,11 @@ class CircuitBreakerDecision:
     trigger_reason: Optional[str] = None
     health_stats: Optional[Dict[str, Any]] = None
     
+    # HALF_OPEN 探测模式相关
+    is_probe_mode: bool = False               # 是否为探测模式
+    probe_budget: int = 0                     # 本次允许放行的探测任务数
+    probe_job_types_allowlist: List[str] = field(default_factory=list)  # 允许的 job_type
+    
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -1985,6 +2177,9 @@ class CircuitBreakerDecision:
             "current_state": self.current_state,
             "trigger_reason": self.trigger_reason,
             "health_stats": self.health_stats,
+            "is_probe_mode": self.is_probe_mode,
+            "probe_budget": self.probe_budget,
+            "probe_job_types_allowlist": self.probe_job_types_allowlist,
         }
 
 
@@ -2053,6 +2248,11 @@ class CircuitBreakerController:
         self._half_open_successes: int = 0               # 半开状态的连续成功次数
         self._last_failure_reason: Optional[str] = None  # 最后一次触发熔断的原因
         
+        # 平滑状态存储（EMA 平滑后的历史值）
+        self._smoothed_failure_rate: Optional[float] = None
+        self._smoothed_rate_limit_rate: Optional[float] = None
+        self._smoothed_timeout_rate: Optional[float] = None
+        
         # 降级控制器（用于渐进恢复）
         self._degradation_controller: Optional[DegradationController] = None
     
@@ -2076,9 +2276,37 @@ class CircuitBreakerController:
         """是否处于正常状态"""
         return self._state == CircuitState.CLOSED
     
+    def _apply_smoothing(self, current_value: float, smoothed_value: Optional[float]) -> float:
+        """
+        应用 EMA（指数移动平均）平滑
+        
+        公式: smoothed = alpha * current + (1 - alpha) * previous_smoothed
+        
+        Args:
+            current_value: 当前值
+            smoothed_value: 上一次平滑后的值（None 表示第一次）
+        
+        Returns:
+            平滑后的值
+        """
+        if not self._config.enable_smoothing:
+            return current_value
+        
+        if smoothed_value is None:
+            # 第一次，直接使用当前值
+            return current_value
+        
+        alpha = self._config.smoothing_alpha
+        # 确保 alpha 在有效范围内
+        alpha = max(0.01, min(1.0, alpha))
+        
+        return alpha * current_value + (1.0 - alpha) * smoothed_value
+    
     def _should_trip(self, health_stats: Dict[str, Any]) -> tuple:
         """
         检查是否应触发熔断
+        
+        使用 min_samples 进行小样本保护，使用 EMA 平滑减少抖动。
         
         Args:
             health_stats: 健康统计数据
@@ -2086,28 +2314,62 @@ class CircuitBreakerController:
         Returns:
             (should_trip: bool, reason: str or None)
         """
-        # 如果没有足够的运行记录，不触发熔断
+        # 小样本保护：如果没有足够的运行记录，不触发熔断
         total_runs = health_stats.get("total_runs", 0)
-        if total_runs < 3:  # 至少需要 3 次运行才能评估
+        min_samples = self._config.min_samples
+        if total_runs < min_samples:
+            logger.debug(
+                "熔断检查跳过（样本不足）: total_runs=%d < min_samples=%d",
+                total_runs, min_samples
+            )
             return (False, None)
         
-        # 检查失败率
-        failed_rate = health_stats.get("failed_rate", 0.0)
-        if failed_rate >= self._config.failure_rate_threshold:
-            return (True, f"failure_rate={failed_rate:.2%}>=threshold={self._config.failure_rate_threshold:.2%}")
+        # 获取原始指标值
+        raw_failure_rate = health_stats.get("failed_rate", 0.0)
+        raw_rate_limit_rate = health_stats.get("rate_limit_rate", 0.0)
         
-        # 检查 429 命中率
-        rate_limit_rate = health_stats.get("rate_limit_rate", 0.0)
-        if rate_limit_rate >= self._config.rate_limit_threshold:
-            return (True, f"rate_limit_rate={rate_limit_rate:.2%}>=threshold={self._config.rate_limit_threshold:.2%}")
-        
-        # 检查超时率（如果有统计）
+        # 计算超时率
         total_requests = health_stats.get("total_requests", 0)
         timeout_count = health_stats.get("total_timeout_count", 0)
+        raw_timeout_rate = timeout_count / total_requests if total_requests > 0 else 0.0
+        
+        # 应用平滑策略（减少抖动）
+        smoothed_failure_rate = self._apply_smoothing(raw_failure_rate, self._smoothed_failure_rate)
+        smoothed_rate_limit_rate = self._apply_smoothing(raw_rate_limit_rate, self._smoothed_rate_limit_rate)
+        smoothed_timeout_rate = self._apply_smoothing(raw_timeout_rate, self._smoothed_timeout_rate)
+        
+        # 更新平滑状态
+        self._smoothed_failure_rate = smoothed_failure_rate
+        self._smoothed_rate_limit_rate = smoothed_rate_limit_rate
+        self._smoothed_timeout_rate = smoothed_timeout_rate
+        
+        # 使用平滑后的值进行阈值判断
+        use_raw = not self._config.enable_smoothing
+        failure_rate = raw_failure_rate if use_raw else smoothed_failure_rate
+        rate_limit_rate = raw_rate_limit_rate if use_raw else smoothed_rate_limit_rate
+        timeout_rate = raw_timeout_rate if use_raw else smoothed_timeout_rate
+        
+        # 检查失败率
+        if failure_rate >= self._config.failure_rate_threshold:
+            reason = f"failure_rate={failure_rate:.2%}>=threshold={self._config.failure_rate_threshold:.2%}"
+            if self._config.enable_smoothing:
+                reason += f" (raw={raw_failure_rate:.2%}, smoothed={smoothed_failure_rate:.2%})"
+            return (True, reason)
+        
+        # 检查 429 命中率
+        if rate_limit_rate >= self._config.rate_limit_threshold:
+            reason = f"rate_limit_rate={rate_limit_rate:.2%}>=threshold={self._config.rate_limit_threshold:.2%}"
+            if self._config.enable_smoothing:
+                reason += f" (raw={raw_rate_limit_rate:.2%}, smoothed={smoothed_rate_limit_rate:.2%})"
+            return (True, reason)
+        
+        # 检查超时率（仅在有请求统计时）
         if total_requests > 0:
-            timeout_rate = timeout_count / total_requests
             if timeout_rate >= self._config.timeout_rate_threshold:
-                return (True, f"timeout_rate={timeout_rate:.2%}>=threshold={self._config.timeout_rate_threshold:.2%}")
+                reason = f"timeout_rate={timeout_rate:.2%}>=threshold={self._config.timeout_rate_threshold:.2%}"
+                if self._config.enable_smoothing:
+                    reason += f" (raw={raw_timeout_rate:.2%}, smoothed={smoothed_timeout_rate:.2%})"
+                return (True, reason)
         
         return (False, None)
     
@@ -2200,7 +2462,7 @@ class CircuitBreakerController:
                 
                 logger.info(f"熔断器进入半开状态: key={self._key}")
                 
-                # 允许探测性同步
+                # 允许探测性同步，使用 probe 模式
                 return CircuitBreakerDecision(
                     allow_sync=True,
                     is_backfill_only=True,  # 先用 backfill 模式探测
@@ -2210,6 +2472,10 @@ class CircuitBreakerController:
                     current_state=CircuitState.HALF_OPEN.value,
                     trigger_reason=self._last_failure_reason,
                     health_stats=health_stats,
+                    # HALF_OPEN 探测模式相关
+                    is_probe_mode=True,
+                    probe_budget=self._config.probe_budget_per_interval,
+                    probe_job_types_allowlist=list(self._config.probe_job_types_allowlist),
                 )
             
             # 仍在熔断中，计算剩余等待时间
@@ -2273,6 +2539,10 @@ class CircuitBreakerController:
                 current_state=CircuitState.HALF_OPEN.value,
                 trigger_reason=self._last_failure_reason,
                 health_stats=health_stats,
+                # HALF_OPEN 探测模式相关
+                is_probe_mode=True,
+                probe_budget=self._config.probe_budget_per_interval,
+                probe_job_types_allowlist=list(self._config.probe_job_types_allowlist),
             )
     
     def record_result(self, success: bool, error_category: Optional[str] = None) -> None:
@@ -2346,6 +2616,10 @@ class CircuitBreakerController:
             "half_open_successes": self._half_open_successes,
             "last_failure_reason": self._last_failure_reason,
             "key": self._key,
+            # 平滑状态
+            "smoothed_failure_rate": self._smoothed_failure_rate,
+            "smoothed_rate_limit_rate": self._smoothed_rate_limit_rate,
+            "smoothed_timeout_rate": self._smoothed_timeout_rate,
         }
     
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
@@ -2365,6 +2639,11 @@ class CircuitBreakerController:
         self._half_open_attempts = state_dict.get("half_open_attempts", 0)
         self._half_open_successes = state_dict.get("half_open_successes", 0)
         self._last_failure_reason = state_dict.get("last_failure_reason")
+        
+        # 加载平滑状态
+        self._smoothed_failure_rate = state_dict.get("smoothed_failure_rate")
+        self._smoothed_rate_limit_rate = state_dict.get("smoothed_rate_limit_rate")
+        self._smoothed_timeout_rate = state_dict.get("smoothed_timeout_rate")
     
     def reset(self) -> None:
         """重置熔断器到初始状态"""
@@ -2374,4 +2653,203 @@ class CircuitBreakerController:
         self._half_open_successes = 0
         self._last_failure_reason = None
         
+        # 重置平滑状态
+        self._smoothed_failure_rate = None
+        self._smoothed_rate_limit_rate = None
+        self._smoothed_timeout_rate = None
+        
         logger.info(f"熔断器已重置: key={self._key}")
+
+
+# ============ 熔断 Key 构建 ============
+
+
+def normalize_instance_key_for_cb(instance_key: Optional[str]) -> Optional[str]:
+    """
+    规范化实例标识，用于构建熔断 key
+    
+    从 URL 或 hostname 提取统一的实例标识符。
+    
+    Args:
+        instance_key: 实例标识（可以是 URL 或 hostname）
+    
+    Returns:
+        规范化后的实例标识（hostname），或 None
+    
+    Examples:
+        >>> normalize_instance_key_for_cb("https://gitlab.example.com/group/project")
+        'gitlab.example.com'
+        >>> normalize_instance_key_for_cb("gitlab.example.com")
+        'gitlab.example.com'
+        >>> normalize_instance_key_for_cb(None)
+        None
+    """
+    if not instance_key:
+        return None
+    
+    instance_key = instance_key.strip()
+    if not instance_key:
+        return None
+    
+    # 如果是 URL，解析出 hostname
+    if "://" in instance_key:
+        try:
+            parsed = urlparse(instance_key)
+            return parsed.netloc.lower() if parsed.netloc else None
+        except Exception:
+            return None
+    
+    # 否则当作 hostname 直接使用
+    return instance_key.lower()
+
+
+def build_circuit_breaker_key(
+    project_key: str = "default",
+    scope: str = "global",
+    pool_name: Optional[str] = None,
+    *,
+    instance_key: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    worker_pool: Optional[str] = None,
+) -> str:
+    """
+    构建熔断状态的规范化 key（统一入口）
+    
+    这是 scheduler 和 worker 共用的 key 构建函数，确保对于相同的
+    instance/tenant/pool 配置，生成的 key 完全一致。
+    
+    Key 规范: <project_key>:<scope>
+    
+    scope 可选值:
+    - 'global': 全局熔断状态
+    - 'instance:<instance_key>': 特定 GitLab 实例的熔断状态
+    - 'tenant:<tenant_id>': 特定租户的熔断状态
+    - 'pool:<pool_name>': 特定 worker pool 的熔断状态
+    
+    参数优先级:
+    - 如果提供 scope 且非 'global'，直接使用（向后兼容）
+    - 如果提供 worker_pool/pool_name，生成 pool:xxx scope
+    - 如果提供 instance_key，生成 instance:xxx scope
+    - 如果提供 tenant_id，生成 tenant:xxx scope
+    - 否则使用 'global'
+    
+    向后兼容:
+    - 前三个位置参数保持与旧签名兼容：(project_key, scope, pool_name)
+    - 新增的 instance_key/tenant_id/worker_pool 为仅限关键字参数
+    
+    Args:
+        project_key: 项目标识（默认 'default'）
+        scope: 范围标识（默认 'global'，可被其他参数覆盖）
+        pool_name: pool 名称（向后兼容）
+        instance_key: GitLab 实例标识（URL 或 hostname，仅限关键字参数）
+        tenant_id: 租户标识（仅限关键字参数）
+        worker_pool: Worker pool 名称（仅限关键字参数，等价于 pool_name）
+    
+    Returns:
+        规范化的 key 字符串
+    
+    Examples:
+        >>> build_circuit_breaker_key()
+        'default:global'
+        >>> build_circuit_breaker_key('myproject')
+        'myproject:global'
+        >>> build_circuit_breaker_key('myproject', 'global')
+        'myproject:global'
+        >>> build_circuit_breaker_key(project_key='myproject')
+        'myproject:global'
+        >>> build_circuit_breaker_key(worker_pool='gitlab-prod')
+        'default:pool:gitlab-prod'
+        >>> build_circuit_breaker_key(instance_key='https://gitlab.example.com')
+        'default:instance:gitlab.example.com'
+        >>> build_circuit_breaker_key(tenant_id='tenant-a')
+        'default:tenant:tenant-a'
+        >>> build_circuit_breaker_key('myproject', 'pool:custom')
+        'myproject:pool:custom'
+    """
+    # 规范化 project_key
+    project_key = project_key or "default"
+    
+    # 合并 worker_pool 和 pool_name（worker_pool 优先）
+    effective_pool = worker_pool or pool_name
+    
+    # 确定 scope
+    # 如果 scope 已经是具体值（非 global），保持不变
+    if scope and scope != "global":
+        final_scope = scope
+    elif effective_pool:
+        # 有 pool 配置，使用 pool scope
+        final_scope = f"pool:{effective_pool}"
+    elif instance_key:
+        # 有 instance 配置，使用 instance scope
+        normalized_instance = normalize_instance_key_for_cb(instance_key)
+        if normalized_instance:
+            final_scope = f"instance:{normalized_instance}"
+        else:
+            final_scope = "global"
+    elif tenant_id:
+        # 有 tenant 配置，使用 tenant scope
+        final_scope = f"tenant:{tenant_id}"
+    else:
+        # 默认使用 global
+        final_scope = "global"
+    
+    return f"{project_key}:{final_scope}"
+
+
+def get_legacy_key_fallbacks(key: str) -> List[str]:
+    """
+    获取旧 key 格式的回退列表（用于兼容读取）
+    
+    当使用新的 key 格式读取失败时，可以尝试这些旧格式的 key。
+    这确保了从旧版本升级时，已存储的熔断状态不会丢失。
+    
+    Args:
+        key: 新格式的 key（如 'default:global'）
+    
+    Returns:
+        可能的旧 key 格式列表
+    
+    Examples:
+        >>> get_legacy_key_fallbacks('default:global')
+        ['global']
+        >>> get_legacy_key_fallbacks('default:pool:gitlab-prod')
+        ['pool:gitlab-prod', 'gitlab-prod']
+        >>> get_legacy_key_fallbacks('myproject:instance:gitlab.example.com')
+        ['instance:gitlab.example.com', 'gitlab.example.com']
+    """
+    fallbacks = []
+    
+    # 解析新 key 格式
+    parts = key.split(":", 1) if key else []
+    
+    if len(parts) == 2:
+        project_key, scope = parts
+        
+        # 旧全局 key 格式
+        if scope == "global":
+            fallbacks.append("global")
+        
+        # 如果 scope 是 pool:<name>，也尝试直接用 pool name
+        elif scope.startswith("pool:"):
+            pool_name = scope[5:]  # 去掉 'pool:' 前缀
+            fallbacks.append(f"pool:{pool_name}")
+            fallbacks.append(pool_name)
+        
+        # 如果 scope 是 instance:<name>，也尝试直接用 instance name
+        elif scope.startswith("instance:"):
+            instance_name = scope[9:]  # 去掉 'instance:' 前缀
+            fallbacks.append(f"instance:{instance_name}")
+            fallbacks.append(instance_name)
+        
+        # 如果 scope 是 tenant:<name>，也尝试直接用 tenant name
+        elif scope.startswith("tenant:"):
+            tenant_name = scope[7:]  # 去掉 'tenant:' 前缀
+            fallbacks.append(f"tenant:{tenant_name}")
+            fallbacks.append(tenant_name)
+    
+    # 也尝试原始 key 作为旧格式（但排除 worker:xxx 格式）
+    if key and ":" in key:
+        if not key.startswith("worker:"):
+            fallbacks.append(key)
+    
+    return fallbacks

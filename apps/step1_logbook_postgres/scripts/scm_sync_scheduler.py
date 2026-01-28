@@ -82,16 +82,18 @@ from engram_step1.scm_sync_policy import (
     InstanceBucketStatus,
     calculate_bucket_priority_penalty,
     should_skip_due_to_bucket_pause,
+    # 熔断 key 构建（统一入口）
+    build_circuit_breaker_key,
 )
 
 import db as scm_db
 from db import (
-    build_circuit_breaker_key,
     # Pause 相关函数
     set_repo_job_pause,
     get_paused_repo_job_pairs,
     batch_check_and_auto_unpause,
     clear_expired_pauses,
+    PauseReasonCode,
     # Rate Limit Bucket 相关函数
     list_rate_limit_buckets,
     get_rate_limit_status,
@@ -120,6 +122,11 @@ from engram_step1.scm_sync_job_types import (
     GIT_LOGICAL_JOB_TYPES,
     SVN_LOGICAL_JOB_TYPES,
     get_job_type_priority,
+)
+from engram_step1.scm_sync_keys import (
+    normalize_instance_key,
+    extract_tenant_id,
+    extract_instance_key,
 )
 
 # 支持的 logical job 类型（用于 policy 层，按默认优先级排序）
@@ -434,25 +441,18 @@ class SyncScheduler:
             elif repo_type == "svn":
                 cursor_ts = svn_cursor_map.get(repo_id)
             
-            # 解析 GitLab 实例和租户 ID
+            # 解析 GitLab 实例和租户 ID（使用统一的 key 规范化模块）
             gitlab_instance = None
             tenant_id = None
             
             if repo_type == "git":
                 # 从 URL 解析实例
                 url = repo.get("url", "")
-                if "://" in url:
-                    try:
-                        from urllib.parse import urlparse
-                        parsed = urlparse(url)
-                        gitlab_instance = parsed.netloc
-                    except Exception:
-                        pass
+                gitlab_instance = normalize_instance_key(url)
                 
-                # 租户 ID 可以从 project_key 解析
+                # 租户 ID 从 project_key 解析
                 project_key = repo.get("project_key", "")
-                if "/" in project_key:
-                    tenant_id = project_key.split("/")[0]
+                tenant_id = extract_tenant_id(project_key=project_key)
             
             # 注意：is_queued 不再在 repo 级别设置
             # 现在 per-job_type 的队列检查在 select_jobs_to_enqueue() 中通过 queued_pairs 参数完成
@@ -564,11 +564,26 @@ class SyncScheduler:
         """
         backfill_jobs = []
         
+        # === HALF_OPEN 探测模式配置 ===
+        probe_budget = circuit_decision.probe_budget if circuit_decision.is_probe_mode else float('inf')
+        probe_allowlist = circuit_decision.probe_job_types_allowlist if circuit_decision.is_probe_mode else []
+        
         for state in states:
+            # HALF_OPEN 探测模式下检查是否已达到 budget 限制
+            if circuit_decision.is_probe_mode and len(backfill_jobs) >= probe_budget:
+                logger.debug(
+                    "探测模式 backfill 任务达到 budget 限制 (%d)，停止生成",
+                    probe_budget
+                )
+                break
+            
             # 获取该仓库支持的 job 类型
             logical_job_types = get_logical_job_types_for_repo(state.repo_type)
             
             for logical_job_type in logical_job_types:
+                # HALF_OPEN 探测模式下过滤 job_type
+                if probe_allowlist and logical_job_type not in probe_allowlist:
+                    continue
                 # 转换为 physical_job_type
                 physical_job_type = logical_to_physical(logical_job_type, state.repo_type)
                 
@@ -616,22 +631,32 @@ class SyncScheduler:
                     # 熔断状态信息
                     "circuit_state": circuit_decision.current_state,
                     "is_backfill_only": True,
+                    # 写入所有 suggested_* 字段
                     "suggested_batch_size": circuit_decision.suggested_batch_size,
+                    "suggested_forward_window_seconds": circuit_decision.suggested_forward_window_seconds,
                     "suggested_diff_mode": circuit_decision.suggested_diff_mode,
                     # === 写入 instance/tenant 供 worker 快速过滤 ===
                     "gitlab_instance": state.gitlab_instance,
                     "tenant_id": state.tenant_id,
                 })
                 
+                # === 探测模式标记 ===
+                if circuit_decision.is_probe_mode:
+                    payload["is_probe_mode"] = True
+                    payload["probe_budget"] = circuit_decision.probe_budget
+                
                 # 计算优先级（backfill 任务优先级略低）
                 base_priority = self._scheduler_config.job_type_priority.get(logical_job_type, 10) * 100
                 priority = base_priority + 50  # backfill 任务优先级 +50
+                
+                # 确定任务模式
+                task_mode = "probe" if circuit_decision.is_probe_mode else "backfill"
                 
                 backfill_jobs.append({
                     "repo_id": state.repo_id,
                     "job_type": physical_job_type,
                     "priority": priority,
-                    "mode": "backfill",
+                    "mode": task_mode,
                     "payload_json": payload,
                 })
         
@@ -877,28 +902,74 @@ class SyncScheduler:
                 # 为需要暂停的 candidates 设置暂停记录
                 for c in candidates:
                     if c.should_pause:
+                        # 确定标准化的 reason_code
+                        # 当前暂停触发条件主要是 error_budget_threshold
+                        reason_code = PauseReasonCode.ERROR_BUDGET
+                        reason_detail = c.pause_reason or "error_budget_exceeded"
+                        
+                        # 如果是因 bucket 暂停相关，使用 rate_limit_bucket
+                        if c.bucket_paused:
+                            reason_code = PauseReasonCode.RATE_LIMIT_BUCKET
+                            reason_detail = f"bucket_paused,remaining={c.bucket_pause_remaining_seconds:.1f}s"
+                        
                         set_repo_job_pause(
                             conn,
                             repo_id=c.repo_id,
                             job_type=c.job_type,
                             pause_duration_seconds=self._scheduler_config.pause_duration_seconds,
-                            reason=c.pause_reason or "error_budget_exceeded",
+                            reason=reason_detail,
                             failure_rate=c.failure_rate,
+                            reason_code=reason_code,
                         )
                         logger.info(
-                            "设置暂停: repo_id=%d, job_type=%s, duration=%ds, reason=%s, failure_rate=%.2f",
+                            "设置暂停: repo_id=%d, job_type=%s, duration=%ds, reason_code=%s, reason=%s, failure_rate=%.2f",
                             c.repo_id, c.job_type,
                             self._scheduler_config.pause_duration_seconds,
-                            c.pause_reason, c.failure_rate,
+                            reason_code, reason_detail, c.failure_rate,
                         )
                 
                 # 过滤掉需要暂停的
                 candidates_to_enqueue = [c for c in candidates if not c.should_pause]
                 
+                # === HALF_OPEN 探测模式过滤 ===
+                # 当全局熔断器处于 HALF_OPEN 状态时，仅放行少量轻量任务
+                probe_mode_filtered_count = 0
+                if circuit_decision.is_probe_mode:
+                    probe_budget = circuit_decision.probe_budget
+                    probe_allowlist = circuit_decision.probe_job_types_allowlist
+                    
+                    logger.info(
+                        "HALF_OPEN 探测模式: budget=%d, allowlist=%s",
+                        probe_budget, probe_allowlist
+                    )
+                    
+                    # 按探测 allowlist 过滤 job_type（如果 allowlist 不为空）
+                    if probe_allowlist:
+                        original_count = len(candidates_to_enqueue)
+                        candidates_to_enqueue = [
+                            c for c in candidates_to_enqueue
+                            if c.job_type in probe_allowlist
+                        ]
+                        probe_mode_filtered_count += original_count - len(candidates_to_enqueue)
+                        
+                        logger.debug(
+                            "探测模式 job_type 过滤: %d -> %d (仅允许 %s)",
+                            original_count, len(candidates_to_enqueue), probe_allowlist
+                        )
+                    
+                    # 限制任务数量为 probe_budget
+                    if len(candidates_to_enqueue) > probe_budget:
+                        probe_mode_filtered_count += len(candidates_to_enqueue) - probe_budget
+                        candidates_to_enqueue = candidates_to_enqueue[:probe_budget]
+                        
+                        logger.debug(
+                            "探测模式数量限制: 限制为 %d 个任务", probe_budget
+                        )
+                
                 if not candidates_to_enqueue:
                     logger.info(
-                        "扫描完成: repos=%d, candidates=%d, paused=%d, 无需入队",
-                        result.scanned_repos, result.candidates_found, result.paused_repos
+                        "扫描完成: repos=%d, candidates=%d, paused=%d, probe_filtered=%d, 无需入队",
+                        result.scanned_repos, result.candidates_found, result.paused_repos, probe_mode_filtered_count
                     )
                     return result
                 
@@ -949,6 +1020,12 @@ class SyncScheduler:
                         # 允许 worker 按 pool 过滤任务，无需 claim 时 join repos 表
                         "gitlab_instance": state.gitlab_instance,
                         "tenant_id": state.tenant_id,
+                        # === 总是写入 suggested_* 参数（熔断建议参数）===
+                        # 即使在 CLOSED 状态下也写入，使用 circuit_decision 提供的默认值
+                        # worker 可统一从 payload 读取这些参数，无需关心熔断状态
+                        "suggested_batch_size": circuit_decision.suggested_batch_size,
+                        "suggested_forward_window_seconds": circuit_decision.suggested_forward_window_seconds,
+                        "suggested_diff_mode": circuit_decision.suggested_diff_mode,
                     }
                     
                     # === 写入 bucket 降权/跳过原因（便于排障）===
@@ -959,7 +1036,7 @@ class SyncScheduler:
                         payload["bucket_penalty_reason"] = candidate.bucket_penalty_reason
                         payload["bucket_penalty_value"] = candidate.bucket_penalty_value
                     
-                    # 确定任务模式（incremental / backfill）
+                    # 确定任务模式（incremental / backfill / probe）
                     task_mode = "incremental"
                     
                     # 如果处于全局熔断降级模式，添加降级参数
@@ -967,8 +1044,21 @@ class SyncScheduler:
                         payload["circuit_state"] = circuit_decision.current_state
                         payload["is_backfill_only"] = True
                         payload["suggested_batch_size"] = circuit_decision.suggested_batch_size
+                        payload["suggested_forward_window_seconds"] = circuit_decision.suggested_forward_window_seconds
                         payload["suggested_diff_mode"] = circuit_decision.suggested_diff_mode
                         task_mode = "backfill"
+                    
+                    # === HALF_OPEN 探测模式 ===
+                    # 在 HALF_OPEN 状态下，标记为 probe 任务并写入降级参数
+                    if circuit_decision.is_probe_mode:
+                        payload["is_probe_mode"] = True
+                        payload["probe_budget"] = circuit_decision.probe_budget
+                        payload["circuit_state"] = circuit_decision.current_state
+                        # 确保 suggested_* 参数已写入
+                        payload["suggested_batch_size"] = circuit_decision.suggested_batch_size
+                        payload["suggested_forward_window_seconds"] = circuit_decision.suggested_forward_window_seconds
+                        payload["suggested_diff_mode"] = circuit_decision.suggested_diff_mode
+                        task_mode = "probe"
                     
                     # === 实例级熔断降级模式 ===
                     # 如果实例处于 OPEN/HALF_OPEN 但允许同步（backfill 模式），应用降级参数
@@ -976,14 +1066,37 @@ class SyncScheduler:
                         payload["instance_circuit_state"] = instance_decision.current_state
                         payload["instance_is_backfill_only"] = True
                         payload["instance_suggested_batch_size"] = instance_decision.suggested_batch_size
+                        payload["instance_suggested_forward_window_seconds"] = instance_decision.suggested_forward_window_seconds
                         payload["instance_suggested_diff_mode"] = instance_decision.suggested_diff_mode
                         # 优先使用更保守的参数
                         payload["suggested_batch_size"] = min(
                             payload.get("suggested_batch_size", 100),
                             instance_decision.suggested_batch_size
                         )
+                        payload["suggested_forward_window_seconds"] = min(
+                            payload.get("suggested_forward_window_seconds", 3600),
+                            instance_decision.suggested_forward_window_seconds
+                        )
                         payload["suggested_diff_mode"] = instance_decision.suggested_diff_mode
-                        task_mode = "backfill"
+                        # 如果不是 probe 模式，设为 backfill
+                        if task_mode != "probe":
+                            task_mode = "backfill"
+                    
+                    # === 实例级 HALF_OPEN 探测模式 ===
+                    if instance_decision and instance_decision.is_probe_mode:
+                        payload["instance_is_probe_mode"] = True
+                        payload["instance_probe_budget"] = instance_decision.probe_budget
+                        # 优先使用更保守的参数
+                        payload["suggested_batch_size"] = min(
+                            payload.get("suggested_batch_size", 100),
+                            instance_decision.suggested_batch_size
+                        )
+                        payload["suggested_forward_window_seconds"] = min(
+                            payload.get("suggested_forward_window_seconds", 3600),
+                            instance_decision.suggested_forward_window_seconds
+                        )
+                        payload["suggested_diff_mode"] = instance_decision.suggested_diff_mode
+                        task_mode = "probe"
                     
                     # 使用 physical_job_type 入队，确保队列唯一键语义清晰
                     jobs_to_insert.append({

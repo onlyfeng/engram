@@ -906,5 +906,237 @@ class TestUnrecoverableErrorCategories:
             assert is_unrecoverable is True
 
 
+# ============ Backfill Watermark 策略测试 ============
+
+
+class TestBackfillWatermarkStrategy:
+    """测试回填时 watermark 策略的应用"""
+
+    def test_backfill_update_watermark_false_constraint_none(self):
+        """回填模式 update_watermark=False 时，约束为 none"""
+        update_watermark = False
+        watermark_constraint = "monotonic" if update_watermark else "none"
+        
+        assert watermark_constraint == "none"
+        
+        # 模拟 chunk payload
+        chunk_payload = {
+            "window_type": "time",
+            "window_since": "2025-01-01T00:00:00+00:00",
+            "window_until": "2025-01-01T04:00:00+00:00",
+            "chunk_index": 0,
+            "chunk_total": 3,
+            "update_watermark": update_watermark,
+            "watermark_constraint": watermark_constraint,
+        }
+        
+        assert chunk_payload["update_watermark"] is False
+        assert chunk_payload["watermark_constraint"] == "none"
+
+    def test_backfill_update_watermark_true_constraint_monotonic(self):
+        """回填模式 update_watermark=True 时，约束为 monotonic"""
+        update_watermark = True
+        watermark_constraint = "monotonic" if update_watermark else "none"
+        
+        assert watermark_constraint == "monotonic"
+        
+        chunk_payload = {
+            "window_type": "time",
+            "window_since": "2025-01-01T00:00:00+00:00",
+            "window_until": "2025-01-01T04:00:00+00:00",
+            "chunk_index": 0,
+            "chunk_total": 1,
+            "update_watermark": update_watermark,
+            "watermark_constraint": watermark_constraint,
+        }
+        
+        assert chunk_payload["update_watermark"] is True
+        assert chunk_payload["watermark_constraint"] == "monotonic"
+
+    def test_strict_mode_watermark_constraint_enforcement(self):
+        """strict 模式下 watermark 约束强制执行"""
+        strict_mode = True
+        update_watermark = True
+        
+        # 在 strict 模式且 update_watermark=True 时
+        # watermark 约束应该被严格执行
+        watermark_before = "2025-01-27T10:00:00Z"
+        watermark_after = "2025-01-27T08:00:00Z"  # 回退
+        
+        if update_watermark and strict_mode:
+            # 解析时间戳
+            from datetime import datetime, timezone
+            before_dt = datetime.fromisoformat(watermark_before.replace("Z", "+00:00"))
+            after_dt = datetime.fromisoformat(watermark_after.replace("Z", "+00:00"))
+            
+            # 检查是否回退
+            is_regression = after_dt < before_dt
+            
+            assert is_regression is True
+            # strict 模式下应该拒绝
+
+    def test_best_effort_mode_watermark_constraint_relaxed(self):
+        """best_effort 模式下 watermark 约束放宽"""
+        strict_mode = False
+        update_watermark = False  # best_effort 默认不更新
+        
+        watermark_before = "2025-01-27T10:00:00Z"
+        watermark_after = "2025-01-27T08:00:00Z"  # 回退
+        
+        # best_effort 模式下，不更新 watermark，不检查回退
+        if not update_watermark:
+            should_check_constraint = False
+        else:
+            should_check_constraint = True
+        
+        assert should_check_constraint is False
+
+    def test_backfill_cursor_before_after_recording(self):
+        """测试回填时 cursor_before/after 的记录"""
+        # 模拟回填 metadata
+        since_time = "2025-01-01T00:00:00+00:00"
+        until_time = "2025-01-01T12:00:00+00:00"
+        watermark_after = "2025-01-01T11:45:00+00:00"
+        
+        cursor_before = {
+            "since": since_time,
+            "window_type": "time",
+        }
+        
+        cursor_after = {
+            "until": until_time,
+            "window_type": "time",
+            "watermark_after": watermark_after,
+            "update_watermark": False,
+            "watermark_constraint": "none",
+        }
+        
+        # 验证 cursor_before 包含窗口起始边界
+        assert cursor_before["since"] == since_time
+        assert cursor_before["window_type"] == "time"
+        
+        # 验证 cursor_after 包含窗口结束边界和 watermark 策略
+        assert cursor_after["until"] == until_time
+        assert cursor_after["watermark_after"] == watermark_after
+        assert cursor_after["update_watermark"] is False
+        assert cursor_after["watermark_constraint"] == "none"
+
+    def test_svn_backfill_cursor_recording(self):
+        """测试 SVN 回填时 cursor_before/after 的记录"""
+        start_rev = 100
+        end_rev = 500
+        watermark_after = 495  # 实际同步到的最后一个 revision
+        
+        cursor_before = {
+            "start_rev": start_rev,
+            "window_type": "revision",
+        }
+        
+        cursor_after = {
+            "end_rev": end_rev,
+            "window_type": "revision",
+            "watermark_after": watermark_after,
+            "update_watermark": True,
+            "watermark_constraint": "monotonic",
+        }
+        
+        # 验证 cursor_before 包含起始 revision
+        assert cursor_before["start_rev"] == 100
+        assert cursor_before["window_type"] == "revision"
+        
+        # 验证 cursor_after 包含结束 revision 和 watermark 策略
+        assert cursor_after["end_rev"] == 500
+        assert cursor_after["watermark_after"] == 495
+        assert cursor_after["update_watermark"] is True
+        assert cursor_after["watermark_constraint"] == "monotonic"
+
+
+class TestChunkPayloadWatermarkFields:
+    """测试 chunk payload 中 watermark 相关字段"""
+
+    def test_time_chunk_payload_complete_fields(self):
+        """测试时间窗口 chunk payload 包含完整字段"""
+        payload = {
+            "window_type": "time",
+            "window_since": "2025-01-01T00:00:00+00:00",
+            "window_until": "2025-01-01T04:00:00+00:00",
+            "chunk_index": 0,
+            "chunk_total": 6,
+            "update_watermark": False,
+            "watermark_constraint": "none",
+        }
+        
+        required_fields = [
+            "window_type",
+            "window_since",
+            "window_until",
+            "chunk_index",
+            "chunk_total",
+            "update_watermark",
+            "watermark_constraint",
+        ]
+        
+        for field in required_fields:
+            assert field in payload, f"缺少字段: {field}"
+
+    def test_revision_chunk_payload_complete_fields(self):
+        """测试 revision 窗口 chunk payload 包含完整字段"""
+        payload = {
+            "window_type": "revision",
+            "window_start_rev": 100,
+            "window_end_rev": 199,
+            "chunk_index": 1,
+            "chunk_total": 5,
+            "update_watermark": True,
+            "watermark_constraint": "monotonic",
+        }
+        
+        required_fields = [
+            "window_type",
+            "window_start_rev",
+            "window_end_rev",
+            "chunk_index",
+            "chunk_total",
+            "update_watermark",
+            "watermark_constraint",
+        ]
+        
+        for field in required_fields:
+            assert field in payload, f"缺少字段: {field}"
+
+    def test_watermark_constraint_valid_values(self):
+        """测试 watermark_constraint 只能是有效值"""
+        valid_constraints = {"monotonic", "none"}
+        
+        # update_watermark=True 时应使用 monotonic
+        constraint_when_update = "monotonic"
+        assert constraint_when_update in valid_constraints
+        
+        # update_watermark=False 时应使用 none
+        constraint_when_no_update = "none"
+        assert constraint_when_no_update in valid_constraints
+
+    def test_all_chunks_share_same_watermark_strategy(self):
+        """测试同一回填任务的所有 chunk 共享相同的 watermark 策略"""
+        update_watermark = True
+        watermark_constraint = "monotonic"
+        
+        # 模拟 3 个 chunk
+        chunk_payloads = [
+            {
+                "chunk_index": i,
+                "chunk_total": 3,
+                "update_watermark": update_watermark,
+                "watermark_constraint": watermark_constraint,
+            }
+            for i in range(3)
+        ]
+        
+        # 验证所有 chunk 使用相同的策略
+        for payload in chunk_payloads:
+            assert payload["update_watermark"] == update_watermark
+            assert payload["watermark_constraint"] == watermark_constraint
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

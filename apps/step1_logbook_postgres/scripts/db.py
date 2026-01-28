@@ -2246,84 +2246,86 @@ def backfill_scm_source_ids(
 #   - worker:<worker_id>          旧 worker 级别 key（随机，不再使用）
 
 
-def build_circuit_breaker_key(
-    project_key: str = "default",
-    scope: str = "global",
-    pool_name: Optional[str] = None,
-) -> str:
-    """
-    构建熔断状态的规范化 key
-    
-    Key 规范: <project_key>:<scope>
-    
-    Args:
-        project_key: 项目标识（默认 'default'）
-        scope: 范围标识，可选值:
-            - 'global': 全局熔断状态
-            - 'pool:<pool_name>': 特定 pool 的熔断状态
-        pool_name: pool 名称（当 scope='pool' 或未指定 scope 但需要 pool 时使用）
-    
-    Returns:
-        规范化的 key 字符串
-    
-    Examples:
-        >>> build_circuit_breaker_key()
-        'default:global'
-        >>> build_circuit_breaker_key('myproject')
-        'myproject:global'
-        >>> build_circuit_breaker_key('default', pool_name='gitlab-prod')
-        'default:pool:gitlab-prod'
-        >>> build_circuit_breaker_key('myproject', 'pool:svn-only')
-        'myproject:pool:svn-only'
-    """
-    # 规范化 project_key
-    project_key = project_key or "default"
-    
-    # 如果提供了 pool_name，自动构建 pool scope
-    if pool_name:
-        scope = f"pool:{pool_name}"
-    
-    # 确保 scope 有值
-    scope = scope or "global"
-    
-    return f"{project_key}:{scope}"
-
-
-def _get_legacy_key_fallbacks(key: str) -> List[str]:
-    """
-    获取旧 key 格式的回退列表（用于兼容读取）
-    
-    Args:
-        key: 新格式的 key（如 'default:global'）
-    
-    Returns:
-        可能的旧 key 格式列表
-    """
-    fallbacks = []
-    
-    # 解析新 key 格式
-    parts = key.split(":", 1) if key else []
-    
-    if len(parts) == 2:
-        project_key, scope = parts
+# === 从 scm_sync_policy 导入熔断 key 构建函数（统一入口）===
+# 为保持向后兼容性，这里重新导出这些函数
+# 新代码应从 engram_step1.scm_sync_policy 导入
+try:
+    from engram_step1.scm_sync_policy import (
+        build_circuit_breaker_key,
+        get_legacy_key_fallbacks as _get_legacy_key_fallbacks,
+    )
+except ImportError:
+    # 回退实现：当 scm_sync_policy 不可用时使用本地实现
+    def build_circuit_breaker_key(
+        project_key: str = "default",
+        scope: str = "global",
+        pool_name: Optional[str] = None,
+        *,
+        instance_key: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        worker_pool: Optional[str] = None,
+    ) -> str:
+        """
+        构建熔断状态的规范化 key（本地回退实现）
         
-        # 旧全局 key 格式
-        if scope == "global":
-            fallbacks.append("global")
+        注意：此为回退实现，新代码应使用 engram_step1.scm_sync_policy.build_circuit_breaker_key
         
-        # 如果 scope 是 pool:<name>，也尝试直接用 pool name
-        if scope.startswith("pool:"):
-            pool_name = scope[5:]  # 去掉 'pool:' 前缀
-            fallbacks.append(f"pool:{pool_name}")
-            fallbacks.append(pool_name)
-    
-    # 也尝试原始 key 作为旧格式
-    if key and ":" in key:
-        # 对于 worker:xxx 格式的旧 key，不作为回退
-        if not key.startswith("worker:"):
-            fallbacks.append(key)
-    
-    return fallbacks
+        向后兼容：前三个位置参数保持旧签名 (project_key, scope, pool_name)
+        """
+        project_key = project_key or "default"
+        effective_pool = worker_pool or pool_name
+        
+        if scope and scope != "global":
+            final_scope = scope
+        elif effective_pool:
+            final_scope = f"pool:{effective_pool}"
+        elif instance_key:
+            # 简单规范化
+            if "://" in instance_key:
+                from urllib.parse import urlparse
+                try:
+                    parsed = urlparse(instance_key)
+                    normalized = parsed.netloc.lower() if parsed.netloc else instance_key
+                except Exception:
+                    normalized = instance_key
+            else:
+                normalized = instance_key.lower()
+            final_scope = f"instance:{normalized}"
+        elif tenant_id:
+            final_scope = f"tenant:{tenant_id}"
+        else:
+            final_scope = "global"
+        
+        return f"{project_key}:{final_scope}"
+
+    def _get_legacy_key_fallbacks(key: str) -> List[str]:
+        """获取旧 key 格式的回退列表（本地回退实现）"""
+        fallbacks = []
+        parts = key.split(":", 1) if key else []
+        
+        if len(parts) == 2:
+            project_key, scope = parts
+            
+            if scope == "global":
+                fallbacks.append("global")
+            elif scope.startswith("pool:"):
+                pool_name = scope[5:]
+                fallbacks.append(f"pool:{pool_name}")
+                fallbacks.append(pool_name)
+            elif scope.startswith("instance:"):
+                instance_name = scope[9:]
+                fallbacks.append(f"instance:{instance_name}")
+                fallbacks.append(instance_name)
+            elif scope.startswith("tenant:"):
+                tenant_name = scope[7:]
+                fallbacks.append(f"tenant:{tenant_name}")
+                fallbacks.append(tenant_name)
+        
+        if key and ":" in key:
+            if not key.startswith("worker:"):
+                fallbacks.append(key)
+        
+        return fallbacks
 
 
 def get_sync_runs_health_stats(
@@ -2793,7 +2795,39 @@ def delete_circuit_breaker_state(
 #
 # 使用 logbook.kv 存储，namespace='scm.sync_pause'
 # key 格式: repo:<repo_id>:<job_type>
-# value_json 包含: {"paused_until": <timestamp>, "reason": <string>, "paused_at": <timestamp>, "failure_rate": <float>}
+# value_json 包含: {"paused_until": <timestamp>, "reason": <string>, "reason_code": <string>, "paused_at": <timestamp>, "failure_rate": <float>}
+
+
+class PauseReasonCode:
+    """
+    暂停原因代码常量
+    
+    标准化的暂停原因代码，用于统一存储和按原因聚合统计。
+    
+    使用示例:
+        set_repo_job_pause(conn, repo_id, job_type, 300, 
+                          reason="failure_rate=0.35", 
+                          reason_code=PauseReasonCode.ERROR_BUDGET)
+    """
+    # 错误预算超限（failure_rate 过高）
+    ERROR_BUDGET = "error_budget"
+    
+    # 令牌桶/Rate Limit 暂停（bucket 级别的限流触发）
+    RATE_LIMIT_BUCKET = "rate_limit_bucket"
+    
+    # 熔断器打开（全局或实例级熔断）
+    CIRCUIT_OPEN = "circuit_open"
+    
+    # 手动暂停（运维人员手动设置）
+    MANUAL = "manual"
+    
+    # 所有有效的 reason code（用于验证）
+    ALL_CODES = frozenset([ERROR_BUDGET, RATE_LIMIT_BUCKET, CIRCUIT_OPEN, MANUAL])
+    
+    @classmethod
+    def is_valid(cls, code: str) -> bool:
+        """验证 reason code 是否有效"""
+        return code in cls.ALL_CODES
 
 
 def _build_pause_key(repo_id: int, job_type: str) -> str:
@@ -2824,13 +2858,26 @@ def _parse_pause_key(key: str) -> Optional[tuple]:
 
 @dataclass
 class RepoPauseRecord:
-    """Repo/Job_type 暂停记录"""
+    """
+    Repo/Job_type 暂停记录
+    
+    Attributes:
+        repo_id: 仓库 ID
+        job_type: 任务类型（logical: commits/mrs/reviews）
+        paused_until: 暂停到期时间戳 (Unix timestamp)
+        reason: 暂停原因描述（详细信息，如 failure_rate=0.35）
+        paused_at: 暂停开始时间戳 (Unix timestamp)
+        failure_rate: 当前失败率
+        reason_code: 标准化的暂停原因代码（参见 PauseReasonCode）
+    """
     repo_id: int
     job_type: str
     paused_until: float  # Unix timestamp
     reason: str
     paused_at: float     # Unix timestamp
     failure_rate: float = 0.0
+    # 标准化原因代码（用于聚合统计），可选（向后兼容旧数据）
+    reason_code: str = ""
     
     def is_expired(self, now: Optional[float] = None) -> bool:
         """检查暂停是否已过期"""
@@ -2852,6 +2899,7 @@ class RepoPauseRecord:
             "reason": self.reason,
             "paused_at": self.paused_at,
             "failure_rate": self.failure_rate,
+            "reason_code": self.reason_code,
         }
     
     @classmethod
@@ -2864,6 +2912,7 @@ class RepoPauseRecord:
             reason=data.get("reason", ""),
             paused_at=data.get("paused_at", 0.0),
             failure_rate=data.get("failure_rate", 0.0),
+            reason_code=data.get("reason_code", ""),
         )
 
 
@@ -2874,6 +2923,7 @@ def set_repo_job_pause(
     pause_duration_seconds: float,
     reason: str,
     failure_rate: float = 0.0,
+    reason_code: str = "",
     now: Optional[float] = None,
 ) -> RepoPauseRecord:
     """
@@ -2884,12 +2934,22 @@ def set_repo_job_pause(
         repo_id: 仓库 ID
         job_type: 任务类型（logical: commits/mrs/reviews）
         pause_duration_seconds: 暂停时长（秒）
-        reason: 暂停原因
+        reason: 暂停原因描述（详细信息）
         failure_rate: 当前失败率
+        reason_code: 标准化原因代码（参见 PauseReasonCode），用于聚合统计
         now: 当前时间戳（默认使用 time.time()）
     
     Returns:
         创建的暂停记录
+    
+    Example:
+        set_repo_job_pause(
+            conn, repo_id=1, job_type="commits",
+            pause_duration_seconds=300,
+            reason="failure_rate=0.35 exceeded threshold=0.30",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+            failure_rate=0.35,
+        )
     """
     if now is None:
         now = time.time()
@@ -2904,6 +2964,7 @@ def set_repo_job_pause(
         reason=reason,
         paused_at=now,
         failure_rate=failure_rate,
+        reason_code=reason_code,
     )
     
     value_json = json.dumps(record.to_dict())

@@ -1516,6 +1516,406 @@ class TestRequeueAttemptsSemantics:
             conn.close()
 
 
+class TestTenantFairClaim:
+    """租户公平调度测试
+    
+    验证:
+    - enable_tenant_fair_claim=True 时，不会长期只 claim 单一 tenant 的任务
+    - 多 tenant 混合队列中，各 tenant 都能公平获得执行机会
+    """
+
+    def test_tenant_fair_claim_distributes_across_tenants(self, migrated_db):
+        """租户公平调度：多 tenant 混合队列时不会只 claim 单一 tenant"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 创建 3 个 tenant，每个 tenant 有 5 个任务（共 15 个任务）
+            # tenant_a: priority 10, 20, 30, 40, 50
+            # tenant_b: priority 11, 21, 31, 41, 51
+            # tenant_c: priority 12, 22, 32, 42, 52
+            # 如果不启用公平调度，会先获取 tenant_a 的所有任务
+            tenants = ["tenant_a", "tenant_b", "tenant_c"]
+            for tenant_idx, tenant_id in enumerate(tenants):
+                for i in range(5):
+                    with conn.cursor() as cur:
+                        priority = (i + 1) * 10 + tenant_idx  # 10, 11, 12, 20, 21, 22, ...
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                            VALUES ('git', 'https://example.com/test_fair_{tenant_id}_{i}.git')
+                            RETURNING repo_id
+                        """)
+                        repo_id = cur.fetchone()[0]
+                        repo_ids.append(repo_id)
+                        
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.sync_jobs (
+                                repo_id, job_type, mode, priority, status,
+                                payload_json
+                            )
+                            VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                    %s::jsonb)
+                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 启用公平调度，连续 claim 9 个任务
+                claimed_tenants = []
+                for i in range(9):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    
+                    tenant_id = job["payload"].get("tenant_id", "")
+                    claimed_tenants.append(tenant_id)
+                    
+                    # 立即 ack，释放任务
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：前 9 个任务应该来自 3 个不同的 tenant，每个 tenant 约 3 个
+                # 公平调度确保不会只 claim 单一 tenant
+                tenant_counts = {}
+                for t in claimed_tenants:
+                    tenant_counts[t] = tenant_counts.get(t, 0) + 1
+                
+                # 应该有 3 个不同的 tenant
+                assert len(tenant_counts) == 3, f"应该从 3 个 tenant claim 任务，实际: {tenant_counts}"
+                
+                # 每个 tenant 应该至少被 claim 2 次（公平分布）
+                for tenant_id, count in tenant_counts.items():
+                    assert count >= 2, f"tenant {tenant_id} 只被 claim {count} 次，公平调度失败"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_without_fair_claim_follows_strict_priority(self, migrated_db):
+        """不启用公平调度时：严格按优先级顺序获取"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 创建 3 个 tenant 的任务，tenant_a 优先级最高
+            # tenant_a: priority 10, 20, 30
+            # tenant_b: priority 11, 21, 31
+            # tenant_c: priority 12, 22, 32
+            tenants = ["tenant_a", "tenant_b", "tenant_c"]
+            for tenant_idx, tenant_id in enumerate(tenants):
+                for i in range(3):
+                    with conn.cursor() as cur:
+                        priority = (i + 1) * 10 + tenant_idx
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                            VALUES ('git', 'https://example.com/test_nofair_{tenant_id}_{i}.git')
+                            RETURNING repo_id
+                        """)
+                        repo_id = cur.fetchone()[0]
+                        repo_ids.append(repo_id)
+                        
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.sync_jobs (
+                                repo_id, job_type, mode, priority, status,
+                                payload_json
+                            )
+                            VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                    %s::jsonb)
+                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 不启用公平调度，连续 claim 9 个任务
+                claimed_tenants = []
+                claimed_priorities = []
+                for i in range(9):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=False,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    
+                    tenant_id = job["payload"].get("tenant_id", "")
+                    claimed_tenants.append(tenant_id)
+                    claimed_priorities.append(job["priority"])
+                    
+                    # 立即 ack，释放任务
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：按严格优先级顺序 claim
+                # 预期顺序: 10, 11, 12, 20, 21, 22, 30, 31, 32
+                expected_priorities = [10, 11, 12, 20, 21, 22, 30, 31, 32]
+                assert claimed_priorities == expected_priorities, \
+                    f"优先级顺序不符，期望 {expected_priorities}，实际 {claimed_priorities}"
+                
+                # 验证：tenant 按优先级交替出现
+                expected_tenants = ["tenant_a", "tenant_b", "tenant_c"] * 3
+                assert claimed_tenants == expected_tenants, \
+                    f"tenant 顺序不符，期望 {expected_tenants}，实际 {claimed_tenants}"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_fair_claim_with_single_tenant(self, migrated_db):
+        """公平调度：只有单一 tenant 时正常工作"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 只创建一个 tenant 的任务
+            for i in range(5):
+                with conn.cursor() as cur:
+                    priority = (i + 1) * 10
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/test_single_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "only_tenant"}'::jsonb)
+                    """, (repo_id, priority))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 启用公平调度
+                claimed_priorities = []
+                for i in range(5):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    assert job["payload"].get("tenant_id") == "only_tenant"
+                    claimed_priorities.append(job["priority"])
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：按优先级顺序获取
+                assert claimed_priorities == [10, 20, 30, 40, 50]
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_fair_claim_with_null_tenant(self, migrated_db):
+        """公平调度：包含无 tenant_id 的任务"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 创建混合任务：有 tenant_id 和无 tenant_id
+            # tenant_a: priority 10, 20
+            # 无 tenant: priority 15, 25 (payload_json 为空或无 tenant_id)
+            
+            # tenant_a 任务
+            for i in range(2):
+                with conn.cursor() as cur:
+                    priority = (i + 1) * 10
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/test_null_a_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "tenant_a"}'::jsonb)
+                    """, (repo_id, priority))
+            
+            # 无 tenant_id 的任务
+            for i in range(2):
+                with conn.cursor() as cur:
+                    priority = (i + 1) * 10 + 5  # 15, 25
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/test_null_none_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{{}}'::jsonb)
+                    """, (repo_id, priority))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 启用公平调度
+                claimed_jobs = []
+                for i in range(4):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    claimed_jobs.append({
+                        "tenant_id": job["payload"].get("tenant_id"),
+                        "priority": job["priority"],
+                    })
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：公平调度应该在两个"tenant 组"（有 tenant_id 和无 tenant_id）间分配
+                # 具体顺序取决于实现，但应该两组都有任务被 claim
+                tenant_a_count = sum(1 for j in claimed_jobs if j["tenant_id"] == "tenant_a")
+                no_tenant_count = sum(1 for j in claimed_jobs if j["tenant_id"] is None)
+                
+                assert tenant_a_count == 2, f"tenant_a 应该有 2 个任务，实际 {tenant_a_count}"
+                assert no_tenant_count == 2, f"无 tenant 应该有 2 个任务，实际 {no_tenant_count}"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_fair_claim_prevents_single_tenant_starvation(self, migrated_db):
+        """公平调度：防止单一 tenant 饥饿（核心验证）"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 模拟极端场景：tenant_a 有 10 个高优先级任务，tenant_b 只有 1 个低优先级任务
+            # tenant_a: priority 1-10
+            # tenant_b: priority 100
+            
+            # tenant_a 任务
+            for i in range(10):
+                with conn.cursor() as cur:
+                    priority = i + 1
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/test_starve_a_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "tenant_a"}'::jsonb)
+                    """, (repo_id, priority))
+            
+            # tenant_b 只有 1 个低优先级任务
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                    VALUES ('git', 'https://example.com/test_starve_b.git')
+                    RETURNING repo_id
+                """)
+                repo_id = cur.fetchone()[0]
+                repo_ids.append(repo_id)
+                
+                cur.execute(f"""
+                    INSERT INTO {scm_schema}.sync_jobs (
+                        repo_id, job_type, mode, priority, status,
+                        payload_json
+                    )
+                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending',
+                            '{"tenant_id": "tenant_b"}'::jsonb)
+                """, (repo_id,))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 启用公平调度，claim 前 5 个任务
+                tenant_b_found = False
+                for i in range(5):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    
+                    if job["payload"].get("tenant_id") == "tenant_b":
+                        tenant_b_found = True
+                    
+                    ack(job["job_id"], f"worker-{i}")
+                
+                # 核心验证：在前 5 次 claim 中，tenant_b 应该至少出现一次
+                # 这证明公平调度防止了 tenant_b 被 tenant_a 完全压制
+                assert tenant_b_found, \
+                    "公平调度失败：tenant_b 应该在前 5 次 claim 中出现，但被 tenant_a 完全压制"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+
 class TestIntegration:
     """集成测试：完整的 claim -> execute -> ack/fail 流程"""
 
@@ -1635,4 +2035,531 @@ class TestIntegration:
             with conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
                 cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+
+class TestMultiTenantMultiRepoFairClaim:
+    """多租户多仓库公平调度 claim 测试
+    
+    测试场景:
+    - 多个 tenant 各有多个 repo 的 pending 任务
+    - 开启 fairness 开关后，断言 claim 序列中 tenant 交替出现
+    - 验证 per-tenant concurrency 限制
+    - 关闭 fairness 开关时保持旧行为（严格按优先级）
+    """
+
+    def test_multi_tenant_multi_repo_claim_alternates_with_fairness(self, migrated_db):
+        """多 tenant 多 repo：开启 fairness 后 claim 序列中 tenant 交替"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 构造 3 个 tenant，每个 tenant 有 4 个 repo 和任务
+            # tenant_a: priority 10, 20, 30, 40
+            # tenant_b: priority 11, 21, 31, 41
+            # tenant_c: priority 12, 22, 32, 42
+            tenants = ["tenant_a", "tenant_b", "tenant_c"]
+            repos_per_tenant = 4
+            
+            for t_idx, tenant_id in enumerate(tenants):
+                for r_idx in range(repos_per_tenant):
+                    with conn.cursor() as cur:
+                        priority = (r_idx + 1) * 10 + t_idx
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                            VALUES ('git', 'https://example.com/fair_claim_{tenant_id}_{r_idx}.git')
+                            RETURNING repo_id
+                        """)
+                        repo_id = cur.fetchone()[0]
+                        repo_ids.append(repo_id)
+                        
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.sync_jobs (
+                                repo_id, job_type, mode, priority, status,
+                                payload_json
+                            )
+                            VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                    %s::jsonb)
+                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 启用公平调度，连续 claim 12 个任务
+                claimed_tenants = []
+                for i in range(12):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    
+                    tenant_id = job["payload"].get("tenant_id", "")
+                    claimed_tenants.append(tenant_id)
+                    
+                    # 立即 ack，释放任务
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：每 3 个连续 claim 应来自 3 个不同 tenant
+                # 因为公平调度会轮询 tenant
+                for round_start in range(0, 12, 3):
+                    round_tenants = claimed_tenants[round_start:round_start + 3]
+                    unique_tenants = set(round_tenants)
+                    assert len(unique_tenants) == 3, \
+                        f"轮次 {round_start // 3}: 应有 3 个不同 tenant，实际: {round_tenants}"
+
+                # 验证每个 tenant 被 claim 4 次
+                for tenant_id in tenants:
+                    count = claimed_tenants.count(tenant_id)
+                    assert count == 4, f"{tenant_id} 应被 claim 4 次，实际 {count}"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_multi_tenant_claim_without_fairness_strict_priority(self, migrated_db):
+        """多 tenant 多 repo：关闭 fairness 时严格按优先级 claim"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 构造场景：tenant_a 有高优先级任务，tenant_b 有低优先级任务
+            # tenant_a: priority 1, 2, 3, 4, 5 (高优先级)
+            # tenant_b: priority 101, 102, 103, 104, 105 (低优先级)
+            
+            # tenant_a 高优先级任务
+            for i in range(5):
+                with conn.cursor() as cur:
+                    priority = i + 1
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/nofair_a_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "tenant_a"}'::jsonb)
+                    """, (repo_id, priority))
+            
+            # tenant_b 低优先级任务
+            for i in range(5):
+                with conn.cursor() as cur:
+                    priority = 101 + i
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/nofair_b_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "tenant_b"}'::jsonb)
+                    """, (repo_id, priority))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 关闭公平调度
+                claimed_tenants = []
+                claimed_priorities = []
+                for i in range(10):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=False,  # 关闭公平调度
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    
+                    tenant_id = job["payload"].get("tenant_id", "")
+                    claimed_tenants.append(tenant_id)
+                    claimed_priorities.append(job["priority"])
+                    
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：关闭 fairness 时，严格按优先级排序
+                # 前 5 个应全是 tenant_a
+                assert claimed_tenants[:5] == ["tenant_a"] * 5, \
+                    f"前 5 个应全是 tenant_a，实际: {claimed_tenants[:5]}"
+                
+                # 后 5 个应全是 tenant_b
+                assert claimed_tenants[5:] == ["tenant_b"] * 5, \
+                    f"后 5 个应全是 tenant_b，实际: {claimed_tenants[5:]}"
+                
+                # 优先级应该递增
+                assert claimed_priorities == sorted(claimed_priorities), \
+                    f"优先级应递增，实际: {claimed_priorities}"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_multi_tenant_varying_backlog_fairness_prevents_starvation(self, migrated_db):
+        """多 tenant 不同 backlog：fairness 防止小 tenant 饥饿"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # tenant_a: 15 个高优先级任务 (大 backlog)
+            # tenant_b: 3 个低优先级任务 (小 backlog)
+            
+            for i in range(15):
+                with conn.cursor() as cur:
+                    priority = i + 1  # 1-15
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/backlog_a_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "tenant_a"}'::jsonb)
+                    """, (repo_id, priority))
+            
+            for i in range(3):
+                with conn.cursor() as cur:
+                    priority = 100 + i  # 100-102 (低优先级)
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/backlog_b_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "tenant_b"}'::jsonb)
+                    """, (repo_id, priority))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                # 启用公平调度，claim 前 6 个任务
+                tenant_b_found_in_first_6 = False
+                tenant_b_count = 0
+                
+                for i in range(6):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    
+                    if job["payload"].get("tenant_id") == "tenant_b":
+                        tenant_b_found_in_first_6 = True
+                        tenant_b_count += 1
+                    
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 核心验证：在前 6 次 claim 中，tenant_b 应该至少出现一次
+                # 这证明公平调度防止了 tenant_b 被 tenant_a 完全压制
+                assert tenant_b_found_in_first_6, \
+                    "公平调度失败：tenant_b 应在前 6 次 claim 中出现"
+                
+                # 更严格的验证：tenant_b 应该出现约 3 次（6 次中两个 tenant 轮流）
+                assert tenant_b_count >= 2, \
+                    f"公平调度失败：tenant_b 应在前 6 次中出现至少 2 次，实际 {tenant_b_count}"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_four_tenants_round_robin_claim(self, migrated_db):
+        """四个 tenant 轮询 claim"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 4 个 tenant 各 3 个任务
+            tenants = ["tenant_a", "tenant_b", "tenant_c", "tenant_d"]
+            
+            for t_idx, tenant_id in enumerate(tenants):
+                for r_idx in range(3):
+                    with conn.cursor() as cur:
+                        priority = (r_idx + 1) * 10 + t_idx
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                            VALUES ('git', 'https://example.com/rr_{tenant_id}_{r_idx}.git')
+                            RETURNING repo_id
+                        """)
+                        repo_id = cur.fetchone()[0]
+                        repo_ids.append(repo_id)
+                        
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.sync_jobs (
+                                repo_id, job_type, mode, priority, status,
+                                payload_json
+                            )
+                            VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                    %s::jsonb)
+                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                claimed_tenants = []
+                for i in range(12):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    
+                    tenant_id = job["payload"].get("tenant_id", "")
+                    claimed_tenants.append(tenant_id)
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：前 8 个应该是 4 个 tenant 各出现 2 次
+                first_eight = claimed_tenants[:8]
+                for tenant_id in tenants:
+                    count = first_eight.count(tenant_id)
+                    assert count == 2, f"前 8 个中 {tenant_id} 应出现 2 次，实际 {count}"
+
+                # 验证每个 tenant 总共被 claim 3 次
+                for tenant_id in tenants:
+                    count = claimed_tenants.count(tenant_id)
+                    assert count == 3, f"{tenant_id} 应被 claim 3 次，实际 {count}"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_claim_with_mixed_null_and_valid_tenant_ids(self, migrated_db):
+        """混合场景：部分任务有 tenant_id，部分没有"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # tenant_a: 3 个任务
+            for i in range(3):
+                with conn.cursor() as cur:
+                    priority = (i + 1) * 10
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/mixed_a_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{"tenant_id": "tenant_a"}'::jsonb)
+                    """, (repo_id, priority))
+            
+            # 无 tenant_id: 3 个任务
+            for i in range(3):
+                with conn.cursor() as cur:
+                    priority = (i + 1) * 10 + 5  # 15, 25, 35
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                        VALUES ('git', 'https://example.com/mixed_none_{i}.git')
+                        RETURNING repo_id
+                    """)
+                    repo_id = cur.fetchone()[0]
+                    repo_ids.append(repo_id)
+                    
+                    cur.execute(f"""
+                        INSERT INTO {scm_schema}.sync_jobs (
+                            repo_id, job_type, mode, priority, status,
+                            payload_json
+                        )
+                        VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                '{{}}'::jsonb)
+                    """, (repo_id, priority))
+
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack
+
+                claimed_jobs = []
+                for i in range(6):
+                    job = claim(
+                        worker_id=f"worker-{i}",
+                        enable_tenant_fair_claim=True,
+                    )
+                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    claimed_jobs.append({
+                        "tenant_id": job["payload"].get("tenant_id"),
+                        "priority": job["priority"],
+                    })
+                    ack(job["job_id"], f"worker-{i}")
+
+                # 验证：两个组（有 tenant_id 和无 tenant_id）都应有任务被 claim
+                tenant_a_count = sum(1 for j in claimed_jobs if j["tenant_id"] == "tenant_a")
+                no_tenant_count = sum(1 for j in claimed_jobs if j["tenant_id"] is None)
+                
+                assert tenant_a_count == 3, f"tenant_a 应有 3 个任务，实际 {tenant_a_count}"
+                assert no_tenant_count == 3, f"无 tenant 应有 3 个任务，实际 {no_tenant_count}"
+                
+                # 验证交替模式：前 4 个应该是交替的
+                first_four_tenants = [j["tenant_id"] for j in claimed_jobs[:4]]
+                for i in range(3):
+                    if first_four_tenants[i] == first_four_tenants[i + 1]:
+                        # 允许在一边用完后连续
+                        before_count = first_four_tenants[:i+1].count(first_four_tenants[i])
+                        if before_count < 3:  # 还没用完
+                            assert False, f"位置 {i} 和 {i+1} 不应连续相同 ({first_four_tenants[i]})"
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_claim_sequence_consistent_with_fairness_toggle(self, migrated_db):
+        """验证 fairness 开关切换前后行为一致性"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_ids = []
+        try:
+            # 创建测试数据：2 个 tenant 各 2 个任务
+            tenants = ["tenant_a", "tenant_b"]
+            for t_idx, tenant_id in enumerate(tenants):
+                for r_idx in range(2):
+                    with conn.cursor() as cur:
+                        # tenant_a: priority 10, 20
+                        # tenant_b: priority 11, 21
+                        priority = (r_idx + 1) * 10 + t_idx
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                            VALUES ('git', 'https://example.com/toggle_{tenant_id}_{r_idx}.git')
+                            RETURNING repo_id
+                        """)
+                        repo_id = cur.fetchone()[0]
+                        repo_ids.append(repo_id)
+                        
+                        cur.execute(f"""
+                            INSERT INTO {scm_schema}.sync_jobs (
+                                repo_id, job_type, mode, priority, status,
+                                payload_json
+                            )
+                            VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
+                                    %s::jsonb)
+                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+
+            # 测试 1：开启 fairness
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram_step1.scm_sync_queue import claim, ack, requeue_without_penalty
+
+                # 开启 fairness 时 claim
+                job1 = claim(worker_id="w1", enable_tenant_fair_claim=True)
+                job2 = claim(worker_id="w2", enable_tenant_fair_claim=True)
+                
+                # 应该来自不同 tenant
+                t1 = job1["payload"].get("tenant_id")
+                t2 = job2["payload"].get("tenant_id")
+                assert t1 != t2, f"开启 fairness 时前 2 个应来自不同 tenant，实际: {t1}, {t2}"
+                
+                # 归还任务
+                requeue_without_penalty(job1["job_id"], "w1", reason="test", jitter_seconds=0)
+                requeue_without_penalty(job2["job_id"], "w2", reason="test", jitter_seconds=0)
+                
+            # 测试 2：关闭 fairness（使用新连接）
+            with patch('engram_step1.scm_sync_queue.get_connection') as mock_get_conn2:
+                mock_conn2 = psycopg.connect(dsn, autocommit=False)
+                with mock_conn2.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn2.return_value = mock_conn2
+
+                from engram_step1.scm_sync_queue import claim as claim2, ack as ack2
+
+                # 关闭 fairness 时 claim
+                job1 = claim2(worker_id="w3", enable_tenant_fair_claim=False)
+                job2 = claim2(worker_id="w4", enable_tenant_fair_claim=False)
+                
+                # 应该按严格优先级，前 2 个可能来自同一 tenant（取决于优先级）
+                p1 = job1["priority"]
+                p2 = job2["priority"]
+                assert p1 <= p2, f"关闭 fairness 时应按优先级顺序，实际: {p1}, {p2}"
+                
+                ack2(job1["job_id"], "w3")
+                ack2(job2["job_id"], "w4")
+
+        finally:
+            for repo_id in repo_ids:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()

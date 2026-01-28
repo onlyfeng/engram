@@ -1444,6 +1444,866 @@ class TestStatsIncludeRateLimitFields:
         assert "avg_wait_time_ms" in limiter_stats
 
 
+# ============ 429 Header Priority & Clamp Tests ============
+
+class Test429HeaderPriorityAndClamp:
+    """
+    测试 429 处理路径中的 header 优先级与异常值 clamp
+    
+    优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
+    """
+    
+    def test_retry_after_takes_priority_over_reset(self, client_factory, mock_token_provider, requests_mock):
+        """Retry-After 优先于 RateLimit-Reset"""
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=2,
+            backoff_base_seconds=0.01,
+            rate_limit_enabled=True,
+            rate_limit_requests_per_second=100.0,
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        # 同时提供 Retry-After 和 RateLimit-Reset
+        reset_time = time.time() + 3600  # 1 小时后
+        responses = [
+            {
+                "status_code": 429,
+                "json": {"message": "Rate limited"},
+                "headers": {
+                    "Retry-After": "5",  # 5 秒
+                    "RateLimit-Reset": str(int(reset_time)),  # 1 小时后
+                },
+            },
+            {"status_code": 200, "json": []},
+        ]
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            responses,
+        )
+        
+        sleep_times = []
+        with patch("time.sleep", side_effect=lambda t: sleep_times.append(t)):
+            client.get_commits("123")
+        
+        # 应该使用 Retry-After 的 5 秒（+ jitter），而不是 RateLimit-Reset 的 1 小时
+        assert len(sleep_times) == 1
+        assert 5.0 <= sleep_times[0] < 6.0, f"应使用 Retry-After，实际等待: {sleep_times[0]}"
+        
+        # 验证 pause_source
+        stats = client.rate_limiter.get_stats()
+        assert stats["pause_source"] == "retry_after"
+    
+    def test_reset_time_used_when_no_retry_after(self, client_factory, mock_token_provider, requests_mock):
+        """只有 RateLimit-Reset 时使用它"""
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=2,
+            backoff_base_seconds=0.01,
+            rate_limit_enabled=True,
+            rate_limit_requests_per_second=100.0,
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        # 只提供 RateLimit-Reset（10 秒后）
+        reset_time = time.time() + 10
+        responses = [
+            {
+                "status_code": 429,
+                "json": {"message": "Rate limited"},
+                "headers": {
+                    "RateLimit-Reset": str(int(reset_time)),
+                },
+            },
+            {"status_code": 200, "json": []},
+        ]
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            responses,
+        )
+        
+        sleep_times = []
+        with patch("time.sleep", side_effect=lambda t: sleep_times.append(t)):
+            client.get_commits("123")
+        
+        # 应该等待大约 10 秒（可能有少许时间误差）
+        assert len(sleep_times) == 1
+        assert 8.0 <= sleep_times[0] <= 12.0, f"应使用 RateLimit-Reset，实际等待: {sleep_times[0]}"
+        
+        # 验证 pause_source
+        stats = client.rate_limiter.get_stats()
+        assert stats["pause_source"] == "rate_limit_reset"
+    
+    def test_default_used_when_no_headers(self, client_factory, mock_token_provider, requests_mock):
+        """没有任何 header 时使用默认值"""
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=2,
+            backoff_base_seconds=0.01,
+            rate_limit_enabled=True,
+            rate_limit_requests_per_second=100.0,
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        # 不提供任何限流头
+        responses = [
+            {
+                "status_code": 429,
+                "json": {"message": "Rate limited"},
+            },
+            {"status_code": 200, "json": []},
+        ]
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            responses,
+        )
+        
+        with patch("time.sleep"):
+            client.get_commits("123")
+        
+        # 验证 pause_source 是 default
+        stats = client.rate_limiter.get_stats()
+        assert stats["pause_source"] == "default"
+    
+    def test_negative_retry_after_clamped_to_zero(self, mock_token_provider):
+        """负数的 Retry-After 被 clamp 到 0"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        # 通知负数的 retry_after
+        limiter.notify_rate_limit(retry_after=-10.0)
+        
+        stats = limiter.get_stats()
+        # paused_until 应该在 now 附近（因为被 clamp 到 0）
+        assert stats["paused_until"] is not None
+        assert stats["pause_source"] == "retry_after"
+        # 暂停时间应该是 now + 0 = now
+        assert stats["paused_until"] <= time.time() + 1
+    
+    def test_huge_retry_after_clamped_to_max(self, mock_token_provider):
+        """超大的 Retry-After 被 clamp 到最大值（1小时）"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        # 通知超大的 retry_after（1天）
+        now = time.time()
+        limiter.notify_rate_limit(retry_after=86400.0)  # 24 小时
+        
+        stats = limiter.get_stats()
+        assert stats["paused_until"] is not None
+        assert stats["pause_source"] == "retry_after"
+        # 应该被 clamp 到 1 小时（3600 秒）
+        pause_duration = stats["paused_until"] - now
+        assert 3599 <= pause_duration <= 3601, f"应被 clamp 到 3600s，实际: {pause_duration}"
+    
+    def test_past_reset_time_clamped_to_zero(self, mock_token_provider):
+        """过去的 RateLimit-Reset 时间被 clamp 到 0"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        # 通知过去的 reset_time
+        past_time = time.time() - 3600  # 1 小时前
+        limiter.notify_rate_limit(reset_time=past_time)
+        
+        stats = limiter.get_stats()
+        assert stats["paused_until"] is not None
+        assert stats["pause_source"] == "rate_limit_reset"
+        # 暂停时间应该是 now + 0 = now（因为负数被 clamp）
+        assert stats["paused_until"] <= time.time() + 1
+    
+    def test_invalid_retry_after_string_falls_back_to_default(self, mock_token_provider):
+        """无效的 Retry-After 字符串回退到默认值"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        # 通知无效的 retry_after
+        limiter.notify_rate_limit(retry_after="invalid")
+        
+        stats = limiter.get_stats()
+        assert stats["paused_until"] is not None
+        assert stats["pause_source"] == "default"
+    
+    def test_invalid_reset_time_string_falls_back_to_default(self, mock_token_provider):
+        """无效的 RateLimit-Reset 字符串回退到默认值"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        # 通知无效的 reset_time
+        limiter.notify_rate_limit(reset_time="not-a-timestamp")
+        
+        stats = limiter.get_stats()
+        assert stats["paused_until"] is not None
+        assert stats["pause_source"] == "default"
+    
+    def test_none_values_use_default(self, mock_token_provider):
+        """两个参数都是 None 时使用默认值"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        now = time.time()
+        limiter.notify_rate_limit(retry_after=None, reset_time=None)
+        
+        stats = limiter.get_stats()
+        assert stats["paused_until"] is not None
+        assert stats["pause_source"] == "default"
+        # 默认暂停 1 秒
+        pause_duration = stats["paused_until"] - now
+        assert 0.9 <= pause_duration <= 1.1
+    
+    def test_zero_retry_after_is_valid(self, mock_token_provider):
+        """0 的 Retry-After 是有效值"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        now = time.time()
+        limiter.notify_rate_limit(retry_after=0.0)
+        
+        stats = limiter.get_stats()
+        assert stats["paused_until"] is not None
+        assert stats["pause_source"] == "retry_after"
+        # 暂停时间应该接近 now
+        assert stats["paused_until"] <= now + 1
+    
+    def test_float_retry_after_parsed_correctly(self, mock_token_provider):
+        """浮点数的 Retry-After 被正确解析"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        now = time.time()
+        limiter.notify_rate_limit(retry_after=2.5)
+        
+        stats = limiter.get_stats()
+        pause_duration = stats["paused_until"] - now
+        assert 2.4 <= pause_duration <= 2.6
+        assert stats["pause_source"] == "retry_after"
+
+
+class Test429HeaderCombinations:
+    """测试各种 header 组合场景"""
+    
+    def test_only_retry_after(self, client_factory, mock_token_provider, requests_mock):
+        """只有 Retry-After"""
+        client = client_factory(max_attempts=1)
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            status_code=429,
+            json={"message": "Rate limited"},
+            headers={"Retry-After": "30"},
+        )
+        
+        result = client.request_safe("GET", "/projects/123/repository/commits")
+        
+        assert result.retry_after == 30.0
+        assert result.rate_limit_reset is None
+    
+    def test_only_rate_limit_reset(self, client_factory, mock_token_provider, requests_mock):
+        """只有 RateLimit-Reset"""
+        client = client_factory(max_attempts=1)
+        reset_time = int(time.time()) + 60
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            status_code=429,
+            json={"message": "Rate limited"},
+            headers={"RateLimit-Reset": str(reset_time)},
+        )
+        
+        result = client.request_safe("GET", "/projects/123/repository/commits")
+        
+        assert result.retry_after is None
+        assert result.rate_limit_reset == float(reset_time)
+    
+    def test_both_headers_present(self, client_factory, mock_token_provider, requests_mock):
+        """两个 header 都存在"""
+        client = client_factory(max_attempts=1)
+        reset_time = int(time.time()) + 120
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            status_code=429,
+            json={"message": "Rate limited"},
+            headers={
+                "Retry-After": "45",
+                "RateLimit-Reset": str(reset_time),
+                "RateLimit-Remaining": "0",
+            },
+        )
+        
+        result = client.request_safe("GET", "/projects/123/repository/commits")
+        
+        assert result.retry_after == 45.0
+        assert result.rate_limit_reset == float(reset_time)
+        assert result.rate_limit_remaining == 0
+    
+    def test_no_rate_limit_headers(self, client_factory, mock_token_provider, requests_mock):
+        """没有任何限流 header"""
+        client = client_factory(max_attempts=1)
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            status_code=429,
+            json={"message": "Rate limited"},
+        )
+        
+        result = client.request_safe("GET", "/projects/123/repository/commits")
+        
+        assert result.retry_after is None
+        assert result.rate_limit_reset is None
+        assert result.rate_limit_remaining is None
+    
+    def test_invalid_retry_after_header(self, client_factory, mock_token_provider, requests_mock):
+        """无效的 Retry-After header（非数字）"""
+        client = client_factory(max_attempts=1)
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            status_code=429,
+            json={"message": "Rate limited"},
+            headers={"Retry-After": "invalid"},
+        )
+        
+        result = client.request_safe("GET", "/projects/123/repository/commits")
+        
+        # _parse_retry_after 应该返回 None
+        assert result.retry_after is None
+    
+    def test_invalid_rate_limit_reset_header(self, client_factory, mock_token_provider, requests_mock):
+        """无效的 RateLimit-Reset header（非数字）"""
+        client = client_factory(max_attempts=1)
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            status_code=429,
+            json={"message": "Rate limited"},
+            headers={"RateLimit-Reset": "not-a-timestamp"},
+        )
+        
+        result = client.request_safe("GET", "/projects/123/repository/commits")
+        
+        assert result.rate_limit_reset is None
+
+
+class TestPauseSourceInStats:
+    """测试 pause_source 在 stats 中的暴露"""
+    
+    def test_rate_limiter_stats_include_pause_source(self, mock_token_provider):
+        """RateLimiter.get_stats() 包含 pause_source 字段"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        # 初始状态
+        stats = limiter.get_stats()
+        assert "pause_source" in stats
+        assert stats["pause_source"] is None
+        assert stats["paused_until"] is None
+        
+        # 通知 429
+        limiter.notify_rate_limit(retry_after=5.0)
+        
+        stats = limiter.get_stats()
+        assert stats["pause_source"] == "retry_after"
+        assert stats["paused_until"] is not None
+    
+    def test_pause_source_updates_correctly(self, mock_token_provider):
+        """pause_source 正确更新"""
+        limiter = RateLimiter(requests_per_second=10.0)
+        
+        # 先用 retry_after
+        limiter.notify_rate_limit(retry_after=1.0)
+        assert limiter.get_stats()["pause_source"] == "retry_after"
+        
+        # 再用 reset_time（更大的值才会更新）
+        future_time = time.time() + 100
+        limiter.notify_rate_limit(reset_time=future_time)
+        assert limiter.get_stats()["pause_source"] == "rate_limit_reset"
+        
+        # 用更大的 retry_after
+        limiter.notify_rate_limit(retry_after=200.0)
+        assert limiter.get_stats()["pause_source"] == "retry_after"
+    
+    def test_client_get_limiter_stats_includes_pause_info(self, mock_token_provider, requests_mock):
+        """GitLabClient.get_limiter_stats() 包含 pause 信息"""
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=2,
+            backoff_base_seconds=0.01,
+            rate_limit_enabled=True,
+            rate_limit_requests_per_second=100.0,
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        # 模拟 429 后成功
+        responses = [
+            {
+                "status_code": 429,
+                "json": {"message": "Rate limited"},
+                "headers": {"Retry-After": "10"},
+            },
+            {"status_code": 200, "json": []},
+        ]
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            responses,
+        )
+        
+        with patch("time.sleep"):
+            client.get_commits("123")
+        
+        # 获取 limiter 统计
+        limiter_stats = client.get_limiter_stats()
+        assert "sub_limiters" in limiter_stats
+        
+        # 找到 local rate limiter 的统计
+        local_stats = None
+        for sub in limiter_stats["sub_limiters"]:
+            if sub.get("type") == "local":
+                local_stats = sub
+                break
+        
+        assert local_stats is not None
+        assert "pause_source" in local_stats
+        assert local_stats["pause_source"] == "retry_after"
+
+
+# ============ 401/403 Token Invalidate Extended Tests ============
+
+class TestAuthInvalidateExtended:
+    """扩展的 401/403 认证错误处理测试，覆盖 invalidate 路径"""
+    
+    def test_401_invalidate_refreshes_token(self, mock_token_provider, requests_mock):
+        """401 触发 invalidate 后，下次请求使用刷新后的 token"""
+        # 设置 token provider 在 invalidate 后返回不同的 token
+        tokens = ["old-token", "new-token"]
+        token_index = [0]
+        
+        def get_token():
+            return tokens[min(token_index[0], len(tokens) - 1)]
+        
+        def invalidate():
+            token_index[0] += 1
+        
+        mock_token_provider.get_token.side_effect = get_token
+        mock_token_provider.invalidate.side_effect = invalidate
+        
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=3,
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        # 第一次请求返回 401，第二次成功
+        request_headers = []
+        
+        def callback(request, context):
+            request_headers.append(dict(request.headers))
+            if len(request_headers) == 1:
+                context.status_code = 401
+                return {"message": "401 Unauthorized"}
+            context.status_code = 200
+            return []
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            json=callback,
+        )
+        
+        result = client.get_commits("123")
+        
+        # 验证 invalidate 被调用
+        mock_token_provider.invalidate.assert_called_once()
+        
+        # 验证第二次请求使用了新 token
+        assert len(request_headers) == 2
+        # 注意：第一次请求用 old-token，第二次用 new-token
+        assert request_headers[0].get("PRIVATE-TOKEN") == "old-token"
+        assert request_headers[1].get("PRIVATE-TOKEN") == "new-token"
+    
+    def test_403_invalidate_refreshes_token(self, mock_token_provider, requests_mock):
+        """403 触发 invalidate 后，下次请求使用刷新后的 token"""
+        # 设置 token provider 在 invalidate 后返回不同的 token
+        tokens = ["expired-token", "valid-token"]
+        token_index = [0]
+        
+        def get_token():
+            return tokens[min(token_index[0], len(tokens) - 1)]
+        
+        def invalidate():
+            token_index[0] += 1
+        
+        mock_token_provider.get_token.side_effect = get_token
+        mock_token_provider.invalidate.side_effect = invalidate
+        
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=3,
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        # 第一次请求返回 403，第二次成功
+        request_headers = []
+        
+        def callback(request, context):
+            request_headers.append(dict(request.headers))
+            if len(request_headers) == 1:
+                context.status_code = 403
+                return {"message": "403 Forbidden"}
+            context.status_code = 200
+            return [{"id": 1}]
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            json=callback,
+        )
+        
+        result = client.get_commits("123")
+        
+        # 验证 invalidate 被调用
+        mock_token_provider.invalidate.assert_called_once()
+        
+        # 验证结果正确
+        assert result == [{"id": 1}]
+        
+        # 验证使用了不同的 token
+        assert len(request_headers) == 2
+        assert request_headers[0].get("PRIVATE-TOKEN") == "expired-token"
+        assert request_headers[1].get("PRIVATE-TOKEN") == "valid-token"
+    
+    def test_401_followed_by_401_stops_after_one_retry(self, mock_token_provider, requests_mock):
+        """连续两次 401 后停止重试，只调用一次 invalidate"""
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=5,  # 设置高于实际允许的次数
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        request_count = [0]
+        
+        def callback(request, context):
+            request_count[0] += 1
+            context.status_code = 401
+            return {"message": "401 Unauthorized"}
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            json=callback,
+        )
+        
+        with pytest.raises(GitLabAuthError):
+            client.get_commits("123")
+        
+        # 验证只重试了一次（总共 2 次请求）
+        assert request_count[0] == 2
+        # invalidate 只被调用一次
+        mock_token_provider.invalidate.assert_called_once()
+    
+    def test_401_error_message_does_not_contain_token(self, mock_token_provider, requests_mock):
+        """401 错误信息不应包含 token"""
+        mock_token_provider.get_token.return_value = "glpat-secret12345678"
+        
+        http_config = HttpConfig(
+            timeout_seconds=30.0,
+            max_attempts=2,
+        )
+        client = GitLabClient(
+            base_url="https://gitlab.example.com",
+            token_provider=mock_token_provider,
+            http_config=http_config,
+        )
+        
+        requests_mock.get(
+            "https://gitlab.example.com/api/v4/projects/123/repository/commits",
+            status_code=401,
+            json={"message": "401 Unauthorized"},
+        )
+        
+        with pytest.raises(GitLabAuthError) as exc_info:
+            client.get_commits("123")
+        
+        # 错误信息不应包含 token
+        error_str = str(exc_info.value)
+        assert "glpat-secret12345678" not in error_str
+        assert "secret" not in error_str.lower() or "secret" in "401 Unauthorized".lower()
+
+
+# ============ Token Redaction Tests ============
+
+class TestTokenRedaction:
+    """测试 token 脱敏功能"""
+    
+    def test_redact_gitlab_token_pattern(self):
+        """测试 GitLab token 模式脱敏"""
+        from engram_step1.scm_auth import redact
+        
+        # glpat- 格式
+        text = "Token: glpat-abc123xyz789defg"
+        result = redact(text)
+        assert "glpat-abc123xyz789defg" not in result
+        # 脱敏结果可能是 [GITLAB_TOKEN] 或 [REDACTED]
+        assert "[GITLAB_TOKEN]" in result or "[REDACTED]" in result
+        
+        # glptt- 格式
+        text = "Token: glptt-abc123xyz789defg"
+        result = redact(text)
+        assert "glptt-abc123xyz789defg" not in result
+    
+    def test_redact_bearer_token(self):
+        """测试 Bearer token 脱敏"""
+        from engram_step1.scm_auth import redact
+        
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc123"
+        result = redact(text)
+        assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in result
+        assert "[TOKEN]" in result or "[REDACTED]" in result
+    
+    def test_redact_private_token_header(self):
+        """测试 PRIVATE-TOKEN header 脱敏"""
+        from engram_step1.scm_auth import redact
+        
+        text = "PRIVATE-TOKEN: glpat-secrettoken123"
+        result = redact(text)
+        assert "glpat-secrettoken123" not in result
+        assert "[REDACTED]" in result
+    
+    def test_redact_url_credentials(self):
+        """测试 URL 中的凭证脱敏"""
+        from engram_step1.scm_auth import redact
+        
+        text = "https://user:mysecretpassword@gitlab.example.com/api/v4"
+        result = redact(text)
+        assert "mysecretpassword" not in result
+        assert "[REDACTED]" in result
+    
+    def test_redact_dict_sensitive_headers(self):
+        """测试字典中敏感 header 脱敏"""
+        from engram_step1.scm_auth import redact_dict
+        
+        data = {
+            "Authorization": "Bearer secret123",
+            "PRIVATE-TOKEN": "glpat-token123",
+            "Content-Type": "application/json",
+            "url": "/api/v4/projects",
+        }
+        
+        result = redact_dict(data)
+        
+        # 敏感 header 应被脱敏
+        assert result["Authorization"] == "[REDACTED]"
+        assert result["PRIVATE-TOKEN"] == "[REDACTED]"
+        
+        # 非敏感字段应保留
+        assert result["Content-Type"] == "application/json"
+        assert result["url"] == "/api/v4/projects"
+    
+    def test_redact_headers_function(self):
+        """测试 redact_headers 函数"""
+        from engram_step1.scm_auth import redact_headers
+        
+        headers = {
+            "PRIVATE-TOKEN": "glpat-secret",
+            "Authorization": "Bearer token",
+            "Accept": "application/json",
+            "Cookie": "session=abc123",
+        }
+        
+        result = redact_headers(headers)
+        
+        assert result["PRIVATE-TOKEN"] == "[REDACTED]"
+        assert result["Authorization"] == "[REDACTED]"
+        assert result["Accept"] == "application/json"
+        assert result["Cookie"] == "[REDACTED]"
+    
+    def test_mask_token_function(self):
+        """测试 mask_token 函数"""
+        from engram_step1.scm_auth import mask_token
+        
+        # 正常 token
+        token = "glpat-abc123xyz789"
+        masked = mask_token(token)
+        
+        # 不应包含原始 token
+        assert "glpat-abc123xyz789" not in masked
+        # 应包含长度信息
+        assert f"len={len(token)}" in masked
+        # 应包含 hash 信息
+        assert "prefix_hash=" in masked
+        assert "suffix_hash=" in masked
+        
+        # 空 token
+        assert mask_token(None) == "empty"
+        assert mask_token("") == "empty"
+    
+    def test_redact_nested_dict(self):
+        """测试嵌套字典脱敏"""
+        from engram_step1.scm_auth import redact_dict
+        
+        data = {
+            "request": {
+                "headers": {
+                    "Authorization": "Bearer secret",
+                },
+                "url": "/api/v4/projects",
+            },
+            "response": {
+                "status": 200,
+            },
+        }
+        
+        result = redact_dict(data, deep=True)
+        
+        # 嵌套的敏感 header 应被脱敏
+        assert result["request"]["headers"]["Authorization"] == "[REDACTED]"
+        # 非敏感字段应保留
+        assert result["request"]["url"] == "/api/v4/projects"
+        assert result["response"]["status"] == 200
+    
+    def test_redact_empty_input(self):
+        """测试空输入处理"""
+        from engram_step1.scm_auth import redact, redact_dict, redact_headers
+        
+        assert redact(None) == ""
+        assert redact("") == ""
+        assert redact_dict({}) == {}
+        assert redact_dict(None) == {}
+        assert redact_headers({}) == {}
+        assert redact_headers(None) == {}
+
+
+# ============ Token Provider Factory Tests ============
+
+class TestTokenProviderFactory:
+    """测试 create_token_provider_for_instance 工厂方法"""
+    
+    def test_payload_token_highest_priority(self):
+        """payload 指定的 token 优先级最高"""
+        from engram_step1.scm_auth import create_token_provider_for_instance
+        
+        provider = create_token_provider_for_instance(
+            instance_key="gitlab.example.com",
+            payload_token="payload-token-123",
+        )
+        
+        assert provider.get_token() == "payload-token-123"
+    
+    def test_config_instance_token(self):
+        """从配置读取特定实例的 token"""
+        from engram_step1.scm_auth import create_token_provider_for_instance
+        
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "scm.gitlab.instances.gitlab_example_com.token": "instance-token-456",
+        }.get(key, default)
+        
+        provider = create_token_provider_for_instance(
+            instance_key="gitlab.example.com",
+            config=mock_config,
+        )
+        
+        assert provider.get_token() == "instance-token-456"
+    
+    def test_config_tenant_token(self):
+        """从配置读取特定租户的 token"""
+        from engram_step1.scm_auth import create_token_provider_for_instance
+        
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "scm.gitlab.tenants.tenant-a.token": "tenant-token-789",
+        }.get(key, default)
+        
+        provider = create_token_provider_for_instance(
+            tenant_id="tenant-a",
+            config=mock_config,
+        )
+        
+        assert provider.get_token() == "tenant-token-789"
+    
+    def test_instance_priority_over_tenant(self):
+        """instance_key 配置优先于 tenant_id 配置"""
+        from engram_step1.scm_auth import create_token_provider_for_instance
+        
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda key, default=None: {
+            "scm.gitlab.instances.gitlab_example_com.token": "instance-token",
+            "scm.gitlab.tenants.tenant-a.token": "tenant-token",
+        }.get(key, default)
+        
+        provider = create_token_provider_for_instance(
+            instance_key="gitlab.example.com",
+            tenant_id="tenant-a",
+            config=mock_config,
+        )
+        
+        # 应该使用 instance token
+        assert provider.get_token() == "instance-token"
+    
+    def test_fallback_to_env_default(self):
+        """没有配置时回退到环境变量默认值"""
+        from engram_step1.scm_auth import create_token_provider_for_instance, EnvTokenProvider
+        import os
+        
+        # 设置环境变量
+        original_token = os.environ.get("GITLAB_TOKEN")
+        os.environ["GITLAB_TOKEN"] = "env-default-token"
+        
+        try:
+            mock_config = MagicMock()
+            mock_config.get.return_value = None
+            
+            provider = create_token_provider_for_instance(
+                instance_key="unknown.gitlab.com",
+                config=mock_config,
+            )
+            
+            # 应该返回 EnvTokenProvider
+            assert isinstance(provider, EnvTokenProvider)
+            assert provider.get_token() == "env-default-token"
+        finally:
+            # 恢复环境变量
+            if original_token is not None:
+                os.environ["GITLAB_TOKEN"] = original_token
+            else:
+                os.environ.pop("GITLAB_TOKEN", None)
+    
+    def test_normalize_instance_key(self):
+        """测试 instance_key 规范化"""
+        from engram_step1.scm_auth import normalize_instance_key
+        
+        # 点号替换为下划线
+        assert normalize_instance_key("gitlab.example.com") == "gitlab_example_com"
+        
+        # 冒号替换为下划线
+        assert normalize_instance_key("gitlab.example.com:8080") == "gitlab_example_com_8080"
+        
+        # 连字符替换为下划线
+        assert normalize_instance_key("gitlab-internal.example.com") == "gitlab_internal_example_com"
+        
+        # 空输入
+        assert normalize_instance_key("") == ""
+
+
 # ---------- 运行测试的入口 ----------
 
 if __name__ == "__main__":

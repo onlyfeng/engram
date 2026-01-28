@@ -30,6 +30,12 @@ import psycopg
 from .db import get_connection
 from .errors import DatabaseError
 from .scm_auth import redact
+from .scm_sync_keys import normalize_instance_key
+from .scm_sync_errors import (
+    DEFAULT_BACKOFF_BASE,
+    DEFAULT_MAX_BACKOFF,
+    calculate_backoff_seconds,
+)
 
 
 # 任务状态常量
@@ -43,7 +49,7 @@ STATUS_DEAD = "dead"
 DEFAULT_PRIORITY = 100
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_LEASE_SECONDS = 300  # 5 分钟
-DEFAULT_BACKOFF_BASE = 60    # 基础退避时间（秒）
+# DEFAULT_BACKOFF_BASE 已从 scm_sync_errors 导入
 
 
 def enqueue(
@@ -123,6 +129,8 @@ def claim(
     lease_seconds: Optional[int] = None,
     instance_allowlist: Optional[List[str]] = None,
     tenant_allowlist: Optional[List[str]] = None,
+    enable_tenant_fair_claim: Optional[bool] = None,
+    max_consecutive_same_tenant: Optional[int] = None,
     conn: Optional[psycopg.Connection] = None,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -137,18 +145,37 @@ def claim(
     - instance_allowlist: 只处理指定 GitLab 实例的任务
     - tenant_allowlist: 只处理指定租户的任务
     
+    租户公平调度（enable_tenant_fair_claim=True）：
+    - 在候选任务中先选出若干不同 tenant，再从每个 tenant 取最高优先级的 job
+    - 防止某个 tenant 的大量任务长期占用队列，导致其他 tenant 饥饿
+    - max_consecutive_same_tenant: 用于外部跟踪，本函数内部通过多 tenant 选择实现公平
+    
     Args:
         worker_id: 当前 worker 标识符
         job_types: 可选，限制获取的任务类型列表
         lease_seconds: 可选，覆盖任务的租约时长
         instance_allowlist: 可选，限制获取的 GitLab 实例列表（基于 payload_json.gitlab_instance）
         tenant_allowlist: 可选，限制获取的租户 ID 列表（基于 payload_json.tenant_id）
+        enable_tenant_fair_claim: 可选，启用租户公平调度，默认从配置读取
+        max_consecutive_same_tenant: 可选，单租户最大连续 claim 次数（用于外部跟踪），默认从配置读取
         conn: 可选的数据库连接
     
     Returns:
         任务信息字典，包含 job_id, repo_id, job_type, mode, payload, attempts 等
         如果没有可用任务返回 None
     """
+    from .config import get_claim_config
+    
+    # 读取配置（参数优先，否则从配置文件读取）
+    claim_config = get_claim_config()
+    if enable_tenant_fair_claim is None:
+        enable_tenant_fair_claim = claim_config["enable_tenant_fair_claim"]
+    if max_consecutive_same_tenant is None:
+        max_consecutive_same_tenant = claim_config["max_consecutive_same_tenant"]
+    # max_tenants_per_round 用于限制公平调度时选取的 tenant 数量
+    # 目前未直接使用，但保留配置项以便后续扩展
+    # max_tenants_per_round = claim_config["max_tenants_per_round"]
+    
     should_close = conn is None
     if conn is None:
         conn = get_connection()
@@ -167,13 +194,19 @@ def claim(
             
             # instance_allowlist 过滤（基于 payload_json ->> 'gitlab_instance'）
             # 允许未设置 gitlab_instance 的任务（如 SVN 任务）或值匹配的任务
+            # 注意：对 allowlist 做规范化，确保与 scheduler 写入的格式一致（小写、无默认端口）
             if instance_allowlist:
-                placeholders = ", ".join(["%s"] * len(instance_allowlist))
-                filters.append(f"""(
-                    payload_json ->> 'gitlab_instance' IS NULL
-                    OR payload_json ->> 'gitlab_instance' IN ({placeholders})
-                )""")
-                params.extend(instance_allowlist)
+                normalized_instances = [
+                    normalize_instance_key(inst) for inst in instance_allowlist
+                    if normalize_instance_key(inst)
+                ]
+                if normalized_instances:
+                    placeholders = ", ".join(["%s"] * len(normalized_instances))
+                    filters.append(f"""(
+                        payload_json ->> 'gitlab_instance' IS NULL
+                        OR payload_json ->> 'gitlab_instance' IN ({placeholders})
+                    )""")
+                    params.extend(normalized_instances)
             
             # tenant_allowlist 过滤（基于 payload_json ->> 'tenant_id'）
             # 允许未设置 tenant_id 的任务或值匹配的任务
@@ -190,42 +223,82 @@ def claim(
             if filters:
                 extra_filter = "AND " + " AND ".join(filters)
             
-            # 使用 FOR UPDATE SKIP LOCKED 获取一个任务
-            # 支持获取：
-            # 1. pending 且 not_before 已过
-            # 2. running 但锁已过期
-            # 3. failed 且 not_before 已过
-            query = f"""
-                WITH claimable AS (
-                    SELECT job_id, lease_seconds
-                    FROM scm.sync_jobs
-                    WHERE (
-                        -- pending 任务
-                        (status = 'pending' AND not_before <= now())
-                        -- 或 running 但锁过期的任务
-                        OR (status = 'running' AND locked_at + (lease_seconds || ' seconds')::interval < now())
-                        -- 或 failed 可重试的任务
-                        OR (status = 'failed' AND not_before <= now() AND attempts < max_attempts)
+            # 基础 claimable 条件
+            claimable_conditions = """(
+                -- pending 任务
+                (status = 'pending' AND not_before <= now())
+                -- 或 running 但锁过期的任务
+                OR (status = 'running' AND locked_at + (lease_seconds || ' seconds')::interval < now())
+                -- 或 failed 可重试的任务
+                OR (status = 'failed' AND not_before <= now() AND attempts < max_attempts)
+            )"""
+            
+            if enable_tenant_fair_claim:
+                # 租户公平调度模式
+                # 实现方式：
+                # 1. 先用 DISTINCT ON 选出若干不同 tenant 的最高优先级任务
+                # 2. 从这些候选中按优先级选择一个
+                # 3. 使用 FOR UPDATE SKIP LOCKED 确保并发安全
+                query = f"""
+                    WITH tenant_candidates AS (
+                        -- 每个 tenant 的最高优先级任务 ID
+                        -- DISTINCT ON 按 tenant_id 分组，每组取 priority 最小、created_at 最早的一个
+                        SELECT DISTINCT ON (COALESCE(payload_json ->> 'tenant_id', ''))
+                            job_id
+                        FROM scm.sync_jobs
+                        WHERE {claimable_conditions}
+                        {extra_filter}
+                        ORDER BY COALESCE(payload_json ->> 'tenant_id', ''), priority ASC, created_at ASC
+                    ),
+                    claimable AS (
+                        -- 从候选任务中选择优先级最高的一个，使用 FOR UPDATE SKIP LOCKED
+                        SELECT j.job_id, j.lease_seconds
+                        FROM scm.sync_jobs j
+                        WHERE j.job_id IN (SELECT job_id FROM tenant_candidates)
+                        ORDER BY j.priority ASC, j.created_at ASC
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
                     )
-                    {extra_filter}
-                    ORDER BY priority ASC, created_at ASC
-                    LIMIT 1
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE scm.sync_jobs j
-                SET 
-                    status = 'running',
-                    locked_by = %s,
-                    locked_at = now(),
-                    attempts = attempts + 1,
-                    updated_at = now()
-                FROM claimable c
-                WHERE j.job_id = c.job_id
-                RETURNING 
-                    j.job_id, j.repo_id, j.job_type, j.mode, j.payload_json,
-                    j.priority, j.attempts, j.max_attempts, j.last_error,
-                    j.lease_seconds, j.created_at
-            """
+                    UPDATE scm.sync_jobs j
+                    SET 
+                        status = 'running',
+                        locked_by = %s,
+                        locked_at = now(),
+                        attempts = attempts + 1,
+                        updated_at = now()
+                    FROM claimable c
+                    WHERE j.job_id = c.job_id
+                    RETURNING 
+                        j.job_id, j.repo_id, j.job_type, j.mode, j.payload_json,
+                        j.priority, j.attempts, j.max_attempts, j.last_error,
+                        j.lease_seconds, j.created_at
+                """
+            else:
+                # 原有模式：按优先级顺序获取
+                query = f"""
+                    WITH claimable AS (
+                        SELECT job_id, lease_seconds
+                        FROM scm.sync_jobs
+                        WHERE {claimable_conditions}
+                        {extra_filter}
+                        ORDER BY priority ASC, created_at ASC
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE scm.sync_jobs j
+                    SET 
+                        status = 'running',
+                        locked_by = %s,
+                        locked_at = now(),
+                        attempts = attempts + 1,
+                        updated_at = now()
+                    FROM claimable c
+                    WHERE j.job_id = c.job_id
+                    RETURNING 
+                        j.job_id, j.repo_id, j.job_type, j.mode, j.payload_json,
+                        j.priority, j.attempts, j.max_attempts, j.last_error,
+                        j.lease_seconds, j.created_at
+                """
             
             # 将 worker_id 放在参数列表开头（用于 UPDATE SET）
             cur.execute(query, params)
@@ -376,9 +449,13 @@ def fail_retry(
                     WHERE job_id = %s
                 """, (redacted_error, job_id))
             else:
-                # 计算退避时间（指数退避: base * 2^(attempts-1)）
+                # 使用统一的 backoff 计算函数（指数退避: base * 2^(attempts-1)）
                 if backoff_seconds is None:
-                    backoff_seconds = DEFAULT_BACKOFF_BASE * (2 ** (attempts - 1))
+                    backoff_seconds = calculate_backoff_seconds(
+                        attempts=attempts,
+                        base_seconds=DEFAULT_BACKOFF_BASE,
+                        max_seconds=DEFAULT_MAX_BACKOFF,
+                    )
                 
                 cur.execute("""
                     UPDATE scm.sync_jobs

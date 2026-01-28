@@ -191,15 +191,21 @@ CREATE TABLE IF NOT EXISTS scm.patch_blobs (
   source_type        text NOT NULL CHECK (source_type IN ('svn','git')),
   source_id          text NOT NULL, -- 格式: <repo_id>:<rev_or_sha>
   uri                text,          -- 物理存储位置（artifact 路径 / file:// / https:// 等）
+  evidence_uri       text,          -- Canonical evidence URI: memory://patch_blobs/<source_type>/<source_id>/<sha256>
   sha256             text NOT NULL,
   size_bytes         bigint,
   format             text NOT NULL DEFAULT 'diff',
   chunking_version   text,
-  meta_json          jsonb NOT NULL DEFAULT '{}'::jsonb,  -- 元数据，包含物化状态与 evidence_uri
+  meta_json          jsonb NOT NULL DEFAULT '{}'::jsonb,  -- 元数据，包含物化状态（evidence_uri 已提升为独立列）
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now(),
   UNIQUE(source_type, source_id, sha256)
 );
+
+-- patch_blobs: evidence_uri 索引（用于溯源查询）
+CREATE INDEX IF NOT EXISTS idx_patch_blobs_evidence_uri
+  ON scm.patch_blobs(evidence_uri)
+  WHERE evidence_uri IS NOT NULL;
 
 -- patch_blobs: updated_at 自动更新触发器函数
 CREATE OR REPLACE FUNCTION scm.update_patch_blobs_updated_at()

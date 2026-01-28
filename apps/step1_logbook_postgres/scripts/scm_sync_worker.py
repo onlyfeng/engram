@@ -86,14 +86,33 @@ from engram_step1.scm_sync_queue import (
     claim, ack, fail_retry, mark_dead, renew_lease, requeue_without_penalty,
     STATUS_PENDING, STATUS_RUNNING, STATUS_COMPLETED, STATUS_FAILED, STATUS_DEAD,
 )
-from engram_step1.scm_auth import redact, redact_dict
+from engram_step1.scm_auth import (
+    redact, redact_dict, 
+    create_token_provider_for_instance,
+)
 from engram_step1.scm_sync_policy import (
     CircuitBreakerController,
     CircuitBreakerConfig,
     CircuitState,
+    # 熔断 key 构建（统一入口）
+    build_circuit_breaker_key,
+)
+from engram_step1.scm_sync_keys import normalize_instance_key
+from engram_step1.scm_sync_errors import (
+    ErrorCategory,
+    TRANSIENT_ERROR_CATEGORIES,
+    TRANSIENT_ERROR_KEYWORDS,
+    TRANSIENT_ERROR_BACKOFF,
+    PERMANENT_ERROR_CATEGORIES,
+    DEFAULT_MAX_RENEW_FAILURES,
+    is_transient_error as _is_transient_error,
+    is_permanent_error as _is_permanent_error,
+    get_transient_error_backoff as _get_transient_error_backoff,
+    classify_exception,
+    classify_last_error,
+    last_error_text,
 )
 import db as scm_db
-from db import build_circuit_breaker_key
 
 # 日志配置
 logging.basicConfig(
@@ -135,7 +154,7 @@ class HeartbeatManager:
         worker_id: str,
         renew_interval_seconds: int = 60,
         lease_seconds: int = 300,
-        max_failures: int = 3,
+        max_failures: int = DEFAULT_MAX_RENEW_FAILURES,
     ):
         """
         Args:
@@ -143,7 +162,7 @@ class HeartbeatManager:
             worker_id: Worker 标识符
             renew_interval_seconds: 续租间隔（秒）
             lease_seconds: 租约时长（秒）
-            max_failures: 最大连续续租失败次数
+            max_failures: 最大连续续租失败次数（默认使用共享常量 DEFAULT_MAX_RENEW_FAILURES）
         """
         self.job_id = job_id
         self.worker_id = worker_id
@@ -157,6 +176,7 @@ class HeartbeatManager:
         self._failure_count = 0
         self._should_abort = False
         self._last_renew_time: Optional[datetime] = None
+        self._last_error: Optional[str] = None  # 最后一次续租失败的错误信息
         self._lock = threading.Lock()
     
     @property
@@ -170,6 +190,30 @@ class HeartbeatManager:
         """获取当前续租失败次数"""
         with self._lock:
             return self._failure_count
+    
+    @property
+    def last_error(self) -> Optional[str]:
+        """获取最后一次续租失败的错误信息"""
+        with self._lock:
+            return self._last_error
+    
+    def get_abort_error(self) -> Dict[str, Any]:
+        """
+        获取中止时的结构化错误信息
+        
+        Returns:
+            包含 error, error_category, failure_count 等字段的字典
+        """
+        with self._lock:
+            return {
+                "error": f"Lease lost after {self._failure_count} consecutive renewal failures. "
+                         f"Last error: {self._last_error or 'renew_lease returned False'}",
+                "error_category": ErrorCategory.LEASE_LOST.value,
+                "failure_count": self._failure_count,
+                "max_failures": self.max_failures,
+                "job_id": self.job_id,
+                "worker_id": self.worker_id,
+            }
     
     def start(self) -> None:
         """启动后台续租线程"""
@@ -222,14 +266,17 @@ class HeartbeatManager:
                     self._failure_count += 1
                     logger.warning(
                         f"续租失败 ({self._failure_count}/{self.max_failures}): "
-                        f"job_id={self.job_id}"
+                        f"job_id={self.job_id}, last_error={self._last_error}"
                     )
                     
                     if self._failure_count >= self.max_failures:
                         self._should_abort = True
+                        # 使用 ErrorCategory 常量记录结构化错误日志
                         logger.error(
                             f"续租失败次数超过阈值，标记任务中止: "
-                            f"job_id={self.job_id}, failures={self._failure_count}"
+                            f"job_id={self.job_id}, failures={self._failure_count}, "
+                            f"error_category={ErrorCategory.LEASE_LOST.value}, "
+                            f"last_error={self._last_error}"
                         )
                         break
     
@@ -248,11 +295,19 @@ class HeartbeatManager:
             )
             if success:
                 logger.debug(f"续租成功: job_id={self.job_id}")
+                with self._lock:
+                    self._last_error = None  # 成功时清除错误
             else:
+                error_msg = "renew_lease returned False (task may have been preempted)"
                 logger.warning(f"续租返回 False（任务可能已被抢占）: job_id={self.job_id}")
+                with self._lock:
+                    self._last_error = error_msg
             return success
         except Exception as e:
+            error_msg = f"Exception during renew: {type(e).__name__}: {e}"
             logger.error(f"续租异常: job_id={self.job_id}, error={e}")
+            with self._lock:
+                self._last_error = error_msg
             return False
     
     def __enter__(self) -> "HeartbeatManager":
@@ -323,129 +378,8 @@ def _normalize_payload(payload: Any) -> Dict[str, Any]:
     return {}
 
 
-# 临时性错误分类
-TRANSIENT_ERROR_CATEGORIES = {
-    "rate_limit",      # API 速率限制（429）
-    "timeout",         # 请求超时
-    "network",         # 网络错误
-    "server_error",    # 服务器错误（5xx）
-    "connection",      # 连接错误
-}
-
-# 临时性错误关键词匹配
-TRANSIENT_ERROR_KEYWORDS = [
-    "429", "rate limit", "too many requests",
-    "timeout", "timed out",
-    "connection", "connect", "network",
-    "502", "503", "504", "bad gateway", "service unavailable", "gateway timeout",
-    "temporary", "retry",
-]
-
-# 不同错误类型的退避时间配置（秒）
-TRANSIENT_ERROR_BACKOFF = {
-    "rate_limit": 120,    # 速率限制：2 分钟
-    "timeout": 30,        # 超时：30 秒
-    "network": 60,        # 网络错误：1 分钟
-    "server_error": 90,   # 服务器错误：1.5 分钟
-    "connection": 45,     # 连接错误：45 秒
-    "default": 60,        # 默认：1 分钟
-}
-
-# 永久性错误分类（不应重试，直接 mark_dead）
-PERMANENT_ERROR_CATEGORIES = {
-    "auth_error",         # 认证错误
-    "auth_missing",       # 认证凭证缺失
-    "auth_invalid",       # 认证凭证无效
-    "repo_not_found",     # 仓库不存在
-    "repo_type_unknown",  # 仓库类型未知
-    "permission_denied",  # 权限不足
-}
-
-
-def _is_transient_error(error_category: str, error_message: str) -> bool:
-    """
-    判断是否为临时性外部错误。
-    
-    临时性错误包括：
-    - 429 速率限制
-    - 请求超时
-    - 网络错误
-    - 服务器错误（5xx）
-    
-    Args:
-        error_category: 错误分类标签
-        error_message: 错误消息
-    
-    Returns:
-        True 表示是临时性错误
-    """
-    # 检查错误分类
-    if error_category and error_category.lower() in TRANSIENT_ERROR_CATEGORIES:
-        return True
-    
-    # 检查错误消息中的关键词
-    error_lower = (error_message or "").lower()
-    for keyword in TRANSIENT_ERROR_KEYWORDS:
-        if keyword in error_lower:
-            return True
-    
-    return False
-
-
-def _is_permanent_error(error_category: str) -> bool:
-    """
-    判断是否为永久性错误（不应重试）。
-    
-    永久性错误包括：
-    - auth_error: 认证错误
-    - auth_missing: 认证凭证缺失
-    - auth_invalid: 认证凭证无效
-    - repo_not_found: 仓库不存在
-    - repo_type_unknown: 仓库类型未知
-    - permission_denied: 权限不足
-    
-    Args:
-        error_category: 错误分类标签
-    
-    Returns:
-        True 表示是永久性错误
-    """
-    if error_category and error_category.lower() in PERMANENT_ERROR_CATEGORIES:
-        return True
-    return False
-
-
-def _get_transient_error_backoff(error_category: str, error_message: str) -> int:
-    """
-    根据临时性错误类型获取退避时间。
-    
-    Args:
-        error_category: 错误分类标签
-        error_message: 错误消息
-    
-    Returns:
-        退避秒数
-    """
-    # 优先使用错误分类
-    if error_category and error_category.lower() in TRANSIENT_ERROR_BACKOFF:
-        return TRANSIENT_ERROR_BACKOFF[error_category.lower()]
-    
-    # 根据错误消息推断类型
-    error_lower = (error_message or "").lower()
-    
-    if "429" in error_lower or "rate limit" in error_lower or "too many requests" in error_lower:
-        return TRANSIENT_ERROR_BACKOFF["rate_limit"]
-    
-    if "timeout" in error_lower or "timed out" in error_lower:
-        return TRANSIENT_ERROR_BACKOFF["timeout"]
-    
-    if "502" in error_lower or "503" in error_lower or "504" in error_lower:
-        return TRANSIENT_ERROR_BACKOFF["server_error"]
-    
-    if "connection" in error_lower or "network" in error_lower:
-        return TRANSIENT_ERROR_BACKOFF["network"]
-    
-    return TRANSIENT_ERROR_BACKOFF["default"]
+# 注意：错误分类常量和函数已迁移到 engram_step1.scm_sync_errors 模块
+# 这里保留向后兼容的导出（从上面的 import 语句重新导出）
 
 
 def _get_repo_info(repo_id: int) -> Optional[Dict[str, Any]]:
@@ -497,26 +431,48 @@ def _run_gitlab_commits(repo_info: Dict[str, Any], mode: str, payload: Dict[str,
 
     # 延迟导入：减少 worker 启动时的依赖/导入开销
     from engram_step1.config import get_incremental_config, get_gitlab_config, is_strict_mode, get_gitlab_auth
-    from engram_step1.scm_auth import create_gitlab_token_provider, TokenValidationError
+    from engram_step1.scm_auth import TokenValidationError
     import scm_sync_gitlab_commits as mod
 
     gitlab_cfg = get_gitlab_config(cfg)
     inc_cfg = get_incremental_config(cfg)
 
-    # 优先检查 GitLab 认证凭证是否可用
+    # 从 gitlab_url 提取 instance_key (如 gitlab.example.com)
+    parsed_url = urlparse(gitlab_url)
+    instance_key = parsed_url.netloc
+    
+    # 从 payload 获取 tenant_id（如果有）
+    tenant_id = payload.get("tenant_id")
+
+    # 优先检查 GitLab 认证凭证是否可用（payload token > instance config > tenant config > env）
     if not payload.get("token"):
         gitlab_auth = get_gitlab_auth(cfg)
-        if gitlab_auth is None:
+        # 检查是否有 instance/tenant 级别的配置
+        instance_token_configured = cfg.get(f"scm.gitlab.instances.{normalize_instance_key(instance_key)}.token") or \
+                                    cfg.get(f"scm.gitlab.instances.{normalize_instance_key(instance_key)}.token_env")
+        tenant_token_configured = tenant_id and (
+            cfg.get(f"scm.gitlab.tenants.{tenant_id}.token") or
+            cfg.get(f"scm.gitlab.tenants.{tenant_id}.token_env")
+        )
+        
+        if gitlab_auth is None and not instance_token_configured and not tenant_token_configured:
             # 凭证缺失，返回可读错误（不泄漏明文）
             return {
                 "success": False,
                 "error": "GitLab 认证凭证未配置。请设置环境变量 GITLAB_TOKEN 或 GITLAB_PRIVATE_TOKEN，"
-                         "或在配置文件中配置 [scm.gitlab.auth] 区块。",
+                         "或在配置文件中配置 [scm.gitlab.auth] / [scm.gitlab.instances.*] 区块。",
                 "error_category": "auth_missing",
             }
 
     try:
-        token_provider = create_gitlab_token_provider(cfg, private_token=payload.get("token"))
+        # 使用工厂方法按 instance_key/tenant_id 选择 token
+        # 优先级: payload token > instance config > tenant config > env 默认
+        token_provider = create_token_provider_for_instance(
+            instance_key=instance_key,
+            tenant_id=tenant_id,
+            payload_token=payload.get("token"),
+            config=cfg,
+        )
     except TokenValidationError as e:
         return {
             "success": False,
@@ -617,25 +573,47 @@ def _run_gitlab_mrs(repo_info: Dict[str, Any], mode: str, payload: Dict[str, Any
     gitlab_url, project_id = _parse_gitlab_repo(repo_info["url"])
 
     from engram_step1.config import get_incremental_config, get_gitlab_config, is_strict_mode, get_gitlab_auth
-    from engram_step1.scm_auth import create_gitlab_token_provider, TokenValidationError
+    from engram_step1.scm_auth import TokenValidationError
     import scm_sync_gitlab_mrs as mod
 
     gitlab_cfg = get_gitlab_config(cfg)
     inc_cfg = get_incremental_config(cfg)
 
-    # 优先检查 GitLab 认证凭证是否可用
+    # 从 gitlab_url 提取 instance_key (如 gitlab.example.com)
+    parsed_url = urlparse(gitlab_url)
+    instance_key = parsed_url.netloc
+    
+    # 从 payload 获取 tenant_id（如果有）
+    tenant_id = payload.get("tenant_id")
+
+    # 优先检查 GitLab 认证凭证是否可用（payload token > instance config > tenant config > env）
     if not payload.get("token"):
         gitlab_auth = get_gitlab_auth(cfg)
-        if gitlab_auth is None:
+        # 检查是否有 instance/tenant 级别的配置
+        instance_token_configured = cfg.get(f"scm.gitlab.instances.{normalize_instance_key(instance_key)}.token") or \
+                                    cfg.get(f"scm.gitlab.instances.{normalize_instance_key(instance_key)}.token_env")
+        tenant_token_configured = tenant_id and (
+            cfg.get(f"scm.gitlab.tenants.{tenant_id}.token") or
+            cfg.get(f"scm.gitlab.tenants.{tenant_id}.token_env")
+        )
+        
+        if gitlab_auth is None and not instance_token_configured and not tenant_token_configured:
             return {
                 "success": False,
                 "error": "GitLab 认证凭证未配置。请设置环境变量 GITLAB_TOKEN 或 GITLAB_PRIVATE_TOKEN，"
-                         "或在配置文件中配置 [scm.gitlab.auth] 区块。",
+                         "或在配置文件中配置 [scm.gitlab.auth] / [scm.gitlab.instances.*] 区块。",
                 "error_category": "auth_missing",
             }
 
     try:
-        token_provider = create_gitlab_token_provider(cfg, private_token=payload.get("token"))
+        # 使用工厂方法按 instance_key/tenant_id 选择 token
+        # 优先级: payload token > instance config > tenant config > env 默认
+        token_provider = create_token_provider_for_instance(
+            instance_key=instance_key,
+            tenant_id=tenant_id,
+            payload_token=payload.get("token"),
+            config=cfg,
+        )
     except TokenValidationError as e:
         return {
             "success": False,
@@ -714,25 +692,47 @@ def _run_gitlab_reviews(repo_info: Dict[str, Any], mode: str, payload: Dict[str,
     gitlab_url, project_id = _parse_gitlab_repo(repo_info["url"])
 
     from engram_step1.config import get_incremental_config, get_gitlab_config, is_strict_mode, get_gitlab_auth
-    from engram_step1.scm_auth import create_gitlab_token_provider, TokenValidationError
+    from engram_step1.scm_auth import TokenValidationError
     import scm_sync_gitlab_reviews as mod
 
     gitlab_cfg = get_gitlab_config(cfg)
     inc_cfg = get_incremental_config(cfg)
 
-    # 优先检查 GitLab 认证凭证是否可用
+    # 从 gitlab_url 提取 instance_key (如 gitlab.example.com)
+    parsed_url = urlparse(gitlab_url)
+    instance_key = parsed_url.netloc
+    
+    # 从 payload 获取 tenant_id（如果有）
+    tenant_id = payload.get("tenant_id")
+
+    # 优先检查 GitLab 认证凭证是否可用（payload token > instance config > tenant config > env）
     if not payload.get("token"):
         gitlab_auth = get_gitlab_auth(cfg)
-        if gitlab_auth is None:
+        # 检查是否有 instance/tenant 级别的配置
+        instance_token_configured = cfg.get(f"scm.gitlab.instances.{normalize_instance_key(instance_key)}.token") or \
+                                    cfg.get(f"scm.gitlab.instances.{normalize_instance_key(instance_key)}.token_env")
+        tenant_token_configured = tenant_id and (
+            cfg.get(f"scm.gitlab.tenants.{tenant_id}.token") or
+            cfg.get(f"scm.gitlab.tenants.{tenant_id}.token_env")
+        )
+        
+        if gitlab_auth is None and not instance_token_configured and not tenant_token_configured:
             return {
                 "success": False,
                 "error": "GitLab 认证凭证未配置。请设置环境变量 GITLAB_TOKEN 或 GITLAB_PRIVATE_TOKEN，"
-                         "或在配置文件中配置 [scm.gitlab.auth] 区块。",
+                         "或在配置文件中配置 [scm.gitlab.auth] / [scm.gitlab.instances.*] 区块。",
                 "error_category": "auth_missing",
             }
 
     try:
-        token_provider = create_gitlab_token_provider(cfg, private_token=payload.get("token"))
+        # 使用工厂方法按 instance_key/tenant_id 选择 token
+        # 优先级: payload token > instance config > tenant config > env 默认
+        token_provider = create_token_provider_for_instance(
+            instance_key=instance_key,
+            tenant_id=tenant_id,
+            payload_token=payload.get("token"),
+            config=cfg,
+        )
     except TokenValidationError as e:
         return {
             "success": False,
@@ -1140,10 +1140,14 @@ def sync_svn(repo_id: int, mode: str, payload: Dict, worker_id: str) -> Dict[str
 def default_sync_handler(job_type: str, repo_id: int, mode: str, payload: Dict) -> Dict[str, Any]:
     """
     默认同步处理器（用于未知任务类型）
+    
+    返回标准同步结果字段: success, error_category, error, counts
     """
     return {
         "success": False,
         "error": f"未知的任务类型: {job_type}",
+        "error_category": "unknown_job_type",
+        "counts": {},
     }
 
 
@@ -1217,18 +1221,31 @@ def process_one_job(
             
             # 检查是否因续租失败需要中止
             if heartbeat.should_abort:
-                logger.error(f"任务因续租失败被中止: job_id={job_id}")
+                # 获取结构化错误信息（使用共享的 ErrorCategory 常量）
+                abort_error = heartbeat.get_abort_error()
+                logger.error(
+                    f"任务因续租失败被中止: job_id={job_id}, "
+                    f"failure_count={abort_error['failure_count']}, "
+                    f"error_category={abort_error['error_category']}"
+                )
                 result = {
                     "success": False,
-                    "error": f"Lease lost after {heartbeat.failure_count} renewal failures",
-                    "error_category": "lease_lost",
+                    "error": abort_error["error"],
+                    "error_category": abort_error["error_category"],
                 }
         
         # 3. 更新熔断状态（如果提供了熔断控制器）
+        # 优先使用同步结果中的标准字段 (success, error_category, retry_after, counts)
         if circuit_breaker is not None:
             success = result.get("success", False)
             error_category = result.get("error_category")
-            circuit_breaker.record_result(success=success, error_category=error_category)
+            # 将 retry_after 传递给 circuit breaker（如果有）
+            retry_after = result.get("retry_after")
+            circuit_breaker.record_result(
+                success=success, 
+                error_category=error_category,
+                retry_after=retry_after,
+            )
             
             # 持久化熔断状态
             try:
@@ -1257,6 +1274,8 @@ def process_one_job(
         else:
             error = result.get("error", "未知错误")
             error_category = result.get("error_category", "")
+            # 优先使用同步结果中的 retry_after 字段（标准字段）
+            retry_after = result.get("retry_after")
             # 对错误信息进行脱敏，防止敏感信息（如 token）泄露到数据库
             redacted_error = redact(error)
             
@@ -1269,16 +1288,22 @@ def process_one_job(
                     f"error_category={error_category}, error={redacted_error}"
                 )
             elif _is_transient_error(error_category, error):
-                # 临时性错误：根据错误类型计算退避时间
-                backoff_seconds = _get_transient_error_backoff(error_category, error)
+                # 临时性错误：优先使用 retry_after，否则根据错误类型计算退避时间
+                if retry_after is not None:
+                    backoff_seconds = int(retry_after)
+                else:
+                    backoff_seconds = _get_transient_error_backoff(error_category, error)
                 fail_retry(job_id, worker_id, redacted_error, backoff_seconds=backoff_seconds)
                 logger.warning(
                     f"任务临时性失败，安排重试: job_id={job_id}, "
                     f"error_category={error_category}, backoff={backoff_seconds}s, error={redacted_error}"
                 )
             else:
-                # 未知错误类型：使用默认退避策略
-                backoff_seconds = _get_transient_error_backoff(error_category, error)
+                # 未知错误类型：优先使用 retry_after，否则使用默认退避策略
+                if retry_after is not None:
+                    backoff_seconds = int(retry_after)
+                else:
+                    backoff_seconds = _get_transient_error_backoff(error_category, error)
                 fail_retry(job_id, worker_id, redacted_error, backoff_seconds=backoff_seconds)
                 logger.warning(
                     f"任务失败，安排重试: job_id={job_id}, "
@@ -1316,9 +1341,13 @@ def _build_worker_circuit_breaker_key(
     """
     构建 worker 使用的熔断 key
     
+    使用统一的 build_circuit_breaker_key 函数，确保与 scheduler 生成的 key 一致。
+    
     Key 规范: <project_key>:<scope>
     - 有 pool 配置时: <project_key>:pool:<pool_name>
-    - 无 pool 配置时: <project_key>:global
+    - 有 instance 配置时: <project_key>:instance:<instance_key>
+    - 有 tenant 配置时: <project_key>:tenant:<tenant_id>
+    - 无配置时: <project_key>:global
     
     Args:
         cfg: 配置对象
@@ -1332,25 +1361,35 @@ def _build_worker_circuit_breaker_key(
     # 获取 project_key
     project_key = cfg.get("project.project_key", "default") or "default"
     
-    # 确定 scope
+    # 使用统一的 build_circuit_breaker_key 函数
     # 优先使用 pool_name，其次根据 allowlist 推断
     if pool_name:
         # 使用预定义的 pool 名称
-        return build_circuit_breaker_key(project_key=project_key, pool_name=pool_name)
+        return build_circuit_breaker_key(
+            project_key=project_key,
+            worker_pool=pool_name,
+        )
     
     if instance_allowlist:
-        # 根据 instance 列表构建 pool 名称
-        # 使用第一个 instance 作为 pool 标识（简化）
-        pool_id = instance_allowlist[0].replace(".", "-").replace(":", "-")
-        return build_circuit_breaker_key(project_key=project_key, pool_name=f"instance-{pool_id}")
+        # 使用第一个 instance 作为 key 基础
+        # build_circuit_breaker_key 会自动规范化 instance_key
+        return build_circuit_breaker_key(
+            project_key=project_key,
+            instance_key=instance_allowlist[0],
+        )
     
     if tenant_allowlist:
-        # 根据 tenant 列表构建 pool 名称
-        pool_id = tenant_allowlist[0]
-        return build_circuit_breaker_key(project_key=project_key, pool_name=f"tenant-{pool_id}")
+        # 使用第一个 tenant 作为 key 基础
+        return build_circuit_breaker_key(
+            project_key=project_key,
+            tenant_id=tenant_allowlist[0],
+        )
     
-    # 没有 pool 配置，使用全局 key
-    return build_circuit_breaker_key(project_key=project_key, scope="global")
+    # 没有 pool/instance/tenant 配置，使用全局 key
+    return build_circuit_breaker_key(
+        project_key=project_key,
+        scope="global",
+    )
 
 
 def run_loop(

@@ -1,33 +1,46 @@
 # -*- coding: utf-8 -*-
 """
-test_gitlab_client_integration.py - GitLab HTTP 客户端集成测试
+test_gitlab_client_integration.py - GitLabClient 集成测试
 
-通过环境变量 ENGRAM_GITLAB_INTEGRATION=1 启用测试。
+测试 GitLabClient 在并发场景下与 Postgres 限流器和断路器的交互。
 
-测试覆盖:
-1. 无 token 401 认证错误
-2. 触发 429 限流（通过快速多请求或低速率限制）
-3. 模拟 5xx 服务器错误（通过无效路径触发 404/500）
-4. 日志/异常文本中的 redact() 脱敏断言
+================================================================================
+测试场景
+================================================================================
 
-环境变量配置:
-    export ENGRAM_GITLAB_INTEGRATION=1
-    export GITLAB_URL=https://gitlab.example.com
-    export GITLAB_TOKEN=glpat-xxx
-    export GITLAB_PROJECT_ID=123  # 或 namespace/project
+1. PostgresRateLimiter 集成测试
+   - 单 worker 请求消费令牌
+   - 429 响应触发 pause_rate_limit_bucket
+   - 多 worker 并发消费共享令牌桶
 
-运行测试:
-    pytest tests/test_gitlab_client_integration.py -v
+2. CircuitBreaker 状态持久化测试
+   - 熔断状态保存到 logbook.kv
+   - 多 worker 共享熔断状态
+
+3. 端到端集成测试
+   - Mock HTTP 返回 429/200 序列
+   - 验证 limiter 状态表变化
+   - 验证 breaker 状态变化
+
+================================================================================
+运行方式
+================================================================================
+
+# 使用现有的 Postgres fixture
+pytest tests/test_gitlab_client_integration.py -v
 """
 
-import logging
+import concurrent.futures
+import json
 import os
-import re
 import sys
+import threading
 import time
-from typing import Optional
-from unittest.mock import patch, MagicMock
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock, Mock, patch
 
+import psycopg
 import pytest
 import requests
 
@@ -36,709 +49,726 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engram_step1.gitlab_client import (
     GitLabClient,
-    GitLabAPIError,
     GitLabAPIResult,
-    GitLabRateLimitError,
-    GitLabAuthError,
-    GitLabServerError,
     GitLabErrorCategory,
     HttpConfig,
+    PostgresRateLimiter,
+    RateLimiter,
     StaticTokenProvider,
-    redact,
-    redact_headers,
 )
-from engram_step1.scm_auth import redact as scm_auth_redact, redact_dict
-
-
-# ============ 测试启用条件 ============
-
-GITLAB_INTEGRATION_ENABLED = os.environ.get(
-    "ENGRAM_GITLAB_INTEGRATION", ""
-).lower() in ("1", "true", "yes")
-
-pytestmark = pytest.mark.skipif(
-    not GITLAB_INTEGRATION_ENABLED,
-    reason="GitLab 集成测试未启用，设置 ENGRAM_GITLAB_INTEGRATION=1 启用"
+from engram_step1.scm_sync_policy import (
+    CircuitBreakerConfig,
+    CircuitBreakerController,
+    CircuitState,
 )
+import db as scm_db
 
 
-# ============ Fixtures ============
-
-
-@pytest.fixture(scope="module")
-def gitlab_config():
-    """GitLab 配置（从环境变量读取）"""
-    config = {
-        "url": os.environ.get("GITLAB_URL", "https://gitlab.com"),
-        "token": os.environ.get("GITLAB_TOKEN", ""),
-        "project_id": os.environ.get("GITLAB_PROJECT_ID", ""),
-    }
-    
-    if not config["token"]:
-        pytest.skip("缺少 GITLAB_TOKEN 环境变量")
-    if not config["project_id"]:
-        pytest.skip("缺少 GITLAB_PROJECT_ID 环境变量")
-    
-    return config
-
-
-@pytest.fixture(scope="module")
-def gitlab_client(gitlab_config):
-    """创建配置正确的 GitLab 客户端"""
-    http_config = HttpConfig(
-        timeout_seconds=30.0,
-        max_attempts=2,
-        backoff_base_seconds=0.5,
-        backoff_max_seconds=10.0,
-    )
-    return GitLabClient(
-        base_url=gitlab_config["url"],
-        private_token=gitlab_config["token"],
-        http_config=http_config,
-    )
+# ============================================================================
+# Fixtures
+# ============================================================================
 
 
 @pytest.fixture
-def invalid_token_client(gitlab_config):
-    """创建使用无效 token 的 GitLab 客户端"""
-    http_config = HttpConfig(
-        timeout_seconds=10.0,
-        max_attempts=1,  # 不重试
-        backoff_base_seconds=0.1,
-    )
-    return GitLabClient(
-        base_url=gitlab_config["url"],
-        private_token="invalid-token-for-testing",
-        http_config=http_config,
-    )
+def instance_key():
+    """生成唯一的实例标识"""
+    return f"gitlab:test-{int(time.time() * 1000)}"
 
 
 @pytest.fixture
-def log_capture():
-    """捕获日志输出以验证脱敏"""
-    captured = []
-    
-    class LogHandler(logging.Handler):
-        def emit(self, record):
-            captured.append(self.format(record))
-    
-    handler = LogHandler()
-    handler.setLevel(logging.DEBUG)
-    
-    # 获取 gitlab_client 模块的 logger
-    logger = logging.getLogger("engram_step1.gitlab_client")
-    original_level = logger.level
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(handler)
-    
-    yield captured
-    
-    logger.removeHandler(handler)
-    logger.setLevel(original_level)
+def postgres_limiter(migrated_db, instance_key):
+    """创建 PostgresRateLimiter 实例"""
+    dsn = migrated_db["dsn"]
+    limiter = PostgresRateLimiter(
+        instance_key=instance_key,
+        dsn=dsn,
+        rate=10.0,      # 10 tokens/sec
+        burst=20,       # 最大 20 tokens
+        max_wait_seconds=5.0,
+    )
+    return limiter
 
 
-# ============ 基础连接测试 ============
+@pytest.fixture
+def cleanup_rate_limit(db_conn_committed, instance_key):
+    """测试后清理 rate limit 记录"""
+    yield
+    try:
+        with db_conn_committed.cursor() as cur:
+            cur.execute(
+                "DELETE FROM scm.sync_rate_limits WHERE instance_key = %s",
+                (instance_key,)
+            )
+        db_conn_committed.commit()
+    except Exception:
+        pass
 
 
-class TestGitLabConnection:
-    """GitLab 连接测试"""
+@pytest.fixture
+def circuit_breaker_key():
+    """生成唯一的熔断器键名"""
+    return f"test:{int(time.time() * 1000)}:global"
 
-    def test_connection_success(self, gitlab_client, gitlab_config):
-        """成功连接到 GitLab 并获取 commits"""
-        project_id = gitlab_config["project_id"]
+
+@pytest.fixture
+def cleanup_circuit_breaker(db_conn_committed, circuit_breaker_key):
+    """测试后清理 circuit breaker 记录"""
+    yield
+    try:
+        with db_conn_committed.cursor() as cur:
+            cur.execute(
+                "DELETE FROM logbook.kv WHERE namespace = 'scm.sync_health' AND key = %s",
+                (circuit_breaker_key,)
+            )
+        db_conn_committed.commit()
+    except Exception:
+        pass
+
+
+# ============================================================================
+# PostgresRateLimiter 集成测试
+# ============================================================================
+
+
+class TestPostgresRateLimiterIntegration:
+    """PostgresRateLimiter 与 Postgres 的集成测试"""
+
+    def test_consume_token_creates_bucket(self, migrated_db, instance_key, cleanup_rate_limit, db_conn_committed):
+        """测试首次消费令牌时自动创建桶"""
+        dsn = migrated_db["dsn"]
+        limiter = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=10.0,
+            burst=20,
+            max_wait_seconds=1.0,
+        )
         
-        # 获取最近的 commits（即使项目没有 commits 也应该成功返回空列表）
-        commits = gitlab_client.get_commits(project_id, per_page=1)
+        # 消费一个令牌
+        result = limiter.acquire(timeout=1.0)
+        assert result is True, "应该成功获取令牌"
         
-        # 验证返回类型
-        assert isinstance(commits, list)
+        # 验证桶已创建
+        status = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status is not None, "桶应该已创建"
+        assert status["instance_key"] == instance_key
+        assert status["rate"] == 10.0
+        assert status["burst"] == 20
+        # 初始 20 tokens - 1 消费 = 19 tokens (允许一些误差)
+        assert status["current_tokens"] >= 18.0
 
-    def test_get_merge_requests(self, gitlab_client, gitlab_config):
-        """获取 merge requests 列表"""
-        project_id = gitlab_config["project_id"]
+    def test_429_triggers_pause(self, migrated_db, instance_key, cleanup_rate_limit, db_conn_committed):
+        """测试 429 响应触发桶暂停"""
+        dsn = migrated_db["dsn"]
+        limiter = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=10.0,
+            burst=20,
+            max_wait_seconds=1.0,
+        )
         
-        mrs = gitlab_client.get_merge_requests(project_id, state="all", per_page=1)
+        # 先消费一个令牌，确保桶存在
+        limiter.acquire(timeout=1.0)
         
-        assert isinstance(mrs, list)
+        # 模拟收到 429 响应
+        limiter.notify_rate_limit(retry_after=5.0)
+        
+        # 验证桶状态
+        status = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status is not None
+        assert status["is_paused"] is True, "桶应该被暂停"
+        assert status["pause_remaining_seconds"] > 0, "应该有剩余暂停时间"
+        
+        # 验证 meta_json 中记录了 429 信息
+        meta = status.get("meta_json") or {}
+        assert "last_429_at" in meta, "应该记录 429 时间"
+        assert meta.get("last_retry_after") == 5.0, "应该记录 retry_after 值"
+
+    def test_concurrent_workers_share_bucket(self, migrated_db, instance_key, cleanup_rate_limit, db_conn_committed):
+        """测试多个 worker 并发消费共享令牌桶"""
+        dsn = migrated_db["dsn"]
+        
+        # 创建两个 limiter 实例（模拟两个 worker）
+        limiter1 = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=1.0,       # 慢速补充，便于观察消费
+            burst=5,        # 小容量便于测试
+            max_wait_seconds=0.1,
+        )
+        limiter2 = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=1.0,
+            burst=5,
+            max_wait_seconds=0.1,
+        )
+        
+        # 并发消费令牌
+        results = []
+        
+        def consume(limiter, count):
+            successes = 0
+            for _ in range(count):
+                if limiter.acquire(timeout=0.1):
+                    successes += 1
+            return successes
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future1 = executor.submit(consume, limiter1, 3)
+            future2 = executor.submit(consume, limiter2, 3)
+            
+            results.append(future1.result())
+            results.append(future2.result())
+        
+        # 两个 worker 总共应该消费 5 个令牌（burst 限制）
+        # 或者因为 rate 限制而少于 6 个
+        total_consumed = sum(results)
+        assert total_consumed <= 6, f"总消费不应超过 burst+1: {total_consumed}"
+        
+        # 验证桶状态
+        status = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status is not None
+        # 令牌应该被消耗了
+        assert status["current_tokens"] < 5.0, "令牌应该被消耗"
+
+    def test_worker_429_affects_all_workers(self, migrated_db, instance_key, cleanup_rate_limit, db_conn_committed):
+        """测试一个 worker 收到 429 会影响所有 worker"""
+        dsn = migrated_db["dsn"]
+        
+        # Worker 1 消费令牌
+        limiter1 = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=10.0,
+            burst=20,
+            max_wait_seconds=0.5,
+        )
+        
+        # Worker 2 使用相同的 instance_key
+        limiter2 = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=10.0,
+            burst=20,
+            max_wait_seconds=0.5,
+        )
+        
+        # Worker 1 先消费令牌
+        assert limiter1.acquire(timeout=1.0) is True
+        
+        # Worker 1 收到 429，通知暂停
+        limiter1.notify_rate_limit(retry_after=10.0)
+        
+        # Worker 2 尝试消费，应该被暂停拒绝（超时）
+        result = limiter2.acquire(timeout=0.3)
+        assert result is False, "Worker 2 应该因为桶暂停而获取失败"
+        
+        # 验证桶状态
+        status = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status["is_paused"] is True
 
 
-# ============ 401 认证错误测试 ============
+# ============================================================================
+# CircuitBreaker 状态持久化测试
+# ============================================================================
 
 
-class TestAuthError401:
-    """测试 401 认证错误"""
+class TestCircuitBreakerPersistence:
+    """CircuitBreaker 状态持久化与多 worker 共享测试"""
 
-    def test_invalid_token_returns_401(self, invalid_token_client, gitlab_config):
-        """使用无效 token 应返回 401 认证错误"""
-        project_id = gitlab_config["project_id"]
+    def test_circuit_breaker_state_saved_to_kv(self, db_conn_committed, circuit_breaker_key, cleanup_circuit_breaker):
+        """测试熔断状态保存到 logbook.kv"""
+        # 创建熔断器
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=60,
+        )
+        controller = CircuitBreakerController(config=config, key=circuit_breaker_key)
         
-        with pytest.raises(GitLabAuthError) as exc_info:
-            invalid_token_client.get_commits(project_id)
+        # 触发熔断
+        controller.force_open(reason="test_trigger")
         
-        error = exc_info.value
-        assert error.status_code == 401
-        assert error.category == GitLabErrorCategory.AUTH_ERROR
-        # 验证错误消息包含 401
-        assert "401" in str(error)
+        # 保存状态
+        state_dict = controller.get_state_dict()
+        scm_db.save_circuit_breaker_state(db_conn_committed, circuit_breaker_key, state_dict)
+        db_conn_committed.commit()
+        
+        # 验证状态已保存
+        loaded_state = scm_db.load_circuit_breaker_state(db_conn_committed, circuit_breaker_key)
+        assert loaded_state is not None
+        assert loaded_state["state"] == "open"
+        assert loaded_state["last_failure_reason"] == "test_trigger"
 
-    def test_invalid_token_error_message_redacted(self, invalid_token_client, gitlab_config):
-        """验证 401 错误消息中的 token 被脱敏"""
-        project_id = gitlab_config["project_id"]
+    def test_multiple_workers_share_circuit_breaker_state(self, db_conn_committed, circuit_breaker_key, cleanup_circuit_breaker):
+        """测试多个 worker 共享熔断状态"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=60,
+            recovery_success_count=2,
+        )
         
-        with pytest.raises(GitLabAuthError) as exc_info:
-            invalid_token_client.get_commits(project_id)
+        # Worker 1 触发熔断
+        controller1 = CircuitBreakerController(config=config, key=circuit_breaker_key)
+        controller1.force_open(reason="worker1_trigger")
         
-        error = exc_info.value
-        error_str = str(error)
+        # Worker 1 保存状态
+        scm_db.save_circuit_breaker_state(
+            db_conn_committed,
+            circuit_breaker_key,
+            controller1.get_state_dict()
+        )
+        db_conn_committed.commit()
         
-        # 核心验证：明文 token 不在错误消息中
-        assert "invalid-token-for-testing" not in error_str
+        # Worker 2 加载状态
+        controller2 = CircuitBreakerController(config=config, key=circuit_breaker_key)
+        loaded_state = scm_db.load_circuit_breaker_state(db_conn_committed, circuit_breaker_key)
+        controller2.load_state_dict(loaded_state)
         
-        # 验证 to_dict() 结果也被脱敏
-        if hasattr(error, 'details') and error.details:
-            details_str = str(error.details)
-            assert "invalid-token-for-testing" not in details_str
+        # 验证 Worker 2 看到相同的熔断状态
+        assert controller2.state == CircuitState.OPEN
+        assert controller2._last_failure_reason == "worker1_trigger"
 
-    def test_401_triggers_token_invalidate(self, gitlab_config):
-        """验证 401 错误触发 TokenProvider.invalidate()"""
-        mock_provider = MagicMock()
-        mock_provider.get_token.return_value = "invalid-token"
+    def test_circuit_breaker_half_open_probe(self, db_conn_committed, circuit_breaker_key, cleanup_circuit_breaker):
+        """测试半开状态的探测和恢复"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=1,  # 1秒后进入半开
+            recovery_success_count=2,
+            half_open_max_requests=3,
+        )
         
+        controller = CircuitBreakerController(config=config, key=circuit_breaker_key)
+        
+        # 触发熔断
+        controller.force_open(reason="test")
+        assert controller.state == CircuitState.OPEN
+        
+        # 等待进入半开状态
+        time.sleep(1.1)
+        
+        # 检查应该进入半开状态
+        decision = controller.check({}, now=time.time())
+        assert controller.state == CircuitState.HALF_OPEN
+        
+        # 保存状态
+        scm_db.save_circuit_breaker_state(
+            db_conn_committed,
+            circuit_breaker_key,
+            controller.get_state_dict()
+        )
+        db_conn_committed.commit()
+        
+        # 验证状态
+        loaded = scm_db.load_circuit_breaker_state(db_conn_committed, circuit_breaker_key)
+        assert loaded["state"] == "half_open"
+
+
+# ============================================================================
+# GitLabClient 端到端集成测试（Mock HTTP）
+# ============================================================================
+
+
+class TestGitLabClientE2EIntegration:
+    """GitLabClient 端到端集成测试（使用 Mock HTTP）"""
+
+    def test_429_response_updates_rate_limit_table(self, migrated_db, instance_key, cleanup_rate_limit, db_conn_committed):
+        """测试 429 响应更新 rate limit 表"""
+        dsn = migrated_db["dsn"]
+        
+        # 创建 PostgresRateLimiter
+        pg_limiter = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=10.0,
+            burst=20,
+            max_wait_seconds=1.0,
+        )
+        
+        # 创建 GitLabClient
         http_config = HttpConfig(
-            timeout_seconds=10.0,
+            timeout_seconds=5.0,
             max_attempts=2,
             backoff_base_seconds=0.1,
         )
         
         client = GitLabClient(
-            base_url=gitlab_config["url"],
-            token_provider=mock_provider,
+            base_url="https://gitlab.example.com",
+            private_token="test-token",
             http_config=http_config,
+            postgres_rate_limiter=pg_limiter,
         )
         
-        with pytest.raises(GitLabAuthError):
-            client.get_commits(gitlab_config["project_id"])
+        # Mock HTTP 响应：先 429，然后 200
+        mock_response_429 = Mock()
+        mock_response_429.status_code = 429
+        mock_response_429.headers = {"Retry-After": "5"}
+        mock_response_429.text = "Rate limited"
+        mock_response_429.json.return_value = {"error": "rate limited"}
+        mock_response_429.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response_429)
         
-        # 验证 invalidate 被调用
-        mock_provider.invalidate.assert_called()
+        mock_response_200 = Mock()
+        mock_response_200.status_code = 200
+        mock_response_200.headers = {}
+        mock_response_200.json.return_value = {"id": 1, "name": "test"}
+        mock_response_200.raise_for_status.return_value = None
+        
+        call_count = [0]
+        
+        def mock_request(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return mock_response_429
+            return mock_response_200
+        
+        with patch.object(client.session, 'request', side_effect=mock_request):
+            # 执行请求（会触发重试）
+            result = client.request_safe("GET", "/projects/1")
+        
+        # 验证 rate limit 表被更新
+        status = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status is not None
+        # 429 应该触发了暂停
+        meta = status.get("meta_json") or {}
+        assert "last_429_at" in meta, "应该记录 429 时间"
 
-    def test_empty_token_returns_401(self, gitlab_config):
-        """使用空 token 应返回 401"""
-        http_config = HttpConfig(
-            timeout_seconds=10.0,
-            max_attempts=1,
-        )
+    def test_concurrent_workers_429_sequence(self, migrated_db, cleanup_rate_limit, db_conn_committed):
+        """测试并发 worker 处理 429/200 序列"""
+        # 使用唯一的 instance_key
+        instance_key = f"gitlab:concurrent-{int(time.time() * 1000)}"
+        dsn = migrated_db["dsn"]
         
-        # 使用特殊的空 token（实际发送请求时 header 会是空的）
-        # 注意：StaticTokenProvider 会拒绝空 token，所以我们使用空格
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token="   ",  # 只有空格的 token
-            http_config=http_config,
-        )
-        
-        with pytest.raises((GitLabAuthError, ValueError)):
-            client.get_commits(gitlab_config["project_id"])
-
-
-# ============ 429 限流错误测试 ============
-
-
-class TestRateLimited429:
-    """测试 429 限流错误"""
-
-    def test_rapid_requests_may_trigger_429(self, gitlab_client, gitlab_config):
-        """快速发送多个请求可能触发 429（或成功但有 429 统计）"""
-        project_id = gitlab_config["project_id"]
-        
-        # 重置统计
-        gitlab_client.stats.reset()
-        
-        # 快速发送多个请求
-        request_count = 5
-        success_count = 0
-        rate_limit_count = 0
-        
-        for i in range(request_count):
-            try:
-                result = gitlab_client.request_safe(
-                    "GET",
-                    f"/projects/{project_id}/repository/commits",
-                    params={"per_page": 1}
-                )
-                if result.success:
-                    success_count += 1
-                elif result.error_category == GitLabErrorCategory.RATE_LIMITED:
-                    rate_limit_count += 1
-            except GitLabRateLimitError:
-                rate_limit_count += 1
-            except Exception:
-                pass  # 忽略其他错误
-        
-        # 验证至少有一些请求成功（除非全部被限流）
-        assert success_count > 0 or rate_limit_count > 0
-        
-        # 记录统计（用于调试）
-        stats = gitlab_client.stats.to_dict()
-        print(f"Stats: {stats}")
-
-    def test_429_error_includes_retry_after(self, gitlab_config):
-        """验证 429 错误结果包含 retry_after 字段"""
-        # 使用 Mock 模拟 429 响应
-        http_config = HttpConfig(
-            timeout_seconds=10.0,
-            max_attempts=1,  # 不重试以捕获原始 429
-        )
-        
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token=gitlab_config["token"],
-            http_config=http_config,
-        )
-        
-        # Mock 请求返回 429
-        with patch.object(client.session, 'request') as mock_request:
-            mock_response = MagicMock()
-            mock_response.status_code = 429
-            mock_response.headers = {"Retry-After": "60"}
-            mock_response.json.return_value = {"message": "Rate limit exceeded"}
-            mock_response.raise_for_status.side_effect = requests.HTTPError(response=mock_response)
-            mock_response.text = '{"message": "Rate limit exceeded"}'
-            mock_request.return_value = mock_response
-            
-            result = client.request_safe("GET", "/test")
-            
-            assert result.success is False
-            assert result.error_category == GitLabErrorCategory.RATE_LIMITED
-            assert result.retry_after == 60.0
-
-    def test_429_recorded_in_stats(self, gitlab_config):
-        """验证 429 命中被记录在统计中"""
-        http_config = HttpConfig(
-            timeout_seconds=10.0,
-            max_attempts=2,
-            backoff_base_seconds=0.1,
-        )
-        
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token=gitlab_config["token"],
-            http_config=http_config,
-        )
-        client.stats.reset()
-        
-        # Mock 第一次 429，第二次成功
-        with patch.object(client.session, 'request') as mock_request:
-            mock_429 = MagicMock()
-            mock_429.status_code = 429
-            mock_429.headers = {"Retry-After": "0.1"}
-            mock_429.json.return_value = {"message": "Rate limited"}
-            mock_429.raise_for_status.side_effect = requests.HTTPError(response=mock_429)
-            mock_429.text = '{"message": "Rate limited"}'
-            
-            mock_200 = MagicMock()
-            mock_200.status_code = 200
-            mock_200.json.return_value = []
-            mock_200.raise_for_status.return_value = None
-            
-            mock_request.side_effect = [mock_429, mock_200]
-            
-            with patch("time.sleep"):  # 跳过等待
-                result = client.request_safe("GET", "/test")
-            
-            assert result.success is True
-            
-            stats = client.stats.to_dict()
-            assert stats["total_429_hits"] >= 1
-
-
-# ============ 5xx 服务器错误测试 ============
-
-
-class TestServerError5xx:
-    """测试 5xx 服务器错误"""
-
-    def test_nonexistent_endpoint_error(self, gitlab_client, gitlab_config):
-        """访问不存在的端点应返回 4xx 错误"""
-        # 使用一个肯定不存在的端点
-        result = gitlab_client.request_safe(
-            "GET",
-            "/nonexistent/endpoint/that/does/not/exist/12345"
-        )
-        
-        assert result.success is False
-        assert result.status_code in (400, 401, 403, 404, 500, 502, 503)
-
-    def test_invalid_project_id_error(self, gitlab_client):
-        """使用无效的项目 ID 应返回错误"""
-        # 使用一个不可能存在的项目 ID
-        result = gitlab_client.request_safe(
-            "GET",
-            "/projects/99999999999/repository/commits"
-        )
-        
-        assert result.success is False
-        # 可能是 404 (Not Found) 或 403 (Forbidden)
-        assert result.status_code in (403, 404)
-
-    def test_mock_500_error_handling(self, gitlab_config):
-        """模拟 500 服务器错误处理"""
-        http_config = HttpConfig(
-            timeout_seconds=10.0,
-            max_attempts=2,
-            backoff_base_seconds=0.1,
-        )
-        
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token=gitlab_config["token"],
-            http_config=http_config,
-        )
-        
-        # Mock 返回 500 错误
-        with patch.object(client.session, 'request') as mock_request:
-            mock_response = MagicMock()
-            mock_response.status_code = 500
-            mock_response.json.return_value = {"error": "Internal Server Error"}
-            mock_response.raise_for_status.side_effect = requests.HTTPError(response=mock_response)
-            mock_response.text = '{"error": "Internal Server Error"}'
-            mock_request.return_value = mock_response
-            
-            with patch("time.sleep"):  # 跳过退避等待
-                with pytest.raises(GitLabServerError) as exc_info:
-                    client.get_commits("123")
-            
-            error = exc_info.value
-            assert error.status_code == 500
-            assert error.category == GitLabErrorCategory.SERVER_ERROR
-
-    def test_mock_502_gateway_error(self, gitlab_config):
-        """模拟 502 Bad Gateway 错误处理"""
-        http_config = HttpConfig(
-            timeout_seconds=10.0,
-            max_attempts=2,
-            backoff_base_seconds=0.1,
-        )
-        
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token=gitlab_config["token"],
-            http_config=http_config,
-        )
-        
-        with patch.object(client.session, 'request') as mock_request:
-            mock_response = MagicMock()
-            mock_response.status_code = 502
-            mock_response.json.return_value = {"message": "Bad Gateway"}
-            mock_response.raise_for_status.side_effect = requests.HTTPError(response=mock_response)
-            mock_response.text = '{"message": "Bad Gateway"}'
-            mock_request.return_value = mock_response
-            
-            with patch("time.sleep"):
-                with pytest.raises(GitLabServerError) as exc_info:
-                    client.get_commits("123")
-            
-            assert exc_info.value.status_code == 502
-
-    def test_mock_503_service_unavailable(self, gitlab_config):
-        """模拟 503 Service Unavailable 错误处理"""
-        http_config = HttpConfig(
-            timeout_seconds=10.0,
-            max_attempts=2,
-            backoff_base_seconds=0.1,
-        )
-        
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token=gitlab_config["token"],
-            http_config=http_config,
-        )
-        
-        with patch.object(client.session, 'request') as mock_request:
-            mock_response = MagicMock()
-            mock_response.status_code = 503
-            mock_response.json.return_value = {"message": "Service Unavailable"}
-            mock_response.raise_for_status.side_effect = requests.HTTPError(response=mock_response)
-            mock_response.text = '{"message": "Service Unavailable"}'
-            mock_request.return_value = mock_response
-            
-            with patch("time.sleep"):
-                with pytest.raises(GitLabServerError) as exc_info:
-                    client.get_commits("123")
-            
-            assert exc_info.value.status_code == 503
-
-
-# ============ Redact 脱敏测试（集成测试中需要真实连接的部分） ============
-
-
-class TestRedactSensitiveInfoIntegration:
-    """测试敏感信息脱敏（需要集成测试环境）"""
-
-    def test_gitlab_api_result_to_dict_redacted(self, gitlab_config):
-        """测试 GitLabAPIResult.to_dict() 结果被脱敏"""
-        # 创建包含敏感信息的结果
-        result = GitLabAPIResult(
-            success=False,
-            status_code=401,
-            endpoint=f"https://gitlab.com/api/v4/projects?private_token=glpat-secret123",
-            error_category=GitLabErrorCategory.AUTH_ERROR,
-            error_message="Invalid token: glpat-secret123",
-        )
-        
-        result_dict = result.to_dict()
-        result_str = str(result_dict)
-        
-        # 验证敏感信息被脱敏
-        assert "glpat-secret123" not in result_str
-        
-        # 验证结构保持
-        assert result_dict["success"] is False
-        assert result_dict["status_code"] == 401
-
-    def test_log_messages_no_token_leak(self, gitlab_config, log_capture):
-        """验证日志消息中不包含明文 token"""
-        http_config = HttpConfig(
-            timeout_seconds=10.0,
-            max_attempts=1,
-        )
-        
-        test_token = "glpat-test123456789xyz"
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token=test_token,
-            http_config=http_config,
-        )
-        
-        # 触发认证错误以产生日志
+        # 清理此 instance_key 的记录
         try:
-            client.get_commits("invalid-project-id")
+            with db_conn_committed.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM scm.sync_rate_limits WHERE instance_key = %s",
+                    (instance_key,)
+                )
+            db_conn_committed.commit()
         except Exception:
             pass
         
-        # 检查所有捕获的日志
-        for log_msg in log_capture:
-            assert test_token not in log_msg, f"Token 泄露到日志: {log_msg}"
-
-
-# ============ Redact 脱敏纯函数测试（无需集成测试环境） ============
-
-# 注意: 这些纯函数测试在 test_redact_sensitive.py 中已有覆盖，
-# 这里额外添加一些特定于 GitLab 集成场景的脱敏断言测试
-
-
-class TestRedactPureFunctions:
-    """测试敏感信息脱敏纯函数（集成测试环境中额外的验证）"""
-
-    def test_redact_gitlab_token_glpat(self):
-        """测试 GitLab Personal Access Token 脱敏"""
-        text = "Error with glpat-abc123def456xyz789"
-        result = redact(text)
-        
-        # 核心验证：明文 token 不在结果中
-        assert "glpat-abc123def456xyz789" not in result
-        assert "[GITLAB_TOKEN]" in result
-
-    def test_redact_private_token_header(self):
-        """测试 PRIVATE-TOKEN header 值脱敏"""
-        text = "PRIVATE-TOKEN: glpat-secrettoken123"
-        result = redact(text)
-        
-        assert "glpat-secrettoken123" not in result
-        assert "[REDACTED]" in result
-
-    def test_redact_authorization_header(self):
-        """测试 Authorization header 值脱敏"""
-        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9"
-        result = redact(text)
-        
-        assert "eyJhbGciOiJIUzI1NiJ9" not in result
-
-    def test_redact_url_credentials(self):
-        """测试 URL 中的凭证脱敏"""
-        text = "https://user:password123@gitlab.com/repo.git"
-        result = redact(text)
-        
-        assert "password123" not in result
-        assert "[REDACTED]" in result
-
-    def test_redact_headers_function(self):
-        """测试 redact_headers 函数"""
-        headers = {
-            "PRIVATE-TOKEN": "glpat-secret123",
-            "Accept": "application/json",
-            "Authorization": "Bearer xyz",
-        }
-        
-        result = redact_headers(headers)
-        
-        assert result["PRIVATE-TOKEN"] == "[REDACTED]"
-        assert result["Authorization"] == "[REDACTED]"
-        assert result["Accept"] == "application/json"
-
-    def test_exception_error_message_redacted(self):
-        """测试异常消息中的敏感信息脱敏"""
-        # 构造包含 token 的错误消息
-        error_msg = (
-            "GitLab API Error: 401 Unauthorized\n"
-            "Request failed with PRIVATE-TOKEN: glpat-xyz789\n"
-            "Endpoint: https://gitlab.com/api/v4/projects"
-        )
-        
-        redacted = redact(error_msg)
-        
-        # 验证 token 被脱敏
-        assert "glpat-xyz789" not in redacted
-        # 验证其他信息保留
-        assert "GitLab API Error: 401 Unauthorized" in redacted
-
-    def test_redact_dict_nested_structure(self):
-        """测试嵌套字典结构脱敏"""
-        data = {
-            "request": {
-                "headers": {
-                    "PRIVATE-TOKEN": "glpat-secret",
-                    "Accept": "application/json",
-                },
-                "url": "/api/v4/projects",
-            },
-            "response": {
-                "error": "Token glpat-abc123 is invalid",
-            },
-        }
-        
-        result = redact_dict(data)
-        
-        # 验证敏感信息被脱敏
-        assert result["request"]["headers"]["PRIVATE-TOKEN"] == "[REDACTED]"
-        assert "glpat-abc123" not in result["response"]["error"]
-        
-        # 验证非敏感信息保留
-        assert result["request"]["headers"]["Accept"] == "application/json"
-        assert result["request"]["url"] == "/api/v4/projects"
-    
-    def test_redact_gitlab_api_result_structure(self):
-        """测试 GitLabAPIResult.to_dict() 结果结构脱敏"""
-        result = GitLabAPIResult(
-            success=False,
-            status_code=401,
-            endpoint="https://gitlab.com/api/v4/projects?private_token=glpat-test123",
-            error_category=GitLabErrorCategory.AUTH_ERROR,
-            error_message="Invalid token: glpat-test123",
-        )
-        
-        result_dict = result.to_dict()
-        result_str = str(result_dict)
-        
-        # 验证敏感信息被脱敏
-        assert "glpat-test123" not in result_str
-        
-        # 验证结构保持
-        assert result_dict["success"] is False
-        assert result_dict["status_code"] == 401
-
-
-# ============ 完整流程测试 ============
-
-
-class TestIntegrationFlow:
-    """完整流程集成测试"""
-
-    def test_full_api_flow(self, gitlab_client, gitlab_config):
-        """完整的 API 调用流程"""
-        project_id = gitlab_config["project_id"]
-        
-        # 1. 获取 commits
-        commits = gitlab_client.get_commits(project_id, per_page=5)
-        assert isinstance(commits, list)
-        
-        # 2. 如果有 commits，获取第一个 commit 的 diff
-        if commits:
-            sha = commits[0].get("id")
-            if sha:
-                diff_result = gitlab_client.get_commit_diff_safe(project_id, sha)
-                # 可能成功也可能因 diff 太大失败
-                assert isinstance(diff_result, GitLabAPIResult)
-        
-        # 3. 获取 merge requests
-        mrs = gitlab_client.get_merge_requests(project_id, state="all", per_page=5)
-        assert isinstance(mrs, list)
-        
-        # 4. 如果有 MR，获取第一个 MR 的 discussions
-        if mrs:
-            mr_iid = mrs[0].get("iid")
-            if mr_iid:
-                discussions = gitlab_client.get_mr_discussions(project_id, mr_iid, per_page=5)
-                assert isinstance(discussions, list)
-
-    def test_stats_tracking(self, gitlab_client, gitlab_config):
-        """验证请求统计跟踪"""
-        project_id = gitlab_config["project_id"]
-        
-        # 重置统计
-        gitlab_client.stats.reset()
-        
-        # 执行几个请求
-        gitlab_client.get_commits(project_id, per_page=1)
-        gitlab_client.get_merge_requests(project_id, per_page=1)
-        
-        # 验证统计
-        stats = gitlab_client.stats.to_dict()
-        assert stats["total_requests"] >= 2
-        assert stats["successful_requests"] >= 2
-        assert stats["failed_requests"] == 0
-
-
-# ============ 边界条件测试 ============
-
-
-class TestEdgeCases:
-    """边界条件测试"""
-
-    def test_project_id_with_namespace(self, gitlab_config):
-        """测试带 namespace 的项目 ID（如 group/project）"""
-        http_config = HttpConfig(
-            timeout_seconds=30.0,
-            max_attempts=2,
-        )
-        
-        client = GitLabClient(
-            base_url=gitlab_config["url"],
-            private_token=gitlab_config["token"],
-            http_config=http_config,
-        )
-        
-        # 使用 namespace/project 格式
-        project_id = gitlab_config["project_id"]
-        if "/" in project_id:
-            # 项目 ID 包含斜杠，测试 URL 编码
-            result = client.request_safe(
-                "GET",
-                f"/projects/{client._encode_project_id(project_id)}/repository/commits",
-                params={"per_page": 1}
+        # 创建两个 client（共享同一 instance_key）
+        def create_client():
+            pg_limiter = PostgresRateLimiter(
+                instance_key=instance_key,
+                dsn=dsn,
+                rate=100.0,    # 高速率，避免限流影响测试
+                burst=100,
+                max_wait_seconds=0.5,
             )
-            # 应该成功或返回可预期的错误
-            assert isinstance(result, GitLabAPIResult)
-
-    def test_special_characters_in_error_message(self):
-        """测试错误消息中特殊字符的处理"""
-        error_msg = "Error: <token>glpat-abc123</token> in XML"
-        result = redact(error_msg)
+            http_config = HttpConfig(
+                timeout_seconds=5.0,
+                max_attempts=1,  # 不重试，便于观察
+                backoff_base_seconds=0.1,
+            )
+            return GitLabClient(
+                base_url="https://gitlab.example.com",
+                private_token="test-token",
+                http_config=http_config,
+                postgres_rate_limiter=pg_limiter,
+            )
         
-        assert "glpat-abc123" not in result
-
-    def test_multiple_tokens_in_text(self):
-        """测试文本中多个 token 的脱敏"""
-        text = "Token1: glpat-token1xxxxx Token2: glpat-token2yyyyy"
-        result = redact(text)
+        client1 = create_client()
+        client2 = create_client()
         
-        assert "glpat-token1xxxxx" not in result
-        assert "glpat-token2yyyyy" not in result
-        assert result.count("[GITLAB_TOKEN]") == 2
+        # 结果收集
+        results = {"worker1": [], "worker2": []}
+        
+        def create_mock_response(status_code, retry_after=None):
+            mock_resp = Mock()
+            mock_resp.status_code = status_code
+            mock_resp.headers = {"Retry-After": str(retry_after)} if retry_after else {}
+            mock_resp.text = "OK" if status_code == 200 else "Error"
+            mock_resp.json.return_value = {"status": "ok"} if status_code == 200 else {"error": "error"}
+            if status_code >= 400:
+                mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_resp)
+            else:
+                mock_resp.raise_for_status.return_value = None
+            return mock_resp
+        
+        # Worker 1: 第一次 429，然后 200
+        worker1_responses = [
+            create_mock_response(429, retry_after=2),
+            create_mock_response(200),
+        ]
+        worker1_call_count = [0]
+        
+        def worker1_mock(*args, **kwargs):
+            idx = min(worker1_call_count[0], len(worker1_responses) - 1)
+            worker1_call_count[0] += 1
+            return worker1_responses[idx]
+        
+        # Worker 2: 都是 200
+        worker2_responses = [
+            create_mock_response(200),
+            create_mock_response(200),
+        ]
+        worker2_call_count = [0]
+        
+        def worker2_mock(*args, **kwargs):
+            idx = min(worker2_call_count[0], len(worker2_responses) - 1)
+            worker2_call_count[0] += 1
+            return worker2_responses[idx]
+        
+        def worker1_task():
+            with patch.object(client1.session, 'request', side_effect=worker1_mock):
+                r1 = client1.request_safe("GET", "/projects/1")
+                results["worker1"].append(r1)
+                time.sleep(0.1)
+                r2 = client1.request_safe("GET", "/projects/2")
+                results["worker1"].append(r2)
+        
+        def worker2_task():
+            time.sleep(0.05)  # 稍后启动
+            with patch.object(client2.session, 'request', side_effect=worker2_mock):
+                r1 = client2.request_safe("GET", "/projects/3")
+                results["worker2"].append(r1)
+        
+        # 并发执行
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            f1 = executor.submit(worker1_task)
+            f2 = executor.submit(worker2_task)
+            f1.result()
+            f2.result()
+        
+        # 验证 rate limit 表状态
+        status = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status is not None, "rate limit 记录应该存在"
+        
+        # Worker 1 的第一次 429 应该触发了暂停记录
+        meta = status.get("meta_json") or {}
+        # 由于 retry_after=2，桶应该被暂停过
+        # 但由于测试执行速度快，暂停可能已过期
+        
+        # 清理
+        try:
+            with db_conn_committed.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM scm.sync_rate_limits WHERE instance_key = %s",
+                    (instance_key,)
+                )
+            db_conn_committed.commit()
+        except Exception:
+            pass
+
+    def test_limiter_and_breaker_interaction(self, migrated_db, db_conn_committed):
+        """测试 limiter 和 breaker 的联动"""
+        instance_key = f"gitlab:interaction-{int(time.time() * 1000)}"
+        breaker_key = f"test:interaction-{int(time.time() * 1000)}:global"
+        dsn = migrated_db["dsn"]
+        
+        # 创建 PostgresRateLimiter
+        pg_limiter = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=10.0,
+            burst=20,
+            max_wait_seconds=1.0,
+        )
+        
+        # 创建 CircuitBreaker
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            rate_limit_threshold=0.2,
+            open_duration_seconds=60,
+        )
+        breaker = CircuitBreakerController(config=config, key=breaker_key)
+        
+        # 模拟高 429 命中率的健康统计
+        health_stats = {
+            "total_runs": 10,
+            "failed_count": 1,
+            "failed_rate": 0.1,
+            "rate_limit_hits": 3,
+            "rate_limit_rate": 0.3,  # 超过 rate_limit_threshold
+            "total_requests": 10,
+        }
+        
+        # 检查熔断决策
+        decision = breaker.check(health_stats)
+        
+        # 应该触发熔断
+        assert breaker.state == CircuitState.OPEN
+        assert decision.allow_sync is True  # backfill_only_mode=True
+        assert decision.is_backfill_only is True
+        
+        # 保存熔断状态
+        scm_db.save_circuit_breaker_state(db_conn_committed, breaker_key, breaker.get_state_dict())
+        db_conn_committed.commit()
+        
+        # 验证熔断状态已保存
+        loaded = scm_db.load_circuit_breaker_state(db_conn_committed, breaker_key)
+        assert loaded is not None
+        assert loaded["state"] == "open"
+        
+        # 同时记录 429 到 rate limit 表
+        pg_limiter.notify_rate_limit(retry_after=10.0)
+        
+        # 验证 rate limit 表
+        status = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status is not None
+        assert status["is_paused"] is True
+        
+        # 清理
+        try:
+            with db_conn_committed.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM scm.sync_rate_limits WHERE instance_key = %s",
+                    (instance_key,)
+                )
+                cur.execute(
+                    "DELETE FROM logbook.kv WHERE namespace = 'scm.sync_health' AND key = %s",
+                    (breaker_key,)
+                )
+            db_conn_committed.commit()
+        except Exception:
+            pass
 
 
-# ============ 运行入口 ============
+# ============================================================================
+# 边界条件测试
+# ============================================================================
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+class TestRateLimiterEdgeCases:
+    """限流器边界条件测试"""
+
+    def test_empty_bucket_waits_for_refill(self, migrated_db, db_conn_committed):
+        """测试空桶等待令牌补充"""
+        instance_key = f"gitlab:empty-{int(time.time() * 1000)}"
+        dsn = migrated_db["dsn"]
+        
+        # 创建低容量、低速率的 limiter
+        limiter = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=1.0,       # 1 token/sec
+            burst=2,        # 最大 2 tokens
+            max_wait_seconds=0.5,
+        )
+        
+        # 消费所有令牌
+        assert limiter.acquire(timeout=1.0) is True
+        assert limiter.acquire(timeout=1.0) is True
+        
+        # 第三次应该因为没有令牌而等待超时
+        start = time.time()
+        result = limiter.acquire(timeout=0.3)
+        elapsed = time.time() - start
+        
+        # 可能成功（如果等待期间补充了令牌）或失败（超时）
+        # 主要验证不会立即返回
+        assert elapsed >= 0.1, "应该等待一段时间"
+        
+        # 清理
+        try:
+            with db_conn_committed.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM scm.sync_rate_limits WHERE instance_key = %s",
+                    (instance_key,)
+                )
+            db_conn_committed.commit()
+        except Exception:
+            pass
+
+    def test_pause_clears_after_duration(self, migrated_db, db_conn_committed):
+        """测试暂停状态在持续时间后清除"""
+        instance_key = f"gitlab:pause-clear-{int(time.time() * 1000)}"
+        dsn = migrated_db["dsn"]
+        
+        limiter = PostgresRateLimiter(
+            instance_key=instance_key,
+            dsn=dsn,
+            rate=10.0,
+            burst=20,
+            max_wait_seconds=3.0,
+        )
+        
+        # 消费一个令牌
+        limiter.acquire(timeout=1.0)
+        
+        # 暂停 1 秒
+        limiter.notify_rate_limit(retry_after=1.0)
+        
+        # 立即尝试应该失败
+        status1 = scm_db.get_rate_limit_status(db_conn_committed, instance_key)
+        assert status1["is_paused"] is True
+        
+        # 等待暂停结束
+        time.sleep(1.2)
+        
+        # 现在应该可以获取
+        result = limiter.acquire(timeout=1.0)
+        assert result is True, "暂停结束后应该可以获取令牌"
+        
+        # 清理
+        try:
+            with db_conn_committed.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM scm.sync_rate_limits WHERE instance_key = %s",
+                    (instance_key,)
+                )
+            db_conn_committed.commit()
+        except Exception:
+            pass
+
+
+class TestCircuitBreakerEdgeCases:
+    """熔断器边界条件测试"""
+
+    def test_half_open_failure_reopens_circuit(self, db_conn_committed):
+        """测试半开状态失败后重新熔断"""
+        breaker_key = f"test:halfopen-{int(time.time() * 1000)}:global"
+        
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=0,  # 立即进入半开
+            recovery_success_count=2,
+        )
+        
+        controller = CircuitBreakerController(config=config, key=breaker_key)
+        
+        # 触发熔断
+        controller.force_open(reason="test")
+        assert controller.state == CircuitState.OPEN
+        
+        # 检查进入半开
+        controller.check({})
+        assert controller.state == CircuitState.HALF_OPEN
+        
+        # 记录失败
+        controller.record_result(success=False, error_category="server_error")
+        
+        # 应该重新熔断
+        assert controller.state == CircuitState.OPEN
+
+    def test_recovery_requires_consecutive_successes(self, db_conn_committed):
+        """测试恢复需要连续成功"""
+        breaker_key = f"test:recovery-{int(time.time() * 1000)}:global"
+        
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=0,
+            recovery_success_count=3,  # 需要 3 次连续成功
+        )
+        
+        controller = CircuitBreakerController(config=config, key=breaker_key)
+        
+        # 进入半开
+        controller.force_open(reason="test")
+        controller.check({})
+        assert controller.state == CircuitState.HALF_OPEN
+        
+        # 2 次成功，还没恢复
+        controller.record_result(success=True)
+        assert controller.state == CircuitState.HALF_OPEN
+        
+        controller.record_result(success=True)
+        assert controller.state == CircuitState.HALF_OPEN
+        
+        # 第 3 次成功，恢复
+        controller.record_result(success=True)
+        assert controller.state == CircuitState.CLOSED

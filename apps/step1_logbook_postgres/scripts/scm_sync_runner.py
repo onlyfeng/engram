@@ -552,6 +552,27 @@ class TimeWindowChunk:
     
     def __str__(self) -> str:
         return f"[{self.index + 1}/{self.total}] {self.since.isoformat()} ~ {self.until.isoformat()}"
+    
+    def to_payload(self, update_watermark: bool = False, watermark_constraint: str = "monotonic") -> Dict[str, Any]:
+        """
+        生成 chunk 的 job payload
+        
+        Args:
+            update_watermark: 是否更新 watermark
+            watermark_constraint: watermark 约束策略 ('monotonic' | 'none')
+        
+        Returns:
+            包含窗口边界和 watermark 策略的字典
+        """
+        return {
+            "window_type": "time",
+            "window_since": self.since.isoformat(),
+            "window_until": self.until.isoformat(),
+            "chunk_index": self.index,
+            "chunk_total": self.total,
+            "update_watermark": update_watermark,
+            "watermark_constraint": watermark_constraint,
+        }
 
 
 @dataclass  
@@ -564,6 +585,27 @@ class RevisionWindowChunk:
     
     def __str__(self) -> str:
         return f"[{self.index + 1}/{self.total}] r{self.start_rev} ~ r{self.end_rev}"
+    
+    def to_payload(self, update_watermark: bool = False, watermark_constraint: str = "monotonic") -> Dict[str, Any]:
+        """
+        生成 chunk 的 job payload
+        
+        Args:
+            update_watermark: 是否更新 watermark
+            watermark_constraint: watermark 约束策略 ('monotonic' | 'none')
+        
+        Returns:
+            包含窗口边界和 watermark 策略的字典
+        """
+        return {
+            "window_type": "revision",
+            "window_start_rev": self.start_rev,
+            "window_end_rev": self.end_rev,
+            "chunk_index": self.index,
+            "chunk_total": self.total,
+            "update_watermark": update_watermark,
+            "watermark_constraint": watermark_constraint,
+        }
 
 
 def split_time_window(
@@ -901,14 +943,29 @@ class SyncRunner:
             chunk_hours=self.ctx.window_chunk_hours,
         )
         
+        # 确定 watermark 约束策略
+        # strict 模式下: monotonic（只能前进，不允许回退）
+        # best_effort 模式下: none（允许推进，即使有错误也会记录）
+        watermark_constraint = "monotonic" if self.ctx.update_watermark else "none"
+        
         logger.info(
-            "回填同步 [%s] 时间范围: %s -> %s, 切分为 %d 个窗口 (update_watermark=%s)",
+            "回填同步 [%s] 时间范围: %s -> %s, 切分为 %d 个窗口 (update_watermark=%s, watermark_constraint=%s)",
             self.ctx.repo,
             since_time.isoformat(),
             until_time.isoformat(),
             len(chunks),
             self.ctx.update_watermark,
+            watermark_constraint,
         )
+        
+        # 生成 chunk payloads（用于记录到 sync_runs）
+        chunk_payloads = [
+            chunk.to_payload(
+                update_watermark=self.ctx.update_watermark,
+                watermark_constraint=watermark_constraint,
+            )
+            for chunk in chunks
+        ]
         
         # 汇总结果
         total_result = {
@@ -918,11 +975,22 @@ class SyncRunner:
             "errors": [],
             "warnings": [],
             "metadata": {
+                # 窗口边界
+                "window_type": "time",
                 "since_time": since_time.isoformat(),
                 "until_time": until_time.isoformat(),
+                # watermark 策略
                 "update_watermark": self.ctx.update_watermark,
+                "watermark_constraint": watermark_constraint,
+                # chunk 信息
                 "chunk_count": len(chunks),
                 "chunk_hours": self.ctx.window_chunk_hours,
+                "chunk_payloads": chunk_payloads,
+                # cursor_before: 回填窗口起始边界
+                "cursor_before": {
+                    "since": since_time.isoformat(),
+                    "window_type": "time",
+                },
             },
         }
         
@@ -966,6 +1034,15 @@ class SyncRunner:
         total_result["watermark_before"] = watermark_before
         total_result["watermark_after"] = watermark_after
         
+        # 添加 cursor_after 信息到 metadata
+        total_result["metadata"]["cursor_after"] = {
+            "until": until_time.isoformat(),
+            "window_type": "time",
+            "watermark_after": watermark_after,
+            "update_watermark": self.ctx.update_watermark,
+            "watermark_constraint": watermark_constraint,
+        }
+        
         return total_result
     
     def _run_backfill_svn_chunks(self) -> Dict[str, Any]:
@@ -997,14 +1074,27 @@ class SyncRunner:
                 chunk_size=self.ctx.window_chunk_revs,
             )
         
+        # 确定 watermark 约束策略
+        watermark_constraint = "monotonic" if self.ctx.update_watermark else "none"
+        
         logger.info(
-            "回填同步 [%s] revision 范围: r%s -> r%s, 切分为 %d 个窗口 (update_watermark=%s)",
+            "回填同步 [%s] revision 范围: r%s -> r%s, 切分为 %d 个窗口 (update_watermark=%s, watermark_constraint=%s)",
             self.ctx.repo,
             start_rev,
             end_rev or "HEAD",
             len(chunks),
             self.ctx.update_watermark,
+            watermark_constraint,
         )
+        
+        # 生成 chunk payloads（用于记录到 sync_runs）
+        chunk_payloads = [
+            chunk.to_payload(
+                update_watermark=self.ctx.update_watermark,
+                watermark_constraint=watermark_constraint,
+            )
+            for chunk in chunks
+        ]
         
         # 汇总结果
         total_result = {
@@ -1014,11 +1104,22 @@ class SyncRunner:
             "errors": [],
             "warnings": [],
             "metadata": {
+                # 窗口边界
+                "window_type": "revision",
                 "start_rev": start_rev,
                 "end_rev": end_rev,
+                # watermark 策略
                 "update_watermark": self.ctx.update_watermark,
+                "watermark_constraint": watermark_constraint,
+                # chunk 信息
                 "chunk_count": len(chunks),
                 "chunk_revs": self.ctx.window_chunk_revs,
+                "chunk_payloads": chunk_payloads,
+                # cursor_before: 回填窗口起始边界
+                "cursor_before": {
+                    "start_rev": start_rev,
+                    "window_type": "revision",
+                },
             },
         }
         
@@ -1061,6 +1162,15 @@ class SyncRunner:
         
         total_result["watermark_before"] = watermark_before
         total_result["watermark_after"] = watermark_after
+        
+        # 添加 cursor_after 信息到 metadata
+        total_result["metadata"]["cursor_after"] = {
+            "end_rev": end_rev,
+            "window_type": "revision",
+            "watermark_after": watermark_after,
+            "update_watermark": self.ctx.update_watermark,
+            "watermark_constraint": watermark_constraint,
+        }
         
         return total_result
     

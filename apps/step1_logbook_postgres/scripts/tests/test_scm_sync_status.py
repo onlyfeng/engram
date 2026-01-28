@@ -31,6 +31,8 @@ from db import (
     insert_sync_run_start,
     insert_sync_run_finish,
     enqueue_sync_job,
+    save_circuit_breaker_state,
+    build_circuit_breaker_key,
 )
 
 from kv import kv_set_json
@@ -486,7 +488,7 @@ class TestOutputStructureSnapshot:
             )
 
     def test_summary_fields_snapshot(self, db_conn):
-        """summary 查询的字段快照"""
+        """summary 查询的字段快照（db.py 的 get_sync_status_summary）"""
         result = get_sync_status_summary(db_conn)
         
         expected_fields = {
@@ -501,3 +503,869 @@ class TestOutputStructureSnapshot:
         
         # 验证 locks 子结构
         assert set(result["locks"].keys()) == {"active", "expired"}
+
+    def test_scm_sync_status_summary_fields_snapshot(self, db_conn):
+        """scm_sync_status.py get_sync_summary 的固定 schema 字段快照"""
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        result = get_sync_summary(db_conn)
+        
+        # 验证固定 schema 必需字段
+        required_fields = {
+            # 新固定 schema 字段
+            "circuit_breakers",
+            "rate_limit_buckets", 
+            "error_budget",
+            "pauses_by_reason",
+            # 原有稳定字段
+            "repos_count", "repos_by_type",
+            "jobs", "jobs_by_status",
+            "expired_locks", "locks",
+            "cursors_count",
+            "runs_24h_by_status",
+            "window_stats",
+            "by_instance", "by_tenant",
+            "top_lag_repos",
+            # 兼容旧字段
+            "circuit_breaker_states",
+            "token_bucket_states",
+            "paused_by_reason",
+            "paused_repos_count",
+            "paused_details",
+        }
+        
+        actual_fields = set(result.keys())
+        missing = required_fields - actual_fields
+        assert not missing, f"缺少必需字段: {missing}"
+        
+        # 验证 circuit_breakers 子结构
+        cb = result["circuit_breakers"]
+        assert "by_scope" in cb
+        assert "total_count" in cb
+        assert "total_open" in cb
+        
+        # 验证 error_budget 子结构
+        eb = result["error_budget"]
+        assert "window_minutes" in eb
+        assert "samples" in eb
+        assert "failure" in eb
+        assert "rate_limit_429" in eb
+        assert "timeout" in eb
+
+
+# ============ 熔断器和令牌桶状态测试 ============
+
+
+class TestCircuitBreakerAndTokenBucketStatus:
+    """测试熔断器和令牌桶状态在 summary 中的输出"""
+
+    def test_circuit_breaker_state_in_summary(self, db_conn):
+        """验证熔断器状态在摘要中的结构"""
+        # 插入熔断器状态
+        cb_key = build_circuit_breaker_key("test_project", "global")
+        cb_state = {
+            "state": "open",
+            "failure_count": 5,
+            "success_count": 10,
+            "last_failure_time": 1700000000.0,
+        }
+        save_circuit_breaker_state(db_conn, cb_key, cb_state)
+        
+        # 导入 scm_sync_status 中的函数
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        result = get_sync_summary(db_conn)
+        
+        # 验证新 schema: circuit_breakers 存在
+        assert "circuit_breakers" in result
+        circuit_breakers = result["circuit_breakers"]
+        assert "by_scope" in circuit_breakers
+        assert "total_count" in circuit_breakers
+        assert "total_open" in circuit_breakers
+        
+        # 验证按 scope 聚合
+        by_scope = circuit_breakers["by_scope"]
+        assert isinstance(by_scope, dict)
+        # 应该有 global scope
+        if "global" in by_scope:
+            global_scope = by_scope["global"]
+            assert "count" in global_scope
+            assert "open_count" in global_scope
+            assert "half_open_count" in global_scope
+            assert "closed_count" in global_scope
+            assert "total_failures" in global_scope
+            assert "entries" in global_scope
+        
+        # 验证兼容旧字段 circuit_breaker_states
+        assert "circuit_breaker_states" in result
+        cb_states = result["circuit_breaker_states"]
+        assert isinstance(cb_states, list)
+        
+        # 找到刚插入的熔断器状态
+        found = [s for s in cb_states if s["key"] == cb_key]
+        assert len(found) == 1
+        
+        cb = found[0]
+        assert "state" in cb
+        assert cb["state"]["state"] == "open"
+        assert cb["state"]["failure_count"] == 5
+        assert cb["state"]["success_count"] == 10
+
+    def test_token_bucket_state_in_summary(self, db_conn):
+        """验证令牌桶状态在摘要中的结构"""
+        # 插入令牌桶状态
+        instance_key = "test-gitlab-instance.com"
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET tokens = EXCLUDED.tokens,
+                    rate = EXCLUDED.rate,
+                    burst = EXCLUDED.burst,
+                    updated_at = EXCLUDED.updated_at
+            """, (instance_key, 15.0, 10.0, 20, '{"test": true}'))
+        
+        # 导入 scm_sync_status 中的函数
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        result = get_sync_summary(db_conn)
+        
+        # 验证新 schema: rate_limit_buckets 存在
+        assert "rate_limit_buckets" in result
+        rate_limit_buckets = result["rate_limit_buckets"]
+        assert isinstance(rate_limit_buckets, list)
+        
+        # 找到刚插入的限流桶状态
+        found_bucket = [b for b in rate_limit_buckets if b["instance_key"] == instance_key]
+        assert len(found_bucket) == 1
+        
+        bucket = found_bucket[0]
+        # 验证新 schema 字段
+        assert "tokens_remaining" in bucket
+        assert "pause_until" in bucket  # 注意：新字段名是 pause_until，不是 paused_until
+        assert "source" in bucket
+        assert "is_paused" in bucket
+        assert "pause_remaining_seconds" in bucket
+        assert "wait_seconds" in bucket
+        assert "rate" in bucket
+        assert "burst" in bucket
+        
+        # 验证兼容旧字段 token_bucket_states
+        assert "token_bucket_states" in result
+        tb_states = result["token_bucket_states"]
+        assert isinstance(tb_states, list)
+        
+        # 找到刚插入的令牌桶状态
+        found = [s for s in tb_states if s["instance_key"] == instance_key]
+        assert len(found) == 1
+        
+        tb = found[0]
+        assert "tokens_remaining" in tb
+        assert "paused_until" in tb
+        assert "wait_seconds" in tb
+        assert "is_paused" in tb
+        assert "pause_remaining_seconds" in tb
+        assert "rate" in tb
+        assert "burst" in tb
+        
+        # 验证值
+        assert tb["rate"] == 10.0
+        assert tb["burst"] == 20
+        assert tb["is_paused"] is False
+
+    def test_token_bucket_paused_state(self, db_conn):
+        """验证暂停状态的令牌桶"""
+        instance_key = "paused-instance.com"
+        # 插入一个被暂停的令牌桶（paused_until 在未来）
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, paused_until, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now() + interval '1 hour', now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET tokens = EXCLUDED.tokens,
+                    paused_until = EXCLUDED.paused_until,
+                    updated_at = EXCLUDED.updated_at
+            """, (instance_key, 0, 10.0, 20, '{}'))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        result = get_sync_summary(db_conn)
+        
+        found = [s for s in result["token_bucket_states"] if s["instance_key"] == instance_key]
+        assert len(found) == 1
+        
+        tb = found[0]
+        assert tb["is_paused"] is True
+        assert tb["pause_remaining_seconds"] > 0
+        assert tb["paused_until"] is not None
+
+
+class TestPrometheusOutputFormat:
+    """测试 Prometheus 输出格式"""
+
+    def test_prometheus_error_budget_metrics(self, db_conn):
+        """验证 Prometheus 输出包含 error_budget 指标"""
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证包含 error_budget 指标
+        assert "scm_error_budget_samples" in prom_output
+        assert "scm_error_budget_failure_count" in prom_output
+        assert "scm_error_budget_failure_rate" in prom_output
+        assert "scm_error_budget_429_count" in prom_output
+        assert "scm_error_budget_429_rate" in prom_output
+        assert "scm_error_budget_timeout_count" in prom_output
+        assert "scm_error_budget_timeout_rate" in prom_output
+
+    def test_prometheus_circuit_breaker_metrics(self, db_conn):
+        """验证 Prometheus 输出包含熔断器指标（新/旧格式）"""
+        # 插入熔断器状态
+        cb_key = build_circuit_breaker_key("prom_test", "global")
+        cb_state = {
+            "state": "half_open",
+            "failure_count": 3,
+            "success_count": 7,
+        }
+        save_circuit_breaker_state(db_conn, cb_key, cb_state)
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证包含新指标：按 scope 聚合
+        assert "scm_circuit_breakers_by_scope" in prom_output
+        assert "scm_circuit_breakers_total_failures" in prom_output
+        
+        # 验证包含兼容旧指标
+        assert "scm_circuit_breaker_state" in prom_output
+        assert "scm_circuit_breaker_failure_count" in prom_output
+        assert "scm_circuit_breaker_success_count" in prom_output
+        assert f'key="{cb_key}"' in prom_output
+
+    def test_prometheus_rate_limit_bucket_metrics(self, db_conn):
+        """验证 Prometheus 输出包含 rate_limit_buckets 指标"""
+        instance_key = "prom-bucket-test.com"
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, paused_until, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now() + interval '10 minutes', now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET tokens = EXCLUDED.tokens, 
+                    paused_until = EXCLUDED.paused_until,
+                    updated_at = EXCLUDED.updated_at
+            """, (instance_key, 5.0, 5.0, 15, '{"pause_source": "test"}'))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证包含新指标：rate_limit_buckets
+        assert "scm_rate_limit_bucket_tokens" in prom_output
+        assert "scm_rate_limit_bucket_paused" in prom_output
+        assert "scm_rate_limit_bucket_pause_seconds" in prom_output
+        assert f'instance_key="{instance_key}"' in prom_output
+
+    def test_prometheus_token_bucket_metrics(self, db_conn):
+        """验证 Prometheus 输出包含令牌桶指标（兼容旧格式）"""
+        instance_key = "prom-test-instance.com"
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET tokens = EXCLUDED.tokens, updated_at = EXCLUDED.updated_at
+            """, (instance_key, 10.0, 5.0, 15, '{}'))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证包含兼容旧指标
+        assert "scm_token_bucket_tokens_remaining" in prom_output
+        assert "scm_token_bucket_wait_seconds" in prom_output
+        assert "scm_token_bucket_is_paused" in prom_output
+        assert "scm_token_bucket_pause_remaining_seconds" in prom_output
+        assert f'instance_key="{instance_key}"' in prom_output
+
+    def test_prometheus_pauses_by_reason_metrics(self, db_conn):
+        """验证 Prometheus 输出包含 pauses_by_reason 指标（新/旧格式）"""
+        from db import set_repo_job_pause, PauseReasonCode
+        
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://example.com/prom-pauses-test.git",
+            project_key="prom_pauses",
+        )
+        
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id,
+            job_type="commits",
+            pause_duration_seconds=300,
+            reason="test pause",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+        )
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证包含新指标名
+        assert "scm_pauses_by_reason" in prom_output
+        
+        # 验证包含兼容旧指标名
+        assert "scm_paused_by_reason" in prom_output
+        assert f'reason_code="{PauseReasonCode.ERROR_BUDGET}"' in prom_output
+
+
+# ============ 暂停统计和敏感信息测试 ============
+
+
+class TestFixedSchemaSummary:
+    """测试固定 schema 的 summary 输出"""
+
+    def test_error_budget_schema(self, db_conn):
+        """验证 error_budget 固定 schema 结构"""
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 验证 error_budget 字段存在
+        assert "error_budget" in summary
+        error_budget = summary["error_budget"]
+        
+        # 验证固定 schema 字段
+        assert "window_minutes" in error_budget
+        assert "samples" in error_budget
+        assert "total_requests" in error_budget
+        assert "completed_runs" in error_budget
+        
+        # 验证 failure 子结构
+        assert "failure" in error_budget
+        failure = error_budget["failure"]
+        assert "count" in failure
+        assert "rate" in failure
+        
+        # 验证 rate_limit_429 子结构
+        assert "rate_limit_429" in error_budget
+        rate_429 = error_budget["rate_limit_429"]
+        assert "count" in rate_429
+        assert "rate" in rate_429
+        
+        # 验证 timeout 子结构
+        assert "timeout" in error_budget
+        timeout = error_budget["timeout"]
+        assert "count" in timeout
+        assert "rate" in timeout
+
+    def test_circuit_breakers_schema(self, db_conn):
+        """验证 circuit_breakers 固定 schema（按 scope 聚合）"""
+        # 插入熔断器状态
+        cb_key = build_circuit_breaker_key("schema_test", "global")
+        save_circuit_breaker_state(db_conn, cb_key, {
+            "state": "open",
+            "failure_count": 3,
+            "success_count": 5,
+        })
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 验证 circuit_breakers 固定 schema
+        assert "circuit_breakers" in summary
+        circuit_breakers = summary["circuit_breakers"]
+        
+        assert "by_scope" in circuit_breakers
+        assert "total_count" in circuit_breakers
+        assert "total_open" in circuit_breakers
+        
+        # 验证 by_scope 内每个 scope 的结构
+        by_scope = circuit_breakers["by_scope"]
+        if by_scope:
+            for scope, data in by_scope.items():
+                assert "count" in data
+                assert "open_count" in data
+                assert "half_open_count" in data
+                assert "closed_count" in data
+                assert "total_failures" in data
+                assert "entries" in data
+
+    def test_rate_limit_buckets_schema(self, db_conn):
+        """验证 rate_limit_buckets 固定 schema（含 pause_until/source）"""
+        instance_key = "schema-test-instance.com"
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, paused_until, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now() + interval '30 minutes', now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET tokens = EXCLUDED.tokens,
+                    paused_until = EXCLUDED.paused_until,
+                    meta_json = EXCLUDED.meta_json,
+                    updated_at = EXCLUDED.updated_at
+            """, (instance_key, 5.0, 10.0, 20, '{"pause_source": "rate_limit_429"}'))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 验证 rate_limit_buckets 固定 schema
+        assert "rate_limit_buckets" in summary
+        buckets = summary["rate_limit_buckets"]
+        assert isinstance(buckets, list)
+        
+        found = [b for b in buckets if b["instance_key"] == instance_key]
+        assert len(found) == 1
+        
+        bucket = found[0]
+        # 验证固定 schema 字段
+        assert "instance_key" in bucket
+        assert "tokens_remaining" in bucket
+        assert "pause_until" in bucket  # 新字段名
+        assert "source" in bucket       # 新字段：暂停原因来源
+        assert "is_paused" in bucket
+        assert "pause_remaining_seconds" in bucket
+        assert "wait_seconds" in bucket
+        assert "rate" in bucket
+        assert "burst" in bucket
+        
+        # 验证 source 字段能正确提取
+        assert bucket["source"] == "rate_limit_429"
+
+    def test_pauses_by_reason_schema(self, db_conn):
+        """验证 pauses_by_reason 固定 schema"""
+        from db import set_repo_job_pause, PauseReasonCode
+        
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://example.com/pauses-schema-test.git",
+            project_key="pauses_schema_test",
+        )
+        
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id,
+            job_type="commits",
+            pause_duration_seconds=300,
+            reason="test",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+        )
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 验证新字段名 pauses_by_reason 存在
+        assert "pauses_by_reason" in summary
+        pauses_by_reason = summary["pauses_by_reason"]
+        assert isinstance(pauses_by_reason, dict)
+        
+        # 验证兼容旧字段名 paused_by_reason
+        assert "paused_by_reason" in summary
+        assert summary["paused_by_reason"] == pauses_by_reason
+
+
+class TestPausedReposAggregation:
+    """测试暂停记录按原因聚合统计"""
+
+    def test_paused_by_reason_in_summary(self, db_conn):
+        """验证 summary 输出包含按 reason_code 聚合的暂停统计"""
+        from db import set_repo_job_pause, PauseReasonCode
+        
+        # 创建测试仓库
+        repo_id1 = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://example.com/pause-test-1.git",
+            project_key="pause_test_1",
+        )
+        repo_id2 = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://example.com/pause-test-2.git",
+            project_key="pause_test_2",
+        )
+        repo_id3 = upsert_repo(
+            db_conn,
+            repo_type="svn",
+            url="https://svn.example.com/pause-test",
+            project_key="pause_test_3",
+        )
+        
+        # 设置不同原因的暂停记录
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id1,
+            job_type="commits",
+            pause_duration_seconds=300,
+            reason="failure_rate=0.35",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+            failure_rate=0.35,
+        )
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id1,
+            job_type="mrs",
+            pause_duration_seconds=300,
+            reason="failure_rate=0.40",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+            failure_rate=0.40,
+        )
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id2,
+            job_type="commits",
+            pause_duration_seconds=600,
+            reason="bucket_paused,remaining=120.0s",
+            reason_code=PauseReasonCode.RATE_LIMIT_BUCKET,
+        )
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id3,
+            job_type="commits",
+            pause_duration_seconds=900,
+            reason="circuit_breaker_open",
+            reason_code=PauseReasonCode.CIRCUIT_OPEN,
+        )
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 验证新字段 pauses_by_reason 存在
+        assert "pauses_by_reason" in summary
+        
+        # 验证聚合字段存在
+        assert "paused_repos_count" in summary
+        assert "paused_by_reason" in summary
+        assert "paused_details" in summary
+        
+        # 验证总数
+        assert summary["paused_repos_count"] >= 4
+        
+        # 验证按 reason_code 聚合（使用新字段名）
+        pauses_by_reason = summary["pauses_by_reason"]
+        assert isinstance(pauses_by_reason, dict)
+        assert PauseReasonCode.ERROR_BUDGET in pauses_by_reason
+        assert pauses_by_reason[PauseReasonCode.ERROR_BUDGET] >= 2
+        assert PauseReasonCode.RATE_LIMIT_BUCKET in pauses_by_reason
+        assert pauses_by_reason[PauseReasonCode.RATE_LIMIT_BUCKET] >= 1
+        assert PauseReasonCode.CIRCUIT_OPEN in pauses_by_reason
+        assert pauses_by_reason[PauseReasonCode.CIRCUIT_OPEN] >= 1
+
+    def test_prometheus_paused_metrics(self, db_conn):
+        """验证 Prometheus 输出包含暂停统计指标"""
+        from db import set_repo_job_pause, PauseReasonCode
+        
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://example.com/prom-pause-test.git",
+            project_key="prom_pause",
+        )
+        
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id,
+            job_type="commits",
+            pause_duration_seconds=300,
+            reason="test pause",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+        )
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证包含暂停指标
+        assert "scm_paused_repos_total" in prom_output
+        assert "scm_paused_by_reason" in prom_output
+        assert f'reason_code="{PauseReasonCode.ERROR_BUDGET}"' in prom_output
+
+
+class TestNoSensitiveInfoLeakage:
+    """测试 summary 输出不泄漏敏感信息（验证 redact 脱敏生效）"""
+
+    def test_paused_details_no_url(self, db_conn):
+        """验证 paused_details 不包含 URL"""
+        from db import set_repo_job_pause, PauseReasonCode
+        
+        sensitive_url = "https://secret-gitlab.internal.corp/sensitive/repo.git"
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url=sensitive_url,
+            project_key="secret_team/sensitive_project",
+        )
+        
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id,
+            job_type="commits",
+            pause_duration_seconds=300,
+            reason="test",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+        )
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 验证 paused_details 存在
+        assert "paused_details" in summary
+        paused_details = summary["paused_details"]
+        assert len(paused_details) >= 1
+        
+        # 验证 paused_details 中的每条记录都不包含敏感字段
+        for detail in paused_details:
+            assert "url" not in detail, "paused_details should not contain url"
+            assert "project_key" not in detail, "paused_details should not contain project_key"
+            # 确保只包含非敏感字段
+            allowed_fields = {"repo_id", "job_type", "reason_code", "remaining_seconds"}
+            for field in detail.keys():
+                assert field in allowed_fields, f"Unexpected field in paused_details: {field}"
+        
+        # 验证 URL 字符串不出现在 paused_details JSON 中
+        import json
+        paused_json = json.dumps(paused_details)
+        assert sensitive_url not in paused_json
+        assert "secret-gitlab" not in paused_json
+        assert "sensitive_project" not in paused_json
+
+    def test_top_lag_repos_url_redacted(self, db_conn):
+        """验证 top_lag_repos 中的 URL 被 redact 脱敏"""
+        from db import insert_sync_run_start, insert_sync_run_finish
+        
+        # 创建包含敏感信息的 URL
+        sensitive_url = "https://user:glpat-secret123456789@gitlab.private.corp/api/v4"
+        sensitive_project = "internal_team/secret_project"
+        
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url=sensitive_url,
+            project_key=sensitive_project,
+        )
+        
+        # 创建 sync_run 以便生成 lag 数据
+        run_id = str(uuid.uuid4())
+        insert_sync_run_start(db_conn, run_id, repo_id, "gitlab_commits")
+        insert_sync_run_finish(db_conn, run_id, status="completed")
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 验证 top_lag_repos 存在
+        assert "top_lag_repos" in summary
+        top_lag_repos = summary["top_lag_repos"]
+        
+        # 找到我们的测试仓库
+        found = [r for r in top_lag_repos if r["repo_id"] == repo_id]
+        
+        if found:
+            repo = found[0]
+            # 验证 URL 已被脱敏（不包含原始敏感内容）
+            url = repo.get("url", "")
+            project_key = repo.get("project_key", "")
+            
+            # GitLab token 应被替换
+            assert "glpat-secret123456789" not in (url or ""), "GitLab token should be redacted in URL"
+            # 用户凭证应被替换
+            assert ":glpat-" not in (url or ""), "Credentials should be redacted in URL"
+            
+            # 确保脱敏后的标记存在（如果 URL 被脱敏了）
+            if url and "://" in url and "@" in url:
+                assert "[REDACTED]" in url or "[GITLAB_TOKEN]" in url, \
+                    "URL with credentials should have redaction markers"
+
+    def test_token_bucket_meta_redacted(self, db_conn):
+        """验证 token_bucket_states 中的 meta_json 被脱敏"""
+        instance_key = "redact-test-instance.com"
+        # meta_json 中包含敏感 token
+        sensitive_meta = {
+            "authorization": "Bearer glpat-sensitive-token-123",
+            "private-token": "glpat-another-token-456",
+            "normal_field": "safe_value",
+        }
+        
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET meta_json = EXCLUDED.meta_json,
+                    updated_at = EXCLUDED.updated_at
+            """, (instance_key, 10.0, 5.0, 15, json.dumps(sensitive_meta)))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        # 找到 token_bucket_states 中的测试条目
+        tb_states = summary.get("token_bucket_states", [])
+        found = [s for s in tb_states if s["instance_key"] == instance_key]
+        
+        assert len(found) == 1
+        meta = found[0].get("meta_json")
+        
+        if meta:
+            # 敏感字段应被脱敏
+            assert meta.get("authorization") == "[REDACTED]", \
+                "authorization header should be redacted"
+            assert meta.get("private-token") == "[REDACTED]", \
+                "private-token header should be redacted"
+            # 非敏感字段应保留
+            assert meta.get("normal_field") == "safe_value"
+
+    def test_paused_by_reason_no_sensitive_info(self, db_conn):
+        """验证 paused_by_reason 聚合只包含 reason_code 和计数"""
+        from db import set_repo_job_pause, PauseReasonCode
+        
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://private.gitlab.com/team/project.git",
+            project_key="team/project",
+        )
+        
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id,
+            job_type="commits",
+            pause_duration_seconds=300,
+            reason="internal error details",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+        )
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary
+        
+        summary = get_sync_summary(db_conn)
+        
+        paused_by_reason = summary.get("paused_by_reason", {})
+        
+        # paused_by_reason 应该只是 {reason_code: count} 格式
+        import json
+        reason_json = json.dumps(paused_by_reason)
+        
+        # 验证不包含敏感信息
+        assert "private.gitlab.com" not in reason_json
+        assert "team/project" not in reason_json
+        assert "internal error details" not in reason_json
+        
+        # 验证格式正确（只有 reason_code 作为 key，int 作为 value）
+        for key, value in paused_by_reason.items():
+            assert isinstance(key, str), "reason_code should be string"
+            assert isinstance(value, int), "count should be int"
+
+    def test_prometheus_output_no_sensitive_info(self, db_conn):
+        """验证 Prometheus 输出不泄漏敏感信息"""
+        from db import set_repo_job_pause, PauseReasonCode
+        
+        sensitive_url = "https://enterprise.gitlab.corp/internal/secret-api.git"
+        sensitive_project = "internal/secret-api"
+        
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url=sensitive_url,
+            project_key=sensitive_project,
+        )
+        
+        set_repo_job_pause(
+            db_conn,
+            repo_id=repo_id,
+            job_type="commits",
+            pause_duration_seconds=300,
+            reason="credentials exposed in error",
+            reason_code=PauseReasonCode.ERROR_BUDGET,
+        )
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证 Prometheus 输出不包含敏感信息
+        assert "enterprise.gitlab.corp" not in prom_output
+        assert "secret-api" not in prom_output
+        assert "credentials exposed" not in prom_output
+        
+        # 验证只包含标准化的 reason_code 标签
+        assert f'reason_code="{PauseReasonCode.ERROR_BUDGET}"' in prom_output

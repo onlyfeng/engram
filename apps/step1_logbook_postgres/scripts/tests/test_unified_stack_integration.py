@@ -41,8 +41,16 @@ pytest tests/test_unified_stack_integration.py -v
 方式二：通过 Docker Compose 运行（推荐用于 CI）
 -------------------------------------------------
 # 使用 test profile 自动启动测试容器
+# 需要设置 MinIO 凭证和服务账号密码
 MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+STEP1_MIGRATOR_PASSWORD=step1_migrator_test_pwd \
+STEP1_SVC_PASSWORD=step1_svc_test_pwd \
+OPENMEMORY_MIGRATOR_PASSWORD=om_migrator_test_pwd \
+OPENMEMORY_SVC_PASSWORD=om_svc_test_pwd \
 docker compose -f docker-compose.unified.yml --profile minio --profile test up
+
+# 或使用 Makefile 简化命令（自动设置默认密码）
+make test-step1-integration
 
 ================================================================================
 环境变量说明
@@ -3042,6 +3050,504 @@ class TestOpenMemoryMigration:
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{table1}")
                 conn.commit()
                 
+        finally:
+            conn.close()
+
+
+# ============================================================================
+# 测试类: SCM 同步栈集成测试
+# ============================================================================
+
+
+@integration_test
+class TestScmSyncStackIntegration:
+    """
+    SCM 同步栈集成测试
+    
+    测试场景：
+    1. 启动依赖 DB（假设已就绪）
+    2. 插入少量 repo/游标/模拟 job
+    3. 运行各个脚本并验证输出：
+       - scm_sync_scheduler.py scan
+       - scm_sync_worker.py --once
+       - scm_sync_reaper.py scan
+       - scm_sync_status.py summary --format prometheus
+    4. 断言关键输出字段存在且不包含敏感信息
+    
+    这是一个可重复的本地验证流程，用于验证 SCM 同步栈各组件的协作。
+    """
+    
+    # 敏感信息关键词列表（用于检测泄露）
+    SENSITIVE_KEYWORDS = [
+        "password",
+        "secret",
+        "token",
+        "private_token",
+        "api_key",
+        "apikey",
+        "credential",
+        "auth_header",
+        # 常见的 token 格式
+        "glpat-",  # GitLab Personal Access Token
+        "ghp_",    # GitHub Personal Access Token
+        "sk-",     # OpenAI API Key
+    ]
+    
+    @pytest.fixture(scope="class")
+    def test_repo_id(self, migrated_database):
+        """
+        创建测试用 repo 并返回 repo_id
+        
+        测试结束后会自动清理
+        """
+        import db as scm_db
+        
+        conn = migrated_database["conn"]
+        
+        # 创建测试仓库（使用唯一的 URL 避免冲突）
+        unique_suffix = secrets.token_hex(4)
+        test_url = f"https://gitlab.test.local/test-group/test-project-{unique_suffix}"
+        
+        repo_id = scm_db.upsert_repo(
+            conn,
+            repo_type="git",
+            url=test_url,
+            project_key=f"test/{unique_suffix}",
+            default_branch="main",
+        )
+        conn.commit()
+        
+        yield repo_id
+        
+        # 清理：删除测试数据
+        try:
+            with conn.cursor() as cur:
+                # 删除相关的 sync_jobs
+                cur.execute("DELETE FROM scm.sync_jobs WHERE repo_id = %s", (repo_id,))
+                # 删除相关的 sync_runs
+                cur.execute("DELETE FROM scm.sync_runs WHERE repo_id = %s", (repo_id,))
+                # 删除相关的 sync_locks
+                cur.execute("DELETE FROM scm.sync_locks WHERE repo_id = %s", (repo_id,))
+                # 删除游标
+                cur.execute(
+                    "DELETE FROM logbook.kv WHERE namespace = 'scm.sync' AND key LIKE %s",
+                    (f"%:{repo_id}",)
+                )
+                # 删除 repo 本身
+                cur.execute("DELETE FROM scm.repos WHERE repo_id = %s", (repo_id,))
+                conn.commit()
+        except Exception as e:
+            print(f"[WARN] 清理测试数据时出错: {e}")
+            conn.rollback()
+    
+    @pytest.fixture(scope="class")
+    def setup_test_cursor(self, test_repo_id, migrated_database):
+        """
+        为测试仓库设置游标
+        """
+        from engram_step1.cursor import Cursor, save_cursor, CURSOR_VERSION
+        from engram_step1.config import get_config
+        
+        config = get_config()
+        
+        # 创建一个简单的 gitlab 游标
+        cursor = Cursor(
+            version=CURSOR_VERSION,
+            watermark={"updated_at": datetime.now(timezone.utc).isoformat()},
+            stats={"synced_count": 0},
+        )
+        
+        # 保存游标
+        save_cursor("gitlab", test_repo_id, cursor, config=config)
+        
+        return cursor
+    
+    @pytest.fixture(scope="class")
+    def setup_test_job(self, test_repo_id, migrated_database):
+        """
+        为测试仓库创建模拟 sync_job
+        """
+        import db as scm_db
+        
+        conn = migrated_database["conn"]
+        
+        # 创建一个 pending 状态的 job
+        job_id = scm_db.enqueue_sync_job(
+            conn,
+            repo_id=test_repo_id,
+            job_type="gitlab_commits",
+            mode="incremental",
+            priority=100,
+            payload_json={
+                "reason": "test",
+                "scheduled_at": datetime.now(timezone.utc).isoformat(),
+                # 注意：不包含敏感信息
+            },
+        )
+        conn.commit()
+        
+        yield job_id
+        
+        # 清理在 test_repo_id fixture 中进行
+    
+    def _check_no_sensitive_info(self, output: str, context: str = "") -> List[str]:
+        """
+        检查输出中是否包含敏感信息
+        
+        Args:
+            output: 要检查的输出字符串
+            context: 上下文描述（用于错误消息）
+        
+        Returns:
+            发现的敏感信息关键词列表（空列表表示安全）
+        """
+        found_sensitive = []
+        output_lower = output.lower()
+        
+        for keyword in self.SENSITIVE_KEYWORDS:
+            if keyword.lower() in output_lower:
+                found_sensitive.append(keyword)
+        
+        return found_sensitive
+    
+    def test_scheduler_scan(
+        self,
+        test_repo_id,
+        setup_test_cursor,
+        migrated_database,
+    ):
+        """
+        测试 scm_sync_scheduler.py scan 命令
+        
+        验证：
+        1. 命令能够正常执行
+        2. 输出包含关键字段（scanned_repos, candidates_found）
+        3. 输出不包含敏感信息
+        """
+        import scm_sync_scheduler as scheduler
+        from io import StringIO
+        import sys
+        
+        # 创建调度器实例
+        sched = scheduler.SyncScheduler()
+        
+        # 执行扫描
+        result = sched.scan_and_enqueue()
+        
+        # 验证结果对象存在关键字段
+        assert hasattr(result, "scanned_repos"), "结果应包含 scanned_repos 字段"
+        assert hasattr(result, "candidates_found"), "结果应包含 candidates_found 字段"
+        assert hasattr(result, "jobs_enqueued"), "结果应包含 jobs_enqueued 字段"
+        assert hasattr(result, "jobs_skipped"), "结果应包含 jobs_skipped 字段"
+        assert hasattr(result, "scan_duration_seconds"), "结果应包含 scan_duration_seconds 字段"
+        
+        # 验证数值合理
+        assert result.scanned_repos >= 0, "scanned_repos 应 >= 0"
+        assert result.candidates_found >= 0, "candidates_found 应 >= 0"
+        assert result.scan_duration_seconds >= 0, "scan_duration_seconds 应 >= 0"
+        
+        # 检查 JSON 输出不包含敏感信息
+        json_output = result.to_json()
+        sensitive_found = self._check_no_sensitive_info(json_output, "scheduler scan output")
+        assert not sensitive_found, f"Scheduler 输出包含敏感信息: {sensitive_found}"
+    
+    def test_worker_once(
+        self,
+        test_repo_id,
+        setup_test_job,
+        migrated_database,
+    ):
+        """
+        测试 scm_sync_worker.py --once 命令
+        
+        验证：
+        1. 命令能够正常执行（即使没有可处理的任务）
+        2. 不抛出异常
+        3. 不泄露敏感信息
+        
+        注意：由于测试环境可能没有 GitLab 连接，worker 可能会失败，
+        但这是预期行为，我们只验证流程不崩溃。
+        """
+        import scm_sync_worker as worker
+        
+        # 生成测试 worker ID
+        worker_id = f"test-worker-{secrets.token_hex(4)}"
+        
+        # 尝试执行单次处理
+        # 注意：这可能返回 False（无任务）或 True（处理了任务但可能失败）
+        # 两种情况都是预期行为
+        try:
+            result = worker.run_once(
+                worker_id=worker_id,
+                job_types=["gitlab_commits"],  # 只处理我们创建的测试任务类型
+                enable_circuit_breaker=False,   # 测试中禁用熔断
+            )
+            
+            # 结果应该是布尔值
+            assert isinstance(result, bool), "run_once 应返回布尔值"
+            
+        except Exception as e:
+            # 如果因为缺少 GitLab token 等原因失败，这是预期的
+            # 但错误消息不应包含敏感信息
+            error_msg = str(e)
+            sensitive_found = self._check_no_sensitive_info(error_msg, "worker error message")
+            assert not sensitive_found, f"Worker 错误消息包含敏感信息: {sensitive_found}"
+    
+    def test_reaper_scan(
+        self,
+        test_repo_id,
+        setup_test_job,
+        migrated_database,
+    ):
+        """
+        测试 scm_sync_reaper.py scan 命令
+        
+        验证：
+        1. 命令能够正常执行
+        2. 输出为结构化 JSON 日志
+        3. 输出不包含敏感信息
+        """
+        import scm_sync_reaper as reaper
+        from io import StringIO
+        import sys
+        
+        # 捕获 stdout（reaper 使用 print 输出 JSON 日志）
+        old_stdout = sys.stdout
+        captured_output = StringIO()
+        sys.stdout = captured_output
+        
+        try:
+            # 获取数据库连接
+            conn = reaper.get_connection()
+            
+            try:
+                # 扫描过期任务
+                jobs = reaper.scan_expired_jobs(conn, grace_seconds=60, limit=100)
+                runs = reaper.scan_expired_runs(conn, max_duration_seconds=1800, limit=100)
+                locks = reaper.scan_expired_locks(conn, grace_seconds=0, limit=100)
+                
+                # 验证返回类型
+                assert isinstance(jobs, list), "scan_expired_jobs 应返回列表"
+                assert isinstance(runs, list), "scan_expired_runs 应返回列表"
+                assert isinstance(locks, list), "scan_expired_locks 应返回列表"
+                
+            finally:
+                conn.close()
+                
+        finally:
+            sys.stdout = old_stdout
+        
+        # 获取捕获的输出
+        output = captured_output.getvalue()
+        
+        # 检查输出不包含敏感信息
+        sensitive_found = self._check_no_sensitive_info(output, "reaper scan output")
+        assert not sensitive_found, f"Reaper 输出包含敏感信息: {sensitive_found}"
+    
+    def test_status_summary_prometheus(
+        self,
+        test_repo_id,
+        setup_test_cursor,
+        setup_test_job,
+        migrated_database,
+    ):
+        """
+        测试 scm_sync_status.py summary --format prometheus 命令
+        
+        验证：
+        1. 命令能够正常执行
+        2. 输出包含 Prometheus 格式的关键指标
+        3. 输出不包含敏感信息
+        
+        关键指标：
+        - scm_repos_total
+        - scm_jobs_total
+        - scm_expired_locks
+        - scm_window_failed_rate
+        - scm_window_rate_limit_rate
+        """
+        import scm_sync_status as status
+        
+        # 获取数据库连接
+        conn = status.get_connection()
+        
+        try:
+            # 获取摘要
+            summary = status.get_sync_summary(conn, window_minutes=60, top_lag_limit=10)
+            
+            # 验证摘要包含关键字段
+            assert "repos_count" in summary, "摘要应包含 repos_count"
+            assert "jobs" in summary, "摘要应包含 jobs"
+            assert "expired_locks" in summary, "摘要应包含 expired_locks"
+            assert "window_stats" in summary, "摘要应包含 window_stats"
+            
+            # 验证 jobs 字段结构
+            jobs = summary["jobs"]
+            assert "pending" in jobs, "jobs 应包含 pending"
+            assert "running" in jobs, "jobs 应包含 running"
+            assert "failed" in jobs, "jobs 应包含 failed"
+            assert "dead" in jobs, "jobs 应包含 dead"
+            
+            # 验证 window_stats 字段结构
+            window_stats = summary["window_stats"]
+            assert "failed_rate" in window_stats, "window_stats 应包含 failed_rate"
+            assert "rate_limit_rate" in window_stats, "window_stats 应包含 rate_limit_rate"
+            
+            # 生成 Prometheus 格式输出
+            prometheus_output = status.format_prometheus_metrics(summary)
+            
+            # 验证 Prometheus 输出包含关键指标
+            assert "scm_repos_total" in prometheus_output, "Prometheus 输出应包含 scm_repos_total"
+            assert "scm_jobs_total" in prometheus_output, "Prometheus 输出应包含 scm_jobs_total"
+            assert "scm_expired_locks" in prometheus_output, "Prometheus 输出应包含 scm_expired_locks"
+            assert "scm_window_failed_rate" in prometheus_output, "Prometheus 输出应包含 scm_window_failed_rate"
+            assert "scm_window_rate_limit_rate" in prometheus_output, "Prometheus 输出应包含 scm_window_rate_limit_rate"
+            
+            # 验证 Prometheus 输出格式正确（包含 # HELP 和 # TYPE）
+            assert "# HELP" in prometheus_output, "Prometheus 输出应包含 HELP 注释"
+            assert "# TYPE" in prometheus_output, "Prometheus 输出应包含 TYPE 注释"
+            
+            # 检查输出不包含敏感信息
+            sensitive_found = self._check_no_sensitive_info(prometheus_output, "prometheus output")
+            assert not sensitive_found, f"Prometheus 输出包含敏感信息: {sensitive_found}"
+            
+            # 检查 JSON 摘要不包含敏感信息
+            import json
+            json_output = json.dumps(summary, ensure_ascii=False, default=str)
+            sensitive_found = self._check_no_sensitive_info(json_output, "status summary json")
+            assert not sensitive_found, f"Status 摘要包含敏感信息: {sensitive_found}"
+            
+        finally:
+            conn.close()
+    
+    def test_full_scm_sync_flow(
+        self,
+        test_repo_id,
+        setup_test_cursor,
+        migrated_database,
+    ):
+        """
+        完整的 SCM 同步流程测试
+        
+        流程：
+        1. scheduler scan -> 入队任务
+        2. status summary -> 验证队列状态
+        3. reaper scan -> 验证无过期任务
+        4. 清理测试数据
+        
+        这是一个端到端的验证流程。
+        """
+        import db as scm_db
+        import scm_sync_scheduler as scheduler
+        import scm_sync_status as status
+        import scm_sync_reaper as reaper
+        
+        conn = migrated_database["conn"]
+        
+        # Step 1: 清理之前的测试任务
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM scm.sync_jobs WHERE repo_id = %s",
+                (test_repo_id,)
+            )
+            conn.commit()
+        
+        # Step 2: 手动入队一个测试任务
+        job_id = scm_db.enqueue_sync_job(
+            conn,
+            repo_id=test_repo_id,
+            job_type="gitlab_commits",
+            mode="incremental",
+            priority=50,
+            payload_json={"reason": "integration_test"},
+        )
+        conn.commit()
+        
+        assert job_id is not None, "应成功入队测试任务"
+        
+        # Step 3: 验证 status 能看到这个任务
+        status_conn = status.get_connection()
+        try:
+            summary = status.get_sync_summary(status_conn)
+            
+            # 验证 pending 任务数 >= 1
+            assert summary["jobs"]["pending"] >= 1, "应至少有 1 个 pending 任务"
+            
+        finally:
+            status_conn.close()
+        
+        # Step 4: reaper scan 应该不会标记我们的新任务为过期
+        reaper_conn = reaper.get_connection()
+        try:
+            expired_jobs = reaper.scan_expired_jobs(
+                reaper_conn,
+                grace_seconds=60,
+                limit=100,
+            )
+            
+            # 我们刚创建的任务不应该在过期列表中
+            expired_job_ids = [str(j.get("job_id", "")) for j in expired_jobs]
+            assert job_id not in expired_job_ids, "新创建的任务不应被标记为过期"
+            
+        finally:
+            reaper_conn.close()
+        
+        # Step 5: 清理测试任务
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM scm.sync_jobs WHERE job_id = %s::uuid",
+                (job_id,)
+            )
+            conn.commit()
+    
+    def test_status_output_no_sensitive_info_comprehensive(
+        self,
+        test_repo_id,
+        migrated_database,
+    ):
+        """
+        全面检查 status 输出不包含敏感信息
+        
+        检查所有输出格式：
+        - JSON
+        - Table
+        - Prometheus
+        """
+        import scm_sync_status as status
+        import json
+        
+        conn = status.get_connection()
+        
+        try:
+            # 获取各种查询结果
+            repos = status.query_repos(conn, limit=10)
+            cursors = status.query_kv_cursors(conn, namespace="scm.sync")
+            runs = status.query_sync_runs(conn, limit=10)
+            jobs = status.query_sync_jobs(conn, limit=10)
+            locks = status.query_sync_locks(conn)
+            summary = status.get_sync_summary(conn)
+            
+            # 序列化所有数据为 JSON
+            all_data = {
+                "repos": repos,
+                "cursors": cursors,
+                "runs": runs,
+                "jobs": jobs,
+                "locks": locks,
+                "summary": summary,
+            }
+            
+            json_output = json.dumps(all_data, ensure_ascii=False, default=str)
+            
+            # 检查 JSON 输出不包含敏感信息
+            sensitive_found = self._check_no_sensitive_info(json_output, "comprehensive status output")
+            assert not sensitive_found, f"Status 综合输出包含敏感信息: {sensitive_found}"
+            
+            # 检查 Prometheus 输出
+            prometheus_output = status.format_prometheus_metrics(summary)
+            sensitive_found = self._check_no_sensitive_info(prometheus_output, "prometheus metrics")
+            assert not sensitive_found, f"Prometheus 指标包含敏感信息: {sensitive_found}"
+            
         finally:
             conn.close()
 

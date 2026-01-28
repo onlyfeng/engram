@@ -59,6 +59,10 @@ class TestCircuitBreakerConfig:
         assert config.open_duration_seconds == 300
         assert config.half_open_max_requests == 3
         assert config.recovery_success_count == 2
+        # 新增参数
+        assert config.min_samples == 5
+        assert config.enable_smoothing is True
+        assert config.smoothing_alpha == 0.5
 
     def test_from_config_with_none(self):
         """测试从 None 配置加载"""
@@ -192,7 +196,10 @@ class TestCircuitBreakerController:
 
     def test_trips_on_high_failure_rate(self):
         """测试高失败率触发熔断"""
-        config = CircuitBreakerConfig(failure_rate_threshold=0.3)
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            enable_smoothing=False,  # 禁用平滑以便立即触发
+        )
         controller = CircuitBreakerController(config=config)
         
         health_stats = {
@@ -212,7 +219,10 @@ class TestCircuitBreakerController:
 
     def test_trips_on_high_rate_limit_rate(self):
         """测试高 429 命中率触发熔断"""
-        config = CircuitBreakerConfig(rate_limit_threshold=0.2)
+        config = CircuitBreakerConfig(
+            rate_limit_threshold=0.2,
+            enable_smoothing=False,  # 禁用平滑以便立即触发
+        )
         controller = CircuitBreakerController(config=config)
         
         health_stats = {
@@ -232,7 +242,10 @@ class TestCircuitBreakerController:
 
     def test_trips_on_high_timeout_rate(self):
         """测试高超时率触发熔断"""
-        config = CircuitBreakerConfig(timeout_rate_threshold=0.2)
+        config = CircuitBreakerConfig(
+            timeout_rate_threshold=0.2,
+            enable_smoothing=False,  # 禁用平滑以便立即触发
+        )
         controller = CircuitBreakerController(config=config)
         
         health_stats = {
@@ -251,11 +264,12 @@ class TestCircuitBreakerController:
 
     def test_not_trip_with_insufficient_data(self):
         """测试数据不足时不触发熔断"""
+        # 使用默认 min_samples=5
         controller = CircuitBreakerController()
         
         health_stats = {
-            "total_runs": 2,  # 少于 3 次
-            "failed_runs": 2,
+            "total_runs": 4,  # 少于 min_samples=5
+            "failed_runs": 4,
             "failed_rate": 1.0,  # 100% 但数据不足
         }
         
@@ -635,7 +649,10 @@ class TestCircuitBreakerEdgeCases:
 
     def test_exactly_at_threshold(self):
         """测试恰好在阈值边界"""
-        config = CircuitBreakerConfig(failure_rate_threshold=0.3)
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            enable_smoothing=False,  # 禁用平滑以便立即触发
+        )
         controller = CircuitBreakerController(config=config)
         
         health_stats = {
@@ -878,7 +895,10 @@ class TestCircuitBreakerKeyScopeIsolation:
 
     def test_different_keys_have_independent_states(self):
         """不同 key 的熔断器状态相互独立"""
-        config = CircuitBreakerConfig(failure_rate_threshold=0.3)
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            enable_smoothing=False,  # 禁用平滑以便立即触发
+        )
         
         # 创建两个不同 key 的熔断器
         global_breaker = CircuitBreakerController(config=config, key="default:global")
@@ -1012,6 +1032,7 @@ class TestPerInstanceCircuitBreakerIsolation:
         config = CircuitBreakerConfig(
             failure_rate_threshold=0.3,
             rate_limit_threshold=0.2,
+            enable_smoothing=False,  # 禁用平滑以便立即触发
         )
         
         # 创建多个 instance 熔断器
@@ -1163,6 +1184,416 @@ class TestPerInstanceCircuitBreakerIsolation:
         assert breaker_b.state == CircuitState.HALF_OPEN
 
 
+# ============ 小样本保护测试 ============
+
+
+class TestMinSamplesProtection:
+    """
+    小样本保护测试
+    
+    验证场景：
+    - 样本数低于 min_samples 时不触发熔断
+    - 样本数达到 min_samples 时正常触发熔断
+    - 自定义 min_samples 配置生效
+    """
+
+    def test_not_trip_with_samples_below_threshold(self):
+        """样本数低于 min_samples 时不触发熔断"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=5,  # 需要至少 5 个样本
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 只有 4 个样本，即使全部失败也不应触发熔断
+        health_stats = {
+            "total_runs": 4,  # 低于 min_samples=5
+            "failed_runs": 4,
+            "failed_rate": 1.0,  # 100% 失败率
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        
+        decision = controller.check(health_stats)
+        
+        # 不应触发熔断
+        assert controller.state == CircuitState.CLOSED
+        assert decision.allow_sync is True
+        assert decision.current_state == "closed"
+
+    def test_trips_when_samples_reach_threshold(self):
+        """样本数达到 min_samples 时正常触发熔断"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=5,
+            enable_smoothing=False,  # 禁用平滑以便测试
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 恰好 5 个样本，高失败率应该触发熔断
+        health_stats = {
+            "total_runs": 5,  # 等于 min_samples=5
+            "failed_runs": 3,
+            "failed_rate": 0.6,  # 60% > 30%
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        
+        decision = controller.check(health_stats)
+        
+        # 应触发熔断
+        assert controller.state == CircuitState.OPEN
+        assert decision.current_state == "open"
+        assert "failure_rate" in decision.trigger_reason
+
+    def test_not_trip_with_exactly_min_samples_and_good_stats(self):
+        """样本数恰好等于 min_samples 且统计正常时不触发熔断"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=5,
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        health_stats = {
+            "total_runs": 5,
+            "failed_runs": 1,
+            "failed_rate": 0.2,  # 20% < 30%
+            "rate_limit_rate": 0.1,  # 10% < 20%
+            "total_requests": 100,
+            "total_timeout_count": 5,
+        }
+        
+        decision = controller.check(health_stats)
+        
+        # 不应触发熔断
+        assert controller.state == CircuitState.CLOSED
+        assert decision.allow_sync is True
+
+    def test_custom_min_samples_value(self):
+        """自定义 min_samples 配置生效"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=10,  # 更高的阈值
+            enable_smoothing=False,
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 7 个样本，低于 min_samples=10
+        health_stats_7 = {
+            "total_runs": 7,
+            "failed_rate": 0.8,
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        
+        decision = controller.check(health_stats_7)
+        assert controller.state == CircuitState.CLOSED  # 不触发
+        
+        # 10 个样本，达到 min_samples=10
+        health_stats_10 = {
+            "total_runs": 10,
+            "failed_rate": 0.8,
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        
+        decision = controller.check(health_stats_10)
+        assert controller.state == CircuitState.OPEN  # 触发
+
+    def test_min_samples_zero_allows_immediate_trip(self):
+        """min_samples=0 时允许立即触发"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=0,  # 无最小样本限制
+            enable_smoothing=False,
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 只有 1 个样本
+        health_stats = {
+            "total_runs": 1,
+            "failed_rate": 1.0,
+            "rate_limit_rate": 0.0,
+            "total_requests": 10,
+            "total_timeout_count": 0,
+        }
+        
+        decision = controller.check(health_stats)
+        assert controller.state == CircuitState.OPEN  # 立即触发
+
+
+# ============ 平滑策略测试 ============
+
+
+class TestSmoothingStrategy:
+    """
+    平滑策略测试
+    
+    验证场景：
+    - 启用平滑时减少抖动
+    - 平滑系数影响收敛速度
+    - 禁用平滑时直接使用原始值
+    - 平滑状态持久化
+    """
+
+    def test_smoothing_reduces_jitter(self):
+        """平滑策略减少抖动：突然高失败率不立即触发熔断"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=3,
+            enable_smoothing=True,
+            smoothing_alpha=0.3,  # 较小的 alpha 意味着更强的平滑
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 第一次检查：正常状态
+        good_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.1,  # 10%
+            "rate_limit_rate": 0.05,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        controller.check(good_stats)
+        assert controller.state == CircuitState.CLOSED
+        
+        # 记录平滑后的值
+        first_smoothed = controller._smoothed_failure_rate
+        assert first_smoothed is not None
+        assert abs(first_smoothed - 0.1) < 0.01  # 首次应接近原始值
+        
+        # 第二次检查：突然高失败率（抖动）
+        # 如果没有平滑，0.5 > 0.3 会立即触发
+        # 但使用 alpha=0.3 的平滑后：
+        # smoothed = 0.3 * 0.5 + 0.7 * 0.1 = 0.15 + 0.07 = 0.22 < 0.3
+        spike_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.5,  # 突然升高到 50%
+            "rate_limit_rate": 0.05,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        decision = controller.check(spike_stats)
+        
+        # 由于平滑，不应立即触发熔断
+        assert controller.state == CircuitState.CLOSED
+        assert decision.allow_sync is True
+        
+        # 验证平滑后的值确实低于原始值
+        second_smoothed = controller._smoothed_failure_rate
+        assert second_smoothed < 0.5  # 平滑后应低于原始值
+        assert second_smoothed > 0.1  # 但高于之前的平滑值
+
+    def test_sustained_high_failure_rate_eventually_triggers(self):
+        """持续高失败率最终会触发熔断"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=3,
+            enable_smoothing=True,
+            smoothing_alpha=0.5,
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 持续发送高失败率统计
+        high_failure_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.6,  # 60%
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        
+        # 多次检查，平滑值会逐渐收敛到高失败率
+        for i in range(10):
+            decision = controller.check(high_failure_stats)
+            if controller.state == CircuitState.OPEN:
+                break
+        
+        # 最终应该触发熔断
+        assert controller.state == CircuitState.OPEN
+
+    def test_smoothing_alpha_affects_convergence_speed(self):
+        """平滑系数影响收敛速度"""
+        # 高 alpha（0.9）= 弱平滑，快速收敛到新值
+        config_fast = CircuitBreakerConfig(
+            failure_rate_threshold=0.9,  # 设高阈值避免触发
+            min_samples=1,
+            enable_smoothing=True,
+            smoothing_alpha=0.9,
+        )
+        controller_fast = CircuitBreakerController(config=config_fast)
+        
+        # 低 alpha（0.1）= 强平滑，缓慢收敛
+        config_slow = CircuitBreakerConfig(
+            failure_rate_threshold=0.9,
+            min_samples=1,
+            enable_smoothing=True,
+            smoothing_alpha=0.1,
+        )
+        controller_slow = CircuitBreakerController(config=config_slow)
+        
+        # 初始化：低失败率
+        init_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.1,
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        controller_fast.check(init_stats)
+        controller_slow.check(init_stats)
+        
+        # 突然高失败率
+        high_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.8,
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        controller_fast.check(high_stats)
+        controller_slow.check(high_stats)
+        
+        # 高 alpha 的控制器平滑值应更接近新值
+        assert controller_fast._smoothed_failure_rate > controller_slow._smoothed_failure_rate
+
+    def test_smoothing_disabled_uses_raw_values(self):
+        """禁用平滑时直接使用原始值"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            min_samples=3,
+            enable_smoothing=False,  # 禁用平滑
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 第一次检查：正常
+        good_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.1,
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        controller.check(good_stats)
+        assert controller.state == CircuitState.CLOSED
+        
+        # 第二次检查：突然高失败率，应立即触发
+        high_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.5,  # 50% > 30%
+            "rate_limit_rate": 0.0,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        decision = controller.check(high_stats)
+        
+        # 禁用平滑时，应立即触发熔断
+        assert controller.state == CircuitState.OPEN
+        assert "failure_rate=50.00%" in decision.trigger_reason
+
+    def test_smoothed_state_persistence(self):
+        """平滑状态持久化"""
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.9,
+            min_samples=1,
+            enable_smoothing=True,
+            smoothing_alpha=0.5,
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 进行一些检查以建立平滑状态
+        stats = {
+            "total_runs": 10,
+            "failed_rate": 0.3,
+            "rate_limit_rate": 0.15,
+            "total_requests": 100,
+            "total_timeout_count": 10,
+        }
+        controller.check(stats)
+        
+        # 获取状态字典
+        state_dict = controller.get_state_dict()
+        
+        # 验证平滑状态被保存
+        assert "smoothed_failure_rate" in state_dict
+        assert "smoothed_rate_limit_rate" in state_dict
+        assert "smoothed_timeout_rate" in state_dict
+        assert state_dict["smoothed_failure_rate"] is not None
+        
+        # 创建新控制器并加载状态
+        new_controller = CircuitBreakerController(config=config, key="new")
+        new_controller.load_state_dict(state_dict)
+        
+        # 验证平滑状态被恢复
+        assert new_controller._smoothed_failure_rate == state_dict["smoothed_failure_rate"]
+        assert new_controller._smoothed_rate_limit_rate == state_dict["smoothed_rate_limit_rate"]
+        assert new_controller._smoothed_timeout_rate == state_dict["smoothed_timeout_rate"]
+
+    def test_reset_clears_smoothed_state(self):
+        """重置熔断器清除平滑状态"""
+        config = CircuitBreakerConfig(enable_smoothing=True)
+        controller = CircuitBreakerController(config=config)
+        
+        # 建立平滑状态
+        stats = {
+            "total_runs": 10,
+            "failed_rate": 0.2,
+            "rate_limit_rate": 0.1,
+            "total_requests": 100,
+            "total_timeout_count": 5,
+        }
+        controller.check(stats)
+        
+        assert controller._smoothed_failure_rate is not None
+        
+        # 重置
+        controller.reset()
+        
+        # 平滑状态应被清除
+        assert controller._smoothed_failure_rate is None
+        assert controller._smoothed_rate_limit_rate is None
+        assert controller._smoothed_timeout_rate is None
+
+    def test_smoothing_with_rate_limit_rate(self):
+        """平滑策略对 429 命中率也生效"""
+        config = CircuitBreakerConfig(
+            rate_limit_threshold=0.2,
+            min_samples=3,
+            enable_smoothing=True,
+            smoothing_alpha=0.3,
+        )
+        controller = CircuitBreakerController(config=config)
+        
+        # 正常状态
+        good_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.0,
+            "rate_limit_rate": 0.05,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        controller.check(good_stats)
+        assert controller.state == CircuitState.CLOSED
+        
+        # 突然高 429 命中率（抖动）
+        # 平滑后：0.3 * 0.5 + 0.7 * 0.05 = 0.15 + 0.035 = 0.185 < 0.2
+        spike_stats = {
+            "total_runs": 10,
+            "failed_rate": 0.0,
+            "rate_limit_rate": 0.5,
+            "total_requests": 100,
+            "total_timeout_count": 0,
+        }
+        decision = controller.check(spike_stats)
+        
+        # 平滑后不应立即触发
+        assert controller.state == CircuitState.CLOSED
+
+
 class TestCircuitBreakerWithSchedulerIntegration:
     """
     熔断器与调度器集成测试
@@ -1175,7 +1606,10 @@ class TestCircuitBreakerWithSchedulerIntegration:
 
     def test_global_breaker_blocks_all_jobs(self):
         """全局熔断时所有任务被阻断"""
-        config = CircuitBreakerConfig(failure_rate_threshold=0.3)
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            enable_smoothing=False,  # 禁用平滑以便立即触发
+        )
         global_breaker = CircuitBreakerController(config=config, key="default:global")
         
         # 触发全局熔断

@@ -2038,6 +2038,354 @@ class TestInstanceLevelCircuitBreaker:
         assert final_batch_size == 10, "应使用更小的 batch_size"
 
 
+# ============ HALF_OPEN 探测模式测试 ============
+
+
+class TestHalfOpenProbeMode:
+    """
+    HALF_OPEN 探测模式测试
+    
+    测试场景：当熔断器从 OPEN 转换到 HALF_OPEN 时：
+    1. 仅生成少量 probe job（由 probe_budget_per_interval 控制）
+    2. 仅允许指定的 job_type（由 probe_job_types_allowlist 控制）
+    3. 生成的任务带有降级参数（suggested_batch_size、suggested_diff_mode 等）
+    """
+
+    def test_circuit_breaker_config_has_probe_fields(self):
+        """测试：CircuitBreakerConfig 包含探测相关配置"""
+        from engram_step1.scm_sync_policy import CircuitBreakerConfig
+        
+        config = CircuitBreakerConfig()
+        
+        # 检查默认值
+        assert hasattr(config, "probe_budget_per_interval")
+        assert hasattr(config, "probe_job_types_allowlist")
+        assert config.probe_budget_per_interval == 2
+        assert config.probe_job_types_allowlist == ["commits"]
+
+    def test_circuit_breaker_config_custom_probe_values(self):
+        """测试：CircuitBreakerConfig 支持自定义探测配置"""
+        from engram_step1.scm_sync_policy import CircuitBreakerConfig
+        
+        config = CircuitBreakerConfig(
+            probe_budget_per_interval=5,
+            probe_job_types_allowlist=["commits", "mrs"],
+        )
+        
+        assert config.probe_budget_per_interval == 5
+        assert config.probe_job_types_allowlist == ["commits", "mrs"]
+
+    def test_circuit_breaker_decision_has_probe_fields(self):
+        """测试：CircuitBreakerDecision 包含探测模式字段"""
+        from engram_step1.scm_sync_policy import CircuitBreakerDecision
+        
+        decision = CircuitBreakerDecision()
+        
+        # 检查默认值
+        assert hasattr(decision, "is_probe_mode")
+        assert hasattr(decision, "probe_budget")
+        assert hasattr(decision, "probe_job_types_allowlist")
+        assert decision.is_probe_mode is False
+        assert decision.probe_budget == 0
+        assert decision.probe_job_types_allowlist == []
+
+    def test_open_to_half_open_transition_sets_probe_mode(self):
+        """
+        测试：从 OPEN 转换到 HALF_OPEN 时，决策中 is_probe_mode=True
+        
+        场景：
+        1. 首先触发熔断（OPEN 状态）
+        2. 等待 open_duration_seconds 后检查（转换到 HALF_OPEN）
+        3. 返回的决策应包含探测模式信息
+        """
+        from engram_step1.scm_sync_policy import (
+            CircuitBreakerController,
+            CircuitBreakerConfig,
+            CircuitState,
+        )
+        
+        # 配置：较短的 open_duration 便于测试
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=10,  # 10 秒
+            probe_budget_per_interval=3,
+            probe_job_types_allowlist=["commits"],
+        )
+        
+        breaker = CircuitBreakerController(config=config, key="test")
+        
+        # 构造触发熔断的 health_stats
+        bad_health = {
+            "total_runs": 10,
+            "failed_runs": 5,
+            "failed_rate": 0.5,  # 50% > 30%
+            "rate_limit_rate": 0.0,
+        }
+        
+        # 第一次检查：触发熔断，进入 OPEN
+        decision1 = breaker.check(bad_health, now=1000.0)
+        assert decision1.current_state == CircuitState.OPEN.value
+        assert decision1.is_probe_mode is False  # OPEN 状态不是探测模式
+        
+        # 第二次检查：模拟时间过去 15 秒（> open_duration_seconds）
+        # 健康统计良好，应转换到 HALF_OPEN
+        good_health = {
+            "total_runs": 10,
+            "failed_runs": 1,
+            "failed_rate": 0.1,  # 10% < 30%
+            "rate_limit_rate": 0.0,
+        }
+        
+        decision2 = breaker.check(good_health, now=1015.0)
+        assert decision2.current_state == CircuitState.HALF_OPEN.value
+        assert decision2.is_probe_mode is True
+        assert decision2.probe_budget == 3
+        assert decision2.probe_job_types_allowlist == ["commits"]
+
+    def test_half_open_decision_contains_degraded_params(self):
+        """
+        测试：HALF_OPEN 状态的决策包含降级参数
+        
+        预期：suggested_batch_size、suggested_forward_window_seconds、suggested_diff_mode
+        """
+        from engram_step1.scm_sync_policy import (
+            CircuitBreakerController,
+            CircuitBreakerConfig,
+            CircuitState,
+        )
+        
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=10,
+            degraded_batch_size=15,
+            degraded_forward_window_seconds=600,
+            probe_budget_per_interval=2,
+        )
+        
+        breaker = CircuitBreakerController(config=config, key="test")
+        
+        # 触发熔断
+        bad_health = {"total_runs": 10, "failed_runs": 5, "failed_rate": 0.5}
+        breaker.check(bad_health, now=1000.0)
+        
+        # 转换到 HALF_OPEN
+        good_health = {"total_runs": 10, "failed_runs": 1, "failed_rate": 0.1}
+        decision = breaker.check(good_health, now=1015.0)
+        
+        assert decision.current_state == CircuitState.HALF_OPEN.value
+        assert decision.suggested_batch_size == 15  # 使用降级值
+        assert decision.suggested_forward_window_seconds == 600
+        assert decision.suggested_diff_mode == "none"  # 第一次探测使用 none
+
+    def test_half_open_probe_mode_filters_job_types(self):
+        """
+        测试：HALF_OPEN 探测模式下，仅放行 allowlist 中的 job_type
+        
+        场景：
+        - probe_job_types_allowlist = ["commits"]
+        - 候选任务包含 commits, mrs, reviews
+        - 预期仅 commits 类型的任务被保留
+        """
+        from engram_step1.scm_sync_policy import (
+            CircuitBreakerDecision,
+            CircuitState,
+        )
+        
+        config = SchedulerConfig(
+            cursor_age_threshold_seconds=3600,
+            global_concurrency=100,
+        )
+        now = 10000.0
+        
+        # 构造仓库状态
+        states = [
+            RepoSyncState(
+                repo_id=1,
+                repo_type="git",
+                cursor_updated_at=now - 5000,  # 需要同步
+            ),
+            RepoSyncState(
+                repo_id=2,
+                repo_type="git",
+                cursor_updated_at=now - 5000,
+            ),
+        ]
+        
+        # 获取所有候选（不考虑探测模式）
+        all_candidates = select_jobs_to_enqueue(
+            states=states,
+            job_types=["commits", "mrs", "reviews"],  # 3 种类型
+            config=config,
+            now=now,
+        )
+        
+        # 应该有 6 个候选（2 个仓库 × 3 种类型）
+        assert len(all_candidates) == 6
+        
+        # 模拟 HALF_OPEN 探测模式的过滤
+        probe_decision = CircuitBreakerDecision(
+            allow_sync=True,
+            is_probe_mode=True,
+            probe_budget=2,
+            probe_job_types_allowlist=["commits"],
+            current_state=CircuitState.HALF_OPEN.value,
+        )
+        
+        # 按 allowlist 过滤
+        filtered_candidates = [
+            c for c in all_candidates
+            if c.job_type in probe_decision.probe_job_types_allowlist
+        ]
+        
+        # 应该只剩 2 个（2 个仓库 × 1 种类型）
+        assert len(filtered_candidates) == 2
+        assert all(c.job_type == "commits" for c in filtered_candidates)
+        
+        # 再按 budget 限制
+        final_candidates = filtered_candidates[:probe_decision.probe_budget]
+        assert len(final_candidates) == 2
+
+    def test_half_open_probe_mode_limits_by_budget(self):
+        """
+        测试：HALF_OPEN 探测模式下，任务数量被 probe_budget 限制
+        
+        场景：
+        - probe_budget_per_interval = 2
+        - 候选任务有 5 个
+        - 预期仅放行 2 个
+        """
+        from engram_step1.scm_sync_policy import (
+            CircuitBreakerDecision,
+            CircuitState,
+        )
+        
+        config = SchedulerConfig(
+            cursor_age_threshold_seconds=3600,
+            global_concurrency=100,
+        )
+        now = 10000.0
+        
+        # 构造 5 个仓库
+        states = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(1, 6)
+        ]
+        
+        # 获取候选
+        candidates = select_jobs_to_enqueue(
+            states=states,
+            job_types=["commits"],
+            config=config,
+            now=now,
+        )
+        
+        assert len(candidates) == 5
+        
+        # 模拟 budget 限制
+        probe_budget = 2
+        limited_candidates = candidates[:probe_budget]
+        
+        assert len(limited_candidates) == 2
+
+    def test_half_open_stays_in_probe_mode_until_recovery(self):
+        """
+        测试：HALF_OPEN 状态下持续返回 is_probe_mode=True，直到恢复
+        
+        场景：
+        1. 进入 HALF_OPEN
+        2. 多次 check() 都应返回 is_probe_mode=True
+        3. 连续成功后恢复到 CLOSED，is_probe_mode 变为 False
+        """
+        from engram_step1.scm_sync_policy import (
+            CircuitBreakerController,
+            CircuitBreakerConfig,
+            CircuitState,
+        )
+        
+        config = CircuitBreakerConfig(
+            failure_rate_threshold=0.3,
+            open_duration_seconds=10,
+            recovery_success_count=2,
+            probe_budget_per_interval=3,
+        )
+        
+        breaker = CircuitBreakerController(config=config, key="test")
+        
+        # 触发熔断并转换到 HALF_OPEN
+        bad_health = {"total_runs": 10, "failed_runs": 5, "failed_rate": 0.5}
+        breaker.check(bad_health, now=1000.0)
+        
+        good_health = {"total_runs": 10, "failed_runs": 1, "failed_rate": 0.1}
+        decision1 = breaker.check(good_health, now=1015.0)
+        assert decision1.current_state == CircuitState.HALF_OPEN.value
+        assert decision1.is_probe_mode is True
+        
+        # 记录第一次成功
+        breaker.record_result(success=True)
+        
+        # 再次检查，仍在 HALF_OPEN
+        decision2 = breaker.check(good_health, now=1016.0)
+        assert decision2.current_state == CircuitState.HALF_OPEN.value
+        assert decision2.is_probe_mode is True
+        
+        # 记录第二次成功，应恢复到 CLOSED
+        breaker.record_result(success=True)
+        
+        decision3 = breaker.check(good_health, now=1017.0)
+        assert decision3.current_state == CircuitState.CLOSED.value
+        assert decision3.is_probe_mode is False
+
+    def test_decision_to_dict_includes_probe_fields(self):
+        """测试：CircuitBreakerDecision.to_dict() 包含探测模式字段"""
+        from engram_step1.scm_sync_policy import CircuitBreakerDecision
+        
+        decision = CircuitBreakerDecision(
+            allow_sync=True,
+            is_probe_mode=True,
+            probe_budget=3,
+            probe_job_types_allowlist=["commits", "mrs"],
+            suggested_batch_size=10,
+            suggested_forward_window_seconds=300,
+            suggested_diff_mode="none",
+        )
+        
+        d = decision.to_dict()
+        
+        assert d["is_probe_mode"] is True
+        assert d["probe_budget"] == 3
+        assert d["probe_job_types_allowlist"] == ["commits", "mrs"]
+        assert d["suggested_batch_size"] == 10
+        assert d["suggested_forward_window_seconds"] == 300
+        assert d["suggested_diff_mode"] == "none"
+
+    def test_empty_allowlist_allows_all_job_types(self):
+        """测试：probe_job_types_allowlist 为空列表时允许所有类型"""
+        from engram_step1.scm_sync_policy import (
+            CircuitBreakerConfig,
+            CircuitBreakerDecision,
+            CircuitState,
+        )
+        
+        config = CircuitBreakerConfig(
+            probe_job_types_allowlist=[],  # 空列表
+        )
+        
+        # 空 allowlist 不应过滤任何 job_type
+        all_types = ["commits", "mrs", "reviews"]
+        allowlist = config.probe_job_types_allowlist
+        
+        if allowlist:
+            filtered = [t for t in all_types if t in allowlist]
+        else:
+            filtered = all_types  # 空 allowlist 允许所有
+        
+        assert filtered == all_types
+
+
 # ============ Pause 记录相关测试 ============
 
 
@@ -3551,3 +3899,1031 @@ class TestSelectJobsWithBucketStatus:
         
         # bucket 暂停的惩罚 (1000) 应该大于失败率惩罚 (20% * 100 = 20)
         assert repo1_candidate.priority > repo2_candidate.priority
+
+
+class TestTenantFairnessOrdering:
+    """Tenant 公平调度策略测试"""
+    
+    def test_tenant_fairness_disabled_by_default(self):
+        """默认情况下 tenant fairness 禁用"""
+        config = SchedulerConfig()
+        assert config.enable_tenant_fairness is False
+        assert config.tenant_fairness_max_per_round == 1
+    
+    def test_tenant_fairness_config_values(self):
+        """启用 tenant fairness 的配置值"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=2,
+        )
+        assert config.enable_tenant_fairness is True
+        assert config.tenant_fairness_max_per_round == 2
+    
+    def test_single_tenant_preserves_priority_order(self):
+        """单个 tenant 时保持优先级顺序"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+        )
+        now = 10000.0
+        
+        # 所有仓库属于同一 tenant
+        states = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000 - (i * 100),  # 不同优先级
+            )
+            for i in range(1, 6)
+        ]
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        # 应该保持优先级顺序（repo_id 越大，cursor 越旧，优先级越高）
+        assert len(candidates) == 5
+        # 单个 tenant 时保持原有优先级排序
+        for i in range(len(candidates) - 1):
+            assert candidates[i].priority <= candidates[i + 1].priority
+    
+    def test_two_tenants_with_equal_backlog_alternate_fairly(self):
+        """两个 tenant 相同 backlog 时交替入队"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            per_tenant_concurrency=100,  # 不限制 per_tenant
+        )
+        now = 10000.0
+        
+        # Tenant A: 3 个仓库
+        states_a = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(1, 4)
+        ]
+        # Tenant B: 3 个仓库
+        states_b = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(4, 7)
+        ]
+        
+        states = states_a + states_b
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 6
+        
+        # 验证交替模式：应该是 A, B, A, B, A, B 或 B, A, B, A, B, A
+        tenant_sequence = []
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        for c in candidates:
+            tenant_sequence.append(repo_to_tenant[c.repo_id])
+        
+        # 检查是否交替
+        for i in range(len(tenant_sequence) - 1):
+            # 连续两个不应来自同一 tenant（因为 max_per_round=1）
+            assert tenant_sequence[i] != tenant_sequence[i + 1], \
+                f"位置 {i} 和 {i+1} 都是 {tenant_sequence[i]}，不符合交替模式"
+    
+    def test_two_tenants_with_different_backlog_still_alternate(self):
+        """两个 tenant 不同 backlog 时仍能交替入队（核心测试场景）"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            per_tenant_concurrency=100,  # 不限制 per_tenant
+        )
+        now = 10000.0
+        
+        # Tenant A: 10 个仓库（大 backlog）
+        states_a = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(1, 11)
+        ]
+        # Tenant B: 2 个仓库（小 backlog）
+        states_b = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(11, 13)
+        ]
+        
+        states = states_a + states_b
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        # 总共 12 个候选
+        assert len(candidates) == 12
+        
+        # 验证前 4 个应该是交替的
+        tenant_sequence = []
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        for c in candidates[:4]:
+            tenant_sequence.append(repo_to_tenant[c.repo_id])
+        
+        # 前 4 个应该是交替的：A, B, A, B 或 B, A, B, A
+        for i in range(3):
+            assert tenant_sequence[i] != tenant_sequence[i + 1], \
+                f"位置 {i} 和 {i+1} 应该交替，但都是 {tenant_sequence[i]}"
+        
+        # 验证 tenant-b 的两个任务都在前面位置（因为交替）
+        tenant_b_positions = [
+            i for i, c in enumerate(candidates) 
+            if repo_to_tenant[c.repo_id] == "tenant-b"
+        ]
+        assert len(tenant_b_positions) == 2
+        # tenant-b 的任务应该在位置 1 和 3（或 0 和 2）
+        assert max(tenant_b_positions) <= 3
+    
+    def test_max_per_round_allows_multiple_per_tenant(self):
+        """max_per_round > 1 时每轮可入队多个"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=2,  # 每轮每 tenant 最多 2 个
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            per_tenant_concurrency=100,
+        )
+        now = 10000.0
+        
+        # Tenant A: 4 个仓库
+        states_a = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(1, 5)
+        ]
+        # Tenant B: 4 个仓库
+        states_b = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(5, 9)
+        ]
+        
+        states = states_a + states_b
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 8
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 前 4 个应该是 A, A, B, B（每轮各 2 个）
+        first_four_tenants = [repo_to_tenant[c.repo_id] for c in candidates[:4]]
+        
+        # 检查分布：应该是 2 个 A 和 2 个 B
+        assert first_four_tenants.count("tenant-a") == 2
+        assert first_four_tenants.count("tenant-b") == 2
+    
+    def test_fairness_disabled_uses_priority_order(self):
+        """禁用 fairness 时按优先级顺序"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=False,  # 禁用
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            per_tenant_concurrency=100,
+        )
+        now = 100000.0  # 使用更大的时间值
+        
+        # Tenant A: 5 个仓库，优先级低（cursor 较新，游标年龄 2 小时）
+        states_a = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 7200,  # 2 小时前
+            )
+            for i in range(1, 6)
+        ]
+        # Tenant B: 2 个仓库，优先级高（cursor 较旧，游标年龄 10 小时）
+        states_b = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 36000,  # 10 小时前，优先级更高
+            )
+            for i in range(6, 8)
+        ]
+        
+        states = states_a + states_b
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 7
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 禁用 fairness 时，按优先级排序，tenant-b 的 2 个（游标更旧）应该在最前面
+        first_two_tenants = [repo_to_tenant[c.repo_id] for c in candidates[:2]]
+        assert first_two_tenants == ["tenant-b", "tenant-b"]
+    
+    def test_three_tenants_round_robin(self):
+        """三个 tenant 轮询"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            per_tenant_concurrency=100,
+        )
+        now = 10000.0
+        
+        # 创建三个 tenant
+        states = []
+        for tenant_id in ["tenant-a", "tenant-b", "tenant-c"]:
+            for i in range(3):
+                repo_id = len(states) + 1
+                states.append(RepoSyncState(
+                    repo_id=repo_id,
+                    repo_type="git",
+                    tenant_id=tenant_id,
+                    cursor_updated_at=now - 5000,
+                ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 9
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 验证前 6 个是三个 tenant 各出现 2 次（两轮）
+        first_six_tenants = [repo_to_tenant[c.repo_id] for c in candidates[:6]]
+        assert first_six_tenants.count("tenant-a") == 2
+        assert first_six_tenants.count("tenant-b") == 2
+        assert first_six_tenants.count("tenant-c") == 2
+    
+    def test_fairness_respects_per_tenant_concurrency_limit(self):
+        """fairness 策略仍然遵守 per_tenant_concurrency 限制"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=2,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            per_tenant_concurrency=3,  # 限制每个 tenant 最多 3 个
+        )
+        now = 10000.0
+        
+        # Tenant A: 10 个仓库
+        states_a = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(1, 11)
+        ]
+        # Tenant B: 10 个仓库
+        states_b = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(11, 21)
+        ]
+        
+        states = states_a + states_b
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        # 每个 tenant 最多 3 个，共 6 个
+        assert len(candidates) == 6
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        tenant_counts = {}
+        for c in candidates:
+            tid = repo_to_tenant[c.repo_id]
+            tenant_counts[tid] = tenant_counts.get(tid, 0) + 1
+        
+        assert tenant_counts["tenant-a"] == 3
+        assert tenant_counts["tenant-b"] == 3
+    
+    def test_no_tenant_id_treated_as_single_bucket(self):
+        """没有 tenant_id 的仓库归入同一桶"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+        )
+        now = 10000.0
+        
+        # 没有 tenant_id 的仓库
+        states_no_tenant = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id=None,
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(1, 4)
+        ]
+        # 有 tenant_id 的仓库
+        states_with_tenant = [
+            RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            )
+            for i in range(4, 7)
+        ]
+        
+        states = states_no_tenant + states_with_tenant
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 6
+        
+        # 验证交替：有 tenant 的和无 tenant 的应该交替
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        tenant_sequence = [repo_to_tenant[c.repo_id] for c in candidates]
+        
+        # 应该有交替模式
+        for i in range(min(5, len(tenant_sequence) - 1)):
+            # 如果连续 2 个相同，检查是否是因为一边已经用完
+            if tenant_sequence[i] == tenant_sequence[i + 1]:
+                # 允许在一边耗尽后连续
+                before_count = tenant_sequence[:i+1].count(tenant_sequence[i])
+                total_of_this = tenant_sequence.count(tenant_sequence[i])
+                # 如果这个 tenant 的任务还没用完，不应该连续
+                if before_count < total_of_this - 1:
+                    assert False, f"位置 {i} 和 {i+1} 不应该连续相同 ({tenant_sequence[i]})"
+
+
+# ============ 熔断 Key 构建测试 ============
+
+# 导入熔断 key 构建函数
+from engram_step1.scm_sync_policy import (
+    build_circuit_breaker_key,
+    get_legacy_key_fallbacks,
+    normalize_instance_key_for_cb,
+)
+
+
+class TestBuildCircuitBreakerKey:
+    """熔断 key 构建函数测试"""
+    
+    def test_default_returns_global_key(self):
+        """默认参数返回全局 key"""
+        key = build_circuit_breaker_key()
+        assert key == "default:global"
+    
+    def test_project_key_prefix(self):
+        """project_key 作为前缀"""
+        key = build_circuit_breaker_key(project_key="myproject")
+        assert key == "myproject:global"
+    
+    def test_positional_args_backward_compatible(self):
+        """位置参数向后兼容：(project_key, scope)"""
+        key = build_circuit_breaker_key("myproject", "global")
+        assert key == "myproject:global"
+        
+        key2 = build_circuit_breaker_key("prod", "pool:custom")
+        assert key2 == "prod:pool:custom"
+    
+    def test_worker_pool_generates_pool_scope(self):
+        """worker_pool 参数生成 pool scope"""
+        key = build_circuit_breaker_key(worker_pool="gitlab-prod")
+        assert key == "default:pool:gitlab-prod"
+    
+    def test_pool_name_generates_pool_scope(self):
+        """pool_name 参数生成 pool scope（向后兼容）"""
+        key = build_circuit_breaker_key("default", pool_name="svn-only")
+        assert key == "default:pool:svn-only"
+    
+    def test_worker_pool_takes_precedence_over_pool_name(self):
+        """worker_pool 优先于 pool_name"""
+        key = build_circuit_breaker_key("default", pool_name="old-pool", worker_pool="new-pool")
+        assert key == "default:pool:new-pool"
+    
+    def test_instance_key_url_normalized(self):
+        """instance_key 从 URL 提取 hostname"""
+        key = build_circuit_breaker_key(instance_key="https://gitlab.example.com/group/project")
+        assert key == "default:instance:gitlab.example.com"
+    
+    def test_instance_key_hostname_normalized(self):
+        """instance_key hostname 直接使用"""
+        key = build_circuit_breaker_key(instance_key="gitlab.example.com")
+        assert key == "default:instance:gitlab.example.com"
+    
+    def test_instance_key_case_insensitive(self):
+        """instance_key 大小写不敏感"""
+        key1 = build_circuit_breaker_key(instance_key="GitLab.Example.COM")
+        key2 = build_circuit_breaker_key(instance_key="gitlab.example.com")
+        assert key1 == key2 == "default:instance:gitlab.example.com"
+    
+    def test_tenant_id_generates_tenant_scope(self):
+        """tenant_id 参数生成 tenant scope"""
+        key = build_circuit_breaker_key(tenant_id="tenant-a")
+        assert key == "default:tenant:tenant-a"
+    
+    def test_explicit_scope_preserved(self):
+        """显式 scope 参数保持不变"""
+        key = build_circuit_breaker_key("default", "instance:custom.gitlab.com")
+        assert key == "default:instance:custom.gitlab.com"
+    
+    def test_priority_pool_over_instance(self):
+        """worker_pool 优先于 instance_key"""
+        key = build_circuit_breaker_key(
+            worker_pool="my-pool",
+            instance_key="gitlab.example.com",
+        )
+        assert key == "default:pool:my-pool"
+    
+    def test_priority_instance_over_tenant(self):
+        """instance_key 优先于 tenant_id"""
+        key = build_circuit_breaker_key(
+            instance_key="gitlab.example.com",
+            tenant_id="tenant-a",
+        )
+        assert key == "default:instance:gitlab.example.com"
+    
+    def test_none_project_key_defaults_to_default(self):
+        """None project_key 使用 'default'"""
+        key = build_circuit_breaker_key(None)
+        assert key == "default:global"
+    
+    def test_empty_project_key_defaults_to_default(self):
+        """空字符串 project_key 使用 'default'"""
+        key = build_circuit_breaker_key("")
+        assert key == "default:global"
+
+
+class TestCircuitBreakerKeyConsistency:
+    """
+    测试同一实例/tenant 在不同入口（scheduler/worker）生成相同 key
+    
+    这是确保 scheduler 和 worker 共享熔断状态的关键测试
+    """
+    
+    def test_same_instance_key_from_url_and_hostname(self):
+        """URL 和 hostname 生成相同的 instance key"""
+        # 模拟 scheduler 从 repo URL 解析
+        key_from_url = build_circuit_breaker_key(
+            "myproject",
+            instance_key="https://gitlab.example.com/group/project",
+        )
+        
+        # 模拟 worker 从 allowlist hostname 获取
+        key_from_hostname = build_circuit_breaker_key(
+            "myproject",
+            instance_key="gitlab.example.com",
+        )
+        
+        assert key_from_url == key_from_hostname == "myproject:instance:gitlab.example.com"
+    
+    def test_same_tenant_key_from_different_entries(self):
+        """不同入口生成相同的 tenant key"""
+        # 模拟 scheduler 构建 tenant key
+        key_scheduler = build_circuit_breaker_key(
+            "myproject",
+            tenant_id="tenant-a",
+        )
+        
+        # 模拟 worker 构建 tenant key
+        key_worker = build_circuit_breaker_key(
+            "myproject",
+            tenant_id="tenant-a",
+        )
+        
+        assert key_scheduler == key_worker == "myproject:tenant:tenant-a"
+    
+    def test_same_pool_key_from_different_params(self):
+        """worker_pool 和 pool_name 生成相同的 key"""
+        key1 = build_circuit_breaker_key(
+            "myproject",
+            worker_pool="gitlab-prod",
+        )
+        
+        key2 = build_circuit_breaker_key(
+            "myproject",
+            pool_name="gitlab-prod",
+        )
+        
+        assert key1 == key2 == "myproject:pool:gitlab-prod"
+    
+    def test_scheduler_worker_global_key_consistency(self):
+        """scheduler 和 worker 生成相同的全局 key"""
+        # 模拟 scheduler 构建全局 key（位置参数方式）
+        scheduler_key = build_circuit_breaker_key("production", "global")
+        
+        # 模拟 worker 构建全局 key（仅 project_key）
+        worker_key = build_circuit_breaker_key("production")
+        
+        assert scheduler_key == worker_key == "production:global"
+    
+    def test_positional_and_keyword_args_consistency(self):
+        """位置参数和关键字参数生成相同的 key"""
+        # 位置参数调用（旧方式）
+        key_positional = build_circuit_breaker_key("myproject", "global")
+        
+        # 关键字参数调用（新方式）
+        key_keyword = build_circuit_breaker_key(project_key="myproject", scope="global")
+        
+        assert key_positional == key_keyword == "myproject:global"
+
+
+class TestGetLegacyKeyFallbacks:
+    """旧 key 格式回退测试"""
+    
+    def test_global_key_fallbacks(self):
+        """全局 key 的回退列表"""
+        fallbacks = get_legacy_key_fallbacks("default:global")
+        assert "global" in fallbacks
+    
+    def test_pool_key_fallbacks(self):
+        """pool key 的回退列表"""
+        fallbacks = get_legacy_key_fallbacks("default:pool:gitlab-prod")
+        assert "pool:gitlab-prod" in fallbacks
+        assert "gitlab-prod" in fallbacks
+    
+    def test_instance_key_fallbacks(self):
+        """instance key 的回退列表"""
+        fallbacks = get_legacy_key_fallbacks("myproject:instance:gitlab.example.com")
+        assert "instance:gitlab.example.com" in fallbacks
+        assert "gitlab.example.com" in fallbacks
+    
+    def test_tenant_key_fallbacks(self):
+        """tenant key 的回退列表"""
+        fallbacks = get_legacy_key_fallbacks("myproject:tenant:tenant-a")
+        assert "tenant:tenant-a" in fallbacks
+        assert "tenant-a" in fallbacks
+    
+    def test_worker_key_not_in_fallbacks(self):
+        """worker:xxx 格式的旧 key 不应在回退列表中"""
+        # 这种旧格式是随机的 worker ID，不应用于回退
+        fallbacks = get_legacy_key_fallbacks("default:global")
+        for fb in fallbacks:
+            assert not fb.startswith("worker:")
+    
+    def test_empty_key_returns_empty_list(self):
+        """空 key 返回空列表"""
+        fallbacks = get_legacy_key_fallbacks("")
+        assert fallbacks == []
+    
+    def test_none_key_returns_empty_list(self):
+        """None key 返回空列表"""
+        fallbacks = get_legacy_key_fallbacks(None)
+        assert fallbacks == []
+
+
+class TestNormalizeInstanceKeyForCb:
+    """实例 key 规范化测试"""
+    
+    def test_url_extracts_hostname(self):
+        """从 URL 提取 hostname"""
+        result = normalize_instance_key_for_cb("https://gitlab.example.com/group/project")
+        assert result == "gitlab.example.com"
+    
+    def test_hostname_preserved(self):
+        """hostname 保持不变"""
+        result = normalize_instance_key_for_cb("gitlab.example.com")
+        assert result == "gitlab.example.com"
+    
+    def test_case_insensitive(self):
+        """大小写不敏感"""
+        result = normalize_instance_key_for_cb("GitLab.Example.COM")
+        assert result == "gitlab.example.com"
+    
+    def test_none_returns_none(self):
+        """None 返回 None"""
+        result = normalize_instance_key_for_cb(None)
+        assert result is None
+    
+    def test_empty_string_returns_none(self):
+        """空字符串返回 None"""
+        result = normalize_instance_key_for_cb("")
+        assert result is None
+    
+    def test_whitespace_only_returns_none(self):
+        """仅空白字符返回 None"""
+        result = normalize_instance_key_for_cb("   ")
+        assert result is None
+    
+    def test_url_with_port(self):
+        """带端口的 URL"""
+        result = normalize_instance_key_for_cb("https://gitlab.example.com:8443/project")
+        assert result == "gitlab.example.com:8443"
+
+
+class TestMultiTenantMultiRepoFairnessEnqueue:
+    """多租户多仓库公平调度入队测试
+    
+    测试场景:
+    - 多个 tenant 各有多个 repo，构建候选集
+    - 开启 fairness 开关后，断言入队序列中 tenant 交替出现
+    - 验证 per-tenant concurrency 限制
+    - 关闭 fairness 开关时保持旧行为（严格按优先级）
+    """
+    
+    def test_multi_tenant_multi_repo_candidates_with_fairness_enabled(self):
+        """多 tenant 多 repo：开启 fairness 后 tenant 交替入队"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            global_concurrency=50,
+            per_tenant_concurrency=10,  # 每 tenant 最多 10 个
+        )
+        now = 10000.0
+        
+        # 构造 4 个 tenant，每个 tenant 有 5 个 repo
+        # tenant-a: repo 1-5, priority based on cursor age
+        # tenant-b: repo 6-10
+        # tenant-c: repo 11-15
+        # tenant-d: repo 16-20
+        states = []
+        tenant_ids = ["tenant-a", "tenant-b", "tenant-c", "tenant-d"]
+        repos_per_tenant = 5
+        
+        for t_idx, tenant_id in enumerate(tenant_ids):
+            for r_idx in range(repos_per_tenant):
+                repo_id = t_idx * repos_per_tenant + r_idx + 1
+                # 每个 repo 有不同的 cursor 年龄，创建优先级差异
+                cursor_age = 5000 + (r_idx * 100)  # 5000, 5100, 5200, ...
+                states.append(RepoSyncState(
+                    repo_id=repo_id,
+                    repo_type="git",
+                    tenant_id=tenant_id,
+                    cursor_updated_at=now - cursor_age,
+                ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        # 应该有 20 个候选（4 tenant * 5 repo）
+        assert len(candidates) == 20
+        
+        # 构建 repo -> tenant 映射
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 验证前 12 个候选中 tenant 分布（3 轮 * 4 tenant）
+        # 开启 fairness 后应该交替出现
+        first_12_tenants = [repo_to_tenant[c.repo_id] for c in candidates[:12]]
+        
+        # 每个 tenant 应该出现 3 次
+        for tenant_id in tenant_ids:
+            count = first_12_tenants.count(tenant_id)
+            assert count == 3, f"前 12 个候选中 {tenant_id} 应出现 3 次，实际 {count}"
+        
+        # 验证交替模式：每 4 个连续候选应该来自 4 个不同的 tenant
+        for round_start in range(0, 12, 4):
+            round_tenants = first_12_tenants[round_start:round_start + 4]
+            unique_tenants = set(round_tenants)
+            assert len(unique_tenants) == 4, \
+                f"轮次 {round_start // 4}：应有 4 个不同 tenant，实际 {len(unique_tenants)}: {round_tenants}"
+    
+    def test_multi_tenant_multi_repo_respects_per_tenant_concurrency(self):
+        """多 tenant 多 repo：验证 per_tenant_concurrency 限制"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=2,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            global_concurrency=50,
+            per_tenant_concurrency=3,  # 每 tenant 最多 3 个
+        )
+        now = 10000.0
+        
+        # 构造 3 个 tenant，每个 tenant 有 10 个 repo
+        states = []
+        tenant_ids = ["tenant-a", "tenant-b", "tenant-c"]
+        repos_per_tenant = 10
+        
+        for t_idx, tenant_id in enumerate(tenant_ids):
+            for r_idx in range(repos_per_tenant):
+                repo_id = t_idx * repos_per_tenant + r_idx + 1
+                states.append(RepoSyncState(
+                    repo_id=repo_id,
+                    repo_type="git",
+                    tenant_id=tenant_id,
+                    cursor_updated_at=now - 5000,
+                ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        # 每 tenant 最多 3 个，共 9 个
+        assert len(candidates) == 9
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        tenant_counts = {}
+        for c in candidates:
+            tid = repo_to_tenant[c.repo_id]
+            tenant_counts[tid] = tenant_counts.get(tid, 0) + 1
+        
+        # 每个 tenant 应该有 3 个
+        for tenant_id in tenant_ids:
+            assert tenant_counts.get(tenant_id, 0) == 3, \
+                f"{tenant_id} 应有 3 个候选，实际 {tenant_counts.get(tenant_id, 0)}"
+    
+    def test_multi_tenant_multi_repo_fairness_disabled_strict_priority(self):
+        """多 tenant 多 repo：关闭 fairness 时严格按优先级排序"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=False,  # 关闭公平调度
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            global_concurrency=50,
+            per_tenant_concurrency=100,  # 不限制
+        )
+        now = 100000.0
+        
+        # 构造场景：tenant-a 有高优先级任务，tenant-b 有低优先级任务
+        # tenant-a: repo 1-5, cursor 很旧 (高优先级)
+        # tenant-b: repo 6-10, cursor 较新 (低优先级)
+        states = []
+        
+        # tenant-a 高优先级（cursor 年龄 10 小时）
+        for i in range(1, 6):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 36000,  # 10 小时前
+            ))
+        
+        # tenant-b 低优先级（cursor 年龄 2 小时）
+        for i in range(6, 11):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 7200,  # 2 小时前
+            ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 10
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 关闭 fairness 时，所有 tenant-a 的任务应该排在前面
+        first_five = [repo_to_tenant[c.repo_id] for c in candidates[:5]]
+        assert all(t == "tenant-a" for t in first_five), \
+            f"关闭 fairness 时，前 5 个应全是 tenant-a，实际: {first_five}"
+        
+        last_five = [repo_to_tenant[c.repo_id] for c in candidates[5:]]
+        assert all(t == "tenant-b" for t in last_five), \
+            f"关闭 fairness 时，后 5 个应全是 tenant-b，实际: {last_five}"
+    
+    def test_multi_tenant_with_varying_backlog_sizes(self):
+        """多 tenant 不同 backlog 大小：fairness 仍能公平分配"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            global_concurrency=50,
+            per_tenant_concurrency=100,  # 不限制
+        )
+        now = 10000.0
+        
+        # tenant-a: 20 个 repo（大 backlog）
+        # tenant-b: 5 个 repo
+        # tenant-c: 2 个 repo（小 backlog）
+        states = []
+        
+        for i in range(1, 21):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            ))
+        
+        for i in range(21, 26):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 5000,
+            ))
+        
+        for i in range(26, 28):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-c",
+                cursor_updated_at=now - 5000,
+            ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 27
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 验证前 6 个应该是 A, B, C, A, B, C（2 轮）
+        first_six = [repo_to_tenant[c.repo_id] for c in candidates[:6]]
+        assert first_six.count("tenant-a") == 2
+        assert first_six.count("tenant-b") == 2
+        assert first_six.count("tenant-c") == 2
+        
+        # tenant-c 只有 2 个，应该在位置 2 和 5（第一轮和第二轮）
+        tenant_c_positions = [
+            i for i, c in enumerate(candidates)
+            if repo_to_tenant[c.repo_id] == "tenant-c"
+        ]
+        assert len(tenant_c_positions) == 2
+        assert max(tenant_c_positions) <= 5, \
+            f"tenant-c 的任务应该在前 6 个位置内完成，实际位置: {tenant_c_positions}"
+    
+    def test_mixed_tenants_some_with_some_without_tenant_id(self):
+        """混合场景：部分 repo 有 tenant_id，部分没有"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            per_tenant_concurrency=10,
+        )
+        now = 10000.0
+        
+        states = []
+        
+        # tenant-a: 4 个 repo
+        for i in range(1, 5):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            ))
+        
+        # tenant-b: 4 个 repo
+        for i in range(5, 9):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 5000,
+            ))
+        
+        # 无 tenant_id: 4 个 repo（归入同一桶）
+        for i in range(9, 13):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id=None,
+                cursor_updated_at=now - 5000,
+            ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 12
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 验证前 9 个候选中三个"tenant"组（a, b, None）各出现 3 次
+        first_nine = [repo_to_tenant[c.repo_id] for c in candidates[:9]]
+        assert first_nine.count("tenant-a") == 3
+        assert first_nine.count("tenant-b") == 3
+        assert first_nine.count(None) == 3
+    
+    def test_enqueue_sequence_alternates_with_max_per_round_2(self):
+        """max_per_round=2 时每轮每 tenant 入队 2 个"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=2,  # 每轮每 tenant 最多 2 个
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=100,
+            global_concurrency=50,
+            per_tenant_concurrency=100,
+        )
+        now = 10000.0
+        
+        # 两个 tenant 各 6 个 repo
+        states = []
+        for i in range(1, 7):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-a",
+                cursor_updated_at=now - 5000,
+            ))
+        
+        for i in range(7, 13):
+            states.append(RepoSyncState(
+                repo_id=i,
+                repo_type="git",
+                tenant_id="tenant-b",
+                cursor_updated_at=now - 5000,
+            ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+        )
+        
+        assert len(candidates) == 12
+        
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        
+        # 验证每 4 个一组（2 个 A + 2 个 B）
+        for round_start in range(0, 12, 4):
+            round_tenants = [repo_to_tenant[c.repo_id] for c in candidates[round_start:round_start + 4]]
+            assert round_tenants.count("tenant-a") == 2, \
+                f"轮次 {round_start // 4} 应有 2 个 tenant-a，实际: {round_tenants}"
+            assert round_tenants.count("tenant-b") == 2, \
+                f"轮次 {round_start // 4} 应有 2 个 tenant-b，实际: {round_tenants}"
+    
+    def test_global_concurrency_limits_total_enqueue(self):
+        """全局并发限制总入队数量"""
+        config = SchedulerConfig(
+            enable_tenant_fairness=True,
+            tenant_fairness_max_per_round=1,
+            cursor_age_threshold_seconds=3600,
+            max_queue_depth=10,  # 全局限制 10 个
+            global_concurrency=10,
+            per_tenant_concurrency=100,
+        )
+        now = 10000.0
+        
+        # 3 个 tenant 各 10 个 repo = 30 个总候选
+        states = []
+        for t_idx, tenant_id in enumerate(["tenant-a", "tenant-b", "tenant-c"]):
+            for r_idx in range(10):
+                repo_id = t_idx * 10 + r_idx + 1
+                states.append(RepoSyncState(
+                    repo_id=repo_id,
+                    repo_type="git",
+                    tenant_id=tenant_id,
+                    cursor_updated_at=now - 5000,
+                ))
+        
+        candidates = select_jobs_to_enqueue(
+            states, ["commits"], config, now=now,
+            current_queue_size=0,
+        )
+        
+        # 全局限制 10 个
+        assert len(candidates) == 10
+        
+        # 验证公平分布：9 个可以三等分（3+3+3），剩 1 个
+        repo_to_tenant = {s.repo_id: s.tenant_id for s in states}
+        tenant_counts = {}
+        for c in candidates:
+            tid = repo_to_tenant[c.repo_id]
+            tenant_counts[tid] = tenant_counts.get(tid, 0) + 1
+        
+        # 每个 tenant 应该有 3-4 个（10 // 3 = 3 余 1）
+        for tid in ["tenant-a", "tenant-b", "tenant-c"]:
+            assert 3 <= tenant_counts.get(tid, 0) <= 4, \
+                f"{tid} 应有 3-4 个候选，实际 {tenant_counts.get(tid, 0)}"

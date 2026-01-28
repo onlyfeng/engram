@@ -157,6 +157,8 @@ class SyncConfig:
     # 错误处理相关配置
     strict: bool = False  # 严格模式：不可恢复的错误时不推进游标
     diff_mode: str = DiffMode.BEST_EFFORT  # Diff 获取模式
+    # Tenant 维度限流配置
+    tenant_id: Optional[str] = None  # 租户 ID，用于 tenant 维度的限流
 
 
 class GitLabSyncError(EngramError):
@@ -1204,6 +1206,7 @@ def sync_gitlab_commits(
     verbose: bool = True,
     fetch_diffs: bool = True,
     lock_lease_seconds: int = DEFAULT_LOCK_LEASE_SECONDS,
+    job_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     执行 GitLab commits 同步
@@ -1215,10 +1218,41 @@ def sync_gitlab_commits(
         verbose: 是否输出详细信息
         fetch_diffs: 是否获取 diff（会被 sync_config.diff_mode 覆盖）
         lock_lease_seconds: 锁租约时长（秒），默认 120 秒
+        job_payload: 可选的 job payload，包含 scheduler 注入的 suggested_* 参数
+            - suggested_batch_size: 建议的批量大小
+            - suggested_forward_window_seconds: 建议的前向窗口秒数
+            - suggested_diff_mode: 建议的 diff 获取模式
 
     Returns:
         同步结果统计，如果获取锁失败则返回 {"locked": True, "skipped": True}
     """
+    # === 优先使用 job_payload 中的 suggested_* 参数覆盖 sync_config ===
+    # 这些参数由 scheduler 根据熔断/限流状态注入
+    if job_payload:
+        if "suggested_batch_size" in job_payload and job_payload["suggested_batch_size"] is not None:
+            original_batch_size = sync_config.batch_size
+            sync_config.batch_size = int(job_payload["suggested_batch_size"])
+            if sync_config.batch_size != original_batch_size:
+                logger.info(
+                    f"使用 payload 建议的 batch_size: {original_batch_size} -> {sync_config.batch_size}"
+                )
+        
+        if "suggested_forward_window_seconds" in job_payload and job_payload["suggested_forward_window_seconds"] is not None:
+            original_window = sync_config.forward_window_seconds
+            sync_config.forward_window_seconds = int(job_payload["suggested_forward_window_seconds"])
+            if sync_config.forward_window_seconds != original_window:
+                logger.info(
+                    f"使用 payload 建议的 forward_window_seconds: {original_window} -> {sync_config.forward_window_seconds}"
+                )
+        
+        if "suggested_diff_mode" in job_payload and job_payload["suggested_diff_mode"] is not None:
+            original_diff_mode = sync_config.diff_mode
+            sync_config.diff_mode = job_payload["suggested_diff_mode"]
+            if sync_config.diff_mode != original_diff_mode:
+                logger.info(
+                    f"使用 payload 建议的 diff_mode: {original_diff_mode} -> {sync_config.diff_mode}"
+                )
+    
     # diff_mode=none 时禁用 diff 获取
     if sync_config.diff_mode == DiffMode.NONE:
         fetch_diffs = False
@@ -1237,6 +1271,9 @@ def sync_gitlab_commits(
         "since": None,
         "skipped_count": 0,  # 因去重/过滤跳过的数量
         "error": None,
+        "error_category": None,  # 标准字段：错误分类
+        "retry_after": None,  # 标准字段：建议的重试等待秒数（可选）
+        "counts": {},  # 标准字段：计数统计
         "cursor_advance_reason": None,  # 游标推进原因
         "cursor_advance_stopped_at": None,  # strict 模式下游标停止的位置（commit sha）
         "degraded_reasons": {},  # 降级原因分布 {reason: count}
@@ -1270,6 +1307,7 @@ def sync_gitlab_commits(
         base_url=sync_config.gitlab_url,
         token_provider=sync_config.token_provider,
         http_config=http_config,
+        tenant_id=sync_config.tenant_id,  # 传入 tenant_id 用于 tenant 维度限流
     )
 
     conn = get_connection(config=config)
@@ -1305,7 +1343,10 @@ def sync_gitlab_commits(
             )
             result["locked"] = True
             result["skipped"] = True
+            result["success"] = True  # locked/skipped 视为成功（不需要重试）
             result["message"] = "锁被其他 worker 持有，跳过本次同步"
+            result["error_category"] = "lock_held"
+            result["counts"] = {"synced_count": 0, "diff_count": 0, "skipped_count": 0}
             return result
         
         logger.debug(f"[run_id={run_id[:8]}] 成功获取锁 (repo_id={repo_id}, worker_id={worker_id})")
@@ -1421,6 +1462,7 @@ def sync_gitlab_commits(
             logger.info("无新 commits 需要同步")
             result["success"] = True
             result["message"] = "无新 commits 需要同步"
+            result["counts"] = {"synced_count": 0, "diff_count": 0, "skipped_count": result.get("skipped_count", 0)}
             return result
 
         # 4. 写入 git_commits 表
@@ -1693,6 +1735,15 @@ def sync_gitlab_commits(
         # 更新 limiter 统计到 ClientStats
         client.update_stats_with_limiter_info()
         result["request_stats"] = client.stats.to_dict()  # 用于降级控制器
+        
+        # 标准字段: counts 统计
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+            "bulk_count": result.get("bulk_count", 0),
+            "degraded_count": result.get("degraded_count", 0),
+            "skipped_count": result.get("skipped_count", 0),
+        }
 
         # 7. 创建 logbook item/event 和 attachments（如果有 patch 结果）
         if collected_patches:
@@ -1785,11 +1836,25 @@ def sync_gitlab_commits(
                 logger.warning(f"创建 logbook 记录失败 (非致命): {e}")
                 result["logbook_error"] = str(e)
 
-    except EngramError:
+    except EngramError as e:
+        # 保留 EngramError 的错误分类
+        result["error"] = str(e)
+        result["error_category"] = getattr(e, "error_category", None) or getattr(e, "error_type", "engram_error")
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+            "skipped_count": result.get("skipped_count", 0),
+        }
         raise
     except Exception as e:
         logger.exception(f"同步过程中发生错误: {e}")
         result["error"] = str(e)
+        result["error_category"] = "exception"
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+            "skipped_count": result.get("skipped_count", 0),
+        }
         raise GitLabSyncError(
             f"GitLab 同步失败: {e}",
             {"error": str(e)},
@@ -2110,6 +2175,9 @@ def backfill_gitlab_commits(
         "since": since,
         "until": until,
         "error": None,
+        "error_category": None,  # 标准字段
+        "retry_after": None,  # 标准字段
+        "counts": {},  # 标准字段
     }
 
     logger.info(f"[run_id={run_id[:8]}] 开始 GitLab commits backfill (dry_run={dry_run})")
@@ -2123,6 +2191,7 @@ def backfill_gitlab_commits(
         base_url=sync_config.gitlab_url,
         token_provider=sync_config.token_provider,
         http_config=http_config,
+        tenant_id=sync_config.tenant_id,  # 传入 tenant_id 用于 tenant 维度限流
     )
 
     # 1. 获取或创建仓库记录
@@ -2178,11 +2247,13 @@ def backfill_gitlab_commits(
 
             result["success"] = True
             result["message"] = f"[dry-run] 时间范围: {since} ~ {until}"
+            result["counts"] = {"synced_count": 0, "diff_count": 0}
             return result
         except Exception as e:
             logger.warning(f"[dry-run] 预览获取失败: {e}")
             result["success"] = True
             result["message"] = f"[dry-run] 时间范围: {since} ~ {until} (预览请求失败)"
+            result["counts"] = {"synced_count": 0, "diff_count": 0}
             return result
 
     # 4. 执行实际同步
@@ -2233,6 +2304,7 @@ def backfill_gitlab_commits(
             logger.info("指定范围内无 commits")
             result["success"] = True
             result["message"] = "指定范围内无 commits"
+            result["counts"] = {"synced_count": 0, "diff_count": 0}
             return result
 
         # 写入 git_commits 表
@@ -2339,12 +2411,30 @@ def backfill_gitlab_commits(
                 logger.info("Backfill 模式：跳过游标更新（使用 --update-watermark 可更新）")
 
         result["success"] = True
+        # 标准字段: counts 统计
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+            "bulk_count": result.get("bulk_count", 0),
+            "degraded_count": result.get("degraded_count", 0),
+        }
 
-    except EngramError:
+    except EngramError as e:
+        result["error"] = str(e)
+        result["error_category"] = getattr(e, "error_category", None) or getattr(e, "error_type", "engram_error")
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+        }
         raise
     except Exception as e:
         logger.exception(f"Backfill 过程中发生错误: {e}")
         result["error"] = str(e)
+        result["error_category"] = "exception"
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+        }
         raise GitLabSyncError(
             f"GitLab Backfill 失败: {e}",
             {"error": str(e)},

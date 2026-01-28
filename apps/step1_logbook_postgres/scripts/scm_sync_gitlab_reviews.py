@@ -155,6 +155,8 @@ class SyncConfig:
     include_closed: bool = True    # 是否包含已关闭的 MR
     overlap_seconds: int = 300     # 向前重叠的秒数，用于防止边界丢失
     strict: bool = False           # 严格模式：不可恢复的错误时不推进游标
+    # Tenant 维度限流配置
+    tenant_id: Optional[str] = None  # 租户 ID，用于 tenant 维度的限流
 
 
 class GitLabReviewSyncError(EngramError):
@@ -757,6 +759,9 @@ def sync_gitlab_reviews(
         "since": None,
         "backfill_mode": backfill_since is not None,
         "error": None,
+        "error_category": None,  # 标准字段：错误分类
+        "retry_after": None,  # 标准字段：建议的重试等待秒数（可选）
+        "counts": {},  # 标准字段：计数统计
         "cursor_advance_reason": None,  # 游标推进原因
         "cursor_advance_stopped_at": None,  # strict 模式下游标停止的位置
         "unrecoverable_errors": [],  # 不可恢复的错误列表
@@ -788,6 +793,7 @@ def sync_gitlab_reviews(
         base_url=sync_config.gitlab_url,
         token_provider=sync_config.token_provider,
         http_config=http_config,
+        tenant_id=sync_config.tenant_id,  # 传入 tenant_id 用于 tenant 维度限流
     )
 
     conn = get_connection(config=config)
@@ -822,7 +828,10 @@ def sync_gitlab_reviews(
             )
             result["locked"] = True
             result["skipped"] = True
+            result["success"] = True  # locked/skipped 视为成功（不需要重试）
             result["message"] = "锁被其他 worker 持有，跳过本次同步"
+            result["error_category"] = "lock_held"
+            result["counts"] = {"synced_mr_count": 0, "synced_event_count": 0, "skipped_event_count": 0}
             return result
         
         logger.debug(f"[run_id={run_id[:8]}] 成功获取锁 (repo_id={repo_id}, worker_id={worker_id})")
@@ -942,6 +951,7 @@ def sync_gitlab_reviews(
             logger.info("无新 MRs 需要同步")
             result["success"] = True
             result["message"] = "无新 MRs 需要同步"
+            result["counts"] = {"synced_mr_count": 0, "synced_event_count": 0, "skipped_event_count": 0}
             return result
 
         # 4. 对每个 MR 拉取 discussions/notes/approvals
@@ -1179,6 +1189,13 @@ def sync_gitlab_reviews(
         # 更新 limiter 统计到 ClientStats
         client.update_stats_with_limiter_info()
         result["request_stats"] = client.stats.to_dict()
+        
+        # 标准字段: counts 统计
+        result["counts"] = {
+            "synced_mr_count": result.get("synced_mr_count", 0),
+            "synced_event_count": result.get("synced_event_count", 0),
+            "skipped_event_count": result.get("skipped_event_count", 0),
+        }
 
         # 7. 创建 logbook item/event（与 commits 同风格）
         total_events_synced = result.get("synced_event_count", 0)
@@ -1231,11 +1248,24 @@ def sync_gitlab_reviews(
                 logger.warning(f"创建 logbook 记录失败 (非致命): {e}")
                 result["logbook_error"] = str(e)
 
-    except EngramError:
+    except EngramError as e:
+        result["error"] = str(e)
+        result["error_category"] = getattr(e, "error_category", None) or getattr(e, "error_type", "engram_error")
+        result["counts"] = {
+            "synced_mr_count": result.get("synced_mr_count", 0),
+            "synced_event_count": result.get("synced_event_count", 0),
+            "skipped_event_count": result.get("skipped_event_count", 0),
+        }
         raise
     except Exception as e:
         logger.exception(f"同步过程中发生错误: {e}")
         result["error"] = str(e)
+        result["error_category"] = "exception"
+        result["counts"] = {
+            "synced_mr_count": result.get("synced_mr_count", 0),
+            "synced_event_count": result.get("synced_event_count", 0),
+            "skipped_event_count": result.get("skipped_event_count", 0),
+        }
         raise GitLabReviewSyncError(
             f"GitLab Reviews 同步失败: {e}",
             {"error": str(e)},

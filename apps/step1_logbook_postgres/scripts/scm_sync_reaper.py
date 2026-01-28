@@ -57,6 +57,25 @@ from db import (
 )
 from engram_step1.scm_auth import redact, redact_dict
 
+# 导入错误分类常量和函数（从统一的 scm_sync_errors 模块）
+from engram_step1.scm_sync_errors import (
+    ErrorCategory,
+    TRANSIENT_ERROR_CATEGORIES,
+    TRANSIENT_ERROR_KEYWORDS,
+    TRANSIENT_ERROR_BACKOFF,
+    PERMANENT_ERROR_CATEGORIES,
+    DEFAULT_BACKOFF_BASE,
+    DEFAULT_MAX_BACKOFF,
+    is_transient_error as _is_transient_error,
+    is_permanent_error as _is_permanent_error,
+    get_transient_error_backoff as _get_transient_error_backoff,
+    classify_last_error as _classify_last_error,
+    calculate_backoff_seconds as _calculate_backoff_seconds,
+)
+
+# Reaper 默认最大退避时间（秒），可通过 CLI 参数覆盖
+DEFAULT_MAX_REAPER_BACKOFF_SECONDS = 1800  # 30 分钟
+
 # ============ CLI 应用定义 ============
 
 app = typer.Typer(
@@ -178,21 +197,39 @@ def scan_expired_locks(
 
 # ============ 处理函数 ============
 
+# 注意：_classify_last_error 函数已迁移到 engram_step1.scm_sync_errors 模块
+# 通过上面的 import 语句导入
+
 
 def process_expired_jobs(
     conn,
     jobs: List[Dict[str, Any]],
     policy: JobRecoveryPolicy = JobRecoveryPolicy.to_failed,
     retry_delay_seconds: int = 60,
+    transient_retry_delay_multiplier: float = 2.0,
+    max_reaper_backoff_seconds: int = DEFAULT_MAX_REAPER_BACKOFF_SECONDS,
 ) -> Dict[str, int]:
     """
     处理过期的 running 任务
     
+    策略说明（基于 last_error 分类）：
+    - 永久性错误（auth_error/repo_not_found/permission_denied）：直接转为 dead
+    - 临时性错误（rate_limit/timeout/network/server_error）：转为 failed + 统一 backoff 计算
+    - 未知错误 + 达到 max_attempts：转为 dead
+    - 未知错误 + 未达到 max_attempts：按照 policy 参数处理
+    
+    退避计算策略（复用 scm_sync_errors.calculate_backoff_seconds）：
+    - 根据错误类别获取基础退避时间
+    - 应用指数退避：base * 2^(attempts-1)
+    - 限制在 max_reaper_backoff_seconds 范围内
+    
     Args:
         conn: 数据库连接
         jobs: 过期任务列表
-        policy: 恢复策略
-        retry_delay_seconds: 重试延迟秒数（仅 to_failed 策略使用）
+        policy: 恢复策略（仅对未分类的错误生效）
+        retry_delay_seconds: 基础重试延迟秒数（用于未分类错误）
+        transient_retry_delay_multiplier: 临时性错误的延迟乘数（已废弃，保留兼容性）
+        max_reaper_backoff_seconds: 最大退避时间（秒），默认 1800（30 分钟）
     
     Returns:
         处理统计 {processed, to_failed, to_pending, to_dead, errors}
@@ -209,13 +246,18 @@ def process_expired_jobs(
         job_id = str(job["job_id"])
         attempts = job["attempts"]
         max_attempts = job["max_attempts"]
+        last_error = job.get("last_error", "")
         
         try:
-            # 判断是否达到最大重试次数
-            if attempts >= max_attempts:
-                # 标记为 dead
-                error_msg = f"Reaped: job expired after {attempts} attempts, marking as dead"
-                # 对错误信息进行脱敏，防止敏感信息泄露
+            # 对 last_error 进行分类
+            is_permanent, is_transient, error_category = _classify_last_error(last_error)
+            
+            # 对 locked_by 进行脱敏（可能包含敏感信息）
+            redacted_locked_by = redact(job.get('locked_by', ''))
+            
+            # 策略 1：永久性错误，直接转为 dead（不再重试）
+            if is_permanent:
+                error_msg = f"Reaped: permanent error ({error_category}), marking as dead"
                 redacted_error_msg = redact(error_msg)
                 success = mark_job_as_dead_by_reaper(conn, job_id, redacted_error_msg)
                 if success:
@@ -225,6 +267,8 @@ def process_expired_jobs(
                         job_id=job_id,
                         repo_id=job["repo_id"],
                         job_type=job["job_type"],
+                        error_category=error_category,
+                        reason="permanent_error",
                         attempts=attempts,
                         max_attempts=max_attempts,
                     )
@@ -236,13 +280,22 @@ def process_expired_jobs(
                         job_id=job_id,
                         action="mark_dead",
                     )
-            elif policy == JobRecoveryPolicy.to_failed:
-                # 标记为 failed，允许重试
-                # 对 locked_by 进行脱敏（可能包含敏感信息）
-                redacted_locked_by = redact(job.get('locked_by', ''))
-                error_msg = f"Reaped: job lock expired (locked_by={redacted_locked_by}, expired_seconds={job.get('expired_seconds', 0):.0f})"
+            
+            # 策略 2：临时性错误，转为 failed + 统一 backoff 计算
+            elif is_transient:
+                # 使用统一的 backoff 计算函数（复用 queue 的指数退避逻辑）
+                actual_delay = _calculate_backoff_seconds(
+                    attempts=attempts,
+                    base_seconds=DEFAULT_BACKOFF_BASE,
+                    max_seconds=max_reaper_backoff_seconds,
+                    error_category=error_category,
+                    error_message=last_error,
+                )
+                
+                error_msg = f"Reaped: transient error ({error_category}), locked_by={redacted_locked_by}, expired_seconds={job.get('expired_seconds', 0):.0f}"
+                redacted_error_msg = redact(error_msg)
                 success = mark_job_as_failed_by_reaper(
-                    conn, job_id, error_msg, retry_delay_seconds=retry_delay_seconds
+                    conn, job_id, redacted_error_msg, retry_delay_seconds=actual_delay
                 )
                 if success:
                     stats["to_failed"] += 1
@@ -251,6 +304,59 @@ def process_expired_jobs(
                         job_id=job_id,
                         repo_id=job["repo_id"],
                         job_type=job["job_type"],
+                        error_category=error_category,
+                        reason="transient_error",
+                        retry_delay_seconds=actual_delay,
+                    )
+                else:
+                    stats["errors"] += 1
+                    log_json(
+                        "job_update_failed",
+                        level="error",
+                        job_id=job_id,
+                        action="mark_failed",
+                    )
+            
+            # 策略 3：未分类错误 + 达到 max_attempts，转为 dead
+            elif attempts >= max_attempts:
+                error_msg = f"Reaped: job expired after {attempts} attempts, marking as dead"
+                redacted_error_msg = redact(error_msg)
+                success = mark_job_as_dead_by_reaper(conn, job_id, redacted_error_msg)
+                if success:
+                    stats["to_dead"] += 1
+                    log_json(
+                        "job_marked_dead",
+                        job_id=job_id,
+                        repo_id=job["repo_id"],
+                        job_type=job["job_type"],
+                        reason="max_attempts_reached",
+                        attempts=attempts,
+                        max_attempts=max_attempts,
+                    )
+                else:
+                    stats["errors"] += 1
+                    log_json(
+                        "job_update_failed",
+                        level="error",
+                        job_id=job_id,
+                        action="mark_dead",
+                    )
+            
+            # 策略 4：未分类错误 + 未达到 max_attempts，按 policy 处理
+            elif policy == JobRecoveryPolicy.to_failed:
+                error_msg = f"Reaped: job lock expired (locked_by={redacted_locked_by}, expired_seconds={job.get('expired_seconds', 0):.0f})"
+                redacted_error_msg = redact(error_msg)
+                success = mark_job_as_failed_by_reaper(
+                    conn, job_id, redacted_error_msg, retry_delay_seconds=retry_delay_seconds
+                )
+                if success:
+                    stats["to_failed"] += 1
+                    log_json(
+                        "job_marked_failed",
+                        job_id=job_id,
+                        repo_id=job["repo_id"],
+                        job_type=job["job_type"],
+                        reason="lock_expired",
                         retry_delay_seconds=retry_delay_seconds,
                     )
                 else:
@@ -262,9 +368,10 @@ def process_expired_jobs(
                         action="mark_failed",
                     )
             else:
-                # 恢复为 pending
-                error_msg = f"Reaped: job lock expired, restoring to pending"
-                success = mark_job_as_pending_by_reaper(conn, job_id, error_msg)
+                # to_pending 策略
+                error_msg = "Reaped: job lock expired, restoring to pending"
+                redacted_error_msg = redact(error_msg)
+                success = mark_job_as_pending_by_reaper(conn, job_id, redacted_error_msg)
                 if success:
                     stats["to_pending"] += 1
                     log_json(
@@ -272,6 +379,7 @@ def process_expired_jobs(
                         job_id=job_id,
                         repo_id=job["repo_id"],
                         job_type=job["job_type"],
+                        reason="lock_expired_to_pending",
                     )
                 else:
                     stats["errors"] += 1
@@ -516,7 +624,11 @@ def cmd_reap(
     ),
     retry_delay_seconds: int = typer.Option(
         60, "--retry-delay-seconds",
-        help="重试延迟秒数（仅 to_failed 策略使用）"
+        help="基础重试延迟秒数（用于未分类错误）"
+    ),
+    max_reaper_backoff_seconds: int = typer.Option(
+        DEFAULT_MAX_REAPER_BACKOFF_SECONDS, "--max-reaper-backoff-seconds",
+        help="最大退避时间（秒），防止指数退避无限增长，默认 1800（30 分钟）"
     ),
     limit: int = typer.Option(
         100, "--limit", "-l",
@@ -553,6 +665,7 @@ def cmd_reap(
         lock_grace_seconds=lock_grace_seconds,
         job_policy=job_policy.value,
         retry_delay_seconds=retry_delay_seconds,
+        max_reaper_backoff_seconds=max_reaper_backoff_seconds,
         limit=limit,
         process_jobs=process_jobs,
         process_runs=process_runs,
@@ -576,6 +689,7 @@ def cmd_reap(
                         conn, jobs,
                         policy=job_policy,
                         retry_delay_seconds=retry_delay_seconds,
+                        max_reaper_backoff_seconds=max_reaper_backoff_seconds,
                     )
                     total_stats["jobs"] = job_stats
             
@@ -635,7 +749,11 @@ def cmd_loop(
     ),
     retry_delay_seconds: int = typer.Option(
         60, "--retry-delay-seconds",
-        help="重试延迟秒数（仅 to_failed 策略使用）"
+        help="基础重试延迟秒数（用于未分类错误）"
+    ),
+    max_reaper_backoff_seconds: int = typer.Option(
+        DEFAULT_MAX_REAPER_BACKOFF_SECONDS, "--max-reaper-backoff-seconds",
+        help="最大退避时间（秒），防止指数退避无限增长，默认 1800（30 分钟）"
     ),
     limit: int = typer.Option(
         100, "--limit", "-l",
@@ -656,6 +774,7 @@ def cmd_loop(
         lock_grace_seconds=lock_grace_seconds,
         job_policy=job_policy.value,
         retry_delay_seconds=retry_delay_seconds,
+        max_reaper_backoff_seconds=max_reaper_backoff_seconds,
         limit=limit,
     )
     
@@ -680,6 +799,7 @@ def cmd_loop(
                         conn, jobs,
                         policy=job_policy,
                         retry_delay_seconds=retry_delay_seconds,
+                        max_reaper_backoff_seconds=max_reaper_backoff_seconds,
                     )
                     total_stats["jobs"] = job_stats
                 

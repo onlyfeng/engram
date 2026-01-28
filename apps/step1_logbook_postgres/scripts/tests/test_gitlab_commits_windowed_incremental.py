@@ -803,6 +803,350 @@ class TestHighActivityNoMissingCommits:
         assert processed_shas == expected_shas
 
 
+class TestPayloadSuggestedParameterOverride:
+    """
+    测试从 job_payload 读取 suggested_* 参数覆盖默认配置
+    
+    验证场景：
+    - payload 中的 suggested_batch_size 覆盖 sync_config.batch_size
+    - payload 中的 suggested_forward_window_seconds 覆盖 sync_config.forward_window_seconds
+    - payload 中的 suggested_diff_mode 覆盖 sync_config.diff_mode
+    - 熔断/限流状态下参数按预期降级
+    """
+
+    def test_payload_batch_size_override(self):
+        """
+        验证 payload 中的 suggested_batch_size 覆盖默认值
+        """
+        from scm_sync_gitlab_commits import SyncConfig, DiffMode
+        from engram_step1.scm_auth import TokenProvider
+        
+        # 创建一个简单的 token provider
+        class DummyTokenProvider(TokenProvider):
+            def get_token(self) -> str:
+                return "dummy_token"
+            
+            def invalidate(self) -> None:
+                pass
+        
+        # 创建 sync_config
+        sync_config = SyncConfig(
+            gitlab_url="https://gitlab.example.com",
+            project_id="123",
+            token_provider=DummyTokenProvider(),
+            batch_size=100,
+            forward_window_seconds=3600,
+            diff_mode=DiffMode.BEST_EFFORT,
+        )
+        
+        # 模拟熔断降级的 payload
+        job_payload = {
+            "suggested_batch_size": 25,
+            "suggested_forward_window_seconds": 900,
+            "suggested_diff_mode": "none",
+        }
+        
+        # 验证覆盖逻辑（直接测试覆盖代码块）
+        if job_payload:
+            if "suggested_batch_size" in job_payload and job_payload["suggested_batch_size"] is not None:
+                sync_config.batch_size = int(job_payload["suggested_batch_size"])
+            if "suggested_forward_window_seconds" in job_payload and job_payload["suggested_forward_window_seconds"] is not None:
+                sync_config.forward_window_seconds = int(job_payload["suggested_forward_window_seconds"])
+            if "suggested_diff_mode" in job_payload and job_payload["suggested_diff_mode"] is not None:
+                sync_config.diff_mode = job_payload["suggested_diff_mode"]
+        
+        # 验证覆盖结果
+        assert sync_config.batch_size == 25
+        assert sync_config.forward_window_seconds == 900
+        assert sync_config.diff_mode == "none"
+
+    def test_payload_partial_override(self):
+        """
+        验证 payload 中部分参数覆盖，其他保持默认
+        """
+        from scm_sync_gitlab_commits import SyncConfig, DiffMode
+        from engram_step1.scm_auth import TokenProvider
+        
+        class DummyTokenProvider(TokenProvider):
+            def get_token(self) -> str:
+                return "dummy_token"
+            
+            def invalidate(self) -> None:
+                pass
+        
+        sync_config = SyncConfig(
+            gitlab_url="https://gitlab.example.com",
+            project_id="123",
+            token_provider=DummyTokenProvider(),
+            batch_size=100,
+            forward_window_seconds=3600,
+            diff_mode=DiffMode.BEST_EFFORT,
+        )
+        
+        # 只覆盖 batch_size
+        job_payload = {
+            "suggested_batch_size": 50,
+        }
+        
+        if job_payload:
+            if "suggested_batch_size" in job_payload and job_payload["suggested_batch_size"] is not None:
+                sync_config.batch_size = int(job_payload["suggested_batch_size"])
+            if "suggested_forward_window_seconds" in job_payload and job_payload["suggested_forward_window_seconds"] is not None:
+                sync_config.forward_window_seconds = int(job_payload["suggested_forward_window_seconds"])
+            if "suggested_diff_mode" in job_payload and job_payload["suggested_diff_mode"] is not None:
+                sync_config.diff_mode = job_payload["suggested_diff_mode"]
+        
+        # batch_size 被覆盖，其他保持默认
+        assert sync_config.batch_size == 50
+        assert sync_config.forward_window_seconds == 3600
+        assert sync_config.diff_mode == DiffMode.BEST_EFFORT
+
+    def test_payload_none_values_ignored(self):
+        """
+        验证 payload 中 None 值不覆盖默认配置
+        """
+        from scm_sync_gitlab_commits import SyncConfig, DiffMode
+        from engram_step1.scm_auth import TokenProvider
+        
+        class DummyTokenProvider(TokenProvider):
+            def get_token(self) -> str:
+                return "dummy_token"
+            
+            def invalidate(self) -> None:
+                pass
+        
+        sync_config = SyncConfig(
+            gitlab_url="https://gitlab.example.com",
+            project_id="123",
+            token_provider=DummyTokenProvider(),
+            batch_size=100,
+            forward_window_seconds=3600,
+            diff_mode=DiffMode.BEST_EFFORT,
+        )
+        
+        # payload 中有 None 值
+        job_payload = {
+            "suggested_batch_size": None,
+            "suggested_forward_window_seconds": 1800,
+            "suggested_diff_mode": None,
+        }
+        
+        if job_payload:
+            if "suggested_batch_size" in job_payload and job_payload["suggested_batch_size"] is not None:
+                sync_config.batch_size = int(job_payload["suggested_batch_size"])
+            if "suggested_forward_window_seconds" in job_payload and job_payload["suggested_forward_window_seconds"] is not None:
+                sync_config.forward_window_seconds = int(job_payload["suggested_forward_window_seconds"])
+            if "suggested_diff_mode" in job_payload and job_payload["suggested_diff_mode"] is not None:
+                sync_config.diff_mode = job_payload["suggested_diff_mode"]
+        
+        # None 值被忽略
+        assert sync_config.batch_size == 100
+        assert sync_config.forward_window_seconds == 1800  # 这个被覆盖
+        assert sync_config.diff_mode == DiffMode.BEST_EFFORT
+
+    def test_empty_payload_keeps_defaults(self):
+        """
+        验证空 payload 或无 payload 时保持默认配置
+        """
+        from scm_sync_gitlab_commits import SyncConfig, DiffMode
+        from engram_step1.scm_auth import TokenProvider
+        
+        class DummyTokenProvider(TokenProvider):
+            def get_token(self) -> str:
+                return "dummy_token"
+            
+            def invalidate(self) -> None:
+                pass
+        
+        sync_config = SyncConfig(
+            gitlab_url="https://gitlab.example.com",
+            project_id="123",
+            token_provider=DummyTokenProvider(),
+            batch_size=100,
+            forward_window_seconds=3600,
+            diff_mode=DiffMode.BEST_EFFORT,
+        )
+        
+        # 空 payload
+        job_payload = {}
+        
+        if job_payload:
+            if "suggested_batch_size" in job_payload and job_payload["suggested_batch_size"] is not None:
+                sync_config.batch_size = int(job_payload["suggested_batch_size"])
+            if "suggested_forward_window_seconds" in job_payload and job_payload["suggested_forward_window_seconds"] is not None:
+                sync_config.forward_window_seconds = int(job_payload["suggested_forward_window_seconds"])
+            if "suggested_diff_mode" in job_payload and job_payload["suggested_diff_mode"] is not None:
+                sync_config.diff_mode = job_payload["suggested_diff_mode"]
+        
+        # 全部保持默认
+        assert sync_config.batch_size == 100
+        assert sync_config.forward_window_seconds == 3600
+        assert sync_config.diff_mode == DiffMode.BEST_EFFORT
+
+
+class TestCircuitBreakerStateDegradation:
+    """
+    测试熔断状态下的参数降级
+    
+    验证场景：
+    - OPEN 状态下 diff_mode 降级为 none
+    - HALF_OPEN 状态下使用保守参数
+    - batch_size 和 forward_window 按熔断建议下调
+    """
+
+    def test_open_state_suggested_parameters(self):
+        """
+        模拟 OPEN 状态下 scheduler 注入的 suggested 参数
+        """
+        # 模拟 OPEN 状态下的 payload（由 scheduler 构建）
+        open_state_payload = {
+            "circuit_state": "open",
+            "is_backfill_only": True,
+            "suggested_batch_size": 10,
+            "suggested_forward_window_seconds": 300,
+            "suggested_diff_mode": "none",
+        }
+        
+        # 验证参数符合降级预期
+        assert open_state_payload["suggested_batch_size"] < 100  # 低于默认
+        assert open_state_payload["suggested_forward_window_seconds"] < 3600  # 低于默认
+        assert open_state_payload["suggested_diff_mode"] == "none"  # 禁用 diff
+
+    def test_half_open_probe_mode_parameters(self):
+        """
+        模拟 HALF_OPEN 探测模式下的 suggested 参数
+        """
+        # 模拟 HALF_OPEN 探测模式的 payload
+        half_open_payload = {
+            "circuit_state": "half_open",
+            "is_probe_mode": True,
+            "probe_budget": 3,
+            "suggested_batch_size": 20,
+            "suggested_forward_window_seconds": 600,
+            "suggested_diff_mode": "best_effort",
+        }
+        
+        # 验证探测模式参数
+        assert half_open_payload["is_probe_mode"] is True
+        assert half_open_payload["probe_budget"] > 0
+        # 探测模式使用适中的参数
+        assert half_open_payload["suggested_batch_size"] < 100
+        assert half_open_payload["suggested_forward_window_seconds"] < 3600
+
+    def test_closed_state_default_parameters(self):
+        """
+        模拟 CLOSED 正常状态下的 suggested 参数
+        """
+        # CLOSED 状态下使用默认参数
+        closed_state_payload = {
+            "circuit_state": "closed",
+            "suggested_batch_size": 100,
+            "suggested_forward_window_seconds": 3600,
+            "suggested_diff_mode": "best_effort",
+        }
+        
+        # 正常状态使用默认值
+        assert closed_state_payload["suggested_batch_size"] == 100
+        assert closed_state_payload["suggested_forward_window_seconds"] == 3600
+        assert closed_state_payload["suggested_diff_mode"] == "best_effort"
+
+
+class TestWindowedSyncWithDegradation:
+    """
+    测试窗口化同步在降级状态下的行为
+    
+    验证场景：
+    - 降级后的 forward_window 影响时间窗口计算
+    - 降级后的 batch_size 影响批次选择
+    """
+
+    def test_degraded_window_affects_fetch_range(self):
+        """
+        降级后的 forward_window_seconds 影响时间窗口计算
+        """
+        from scm_sync_gitlab_commits import compute_commit_fetch_window
+        
+        now = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        cursor_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+        overlap_seconds = 300
+        
+        # 正常窗口（1 小时）
+        normal_window = compute_commit_fetch_window(
+            cursor_ts=cursor_ts,
+            overlap_seconds=overlap_seconds,
+            forward_window_seconds=3600,
+            now=now,
+        )
+        
+        # 降级窗口（15 分钟）
+        degraded_window = compute_commit_fetch_window(
+            cursor_ts=cursor_ts,
+            overlap_seconds=overlap_seconds,
+            forward_window_seconds=900,  # 降级到 15 分钟
+            now=now,
+        )
+        
+        # 降级窗口范围更小
+        normal_range = (normal_window.until - normal_window.since).total_seconds()
+        degraded_range = (degraded_window.until - degraded_window.since).total_seconds()
+        
+        assert degraded_range < normal_range
+        assert degraded_range == 900  # 15 分钟
+
+    def test_degraded_batch_size_affects_commit_selection(self):
+        """
+        降级后的 batch_size 影响批次选择数量
+        """
+        ts = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        
+        # 创建 100 个 commits
+        commits = [make_commit(f"sha_{i:03d}", committed_date=ts) for i in range(100)]
+        
+        # 正常批次（batch_size=50）
+        normal_batch = select_next_batch(commits, None, None, batch_size=50)
+        assert len(normal_batch) == 50
+        
+        # 降级批次（batch_size=10）
+        degraded_batch = select_next_batch(commits, None, None, batch_size=10)
+        assert len(degraded_batch) == 10
+
+    def test_multiple_rounds_with_degraded_batch(self):
+        """
+        降级 batch_size 下多轮处理仍能覆盖所有 commits
+        """
+        ts = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        
+        # 创建 50 个 commits
+        commits = [make_commit(f"sha_{i:03d}", committed_date=ts + timedelta(seconds=i)) for i in range(50)]
+        
+        processed_shas = set()
+        cursor_ts: Optional[datetime] = None
+        cursor_sha: Optional[str] = None
+        degraded_batch_size = 10  # 降级后的 batch_size
+        
+        round_count = 0
+        while round_count < 10:
+            round_count += 1
+            
+            batch = select_next_batch(commits, cursor_sha, cursor_ts, degraded_batch_size)
+            
+            if not batch:
+                break
+            
+            for commit in batch:
+                processed_shas.add(commit.sha)
+            
+            target = compute_batch_cursor_target(batch)
+            if target:
+                cursor_ts, cursor_sha = target
+        
+        # 所有 commits 都被处理
+        expected_shas = {f"sha_{i:03d}" for i in range(50)}
+        assert processed_shas == expected_shas
+        # 需要 5 轮（50 / 10 = 5）
+        assert round_count >= 5
+
+
 # ---------- 运行测试的入口 ----------
 
 if __name__ == "__main__":

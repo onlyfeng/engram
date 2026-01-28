@@ -3,15 +3,20 @@
 backfill_evidence_uri.py - 回填 patch_blobs 的 evidence_uri
 
 功能:
-- 扫描 scm.patch_blobs 表中缺失 meta_json.evidence_uri 的记录
+- 扫描 scm.patch_blobs 表中缺失 evidence_uri 的记录
 - 根据 source_type、source_id、sha256 生成 canonical evidence_uri
-- 更新 meta_json 字段
+- 双写更新：evidence_uri 列 + meta_json->>'evidence_uri'（保持向后兼容）
 
 使用:
     python backfill_evidence_uri.py [--config PATH] [--batch-size N] [--dry-run] [--verbose]
 
 Canonical Evidence URI 格式:
     memory://patch_blobs/<source_type>/<source_id>/<sha256>
+
+兼容性说明:
+- 查询时使用 COALESCE(evidence_uri, meta_json->>'evidence_uri') 兼容新旧数据
+- 写入时双写（列 + meta_json）确保向后兼容
+- 迁移后优先使用 evidence_uri 列（性能更优）
 """
 
 import argparse
@@ -46,6 +51,10 @@ def get_blobs_missing_evidence_uri(
     """
     获取缺失 evidence_uri 的 patch_blobs 记录
     
+    检查条件（使用 COALESCE 兼容新旧数据）：
+    - evidence_uri 列为空 且
+    - meta_json->>'evidence_uri' 为空
+    
     Args:
         conn: 数据库连接
         batch_size: 批量大小
@@ -54,11 +63,9 @@ def get_blobs_missing_evidence_uri(
         记录列表
     """
     query = """
-        SELECT blob_id, source_type, source_id, sha256, meta_json
+        SELECT blob_id, source_type, source_id, sha256, meta_json, evidence_uri
         FROM scm.patch_blobs
-        WHERE meta_json IS NULL 
-           OR meta_json->>'evidence_uri' IS NULL
-           OR meta_json->>'evidence_uri' = ''
+        WHERE COALESCE(evidence_uri, meta_json->>'evidence_uri', '') = ''
         ORDER BY blob_id
         LIMIT %s
     """
@@ -74,7 +81,11 @@ def update_evidence_uri(
     evidence_uri: str,
 ) -> bool:
     """
-    更新单条记录的 evidence_uri
+    更新单条记录的 evidence_uri（双写：列 + meta_json）
+    
+    同时更新:
+    - evidence_uri 列（新增的独立列）
+    - meta_json->>'evidence_uri'（保持向后兼容）
     
     Args:
         conn: 数据库连接
@@ -86,14 +97,15 @@ def update_evidence_uri(
     """
     query = """
         UPDATE scm.patch_blobs
-        SET meta_json = COALESCE(meta_json, '{}'::jsonb) || %s::jsonb,
+        SET evidence_uri = %s,
+            meta_json = COALESCE(meta_json, '{}'::jsonb) || %s::jsonb,
             updated_at = now()
         WHERE blob_id = %s
         RETURNING blob_id
     """
     
     with conn.cursor() as cur:
-        cur.execute(query, (json.dumps({"evidence_uri": evidence_uri}), blob_id))
+        cur.execute(query, (evidence_uri, json.dumps({"evidence_uri": evidence_uri}), blob_id))
         result = cur.fetchone()
         return result is not None
 

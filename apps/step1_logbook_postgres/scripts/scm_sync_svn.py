@@ -1379,6 +1379,9 @@ def sync_svn_revisions(
         "start_rev": None,
         "end_rev": None,
         "error": None,
+        "error_category": None,  # 标准字段：错误分类
+        "retry_after": None,  # 标准字段：建议的重试等待秒数（可选）
+        "counts": {},  # 标准字段：计数统计
         "cursor_advance_reason": None,  # 游标推进原因
         "cursor_advance_stopped_at": None,  # strict 模式下游标停止的位置
         "unrecoverable_errors": [],  # 不可恢复的错误列表
@@ -1433,7 +1436,10 @@ def sync_svn_revisions(
             )
             result["locked"] = True
             result["skipped"] = True
+            result["success"] = True  # locked/skipped 视为成功（不需要重试）
             result["message"] = "锁被其他 worker 持有，跳过本次同步"
+            result["error_category"] = "lock_held"
+            result["counts"] = {"synced_count": 0, "diff_count": 0}
             return result
         
         logger.debug(f"[run_id={run_id[:8]}] 成功获取锁 (repo_id={repo_id}, worker_id={worker_id})")
@@ -1481,6 +1487,7 @@ def sync_svn_revisions(
             logger.info("已是最新，无需同步")
             result["success"] = True
             result["message"] = "已是最新，无需同步"
+            result["counts"] = {"synced_count": 0, "diff_count": 0}
             return result
 
         # 5. 应用 batch_size 限制
@@ -1599,6 +1606,14 @@ def sync_svn_revisions(
         if result["has_more"]:
             result["remaining"] = head_rev - end_rev
             logger.info(f"还有 {result['remaining']} 个 revision 待同步")
+        
+        # 标准字段: counts 统计
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+            "bulk_count": result.get("bulk_count", 0),
+            "degraded_count": result.get("degraded_count", 0),
+        }
 
         # 11. 创建 logbook item/event 和 attachments（如果有 patch 结果）
         patch_stats = result.get("patch_stats")
@@ -1682,11 +1697,22 @@ def sync_svn_revisions(
                 logger.warning(f"创建 logbook 记录失败 (非致命): {e}")
                 result["logbook_error"] = str(e)
 
-    except EngramError:
+    except EngramError as e:
+        result["error"] = str(e)
+        result["error_category"] = getattr(e, "error_category", None) or getattr(e, "error_type", "engram_error")
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+        }
         raise
     except Exception as e:
         logger.exception(f"同步过程中发生错误: {e}")
         result["error"] = str(e)
+        result["error_category"] = "exception"
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+        }
         raise SvnSyncError(
             f"SVN 同步失败: {e}",
             {"error": str(e)},
@@ -1985,6 +2011,7 @@ def backfill_svn_revisions(
 
         result["success"] = True
         result["message"] = f"[dry-run] 将处理 {revision_count} 个 revision (r{start_rev} ~ r{end_rev})"
+        result["counts"] = {"synced_count": 0, "diff_count": 0}
         return result
 
     # 4. 执行实际同步
@@ -2049,12 +2076,28 @@ def backfill_svn_revisions(
                 logger.info("Backfill 模式：跳过游标更新（使用 --update-watermark 可更新）")
 
         result["success"] = True
+        # 标准字段: counts 统计
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+        }
 
-    except EngramError:
+    except EngramError as e:
+        result["error"] = str(e)
+        result["error_category"] = getattr(e, "error_category", None) or getattr(e, "error_type", "engram_error")
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+        }
         raise
     except Exception as e:
         logger.exception(f"Backfill 过程中发生错误: {e}")
         result["error"] = str(e)
+        result["error_category"] = "exception"
+        result["counts"] = {
+            "synced_count": result.get("synced_count", 0),
+            "diff_count": result.get("diff_count", 0),
+        }
         raise SvnSyncError(
             f"SVN Backfill 失败: {e}",
             {"error": str(e)},

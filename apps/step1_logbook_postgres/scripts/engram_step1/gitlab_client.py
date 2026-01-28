@@ -186,7 +186,16 @@ class RateLimiter:
     
     用于控制 HTTP 请求速率，避免触发 GitLab 的 429 限流。
     支持根据 429 响应中的 Retry-After 或 RateLimit-Reset 头自动调整。
+    
+    429 处理优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
     """
+    
+    # 默认暂停时间（秒）
+    DEFAULT_PAUSE_SECONDS = 1.0
+    # 最大暂停时间（秒），用于 clamp 异常值
+    MAX_PAUSE_SECONDS = 3600.0  # 1 小时
+    # 最小暂停时间（秒），用于 clamp 负值
+    MIN_PAUSE_SECONDS = 0.0
     
     def __init__(
         self,
@@ -216,6 +225,8 @@ class RateLimiter:
         
         # 429 响应时暂停直到的时间
         self._paused_until: Optional[float] = None
+        # 暂停的来源（便于 status 查询）
+        self._pause_source: Optional[str] = None
     
     @property
     def rate(self) -> float:
@@ -276,34 +287,79 @@ class RateLimiter:
             # 等待令牌补充
             time.sleep(min(wait_time, 0.1))  # 最多等待 0.1 秒后重新检查
     
-    def pause_until(self, resume_time: float) -> None:
+    def pause_until(self, resume_time: float, source: Optional[str] = None) -> None:
         """
         暂停请求直到指定时间（用于处理 429 响应）
         
         Args:
             resume_time: 恢复请求的时间戳
+            source: 暂停来源（如 "retry_after", "rate_limit_reset", "default"）
         """
         with self._lock:
             if self._paused_until is None or resume_time > self._paused_until:
                 self._paused_until = resume_time
+                self._pause_source = source
+    
+    def _clamp_pause_seconds(self, seconds: float) -> float:
+        """
+        对暂停秒数做 clamp 处理
+        
+        Args:
+            seconds: 原始暂停秒数
+            
+        Returns:
+            clamp 后的暂停秒数，范围 [MIN_PAUSE_SECONDS, MAX_PAUSE_SECONDS]
+        """
+        return max(self.MIN_PAUSE_SECONDS, min(seconds, self.MAX_PAUSE_SECONDS))
     
     def notify_rate_limit(self, retry_after: Optional[float] = None, reset_time: Optional[float] = None) -> None:
         """
         通知收到了速率限制响应（429）
+        
+        优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
         
         Args:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
         """
         now = time.time()
+        pause_seconds: float
+        source: str
         
-        if reset_time and reset_time > now:
-            self.pause_until(reset_time)
-        elif retry_after:
-            self.pause_until(now + retry_after)
+        # 优先级 1: Retry-After（秒）
+        if retry_after is not None:
+            try:
+                pause_seconds = float(retry_after)
+                # clamp 异常/负值
+                pause_seconds = self._clamp_pause_seconds(pause_seconds)
+                source = "retry_after"
+            except (ValueError, TypeError):
+                # 解析失败，回退到默认值
+                logger.warning(f"无法解析 Retry-After 值: {retry_after}，使用默认值")
+                pause_seconds = self.DEFAULT_PAUSE_SECONDS
+                source = "default"
+        # 优先级 2: RateLimit-Reset（时间戳）
+        elif reset_time is not None:
+            try:
+                reset_ts = float(reset_time)
+                pause_seconds = reset_ts - now
+                # clamp 异常/负值
+                pause_seconds = self._clamp_pause_seconds(pause_seconds)
+                source = "rate_limit_reset"
+            except (ValueError, TypeError):
+                # 解析失败，回退到默认值
+                logger.warning(f"无法解析 RateLimit-Reset 值: {reset_time}，使用默认值")
+                pause_seconds = self.DEFAULT_PAUSE_SECONDS
+                source = "default"
+        # 优先级 3: 默认值
         else:
-            # 默认暂停 1 秒
-            self.pause_until(now + 1.0)
+            pause_seconds = self.DEFAULT_PAUSE_SECONDS
+            source = "default"
+        
+        resume_time = now + pause_seconds
+        self.pause_until(resume_time, source=source)
+        
+        logger.debug(f"RateLimiter: 429 响应，暂停 {pause_seconds:.2f}s (来源: {source})")
     
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
@@ -316,6 +372,7 @@ class RateLimiter:
                 "throttled_count": self._throttled_count,
                 "avg_wait_time_ms": round(self._total_wait_time_ms / self._total_requests, 2) if self._total_requests > 0 else 0,
                 "paused_until": self._paused_until,
+                "pause_source": self._pause_source,
             }
 
 
@@ -328,11 +385,20 @@ class PostgresRateLimiter:
     - 使用 Postgres 行锁保证原子性
     - 支持 429 Retry-After 反馈机制
     
+    429 处理优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
+    
     适用场景：
     - 多 worker 并发同步
     - 需要跨进程共享限流状态
     - 需要持久化限流配置
     """
+    
+    # 默认暂停时间（秒）
+    DEFAULT_PAUSE_SECONDS = 1.0
+    # 最大暂停时间（秒），用于 clamp 异常值
+    MAX_PAUSE_SECONDS = 3600.0  # 1 小时
+    # 最小暂停时间（秒），用于 clamp 负值
+    MIN_PAUSE_SECONDS = 0.0
     
     def __init__(
         self,
@@ -364,6 +430,10 @@ class PostgresRateLimiter:
         self._total_wait_time_ms = 0.0
         self._throttled_count = 0
         self._rejected_count = 0
+        
+        # 本地缓存最后一次 429 暂停信息（便于 status 查询）
+        self._last_pause_until: Optional[float] = None
+        self._last_pause_source: Optional[str] = None
     
     @property
     def instance_key(self) -> str:
@@ -449,6 +519,18 @@ class PostgresRateLimiter:
                 logger.warning(f"Postgres 限流器操作失败: {e}，允许请求通过")
                 return True  # 失败时允许通过，避免阻塞
     
+    def _clamp_pause_seconds(self, seconds: float) -> float:
+        """
+        对暂停秒数做 clamp 处理
+        
+        Args:
+            seconds: 原始暂停秒数
+            
+        Returns:
+            clamp 后的暂停秒数，范围 [MIN_PAUSE_SECONDS, MAX_PAUSE_SECONDS]
+        """
+        return max(self.MIN_PAUSE_SECONDS, min(seconds, self.MAX_PAUSE_SECONDS))
+    
     def notify_rate_limit(
         self,
         retry_after: Optional[float] = None,
@@ -459,6 +541,8 @@ class PostgresRateLimiter:
         
         将暂停信息写入 Postgres，影响所有使用相同 instance_key 的 worker。
         
+        优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
+        
         Args:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
@@ -466,14 +550,43 @@ class PostgresRateLimiter:
         from ..db import pause_rate_limit_bucket
         
         now = time.time()
+        pause_seconds: float
+        source: str
         
-        # 计算暂停秒数
-        if reset_time and reset_time > now:
-            pause_seconds = reset_time - now
-        elif retry_after:
-            pause_seconds = retry_after
+        # 优先级 1: Retry-After（秒）
+        if retry_after is not None:
+            try:
+                pause_seconds = float(retry_after)
+                # clamp 异常/负值
+                pause_seconds = self._clamp_pause_seconds(pause_seconds)
+                source = "retry_after"
+            except (ValueError, TypeError):
+                # 解析失败，回退到默认值
+                logger.warning(f"Postgres 限流器: 无法解析 Retry-After 值: {retry_after}，使用默认值")
+                pause_seconds = self.DEFAULT_PAUSE_SECONDS
+                source = "default"
+        # 优先级 2: RateLimit-Reset（时间戳）
+        elif reset_time is not None:
+            try:
+                reset_ts = float(reset_time)
+                pause_seconds = reset_ts - now
+                # clamp 异常/负值
+                pause_seconds = self._clamp_pause_seconds(pause_seconds)
+                source = "rate_limit_reset"
+            except (ValueError, TypeError):
+                # 解析失败，回退到默认值
+                logger.warning(f"Postgres 限流器: 无法解析 RateLimit-Reset 值: {reset_time}，使用默认值")
+                pause_seconds = self.DEFAULT_PAUSE_SECONDS
+                source = "default"
+        # 优先级 3: 默认值
         else:
-            pause_seconds = 1.0  # 默认暂停 1 秒
+            pause_seconds = self.DEFAULT_PAUSE_SECONDS
+            source = "default"
+        
+        # 记录本地缓存（便于 status 查询）
+        with self._lock:
+            self._last_pause_until = now + pause_seconds
+            self._last_pause_source = source
         
         try:
             with self._get_conn() as conn:
@@ -483,7 +596,7 @@ class PostgresRateLimiter:
                     pause_seconds,
                     record_429=True,
                 )
-            logger.info(f"Postgres 限流器: 收到 429，暂停 {pause_seconds:.1f}s")
+            logger.info(f"Postgres 限流器: 收到 429，暂停 {pause_seconds:.1f}s (来源: {source})")
         except Exception as e:
             logger.warning(f"Postgres 限流器: 记录 429 失败: {e}")
     
@@ -501,6 +614,8 @@ class PostgresRateLimiter:
                 "avg_wait_time_ms": round(
                     self._total_wait_time_ms / self._total_requests, 2
                 ) if self._total_requests > 0 else 0,
+                "last_pause_until": self._last_pause_until,
+                "last_pause_source": self._last_pause_source,
             }
     
     def get_bucket_status(self) -> Optional[Dict[str, Any]]:
@@ -1003,17 +1118,46 @@ class HttpConfig:
     rate_limit_enabled: bool = False  # 是否启用速率限制
     rate_limit_requests_per_second: float = 10.0  # 每秒请求数
     rate_limit_burst_size: Optional[int] = None  # 突发容量
-    # Postgres 限流配置（分布式版）
+    # Postgres 限流配置（分布式版，实例维度）
     postgres_rate_limit_enabled: bool = False  # 是否启用 Postgres 限流
     postgres_rate_limit_dsn: Optional[str] = None  # Postgres DSN（默认从环境变量读取）
     postgres_rate_limit_rate: float = 10.0  # 令牌补充速率
     postgres_rate_limit_burst: int = 20  # 最大令牌容量
     postgres_rate_limit_max_wait: float = 60.0  # 最大等待时间
+    # Postgres 限流配置（分布式版，tenant 维度）
+    # key 形如: gitlab:<host>:tenant:<id>
+    tenant_rate_limit_enabled: bool = False  # 是否启用 tenant 维度限流
+    tenant_rate_limit_rate: float = 5.0  # tenant 级别更保守
+    tenant_rate_limit_burst: int = 10  # tenant 级别的令牌容量
+    tenant_rate_limit_max_wait: float = 30.0  # tenant 级别的最大等待时间
 
     @classmethod
     def from_config(cls, config: Optional["Config"] = None) -> "HttpConfig":
-        """从配置对象加载 HTTP 配置"""
+        """
+        从配置对象加载 HTTP 配置
+        
+        使用 config.py 中定义的默认值常量，确保默认值与文档一致。
+        """
         import os
+        
+        # 延迟导入避免循环依赖，获取统一的默认值常量
+        from .config import (
+            DEFAULT_HTTP_TIMEOUT_SECONDS,
+            DEFAULT_HTTP_MAX_ATTEMPTS,
+            DEFAULT_HTTP_BACKOFF_BASE_SECONDS,
+            DEFAULT_HTTP_BACKOFF_MAX_SECONDS,
+            DEFAULT_GITLAB_RATE_LIMIT_ENABLED,
+            DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND,
+            DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT,
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED,
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE,
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST,
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT,
+        )
         
         if config is None:
             return cls()
@@ -1024,20 +1168,25 @@ class HttpConfig:
             postgres_dsn = os.environ.get("POSTGRES_DSN")
 
         return cls(
-            timeout_seconds=config.get("scm.http.timeout_seconds", 60.0),
-            max_attempts=config.get("scm.http.max_attempts", 3),
-            backoff_base_seconds=config.get("scm.http.backoff_base_seconds", 1.0),
-            backoff_max_seconds=config.get("scm.http.backoff_max_seconds", 60.0),
+            timeout_seconds=config.get("scm.http.timeout_seconds", DEFAULT_HTTP_TIMEOUT_SECONDS),
+            max_attempts=config.get("scm.http.max_attempts", DEFAULT_HTTP_MAX_ATTEMPTS),
+            backoff_base_seconds=config.get("scm.http.backoff_base_seconds", DEFAULT_HTTP_BACKOFF_BASE_SECONDS),
+            backoff_max_seconds=config.get("scm.http.backoff_max_seconds", DEFAULT_HTTP_BACKOFF_MAX_SECONDS),
             max_concurrency=config.get("scm.gitlab.max_concurrency"),
-            rate_limit_enabled=config.get("scm.gitlab.rate_limit_enabled", False),
-            rate_limit_requests_per_second=config.get("scm.gitlab.rate_limit_requests_per_second", 10.0),
-            rate_limit_burst_size=config.get("scm.gitlab.rate_limit_burst_size"),
-            # Postgres 限流配置
-            postgres_rate_limit_enabled=config.get("scm.gitlab.postgres_rate_limit_enabled", False),
+            rate_limit_enabled=config.get("scm.gitlab.rate_limit_enabled", DEFAULT_GITLAB_RATE_LIMIT_ENABLED),
+            rate_limit_requests_per_second=config.get("scm.gitlab.rate_limit_requests_per_second", DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND),
+            rate_limit_burst_size=config.get("scm.gitlab.rate_limit_burst_size", DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE),
+            # Postgres 限流配置（实例维度）
+            postgres_rate_limit_enabled=config.get("scm.gitlab.postgres_rate_limit_enabled", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED),
             postgres_rate_limit_dsn=postgres_dsn,
-            postgres_rate_limit_rate=config.get("scm.gitlab.postgres_rate_limit_rate", 10.0),
-            postgres_rate_limit_burst=config.get("scm.gitlab.postgres_rate_limit_burst", 20),
-            postgres_rate_limit_max_wait=config.get("scm.gitlab.postgres_rate_limit_max_wait", 60.0),
+            postgres_rate_limit_rate=config.get("scm.gitlab.postgres_rate_limit_rate", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE),
+            postgres_rate_limit_burst=config.get("scm.gitlab.postgres_rate_limit_burst", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST),
+            postgres_rate_limit_max_wait=config.get("scm.gitlab.postgres_rate_limit_max_wait", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT),
+            # Postgres 限流配置（tenant 维度）
+            tenant_rate_limit_enabled=config.get("scm.gitlab.tenant_rate_limit_enabled", DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED),
+            tenant_rate_limit_rate=config.get("scm.gitlab.tenant_rate_limit_rate", DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE),
+            tenant_rate_limit_burst=config.get("scm.gitlab.tenant_rate_limit_burst", DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST),
+            tenant_rate_limit_max_wait=config.get("scm.gitlab.tenant_rate_limit_max_wait", DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT),
         )
 
 
@@ -1071,6 +1220,8 @@ class GitLabClient:
         concurrency_limiter: Optional[ConcurrencyLimiter] = None,
         rate_limiter: Optional[RateLimiter] = None,
         postgres_rate_limiter: Optional["PostgresRateLimiter"] = None,
+        tenant_id: Optional[str] = None,
+        tenant_rate_limiter: Optional["PostgresRateLimiter"] = None,
     ):
         """
         初始化 GitLab 客户端
@@ -1084,6 +1235,8 @@ class GitLabClient:
             concurrency_limiter: 并发限制器（可选，默认根据配置创建）
             rate_limiter: 速率限制器（可选，默认根据配置创建）
             postgres_rate_limiter: Postgres 限流器（可选，默认根据配置创建）
+            tenant_id: 租户 ID（可选，用于 tenant 维度限流）
+            tenant_rate_limiter: Tenant 维度的 Postgres 限流器（可选，默认根据配置创建）
         """
         self.base_url = base_url.rstrip("/")
 
@@ -1129,7 +1282,7 @@ class GitLabClient:
         else:
             self._rate_limiter = None
         
-        # Postgres 限流器（分布式版）
+        # Postgres 限流器（分布式版，实例维度）
         if postgres_rate_limiter is not None:
             self._postgres_rate_limiter = postgres_rate_limiter
         elif self.http_config.postgres_rate_limit_enabled:
@@ -1144,6 +1297,24 @@ class GitLabClient:
             )
         else:
             self._postgres_rate_limiter = None
+        
+        # Postgres 限流器（分布式版，tenant 维度）
+        # key 形如: gitlab:<host>:tenant:<id>
+        self._tenant_id = tenant_id
+        if tenant_rate_limiter is not None:
+            self._tenant_rate_limiter = tenant_rate_limiter
+        elif self.http_config.tenant_rate_limit_enabled and tenant_id:
+            # 从 base_url 提取实例标识并加上 tenant
+            tenant_key = self._extract_tenant_key(base_url, tenant_id)
+            self._tenant_rate_limiter = PostgresRateLimiter(
+                instance_key=tenant_key,
+                dsn=self.http_config.postgres_rate_limit_dsn,  # 复用同一 DSN
+                rate=self.http_config.tenant_rate_limit_rate,
+                burst=self.http_config.tenant_rate_limit_burst,
+                max_wait_seconds=self.http_config.tenant_rate_limit_max_wait,
+            )
+        else:
+            self._tenant_rate_limiter = None
     
     def _extract_instance_key(self, url: str) -> str:
         """
@@ -1168,6 +1339,30 @@ class GitLabClient:
         except Exception:
             return f"gitlab:{url}"
     
+    def _extract_tenant_key(self, url: str, tenant_id: str) -> str:
+        """
+        从 URL 和 tenant_id 提取 tenant 维度的限流 key
+        
+        生成规则: gitlab:<host>:tenant:<id>
+        例如: https://gitlab.example.com + tenant123 -> gitlab:gitlab.example.com:tenant:tenant123
+        
+        这确保同一 GitLab host 下的每个 tenant 有独立的限流桶。
+        
+        Args:
+            url: GitLab 实例 URL
+            tenant_id: 租户 ID
+            
+        Returns:
+            格式为 "gitlab:<host>:tenant:<id>" 的 tenant 限流 key
+        """
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(url)
+            host = parsed.netloc or url
+            return f"gitlab:{host}:tenant:{tenant_id}"
+        except Exception:
+            return f"gitlab:{url}:tenant:{tenant_id}"
+    
     def _notify_all_rate_limiters(
         self,
         retry_after: Optional[float] = None,
@@ -1176,7 +1371,7 @@ class GitLabClient:
         """
         通知所有速率限制器收到了 429 响应
         
-        同时通知 local 和 distributed limiter，确保所有限流器状态同步。
+        同时通知 local、distributed 和 tenant limiter，确保所有限流器状态同步。
         
         Args:
             retry_after: Retry-After 头的值（秒）
@@ -1192,7 +1387,7 @@ class GitLabClient:
             except Exception as e:
                 logger.warning(f"通知本地速率限制器失败: {e}")
         
-        # 通知分布式速率限制器（Postgres）
+        # 通知分布式速率限制器（Postgres，实例维度）
         if self._postgres_rate_limiter:
             try:
                 self._postgres_rate_limiter.notify_rate_limit(
@@ -1201,6 +1396,16 @@ class GitLabClient:
                 )
             except Exception as e:
                 logger.warning(f"通知 Postgres 限流器失败: {e}")
+        
+        # 通知 tenant 维度的限流器（Postgres）
+        if self._tenant_rate_limiter:
+            try:
+                self._tenant_rate_limiter.notify_rate_limit(
+                    retry_after=retry_after,
+                    reset_time=reset_time,
+                )
+            except Exception as e:
+                logger.warning(f"通知 Tenant 限流器失败: {e}")
     
     @property
     def concurrency_limiter(self) -> Optional[ConcurrencyLimiter]:
@@ -1214,8 +1419,18 @@ class GitLabClient:
     
     @property
     def postgres_rate_limiter(self) -> Optional[PostgresRateLimiter]:
-        """获取 Postgres 限流器（分布式版）"""
+        """获取 Postgres 限流器（分布式版，实例维度）"""
         return self._postgres_rate_limiter
+    
+    @property
+    def tenant_rate_limiter(self) -> Optional[PostgresRateLimiter]:
+        """获取 Tenant 维度的 Postgres 限流器"""
+        return self._tenant_rate_limiter
+    
+    @property
+    def tenant_id(self) -> Optional[str]:
+        """获取当前 tenant ID"""
+        return self._tenant_id
     
     def get_limiter_stats(self) -> Dict[str, Any]:
         """
@@ -1249,7 +1464,7 @@ class GitLabClient:
             except Exception as e:
                 logger.debug(f"获取本地限流器统计失败: {e}")
         
-        # 收集 Postgres 限流器统计
+        # 收集 Postgres 限流器统计（实例维度）
         if self._postgres_rate_limiter:
             try:
                 pg_stats = self._postgres_rate_limiter.get_stats()
@@ -1261,6 +1476,20 @@ class GitLabClient:
                 stats["timeout_count"] += pg_stats.get("throttled_count", 0)
             except Exception as e:
                 logger.debug(f"获取 Postgres 限流器统计失败: {e}")
+        
+        # 收集 Tenant 维度限流器统计
+        if self._tenant_rate_limiter:
+            try:
+                tenant_stats = self._tenant_rate_limiter.get_stats()
+                tenant_stats["type"] = "tenant"
+                sub_stats.append(tenant_stats)
+                
+                total_requests += tenant_stats.get("total_requests", 0)
+                total_wait_time_ms += tenant_stats.get("avg_wait_time_ms", 0) * tenant_stats.get("total_requests", 0)
+                stats["timeout_count"] += tenant_stats.get("rejected_count", 0)
+                stats["timeout_count"] += tenant_stats.get("throttled_count", 0)
+            except Exception as e:
+                logger.debug(f"获取 Tenant 限流器统计失败: {e}")
         
         # 收集并发限制器统计
         if self._concurrency_limiter:
@@ -1304,23 +1533,41 @@ class GitLabClient:
             return quote(str(project_id), safe="")
         return str(project_id)
 
-    def _calculate_backoff(self, attempt: int, retry_after: Optional[float] = None) -> float:
+    def _calculate_backoff(
+        self,
+        attempt: int,
+        retry_after: Optional[float] = None,
+        rate_limit_reset: Optional[float] = None,
+    ) -> float:
         """
         计算退避等待时间（指数退避 + 随机抖动）
+        
+        优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 指数退避默认值
 
         Args:
             attempt: 当前尝试次数（从 1 开始）
-            retry_after: 429 响应的 Retry-After 值（优先使用）
+            retry_after: 429 响应的 Retry-After 值（秒）
+            rate_limit_reset: 429 响应的 RateLimit-Reset 值（Unix 时间戳）
 
         Returns:
             等待时间（秒）
         """
+        # 优先级 1: Retry-After（秒）
         if retry_after is not None and retry_after > 0:
             # 使用服务器返回的 Retry-After，加上少量抖动
             jitter = random.uniform(0, 1)
             return retry_after + jitter
+        
+        # 优先级 2: RateLimit-Reset（时间戳）
+        if rate_limit_reset is not None:
+            now = time.time()
+            wait_seconds = rate_limit_reset - now
+            if wait_seconds > 0:
+                # 使用计算出的等待时间，加上少量抖动
+                jitter = random.uniform(0, 1)
+                return min(wait_seconds + jitter, self.http_config.backoff_max_seconds)
 
-        # 指数退避：base * 2^(attempt-1) + jitter
+        # 优先级 3: 指数退避：base * 2^(attempt-1) + jitter
         base = self.http_config.backoff_base_seconds
         max_backoff = self.http_config.backoff_max_seconds
 
@@ -1475,7 +1722,7 @@ class GitLabClient:
         if self._concurrency_limiter:
             self._concurrency_limiter.acquire()
         
-        # 获取速率限制令牌（优先使用 Postgres 限流器）
+        # 获取速率限制令牌（依次检查：Postgres 实例级 -> Tenant 级 -> 内存级）
         if self._postgres_rate_limiter:
             if not self._postgres_rate_limiter.acquire():
                 # Postgres 限流器拒绝请求
@@ -1487,6 +1734,23 @@ class GitLabClient:
                     endpoint=url,
                     error_category=GitLabErrorCategory.RATE_LIMITED,
                     error_message="Postgres 限流器: 请求被限流（等待超时）",
+                )
+                if raise_on_error:
+                    self._raise_error(result)
+                return result
+        
+        # Tenant 维度限流（如果启用）
+        if self._tenant_rate_limiter:
+            if not self._tenant_rate_limiter.acquire():
+                # Tenant 限流器拒绝请求
+                if self._concurrency_limiter:
+                    self._concurrency_limiter.release()
+                
+                result = GitLabAPIResult(
+                    success=False,
+                    endpoint=url,
+                    error_category=GitLabErrorCategory.RATE_LIMITED,
+                    error_message=f"Tenant 限流器: 请求被限流（tenant_id={self._tenant_id}）",
                 )
                 if raise_on_error:
                     self._raise_error(result)
@@ -1608,7 +1872,11 @@ class GitLabClient:
 
                 # 判断是否应该重试
                 if self._should_retry(category, attempt):
-                    backoff = self._calculate_backoff(attempt, retry_after)
+                    backoff = self._calculate_backoff(
+                        attempt,
+                        retry_after=retry_after,
+                        rate_limit_reset=rate_limit_reset,
+                    )
                     logger.warning(
                         f"请求失败 (attempt={attempt}/{self.http_config.max_attempts}), "
                         f"category={category.value}, {backoff:.2f}s 后重试: {redact(error_msg)}"

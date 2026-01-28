@@ -754,6 +754,177 @@ class TestBackoffSecondsTransmission:
         assert suggestion.sleep_seconds <= 2.0
 
 
+class TestCircuitBreakerDiffModeDegradation:
+    """
+    测试熔断状态下 diff_mode 降级
+    
+    验证场景：
+    - 熔断触发时 suggested_diff_mode 变为 none
+    - 限流状态下 batch_size 和 forward_window 按预期下调
+    - HALF_OPEN 状态下保持降级参数
+    """
+
+    def test_rate_limit_triggers_diff_mode_none_via_degradation(self):
+        """
+        连续 429 错误触发 diff_mode 降级为 none
+        
+        验证 DegradationController 在达到 rate_limit_threshold 后，
+        suggested_diff_mode 变为 none
+        """
+        config = DegradationConfig(
+            rate_limit_threshold=3,
+            default_batch_size=100,
+            batch_shrink_factor=0.5,
+        )
+        controller = DegradationController(
+            config=config,
+            initial_diff_mode="best_effort",
+        )
+        
+        # 连续触发 429
+        for i in range(3):
+            suggestion = controller.update(
+                request_stats={"total_429_hits": 1},
+                unrecoverable_errors=[{"error_category": "rate_limited", "status_code": 429}],
+                synced_count=0,
+            )
+        
+        # diff_mode 应降级为 none
+        assert suggestion.diff_mode == "none"
+        assert controller.current_diff_mode == "none"
+
+    def test_batch_size_shrinks_on_rate_limit(self):
+        """
+        限流状态下 batch_size 按 shrink_factor 下调
+        """
+        config = DegradationConfig(
+            default_batch_size=100,
+            batch_shrink_factor=0.5,
+            min_batch_size=10,
+        )
+        controller = DegradationController(
+            config=config,
+            initial_batch_size=100,
+        )
+        
+        # 第一次 429
+        suggestion = controller.update(
+            unrecoverable_errors=[{"error_category": "rate_limited", "status_code": 429}],
+            synced_count=0,
+        )
+        
+        # batch_size 应缩小到 50
+        assert suggestion.batch_size == 50
+        
+        # 第二次 429
+        suggestion = controller.update(
+            unrecoverable_errors=[{"error_category": "rate_limited", "status_code": 429}],
+            synced_count=0,
+        )
+        
+        # batch_size 应缩小到 25
+        assert suggestion.batch_size == 25
+
+    def test_forward_window_shrinks_on_rate_limit(self):
+        """
+        限流状态下 forward_window_seconds 按 window_shrink_factor 下调
+        """
+        config = DegradationConfig(
+            default_forward_window_seconds=3600,
+            window_shrink_factor=0.5,
+            min_forward_window_seconds=300,
+        )
+        controller = DegradationController(
+            config=config,
+            initial_forward_window_seconds=3600,
+        )
+        
+        # 触发 429
+        suggestion = controller.update(
+            unrecoverable_errors=[{"error_category": "rate_limited", "status_code": 429}],
+            synced_count=0,
+        )
+        
+        # forward_window 应缩小到 1800
+        assert suggestion.forward_window_seconds == 1800
+
+    def test_degradation_parameters_combined(self):
+        """
+        验证 diff_mode、batch_size、forward_window 同时降级
+        """
+        config = DegradationConfig(
+            rate_limit_threshold=2,
+            default_batch_size=100,
+            batch_shrink_factor=0.5,
+            default_forward_window_seconds=3600,
+            window_shrink_factor=0.5,
+        )
+        controller = DegradationController(
+            config=config,
+            initial_batch_size=100,
+            initial_diff_mode="best_effort",
+            initial_forward_window_seconds=3600,
+        )
+        
+        # 第一次 429
+        suggestion1 = controller.update(
+            unrecoverable_errors=[{"error_category": "rate_limited", "status_code": 429}],
+            synced_count=0,
+        )
+        
+        # batch 和 window 应该缩小
+        assert suggestion1.batch_size == 50
+        assert suggestion1.forward_window_seconds == 1800
+        # diff_mode 还没到阈值
+        assert suggestion1.diff_mode == "best_effort"
+        
+        # 第二次 429 - 达到阈值
+        suggestion2 = controller.update(
+            unrecoverable_errors=[{"error_category": "rate_limited", "status_code": 429}],
+            synced_count=0,
+        )
+        
+        # 全部降级
+        assert suggestion2.batch_size == 25
+        assert suggestion2.forward_window_seconds == 900
+        assert suggestion2.diff_mode == "none"
+
+    def test_recovery_restores_parameters(self):
+        """
+        连续成功后恢复 diff_mode、batch_size、forward_window
+        """
+        config = DegradationConfig(
+            rate_limit_threshold=2,
+            recovery_success_count=3,
+            default_batch_size=100,
+            batch_shrink_factor=0.5,
+            batch_grow_factor=1.5,
+            default_forward_window_seconds=3600,
+            window_shrink_factor=0.5,
+            window_grow_factor=1.5,
+        )
+        controller = DegradationController(
+            config=config,
+            initial_batch_size=25,  # 假设已被缩小
+            initial_diff_mode="none",  # 假设已被降级
+            initial_forward_window_seconds=900,  # 假设已被缩小
+        )
+        
+        # 连续成功
+        for i in range(3):
+            suggestion = controller.update(
+                unrecoverable_errors=[],
+                synced_count=10,
+            )
+        
+        # diff_mode 应恢复
+        assert controller.current_diff_mode == "best_effort"
+        # batch_size 应开始恢复（25 * 1.5 = 37.5 -> 37）
+        assert controller.current_batch_size > 25
+        # forward_window 应开始恢复
+        assert controller.current_forward_window_seconds > 900
+
+
 class TestDegradationWithMultipleErrorTypes:
     """
     测试多种错误类型的降级处理

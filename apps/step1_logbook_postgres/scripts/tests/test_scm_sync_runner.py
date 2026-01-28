@@ -1327,5 +1327,370 @@ class TestPostgresRateLimiterSharedBucket:
         assert client._postgres_rate_limiter._dsn == expected_dsn
 
 
+class TestChunkPayloadGeneration:
+    """Chunk Payload 生成测试"""
+
+    def test_time_window_chunk_to_payload_basic(self):
+        """测试 TimeWindowChunk.to_payload 基本功能"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 1, 4, 0, 0, tzinfo=timezone.utc)
+        
+        chunk = TimeWindowChunk(since=since, until=until, index=0, total=3)
+        payload = chunk.to_payload(update_watermark=False, watermark_constraint="none")
+        
+        assert payload["window_type"] == "time"
+        assert payload["window_since"] == since.isoformat()
+        assert payload["window_until"] == until.isoformat()
+        assert payload["chunk_index"] == 0
+        assert payload["chunk_total"] == 3
+        assert payload["update_watermark"] is False
+        assert payload["watermark_constraint"] == "none"
+
+    def test_time_window_chunk_to_payload_with_update_watermark(self):
+        """测试 TimeWindowChunk.to_payload 更新 watermark 时的策略"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 1, 4, 0, 0, tzinfo=timezone.utc)
+        
+        chunk = TimeWindowChunk(since=since, until=until, index=0, total=1)
+        payload = chunk.to_payload(update_watermark=True, watermark_constraint="monotonic")
+        
+        assert payload["update_watermark"] is True
+        assert payload["watermark_constraint"] == "monotonic"
+
+    def test_revision_window_chunk_to_payload_basic(self):
+        """测试 RevisionWindowChunk.to_payload 基本功能"""
+        chunk = RevisionWindowChunk(start_rev=100, end_rev=200, index=1, total=5)
+        payload = chunk.to_payload(update_watermark=False, watermark_constraint="none")
+        
+        assert payload["window_type"] == "revision"
+        assert payload["window_start_rev"] == 100
+        assert payload["window_end_rev"] == 200
+        assert payload["chunk_index"] == 1
+        assert payload["chunk_total"] == 5
+        assert payload["update_watermark"] is False
+        assert payload["watermark_constraint"] == "none"
+
+    def test_revision_window_chunk_to_payload_with_update_watermark(self):
+        """测试 RevisionWindowChunk.to_payload 更新 watermark 时的策略"""
+        chunk = RevisionWindowChunk(start_rev=1, end_rev=100, index=0, total=1)
+        payload = chunk.to_payload(update_watermark=True, watermark_constraint="monotonic")
+        
+        assert payload["update_watermark"] is True
+        assert payload["watermark_constraint"] == "monotonic"
+
+
+class TestChunkBoundaryStability:
+    """Chunk 边界稳定性测试 - 验证相同输入生成稳定的 chunk 边界"""
+
+    def test_time_window_split_deterministic(self):
+        """测试时间窗口切分是确定性的：相同输入始终产生相同输出"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 2, 0, 0, 0, tzinfo=timezone.utc)  # 24 小时
+        chunk_hours = 4
+        
+        # 多次调用
+        results = [
+            split_time_window(since, until, chunk_hours=chunk_hours)
+            for _ in range(5)
+        ]
+        
+        # 验证所有结果相同
+        first_result = results[0]
+        for result in results[1:]:
+            assert len(result) == len(first_result)
+            for i, chunk in enumerate(result):
+                assert chunk.since == first_result[i].since
+                assert chunk.until == first_result[i].until
+                assert chunk.index == first_result[i].index
+                assert chunk.total == first_result[i].total
+
+    def test_time_window_split_stable_boundaries(self):
+        """测试时间窗口边界稳定：固定的 since/until 应产生固定的边界"""
+        since = datetime(2025, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 15, 20, 0, 0, tzinfo=timezone.utc)  # 12 小时
+        
+        chunks = split_time_window(since, until, chunk_hours=4)
+        
+        # 验证确切的边界
+        assert len(chunks) == 3
+        
+        # 第一个窗口：08:00 -> 12:00
+        assert chunks[0].since == datetime(2025, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
+        assert chunks[0].until == datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        
+        # 第二个窗口：12:00 -> 16:00
+        assert chunks[1].since == datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        assert chunks[1].until == datetime(2025, 1, 15, 16, 0, 0, tzinfo=timezone.utc)
+        
+        # 第三个窗口：16:00 -> 20:00
+        assert chunks[2].since == datetime(2025, 1, 15, 16, 0, 0, tzinfo=timezone.utc)
+        assert chunks[2].until == datetime(2025, 1, 15, 20, 0, 0, tzinfo=timezone.utc)
+
+    def test_revision_window_split_deterministic(self):
+        """测试 revision 窗口切分是确定性的：相同输入始终产生相同输出"""
+        start_rev = 100
+        end_rev = 500
+        chunk_size = 100
+        
+        # 多次调用
+        results = [
+            split_revision_window(start_rev, end_rev, chunk_size=chunk_size)
+            for _ in range(5)
+        ]
+        
+        # 验证所有结果相同
+        first_result = results[0]
+        for result in results[1:]:
+            assert len(result) == len(first_result)
+            for i, chunk in enumerate(result):
+                assert chunk.start_rev == first_result[i].start_rev
+                assert chunk.end_rev == first_result[i].end_rev
+                assert chunk.index == first_result[i].index
+                assert chunk.total == first_result[i].total
+
+    def test_revision_window_split_stable_boundaries(self):
+        """测试 revision 窗口边界稳定：固定的 start/end 应产生固定的边界"""
+        chunks = split_revision_window(50, 350, chunk_size=100)
+        
+        # 验证确切的边界
+        assert len(chunks) == 4
+        
+        # 第一个窗口：r50 -> r149
+        assert chunks[0].start_rev == 50
+        assert chunks[0].end_rev == 149
+        
+        # 第二个窗口：r150 -> r249
+        assert chunks[1].start_rev == 150
+        assert chunks[1].end_rev == 249
+        
+        # 第三个窗口：r250 -> r349
+        assert chunks[2].start_rev == 250
+        assert chunks[2].end_rev == 349
+        
+        # 第四个窗口：r350 -> r350（只有 1 个）
+        assert chunks[3].start_rev == 350
+        assert chunks[3].end_rev == 350
+
+    def test_chunk_payload_serialization_stable(self):
+        """测试 chunk payload 序列化稳定"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 1, 4, 0, 0, tzinfo=timezone.utc)
+        
+        chunk = TimeWindowChunk(since=since, until=until, index=0, total=1)
+        
+        # 多次生成 payload
+        payloads = [
+            chunk.to_payload(update_watermark=True, watermark_constraint="monotonic")
+            for _ in range(5)
+        ]
+        
+        # 验证所有 payload 相同
+        first_payload = payloads[0]
+        for payload in payloads[1:]:
+            assert payload == first_payload
+
+
+class TestWatermarkConstraintBehavior:
+    """Watermark 约束行为测试 - 验证 strict/best_effort 模式行为"""
+
+    def test_watermark_constraint_monotonic_when_update_enabled(self):
+        """测试启用 watermark 更新时约束为 monotonic"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 1, 4, 0, 0, tzinfo=timezone.utc)
+        
+        chunk = TimeWindowChunk(since=since, until=until, index=0, total=1)
+        
+        # update_watermark=True 时应使用 monotonic 约束
+        payload = chunk.to_payload(update_watermark=True, watermark_constraint="monotonic")
+        
+        assert payload["update_watermark"] is True
+        assert payload["watermark_constraint"] == "monotonic"
+
+    def test_watermark_constraint_none_when_update_disabled(self):
+        """测试禁用 watermark 更新时约束为 none"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 1, 4, 0, 0, tzinfo=timezone.utc)
+        
+        chunk = TimeWindowChunk(since=since, until=until, index=0, total=1)
+        
+        # update_watermark=False 时应使用 none 约束
+        payload = chunk.to_payload(update_watermark=False, watermark_constraint="none")
+        
+        assert payload["update_watermark"] is False
+        assert payload["watermark_constraint"] == "none"
+
+    def test_strict_mode_watermark_behavior(self):
+        """测试 strict 模式下的 watermark 行为
+        
+        strict 模式下：
+        - watermark 只能前进，不能回退（monotonic）
+        - 遇到不可恢复错误时停止，不更新 watermark
+        """
+        # 正常前进：允许
+        validate_watermark_constraint(
+            watermark_before="2025-01-27T10:00:00Z",
+            watermark_after="2025-01-27T12:00:00Z",
+            update_watermark=True,  # strict 模式
+        )
+        
+        # 回退：禁止
+        with pytest.raises(WatermarkConstraintError):
+            validate_watermark_constraint(
+                watermark_before="2025-01-27T12:00:00Z",
+                watermark_after="2025-01-27T10:00:00Z",
+                update_watermark=True,  # strict 模式
+            )
+
+    def test_best_effort_mode_watermark_behavior(self):
+        """测试 best_effort 模式下的 watermark 行为
+        
+        best_effort 模式下：
+        - 不更新 watermark（update_watermark=False）
+        - 不检查回退约束
+        - 允许继续处理即使有错误
+        """
+        # best_effort 模式下，即使 watermark 回退也不报错
+        validate_watermark_constraint(
+            watermark_before="2025-01-27T12:00:00Z",
+            watermark_after="2025-01-27T08:00:00Z",
+            update_watermark=False,  # best_effort 模式
+        )
+
+    def test_chunk_payloads_reflect_watermark_strategy(self):
+        """测试所有 chunk 的 payload 都反映正确的 watermark 策略"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)  # 12 小时
+        
+        chunks = split_time_window(since, until, chunk_hours=4)
+        
+        # 生成 payloads（模拟 update_watermark=True 场景）
+        payloads = [
+            chunk.to_payload(update_watermark=True, watermark_constraint="monotonic")
+            for chunk in chunks
+        ]
+        
+        # 验证所有 payload 都包含正确的 watermark 策略
+        assert len(payloads) == 3
+        for payload in payloads:
+            assert payload["update_watermark"] is True
+            assert payload["watermark_constraint"] == "monotonic"
+
+    def test_revision_chunks_watermark_strategy(self):
+        """测试 revision chunk 的 watermark 策略"""
+        chunks = split_revision_window(1, 300, chunk_size=100)
+        
+        # update_watermark=False 场景
+        payloads_no_update = [
+            chunk.to_payload(update_watermark=False, watermark_constraint="none")
+            for chunk in chunks
+        ]
+        
+        for payload in payloads_no_update:
+            assert payload["update_watermark"] is False
+            assert payload["watermark_constraint"] == "none"
+        
+        # update_watermark=True 场景
+        payloads_with_update = [
+            chunk.to_payload(update_watermark=True, watermark_constraint="monotonic")
+            for chunk in chunks
+        ]
+        
+        for payload in payloads_with_update:
+            assert payload["update_watermark"] is True
+            assert payload["watermark_constraint"] == "monotonic"
+
+
+class TestBackfillMetadataContainsWatermarkInfo:
+    """测试回填 metadata 包含 watermark 信息"""
+
+    def test_time_chunks_metadata_structure(self):
+        """测试时间窗口回填 metadata 结构完整性"""
+        since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2025, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+        
+        chunks = split_time_window(since, until, chunk_hours=4)
+        
+        # 模拟 metadata 结构
+        update_watermark = True
+        watermark_constraint = "monotonic" if update_watermark else "none"
+        
+        chunk_payloads = [
+            chunk.to_payload(
+                update_watermark=update_watermark,
+                watermark_constraint=watermark_constraint,
+            )
+            for chunk in chunks
+        ]
+        
+        metadata = {
+            "window_type": "time",
+            "since_time": since.isoformat(),
+            "until_time": until.isoformat(),
+            "update_watermark": update_watermark,
+            "watermark_constraint": watermark_constraint,
+            "chunk_count": len(chunks),
+            "chunk_hours": 4,
+            "chunk_payloads": chunk_payloads,
+            "cursor_before": {
+                "since": since.isoformat(),
+                "window_type": "time",
+            },
+        }
+        
+        # 验证 metadata 包含所有必需字段
+        assert metadata["window_type"] == "time"
+        assert metadata["since_time"] == since.isoformat()
+        assert metadata["until_time"] == until.isoformat()
+        assert metadata["update_watermark"] is True
+        assert metadata["watermark_constraint"] == "monotonic"
+        assert metadata["chunk_count"] == 2
+        assert len(metadata["chunk_payloads"]) == 2
+        assert "cursor_before" in metadata
+
+    def test_revision_chunks_metadata_structure(self):
+        """测试 revision 窗口回填 metadata 结构完整性"""
+        start_rev = 100
+        end_rev = 300
+        
+        chunks = split_revision_window(start_rev, end_rev, chunk_size=100)
+        
+        # 模拟 metadata 结构
+        update_watermark = False
+        watermark_constraint = "none"
+        
+        chunk_payloads = [
+            chunk.to_payload(
+                update_watermark=update_watermark,
+                watermark_constraint=watermark_constraint,
+            )
+            for chunk in chunks
+        ]
+        
+        metadata = {
+            "window_type": "revision",
+            "start_rev": start_rev,
+            "end_rev": end_rev,
+            "update_watermark": update_watermark,
+            "watermark_constraint": watermark_constraint,
+            "chunk_count": len(chunks),
+            "chunk_revs": 100,
+            "chunk_payloads": chunk_payloads,
+            "cursor_before": {
+                "start_rev": start_rev,
+                "window_type": "revision",
+            },
+        }
+        
+        # 验证 metadata 包含所有必需字段
+        assert metadata["window_type"] == "revision"
+        assert metadata["start_rev"] == 100
+        assert metadata["end_rev"] == 300
+        assert metadata["update_watermark"] is False
+        assert metadata["watermark_constraint"] == "none"
+        assert metadata["chunk_count"] == 3
+        assert len(metadata["chunk_payloads"]) == 3
+        assert "cursor_before" in metadata
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

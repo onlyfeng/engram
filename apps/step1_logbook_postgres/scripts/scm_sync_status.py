@@ -50,7 +50,109 @@ from psycopg.rows import dict_row
 # 添加当前目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_conn
+from db import (
+    get_conn, 
+    load_circuit_breaker_state, 
+    build_circuit_breaker_key,
+    list_paused_repo_jobs,
+    PauseReasonCode,
+)
+
+# 尝试导入 key 规范化模块，若失败则使用内联实现（支持独立运行）
+try:
+    from engram_step1.scm_sync_keys import normalize_instance_key, extract_tenant_id
+except ImportError:
+    # 内联回退实现
+    from urllib.parse import urlparse as _urlparse
+    
+    def normalize_instance_key(url_or_host):
+        if not url_or_host:
+            return None
+        value = url_or_host.strip()
+        if not value:
+            return None
+        if "://" in value:
+            try:
+                parsed = _urlparse(value)
+                host = parsed.netloc or parsed.hostname or ""
+            except Exception:
+                host = value.split("://", 1)[-1].split("/", 1)[0]
+        else:
+            host = value.split("/", 1)[0]
+        host = host.lower()
+        if host.endswith(":80"):
+            host = host[:-3]
+        elif host.endswith(":443"):
+            host = host[:-4]
+        return host if host else None
+    
+    def extract_tenant_id(payload_json=None, project_key=None):
+        if payload_json and isinstance(payload_json, dict):
+            tenant_id = payload_json.get("tenant_id")
+            if tenant_id and isinstance(tenant_id, str) and tenant_id.strip():
+                return tenant_id.strip()
+        if project_key and isinstance(project_key, str):
+            project_key = project_key.strip()
+            if "/" in project_key:
+                tenant_part = project_key.split("/", 1)[0].strip()
+                if tenant_part:
+                    return tenant_part
+        return None
+
+# 尝试导入 redact 脱敏函数，若失败则使用内联实现
+try:
+    from engram_step1.scm_auth import redact, redact_dict
+except ImportError:
+    import re as _re
+    
+    # 内联回退实现
+    _SENSITIVE_PATTERNS = [
+        (_re.compile(r'\b(glp[a-z]{1,2}-[A-Za-z0-9_-]{10,})\b'), '[GITLAB_TOKEN]'),
+        (_re.compile(r'(Bearer\s+)[A-Za-z0-9_.\-=]+', _re.IGNORECASE), r'\1[TOKEN]'),
+        (_re.compile(r'(Authorization[:\s]+)(\S+\s+)?(\S+)', _re.IGNORECASE), r'\1[REDACTED]'),
+        (_re.compile(r'(PRIVATE-TOKEN[:\s]+)[^\s,;]+', _re.IGNORECASE), r'\1[REDACTED]'),
+        (_re.compile(r'(password[=:\s]+)[^\s&;,]+', _re.IGNORECASE), r'\1[REDACTED]'),
+        (_re.compile(r'(token[=:\s]+)[^\s&;,]+', _re.IGNORECASE), r'\1[REDACTED]'),
+        (_re.compile(r'(://[^:]+:)[^@]+(@)'), r'\1[REDACTED]\2'),
+    ]
+    _SENSITIVE_HEADERS = {
+        'authorization', 'private-token', 'x-private-token',
+        'x-gitlab-token', 'cookie', 'set-cookie',
+    }
+    
+    def redact(text):
+        if not text:
+            return ""
+        result = str(text)
+        for pattern, replacement in _SENSITIVE_PATTERNS:
+            result = pattern.sub(replacement, result)
+        return result
+    
+    def redact_dict(data, sensitive_keys=None, deep=True):
+        if not data:
+            return {}
+        all_sensitive_keys = _SENSITIVE_HEADERS.copy()
+        if sensitive_keys:
+            all_sensitive_keys.update(k.lower() for k in sensitive_keys)
+        result = {}
+        for key, value in data.items():
+            key_lower = key.lower() if isinstance(key, str) else str(key).lower()
+            if key_lower in all_sensitive_keys:
+                result[key] = "[REDACTED]"
+            elif isinstance(value, dict) and deep:
+                result[key] = redact_dict(value, sensitive_keys, deep)
+            elif isinstance(value, list) and deep:
+                result[key] = [
+                    redact_dict(item, sensitive_keys, deep) if isinstance(item, dict)
+                    else redact(item) if isinstance(item, str)
+                    else item
+                    for item in value
+                ]
+            elif isinstance(value, str):
+                result[key] = redact(value)
+            else:
+                result[key] = value
+        return result
 
 # ============ CLI 应用定义 ============
 
@@ -362,23 +464,26 @@ def get_sync_summary(
     top_lag_limit: int = 10,
 ) -> Dict[str, Any]:
     """
-    获取同步状态摘要
+    获取同步状态摘要（固定 schema）
     
     Args:
         conn: 数据库连接
-        window_minutes: 统计窗口分钟数（用于 failed_rate/rate_limit_rate）
+        window_minutes: 统计窗口分钟数（用于 error_budget 计算）
         top_lag_limit: 返回 lag 最大的仓库数量
     
     Returns:
-        包含以下字段的摘要字典:
+        包含以下固定字段的摘要字典（所有输出已脱敏）:
+        - circuit_breakers: 熔断器状态（按 scope 聚合）
+        - rate_limit_buckets: 限流桶状态（含 pause_until/source）
+        - error_budget: 错误预算统计（failure/429/timeout + samples）
+        - pauses_by_reason: 按原因聚合的暂停统计
         - repos_count: 仓库总数
         - repos_by_type: 按类型统计仓库
         - jobs: pending/running/failed/dead 计数
         - expired_locks: 过期锁数量
-        - window_stats: 最近窗口的 failed_rate/rate_limit_rate
         - by_instance: 每实例队列占用
         - by_tenant: 每租户队列占用
-        - top_lag_repos: lag 最大的仓库列表
+        - top_lag_repos: lag 最大的仓库列表（已脱敏）
     """
     summary: Dict[str, Any] = {}
     
@@ -445,13 +550,15 @@ def get_sync_summary(
         """)
         summary["cursors_count"] = cur.fetchone()[0]
         
-        # 最近窗口统计：failed_rate 和 rate_limit_rate
+        # ============ error_budget: 错误预算统计 ============
+        # 统计 failure/429/timeout 及样本数
         cur.execute("""
             WITH recent_runs AS (
                 SELECT 
                     run_id,
                     status,
-                    counts
+                    counts,
+                    error_summary_json
                 FROM scm.sync_runs 
                 WHERE started_at >= now() - interval '%s minutes'
             )
@@ -460,7 +567,8 @@ def get_sync_summary(
                 COUNT(*) FILTER (WHERE status = 'completed') as completed_runs,
                 COUNT(*) FILTER (WHERE status = 'failed') as failed_runs,
                 COALESCE(SUM((counts->>'total_429_hits')::int), 0) as total_429_hits,
-                COALESCE(SUM((counts->>'total_requests')::int), 0) as total_requests
+                COALESCE(SUM((counts->>'total_requests')::int), 0) as total_requests,
+                COALESCE(SUM((counts->>'timeout_count')::int), 0) as timeout_count
             FROM recent_runs
         """, (window_minutes,))
         window_row = cur.fetchone()
@@ -470,20 +578,43 @@ def get_sync_summary(
         failed_runs = window_row[2] or 0
         total_429_hits = window_row[3] or 0
         total_requests = window_row[4] or 0
+        timeout_count = window_row[5] or 0
         
         total_finished = completed_runs + failed_runs
-        failed_rate = round(failed_runs / total_finished, 4) if total_finished > 0 else 0.0
-        rate_limit_rate = round(total_429_hits / total_requests, 4) if total_requests > 0 else 0.0
+        failure_rate = round(failed_runs / total_finished, 4) if total_finished > 0 else 0.0
+        rate_429 = round(total_429_hits / total_requests, 4) if total_requests > 0 else 0.0
+        timeout_rate = round(timeout_count / total_requests, 4) if total_requests > 0 else 0.0
         
+        # 固定 schema: error_budget
+        summary["error_budget"] = {
+            "window_minutes": window_minutes,
+            "samples": total_runs,
+            "failure": {
+                "count": failed_runs,
+                "rate": failure_rate,
+            },
+            "rate_limit_429": {
+                "count": total_429_hits,
+                "rate": rate_429,
+            },
+            "timeout": {
+                "count": timeout_count,
+                "rate": timeout_rate,
+            },
+            "total_requests": total_requests,
+            "completed_runs": completed_runs,
+        }
+        
+        # 保留旧字段以兼容（标记为 deprecated）
         summary["window_stats"] = {
             "window_minutes": window_minutes,
             "total_runs": total_runs,
             "completed_runs": completed_runs,
             "failed_runs": failed_runs,
-            "failed_rate": failed_rate,
+            "failed_rate": failure_rate,
             "total_429_hits": total_429_hits,
             "total_requests": total_requests,
-            "rate_limit_rate": rate_limit_rate,
+            "rate_limit_rate": rate_429,
         }
         
         # 每实例/租户队列占用
@@ -504,20 +635,13 @@ def get_sync_summary(
         for row in cur.fetchall():
             status, url, project_key, repo_type = row
             
-            # 解析 gitlab_instance（仅 git 类型）
+            # 解析 gitlab_instance（仅 git 类型，使用统一的 key 规范化）
             gitlab_instance = None
-            if repo_type == "git" and url and "://" in url:
-                try:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(url)
-                    gitlab_instance = parsed.netloc
-                except Exception:
-                    pass
+            if repo_type == "git" and url:
+                gitlab_instance = normalize_instance_key(url)
             
-            # 解析 tenant_id
-            tenant_id = None
-            if project_key and "/" in project_key:
-                tenant_id = project_key.split("/")[0]
+            # 解析 tenant_id（使用统一的提取函数）
+            tenant_id = extract_tenant_id(project_key=project_key)
             
             # 按实例计数
             if gitlab_instance:
@@ -531,6 +655,7 @@ def get_sync_summary(
         summary["by_tenant"] = by_tenant
         
         # Top N lag 最大仓库（按最后同步时间排序，越久未同步的 lag 越大）
+        # 注意：URL 和 project_key 会被脱敏处理
         cur.execute("""
             WITH latest_runs AS (
                 SELECT DISTINCT ON (repo_id, job_type)
@@ -576,8 +701,8 @@ def get_sync_summary(
             top_lag_repos.append({
                 "repo_id": repo_id,
                 "repo_type": repo_type,
-                "url": url,
-                "project_key": project_key,
+                "url": redact(url) if url else None,  # 脱敏 URL
+                "project_key": redact(project_key) if project_key else None,  # 脱敏 project_key
                 "job_type": job_type,
                 "last_status": last_status,
                 "last_finished_at": format_datetime(last_finished_at),
@@ -585,6 +710,171 @@ def get_sync_summary(
             })
         
         summary["top_lag_repos"] = top_lag_repos
+        
+        # ============ circuit_breakers: 熔断器状态（按 scope 聚合） ============
+        cur.execute("""
+            SELECT key, value_json, updated_at
+            FROM logbook.kv
+            WHERE namespace = 'scm.sync_health'
+            ORDER BY key
+        """)
+        
+        circuit_breakers_by_scope: Dict[str, List[Dict[str, Any]]] = {}
+        circuit_breaker_states = []  # 保留旧格式以兼容
+        
+        for row in cur.fetchall():
+            key, value_json, updated_at = row
+            if isinstance(value_json, str):
+                import json as json_mod
+                value_json = json_mod.loads(value_json)
+            
+            # 解析 scope（从 key 格式 "cb:scope:instance" 提取）
+            # 例如: "cb:global:gitlab.com" -> scope="global"
+            parts = key.split(":", 2) if key else []
+            scope = parts[1] if len(parts) >= 2 else "unknown"
+            
+            cb_entry = {
+                "key": key,
+                "scope": scope,
+                "state": value_json.get("state", "unknown"),
+                "failure_count": value_json.get("failure_count", 0),
+                "success_count": value_json.get("success_count", 0),
+                "last_failure_time": value_json.get("last_failure_time"),
+                "updated_at": format_datetime(updated_at),
+            }
+            
+            # 按 scope 聚合
+            if scope not in circuit_breakers_by_scope:
+                circuit_breakers_by_scope[scope] = []
+            circuit_breakers_by_scope[scope].append(cb_entry)
+            
+            # 保留旧格式
+            circuit_breaker_states.append({
+                "key": key,
+                "state": value_json,
+                "updated_at": format_datetime(updated_at),
+            })
+        
+        # 固定 schema: circuit_breakers（按 scope 聚合统计）
+        summary["circuit_breakers"] = {
+            "by_scope": {
+                scope: {
+                    "count": len(entries),
+                    "open_count": sum(1 for e in entries if e["state"] == "open"),
+                    "half_open_count": sum(1 for e in entries if e["state"] == "half_open"),
+                    "closed_count": sum(1 for e in entries if e["state"] == "closed"),
+                    "total_failures": sum(e["failure_count"] for e in entries),
+                    "entries": entries,
+                }
+                for scope, entries in circuit_breakers_by_scope.items()
+            },
+            "total_count": len(circuit_breaker_states),
+            "total_open": sum(1 for cb in circuit_breaker_states if cb["state"].get("state") == "open"),
+        }
+        summary["circuit_breaker_states"] = circuit_breaker_states  # 旧字段，兼容
+        
+        # ============ rate_limit_buckets: 限流桶状态 ============
+        cur.execute("""
+            SELECT instance_key, tokens, updated_at, rate, burst,
+                   paused_until, meta_json
+            FROM scm.sync_rate_limits
+            ORDER BY instance_key
+        """)
+        
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        rate_limit_buckets = []
+        token_bucket_states = []  # 旧格式，兼容
+        
+        for row in cur.fetchall():
+            instance_key, tokens, updated_at, rate, burst, paused_until, meta_json = row
+            
+            # 计算当前实际令牌数
+            if updated_at.tzinfo is not None:
+                updated_at_naive = updated_at.replace(tzinfo=None)
+            else:
+                updated_at_naive = updated_at
+            
+            elapsed = (now - updated_at_naive).total_seconds()
+            current_tokens = min(burst, tokens + elapsed * rate)
+            
+            # 计算等待时间和暂停状态
+            is_paused = False
+            pause_remaining_seconds = 0.0
+            wait_seconds = 0.0
+            pause_source = None
+            
+            if paused_until:
+                if paused_until.tzinfo is not None:
+                    paused_until_naive = paused_until.replace(tzinfo=None)
+                else:
+                    paused_until_naive = paused_until
+                
+                if now < paused_until_naive:
+                    is_paused = True
+                    pause_remaining_seconds = (paused_until_naive - now).total_seconds()
+                    wait_seconds = pause_remaining_seconds
+                    # 从 meta_json 提取暂停原因（source）
+                    if meta_json and isinstance(meta_json, dict):
+                        pause_source = meta_json.get("pause_source") or meta_json.get("source")
+            
+            # 如果没有被暂停且令牌不足，计算需要等待的时间
+            if not is_paused and current_tokens < 1:
+                tokens_needed = 1 - current_tokens
+                wait_seconds = tokens_needed / rate if rate > 0 else 0
+            
+            # 固定 schema: rate_limit_buckets
+            rate_limit_buckets.append({
+                "instance_key": instance_key,
+                "tokens_remaining": round(current_tokens, 3),
+                "pause_until": format_datetime(paused_until) if paused_until else None,
+                "source": pause_source,  # 暂停原因来源
+                "is_paused": is_paused,
+                "pause_remaining_seconds": round(pause_remaining_seconds, 3),
+                "wait_seconds": round(wait_seconds, 3),
+                "rate": rate,
+                "burst": burst,
+            })
+            
+            # 旧格式，兼容
+            token_bucket_states.append({
+                "instance_key": instance_key,
+                "tokens_remaining": round(current_tokens, 3),
+                "paused_until": format_datetime(paused_until) if paused_until else None,
+                "wait_seconds": round(wait_seconds, 3),
+                "is_paused": is_paused,
+                "pause_remaining_seconds": round(pause_remaining_seconds, 3),
+                "rate": rate,
+                "burst": burst,
+                "meta_json": redact_dict(meta_json) if meta_json else None,  # 脱敏 meta
+            })
+        
+        summary["rate_limit_buckets"] = rate_limit_buckets
+        summary["token_bucket_states"] = token_bucket_states  # 旧字段，兼容
+        
+        # ============ pauses_by_reason: 按原因聚合暂停统计 ============
+        paused_records = list_paused_repo_jobs(conn, include_expired=False)
+        
+        # 按 reason_code 聚合
+        pauses_by_reason: Dict[str, int] = {}
+        for record in paused_records:
+            reason_code = record.reason_code or "unknown"
+            pauses_by_reason[reason_code] = pauses_by_reason.get(reason_code, 0) + 1
+        
+        # 固定 schema: pauses_by_reason
+        summary["pauses_by_reason"] = pauses_by_reason
+        summary["paused_repos_count"] = len(paused_records)
+        summary["paused_by_reason"] = pauses_by_reason  # 旧字段，兼容
+        
+        # 暂停记录详情（仅包含非敏感信息，已脱敏）
+        paused_details = []
+        for record in paused_records[:50]:  # 限制最多 50 条
+            paused_details.append({
+                "repo_id": record.repo_id,
+                "job_type": record.job_type,
+                "reason_code": record.reason_code or "unknown",
+                "remaining_seconds": int(record.remaining_seconds()),
+            })
+        summary["paused_details"] = paused_details
     
     return summary
 
@@ -741,6 +1031,167 @@ def format_prometheus_metrics(summary: Dict[str, Any]) -> str:
                 job_type = repo.get("job_type", "") or ""
                 lines.append(f'scm_repo_lag_seconds{{repo_id="{repo_id}",repo_type="{repo_type}",job_type="{job_type}"}} {lag}')
     
+    # ============ error_budget 指标 ============
+    error_budget = summary.get("error_budget", {})
+    if error_budget:
+        window_min = error_budget.get("window_minutes", 60)
+        
+        lines.extend(metric_line(
+            "scm_error_budget_samples",
+            error_budget.get("samples", 0),
+            labels={"window_minutes": str(window_min)},
+            help_text="Total samples in error budget window",
+        ))
+        
+        failure = error_budget.get("failure", {})
+        lines.extend(metric_line(
+            "scm_error_budget_failure_count",
+            failure.get("count", 0),
+            labels={"window_minutes": str(window_min)},
+            help_text="Failure count in error budget window",
+        ))
+        lines.extend(metric_line(
+            "scm_error_budget_failure_rate",
+            failure.get("rate", 0),
+            labels={"window_minutes": str(window_min)},
+            help_text="Failure rate in error budget window",
+        ))
+        
+        rate_429 = error_budget.get("rate_limit_429", {})
+        lines.extend(metric_line(
+            "scm_error_budget_429_count",
+            rate_429.get("count", 0),
+            labels={"window_minutes": str(window_min)},
+            help_text="429 rate limit hits in error budget window",
+        ))
+        lines.extend(metric_line(
+            "scm_error_budget_429_rate",
+            rate_429.get("rate", 0),
+            labels={"window_minutes": str(window_min)},
+            help_text="429 rate in error budget window",
+        ))
+        
+        timeout = error_budget.get("timeout", {})
+        lines.extend(metric_line(
+            "scm_error_budget_timeout_count",
+            timeout.get("count", 0),
+            labels={"window_minutes": str(window_min)},
+            help_text="Timeout count in error budget window",
+        ))
+        lines.extend(metric_line(
+            "scm_error_budget_timeout_rate",
+            timeout.get("rate", 0),
+            labels={"window_minutes": str(window_min)},
+            help_text="Timeout rate in error budget window",
+        ))
+    
+    # ============ circuit_breakers 指标（按 scope 聚合） ============
+    circuit_breakers = summary.get("circuit_breakers", {})
+    by_scope = circuit_breakers.get("by_scope", {})
+    if by_scope:
+        lines.append("# HELP scm_circuit_breakers_by_scope Circuit breaker counts by scope")
+        lines.append("# TYPE scm_circuit_breakers_by_scope gauge")
+        for scope, data in by_scope.items():
+            lines.append(f'scm_circuit_breakers_by_scope{{scope="{scope}",state="open"}} {data.get("open_count", 0)}')
+            lines.append(f'scm_circuit_breakers_by_scope{{scope="{scope}",state="half_open"}} {data.get("half_open_count", 0)}')
+            lines.append(f'scm_circuit_breakers_by_scope{{scope="{scope}",state="closed"}} {data.get("closed_count", 0)}')
+        
+        lines.append("# HELP scm_circuit_breakers_total_failures Total failures by scope")
+        lines.append("# TYPE scm_circuit_breakers_total_failures gauge")
+        for scope, data in by_scope.items():
+            lines.append(f'scm_circuit_breakers_total_failures{{scope="{scope}"}} {data.get("total_failures", 0)}')
+    
+    # 兼容旧指标格式
+    circuit_breaker_states = summary.get("circuit_breaker_states", [])
+    if circuit_breaker_states:
+        lines.append("# HELP scm_circuit_breaker_state Circuit breaker state (0=closed, 1=open, 2=half_open)")
+        lines.append("# TYPE scm_circuit_breaker_state gauge")
+        lines.append("# HELP scm_circuit_breaker_failure_count Circuit breaker failure count")
+        lines.append("# TYPE scm_circuit_breaker_failure_count gauge")
+        lines.append("# HELP scm_circuit_breaker_success_count Circuit breaker success count")
+        lines.append("# TYPE scm_circuit_breaker_success_count gauge")
+        
+        state_map = {"closed": 0, "open": 1, "half_open": 2}
+        
+        for cb in circuit_breaker_states:
+            key = cb.get("key", "")
+            state = cb.get("state", {})
+            cb_state = state.get("state", "closed")
+            failure_count = state.get("failure_count", 0)
+            success_count = state.get("success_count", 0)
+            
+            state_value = state_map.get(cb_state, 0)
+            lines.append(f'scm_circuit_breaker_state{{key="{key}"}} {state_value}')
+            lines.append(f'scm_circuit_breaker_failure_count{{key="{key}"}} {failure_count}')
+            lines.append(f'scm_circuit_breaker_success_count{{key="{key}"}} {success_count}')
+    
+    # ============ rate_limit_buckets 指标 ============
+    rate_limit_buckets = summary.get("rate_limit_buckets", [])
+    if rate_limit_buckets:
+        lines.append("# HELP scm_rate_limit_bucket_tokens Remaining tokens in the rate limiter bucket")
+        lines.append("# TYPE scm_rate_limit_bucket_tokens gauge")
+        lines.append("# HELP scm_rate_limit_bucket_paused Whether the bucket is paused (0=no, 1=yes)")
+        lines.append("# TYPE scm_rate_limit_bucket_paused gauge")
+        lines.append("# HELP scm_rate_limit_bucket_pause_seconds Remaining pause time in seconds")
+        lines.append("# TYPE scm_rate_limit_bucket_pause_seconds gauge")
+        
+        for bucket in rate_limit_buckets:
+            instance_key = bucket.get("instance_key", "")
+            tokens_remaining = bucket.get("tokens_remaining", 0)
+            is_paused = 1 if bucket.get("is_paused", False) else 0
+            pause_remaining = bucket.get("pause_remaining_seconds", 0)
+            source = bucket.get("source") or ""
+            
+            lines.append(f'scm_rate_limit_bucket_tokens{{instance_key="{instance_key}"}} {tokens_remaining}')
+            lines.append(f'scm_rate_limit_bucket_paused{{instance_key="{instance_key}",source="{source}"}} {is_paused}')
+            lines.append(f'scm_rate_limit_bucket_pause_seconds{{instance_key="{instance_key}"}} {pause_remaining}')
+    
+    # 兼容旧指标格式
+    token_bucket_states = summary.get("token_bucket_states", [])
+    if token_bucket_states:
+        lines.append("# HELP scm_token_bucket_tokens_remaining Remaining tokens in the rate limiter bucket")
+        lines.append("# TYPE scm_token_bucket_tokens_remaining gauge")
+        lines.append("# HELP scm_token_bucket_wait_seconds Seconds to wait before next request is allowed")
+        lines.append("# TYPE scm_token_bucket_wait_seconds gauge")
+        lines.append("# HELP scm_token_bucket_is_paused Whether the token bucket is paused (0=no, 1=yes)")
+        lines.append("# TYPE scm_token_bucket_is_paused gauge")
+        lines.append("# HELP scm_token_bucket_pause_remaining_seconds Remaining pause time in seconds")
+        lines.append("# TYPE scm_token_bucket_pause_remaining_seconds gauge")
+        
+        for tb in token_bucket_states:
+            instance_key = tb.get("instance_key", "")
+            tokens_remaining = tb.get("tokens_remaining", 0)
+            wait_seconds = tb.get("wait_seconds", 0)
+            is_paused = 1 if tb.get("is_paused", False) else 0
+            pause_remaining = tb.get("pause_remaining_seconds", 0)
+            
+            lines.append(f'scm_token_bucket_tokens_remaining{{instance_key="{instance_key}"}} {tokens_remaining}')
+            lines.append(f'scm_token_bucket_wait_seconds{{instance_key="{instance_key}"}} {wait_seconds}')
+            lines.append(f'scm_token_bucket_is_paused{{instance_key="{instance_key}"}} {is_paused}')
+            lines.append(f'scm_token_bucket_pause_remaining_seconds{{instance_key="{instance_key}"}} {pause_remaining}')
+    
+    # ============ pauses_by_reason 指标 ============
+    paused_repos_count = summary.get("paused_repos_count", 0)
+    lines.extend(metric_line(
+        "scm_paused_repos_total",
+        paused_repos_count,
+        help_text="Total number of paused repo/job_type pairs",
+    ))
+    
+    # 使用新字段名 pauses_by_reason（同时兼容旧字段名）
+    pauses_by_reason = summary.get("pauses_by_reason") or summary.get("paused_by_reason", {})
+    if pauses_by_reason:
+        lines.append("# HELP scm_pauses_by_reason Number of paused repo/job_type by reason code")
+        lines.append("# TYPE scm_pauses_by_reason gauge")
+        for reason_code, count in pauses_by_reason.items():
+            lines.append(f'scm_pauses_by_reason{{reason_code="{reason_code}"}} {count}')
+        
+        # 兼容旧指标名
+        lines.append("# HELP scm_paused_by_reason Number of paused repo/job_type by reason code (deprecated)")
+        lines.append("# TYPE scm_paused_by_reason gauge")
+        for reason_code, count in pauses_by_reason.items():
+            lines.append(f'scm_paused_by_reason{{reason_code="{reason_code}"}} {count}')
+    
     return "\n".join(lines) + "\n"
 
 
@@ -842,6 +1293,40 @@ def cmd_summary(
                 print(f"\n最近 24 小时同步运行:")
                 for status, count in summary.get('runs_24h_by_status', {}).items():
                     print(f"  - {status}: {count}")
+                
+                # 熔断器状态
+                circuit_breaker_states = summary.get('circuit_breaker_states', [])
+                if circuit_breaker_states:
+                    print(f"\n熔断器状态:")
+                    for cb in circuit_breaker_states:
+                        key = cb.get('key', '')
+                        state = cb.get('state', {})
+                        cb_state = state.get('state', 'unknown')
+                        failure_count = state.get('failure_count', 0)
+                        success_count = state.get('success_count', 0)
+                        print(f"  - {key}: state={cb_state}, failures={failure_count}, successes={success_count}")
+                
+                # 令牌桶状态
+                token_bucket_states = summary.get('token_bucket_states', [])
+                if token_bucket_states:
+                    print(f"\n令牌桶状态:")
+                    for tb in token_bucket_states:
+                        instance_key = tb.get('instance_key', '')
+                        tokens = tb.get('tokens_remaining', 0)
+                        is_paused = tb.get('is_paused', False)
+                        wait_s = tb.get('wait_seconds', 0)
+                        pause_s = tb.get('pause_remaining_seconds', 0)
+                        status_str = f"PAUSED({pause_s:.1f}s)" if is_paused else f"OK"
+                        print(f"  - {instance_key}: tokens={tokens:.1f}, status={status_str}, wait={wait_s:.1f}s")
+                
+                # 暂停统计（按 reason_code 聚合）
+                paused_count = summary.get('paused_repos_count', 0)
+                paused_by_reason = summary.get('paused_by_reason', {})
+                if paused_count > 0 or paused_by_reason:
+                    print(f"\n暂停统计 (按原因聚合):")
+                    print(f"  - 总暂停数: {paused_count}")
+                    for reason_code, count in sorted(paused_by_reason.items(), key=lambda x: -x[1]):
+                        print(f"  - {reason_code}: {count}")
             else:
                 output_json(make_ok_result(data=summary), pretty=pretty)
         finally:

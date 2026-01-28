@@ -636,6 +636,174 @@ def create_gitlab_token_provider(
         return EnvTokenProvider("GITLAB_TOKEN", DEFAULT_MIN_REFRESH_INTERVAL)
 
 
+def _normalize_instance_key_for_config(instance_key: str) -> str:
+    """
+    规范化 instance_key（用于配置键查找）
+    
+    将点号、冒号等特殊字符替换为下划线，便于作为配置键使用。
+    
+    Args:
+        instance_key: 原始 instance key (如 gitlab.example.com:8080)
+        
+    Returns:
+        规范化的 key (如 gitlab_example_com_8080)
+        
+    Note:
+        此函数是内部使用的配置键规范化函数。
+        对于外部使用，请使用 engram_step1.scm_sync_keys.normalize_instance_key
+    """
+    if not instance_key:
+        return ""
+    # 替换常见分隔符为下划线
+    result = instance_key.replace(".", "_").replace(":", "_").replace("-", "_")
+    # 移除多余的下划线
+    while "__" in result:
+        result = result.replace("__", "_")
+    return result.strip("_").lower()
+
+
+# 重新导出 normalize_instance_key 以保持 API 兼容性
+def normalize_instance_key(instance_key: str) -> str:
+    """
+    规范化 instance_key（用于配置键查找）
+    
+    将点号、冒号等特殊字符替换为下划线，便于作为配置键使用。
+    
+    Args:
+        instance_key: 原始 instance key (如 gitlab.example.com:8080)
+        
+    Returns:
+        规范化的 key (如 gitlab_example_com_8080)
+    """
+    return _normalize_instance_key_for_config(instance_key)
+
+
+def create_token_provider_for_instance(
+    instance_key: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    payload_token: Optional[str] = None,
+    config=None,
+) -> TokenProvider:
+    """
+    按 instance_key/tenant_id 选择 token 的工厂方法
+    
+    优先级: payload 指定 > config 映射 > env 默认
+    
+    Config 映射格式示例:
+        # 按 GitLab 实例配置 token
+        [scm.gitlab.instances.gitlab_example_com]
+        token = "glpat-xxx"
+        # 或使用环境变量
+        token_env = "GITLAB_EXAMPLE_TOKEN"
+        # 或使用文件
+        token_file = "/path/to/token"
+        
+        # 按租户配置 token
+        [scm.gitlab.tenants.tenant1]
+        token = "glpat-yyy"
+        token_env = "TENANT1_GITLAB_TOKEN"
+    
+    Args:
+        instance_key: GitLab 实例的 key (如 gitlab.example.com)
+        tenant_id: 租户 ID
+        payload_token: payload 中直接指定的 token（优先级最高）
+        config: Config 实例
+        
+    Returns:
+        TokenProvider 实例
+        
+    Example:
+        # 优先使用 payload token
+        provider = create_token_provider_for_instance(
+            instance_key="gitlab.example.com",
+            payload_token="glpat-xxx",  # 最高优先级
+        )
+        
+        # 从配置读取特定实例的 token
+        provider = create_token_provider_for_instance(
+            instance_key="gitlab.example.com",
+            config=cfg,
+        )
+        
+        # 从配置读取特定租户的 token
+        provider = create_token_provider_for_instance(
+            tenant_id="tenant-a",
+            config=cfg,
+        )
+    """
+    # 1. 优先使用 payload 指定的 token
+    if payload_token:
+        logger.debug(f"使用 payload 指定的 token: {mask_token(payload_token)}")
+        return StaticTokenProvider(payload_token)
+    
+    # 2. 从配置中按 instance_key 或 tenant_id 查找
+    if config:
+        # 2a. 按 instance_key 查找
+        if instance_key:
+            normalized_key = _normalize_instance_key_for_config(instance_key)
+            # 尝试多种配置键格式
+            config_prefixes = [
+                f"scm.gitlab.instances.{normalized_key}",
+                f"scm.gitlab.instances.{instance_key}",  # 原始 key
+            ]
+            
+            for prefix in config_prefixes:
+                provider = _try_create_provider_from_config(config, prefix)
+                if provider:
+                    logger.debug(f"使用配置 [{prefix}] 的 token")
+                    return provider
+        
+        # 2b. 按 tenant_id 查找
+        if tenant_id:
+            prefix = f"scm.gitlab.tenants.{tenant_id}"
+            provider = _try_create_provider_from_config(config, prefix)
+            if provider:
+                logger.debug(f"使用配置 [{prefix}] 的 token")
+                return provider
+    
+    # 3. 回退到默认的 create_gitlab_token_provider
+    logger.debug(
+        f"未找到 instance_key={instance_key} / tenant_id={tenant_id} 的专用配置，"
+        "使用默认 token provider"
+    )
+    return create_gitlab_token_provider(config)
+
+
+def _try_create_provider_from_config(config, prefix: str) -> Optional[TokenProvider]:
+    """
+    尝试从配置前缀创建 TokenProvider
+    
+    Args:
+        config: Config 实例
+        prefix: 配置键前缀 (如 scm.gitlab.instances.gitlab_example_com)
+        
+    Returns:
+        TokenProvider 实例，如果配置不存在则返回 None
+    """
+    # 检查是否有该配置块
+    token = config.get(f"{prefix}.token")
+    if token:
+        return StaticTokenProvider(token)
+    
+    token_env = config.get(f"{prefix}.token_env")
+    if token_env:
+        min_interval = config.get(f"{prefix}.token_refresh_interval", DEFAULT_MIN_REFRESH_INTERVAL)
+        return EnvTokenProvider(token_env, min_interval)
+    
+    token_file = config.get(f"{prefix}.token_file")
+    if token_file:
+        min_interval = config.get(f"{prefix}.token_refresh_interval", DEFAULT_MIN_REFRESH_INTERVAL)
+        return FileTokenProvider(token_file, min_interval)
+    
+    token_exec = config.get(f"{prefix}.token_exec")
+    if token_exec:
+        min_interval = config.get(f"{prefix}.token_refresh_interval", DEFAULT_MIN_REFRESH_INTERVAL)
+        timeout = config.get(f"{prefix}.token_exec_timeout", DEFAULT_EXEC_TIMEOUT)
+        return ExecTokenProvider(token_exec, min_interval, timeout)
+    
+    return None
+
+
 class GitLabAuthenticatedSession:
     """
     GitLab 认证会话封装

@@ -73,6 +73,9 @@ class ErrorCode:
     OUTBOX_FLUSH_DB_TIMEOUT = "outbox_flush_db_timeout"
     OUTBOX_FLUSH_DB_ERROR = "outbox_flush_db_error"
     
+    # Outbox 对账相关
+    OUTBOX_STALE = "outbox_stale"
+    
     # -------------------------------------------------------------------------
     # Actor 用户相关错误码
     # -------------------------------------------------------------------------
