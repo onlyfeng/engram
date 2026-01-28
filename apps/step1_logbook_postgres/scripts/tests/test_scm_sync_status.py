@@ -1482,3 +1482,235 @@ class TestNoSensitiveInfoLeakage:
         
         # 验证只包含标准化的 reason_code 标签
         assert f'reason_code="{PauseReasonCode.ERROR_BUDGET}"' in prom_output
+
+
+# ============ 指标名与标签稳定性测试 ============
+
+
+class TestPrometheusMetricLabelsStability:
+    """
+    验证 Prometheus 指标名与标签稳定性，确保只使用规范化的标签
+    （instance_key/tenant_id/job_type），且不包含敏感信息
+    """
+
+    def test_jobs_by_status_labels_are_normalized(self, db_conn):
+        """验证 scm_jobs_by_status 指标的标签已规范化"""
+        # 创建包含敏感 URL 的仓库和任务
+        sensitive_url = "https://user:glpat-secrettoken123@private.gitlab.com/secret/repo.git"
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url=sensitive_url,
+            project_key="secret_tenant/secret_project",
+        )
+        enqueue_sync_job(db_conn, repo_id, "gitlab_commits", priority=50)
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证敏感信息不在输出中
+        assert "glpat-secrettoken123" not in prom_output
+        assert "secret_project" not in prom_output
+        # 用户凭证不应出现
+        assert "user:glpat" not in prom_output
+        
+        # 验证 instance_key 已规范化为 hostname
+        assert 'instance_key="private.gitlab.com"' in prom_output or 'instance_key="_unknown_"' in prom_output
+        
+        # 验证 tenant_id 是从 project_key 中提取的（首段）
+        assert 'tenant_id="secret_tenant"' in prom_output or 'tenant_id="_unknown_"' in prom_output
+
+    def test_breaker_state_uses_normalized_instance_key(self, db_conn):
+        """验证 scm_breaker_state 指标使用规范化的 instance_key（无敏感信息）"""
+        # 创建包含敏感信息的熔断器 key
+        # key 格式: "cb:scope:instance_key"
+        cb_key = "cb:global:https://user:password@secret.gitlab.corp/api/v4"
+        cb_state = {
+            "state": "open",
+            "failure_count": 10,
+            "success_count": 5,
+        }
+        save_circuit_breaker_state(db_conn, cb_key, cb_state)
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证新指标存在
+        assert "scm_breaker_state{instance_key=" in prom_output
+        
+        # 验证敏感信息不在 scm_breaker_state 指标中
+        lines = [line for line in prom_output.split('\n') if line.startswith('scm_breaker_')]
+        for line in lines:
+            assert "password" not in line
+            assert "user:" not in line
+            # instance_key 应该是规范化后的 hostname
+            assert "secret.gitlab.corp" in line or "_unknown_" in line
+
+    def test_rate_limit_labels_use_only_instance_key(self, db_conn):
+        """验证限流相关指标只使用 instance_key 标签"""
+        instance_key = "rate-limit-label-test.example.com"
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, paused_until, updated_at, meta_json)
+                VALUES (%s, %s, %s, %s, now() + interval '30 minutes', now(), %s)
+                ON CONFLICT (instance_key) DO UPDATE
+                SET paused_until = EXCLUDED.paused_until,
+                    updated_at = EXCLUDED.updated_at
+            """, (instance_key, 5.0, 10.0, 20, '{"sensitive_key": "should_not_appear"}'))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 验证指标存在
+        assert "scm_rate_limit_bucket_tokens" in prom_output
+        assert "scm_rate_limit_pause_until" in prom_output
+        
+        # 验证 meta_json 中的敏感数据不在指标标签中
+        rate_limit_lines = [line for line in prom_output.split('\n') if 'rate_limit' in line]
+        for line in rate_limit_lines:
+            assert "sensitive_key" not in line
+            assert "should_not_appear" not in line
+
+    def test_retry_backoff_labels_are_complete(self, db_conn):
+        """验证 scm_retry_backoff_seconds 指标包含完整的标签集"""
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://gitlab.example.org/label_test/project.git",
+            project_key="label_test/project",
+        )
+        
+        # 创建一个有 backoff 的任务
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_jobs (repo_id, job_type, status, priority, not_before)
+                VALUES (%s, %s, %s, %s, now() + interval '10 minutes')
+            """, (repo_id, "gitlab_mrs", "failed", 50))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 查找 retry_backoff 指标行
+        import re
+        backoff_lines = [line for line in prom_output.split('\n') 
+                        if line.startswith('scm_retry_backoff_seconds{')]
+        
+        if backoff_lines:
+            # 验证标签完整性
+            for line in backoff_lines:
+                assert 'instance_key=' in line
+                assert 'tenant_id=' in line
+                assert 'job_type=' in line
+                # 验证标签值被正确引用
+                assert re.search(r'instance_key="[^"]*"', line)
+                assert re.search(r'tenant_id="[^"]*"', line)
+                assert re.search(r'job_type="[^"]*"', line)
+
+    def test_all_prometheus_labels_are_allowed(self, db_conn):
+        """验证所有 Prometheus 指标只使用允许的标签集"""
+        # 创建测试数据
+        repo_id = upsert_repo(
+            db_conn,
+            repo_type="git",
+            url="https://gitlab.test.com/allowed/project.git",
+            project_key="allowed/project",
+        )
+        enqueue_sync_job(db_conn, repo_id, "gitlab_commits")
+        
+        cb_key = build_circuit_breaker_key("allowed-test.com", "global")
+        save_circuit_breaker_state(db_conn, cb_key, {"state": "closed", "failure_count": 0})
+        
+        with db_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scm.sync_rate_limits 
+                    (instance_key, tokens, rate, burst, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (instance_key) DO NOTHING
+            """, ("allowed-instance.com", 10.0, 5.0, 20))
+        
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 允许的标签集（用于新指标）
+        allowed_labels = {
+            "instance_key", "tenant_id", "job_type", "status",
+            "repo_type", "repo_id", "reason_code", "source",
+            "scope", "state", "window_minutes",
+            # 兼容旧指标的标签
+            "key", "instance", "tenant",
+        }
+        
+        import re
+        # 提取所有标签名
+        label_pattern = re.compile(r'(\w+)="[^"]*"')
+        found_labels = set()
+        
+        for line in prom_output.split('\n'):
+            if line.startswith('scm_') and '{' in line:
+                matches = label_pattern.findall(line)
+                found_labels.update(matches)
+        
+        # 验证所有标签都在允许列表中
+        unexpected_labels = found_labels - allowed_labels
+        assert not unexpected_labels, f"发现未允许的标签: {unexpected_labels}"
+
+    def test_prometheus_metric_names_are_stable(self, db_conn):
+        """验证关键 Prometheus 指标名稳定不变"""
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from scm_sync_status import get_sync_summary, format_prometheus_metrics
+        
+        summary = get_sync_summary(db_conn)
+        prom_output = format_prometheus_metrics(summary)
+        
+        # 定义必须存在的稳定指标名列表
+        required_metric_names = [
+            # 基础指标
+            "scm_repos_total",
+            "scm_repos_by_type",
+            "scm_jobs_total",
+            "scm_expired_locks",
+            "scm_cursors_total",
+            # 新增关键指标
+            "scm_jobs_by_status",
+            "scm_breaker_state",
+            "scm_breaker_failure_count",
+            "scm_breaker_success_count",
+            "scm_rate_limit_pause_until",
+            # error_budget 指标
+            "scm_error_budget_samples",
+            "scm_error_budget_failure_rate",
+            # 暂停相关指标
+            "scm_paused_repos_total",
+            "scm_pauses_by_reason",
+        ]
+        
+        for metric_name in required_metric_names:
+            assert metric_name in prom_output, f"缺少稳定指标: {metric_name}"
