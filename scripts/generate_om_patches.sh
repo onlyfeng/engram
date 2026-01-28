@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
+# ==============================================================================
 # OpenMemory 补丁生成与管理脚本
-# 用法: ./scripts/generate_om_patches.sh [generate|apply|verify|bundle-hash|backfill]
+# ==============================================================================
+#
+# 用法: ./scripts/generate_om_patches.sh [generate|apply|verify|verify-apply-dry-run|bundle-hash|backfill]
+#
+# ==============================================================================
+# 路径 B 策略说明 (2026-01 更新)
+# ==============================================================================
+# 
+# 当前项目采用"路径 B（不强制 patch 文件）"策略：
+#
+# 1. patch 文件的生成是可选的，用于记录和审计目的
+# 2. CI/Nightly 默认不强制要求 patch 文件存在（OPENMEMORY_PATCH_FILES_REQUIRED=0）
+# 3. 严格校验仅在以下场景启用：
+#    - upstream_ref 变更时（CI 自动启用）
+#    - release 分支准备时（手动触发）
+#    - 明确需要 patch 审计时
+#
+# patch 文件生成前提条件：
+#   - 需要上游基线文件: archives/openmemory-base-<version>/
+#   - 运行: ./scripts/generate_om_patches.sh generate v1.3.0
+#
+# ==============================================================================
 
 set -euo pipefail
 
@@ -73,19 +95,20 @@ generate_patch() {
 }
 
 # 应用单个补丁
-# 用法: apply_patch <target_file> <patch_file>
+# 用法: apply_patch <patch_file>
+# 注意: 生成的 patch 使用 a/b 前缀格式，需使用 -p1 应用
+#       必须在项目根目录 (PROJECT_ROOT) 执行
 apply_patch() {
-    local target_file="$1"
-    local patch_file="$2"
+    local patch_file="$1"
 
     if [[ ! -f "$patch_file" ]]; then
         log_error "补丁文件不存在: $patch_file"
         return 1
     fi
 
-    # 先尝试 dry-run
-    if patch --dry-run -p0 < "$patch_file" &> /dev/null; then
-        patch -p0 < "$patch_file"
+    # 先尝试 dry-run (-p1 匹配生成规则中的 a/b 前缀)
+    if patch --dry-run -p1 -d "$PROJECT_ROOT" < "$patch_file" &> /dev/null; then
+        patch -p1 -d "$PROJECT_ROOT" < "$patch_file"
         log_info "已应用补丁: $patch_file"
     else
         log_error "补丁无法应用 (可能已应用或冲突): $patch_file"
@@ -197,12 +220,58 @@ apply_all_patches() {
         local category_dir="$PATCHES_DIR/$category"
         if [[ -d "$category_dir" ]]; then
             for patch_file in $(find "$category_dir" -name "*.patch" -type f | sort); do
-                apply_patch "" "$patch_file" || true
+                apply_patch "$patch_file" || true
             done
         fi
     done
 
     log_info "补丁应用完成"
+}
+
+# 验证所有补丁的 dry-run 应用
+# 对每个 patch 文件执行 patch --dry-run -p1，汇总失败列表
+verify_apply_dry_run() {
+    log_info "验证所有补丁 dry-run 应用..."
+    
+    local failed_patches=()
+    local success_count=0
+    local total_count=0
+
+    for category in A B C COMBINED; do
+        local category_dir="$PATCHES_DIR/$category"
+        if [[ -d "$category_dir" ]]; then
+            while IFS= read -r -d '' patch_file; do
+                ((total_count++))
+                if patch --dry-run -p1 -d "$PROJECT_ROOT" < "$patch_file" &> /dev/null; then
+                    ((success_count++))
+                    log_info "[OK] $(basename "$patch_file")"
+                else
+                    failed_patches+=("$patch_file")
+                    log_error "[FAIL] $(basename "$patch_file")"
+                fi
+            done < <(find "$category_dir" -maxdepth 1 -name "*.patch" -type f -print0 2>/dev/null | sort -z)
+        fi
+    done
+
+    echo ""
+    log_info "========== Dry-run 验证结果 =========="
+    log_info "总计: $total_count 个补丁"
+    log_info "成功: $success_count 个"
+    log_info "失败: ${#failed_patches[@]} 个"
+
+    if [[ ${#failed_patches[@]} -gt 0 ]]; then
+        echo ""
+        log_error "失败的补丁列表:"
+        for pf in "${failed_patches[@]}"; do
+            echo "  - $pf"
+        done
+        echo ""
+        log_warn "提示: 可使用 'patch --dry-run -p1 < <patch_file>' 查看详细错误"
+        return 1
+    else
+        log_info "所有补丁均可成功应用"
+        return 0
+    fi
 }
 
 # 回填补丁 SHA256 到 openmemory_patches.json
@@ -283,6 +352,9 @@ main() {
         verify)
             verify_patches
             ;;
+        verify-apply-dry-run)
+            verify_apply_dry_run
+            ;;
         bundle-hash)
             compute_bundle_hash
             ;;
@@ -295,17 +367,29 @@ main() {
             echo "用法: $0 <command> [options]"
             echo ""
             echo "命令:"
-            echo "  generate [version]  从 base 快照生成所有补丁 (默认: v1.3.0)"
-            echo "  apply               应用所有补丁"
-            echo "  verify              验证补丁文件 SHA256"
-            echo "  bundle-hash         计算所有补丁的联合 SHA256"
-            echo "  backfill            回填补丁 SHA256 到 openmemory_patches.json"
-            echo "  help                显示此帮助信息"
+            echo "  generate [version]    从 base 快照生成所有补丁 (默认: v1.3.0)"
+            echo "  apply                 应用所有补丁到当前工作目录"
+            echo "  verify                验证补丁文件 SHA256"
+            echo "  verify-apply-dry-run  对所有补丁执行 dry-run 验证，汇总失败列表"
+            echo "  bundle-hash           计算所有补丁的联合 SHA256"
+            echo "  backfill              回填补丁 SHA256 到 openmemory_patches.json"
+            echo "  help                  显示此帮助信息"
             echo ""
             echo "示例:"
-            echo "  $0 generate v1.3.0  # 基于 v1.3.0 生成补丁"
-            echo "  $0 verify           # 验证补丁完整性"
-            echo "  $0 backfill         # 回填现有 patch 文件的 SHA256"
+            echo "  $0 generate v1.3.0       # 基于 v1.3.0 生成补丁"
+            echo "  $0 verify                # 验证补丁完整性"
+            echo "  $0 verify-apply-dry-run  # dry-run 检查所有补丁是否可应用"
+            echo "  $0 backfill              # 回填现有 patch 文件的 SHA256"
+            echo ""
+            echo "应用补丁说明:"
+            echo "  apply 命令将按顺序应用 A -> B -> C 类别的补丁"
+            echo "  生成的补丁使用 a/b 前缀格式，必须使用 patch -p1 应用"
+            echo "  示例: cd <project_root> && patch -p1 < patches/openmemory/A/migrate-001-db-name-validation.patch"
+            echo ""
+            echo "路径 B 策略说明 (2026-01):"
+            echo "  当前项目采用非强制 patch 文件策略，patch 文件用于审计和记录目的"
+            echo "  CI 默认不强制要求 patch 文件存在 (OPENMEMORY_PATCH_FILES_REQUIRED=0)"
+            echo "  严格校验仅在 upstream_ref 变更或 release 分支准备时启用"
             ;;
         *)
             log_error "未知命令: $command"

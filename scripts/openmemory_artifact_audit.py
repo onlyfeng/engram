@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 
 # 默认检查的镜像列表（对应 docker-compose.unified.yml 中的服务）
 DEFAULT_IMAGES = [
+    "gateway",
+    "worker",
     "openmemory",
     "openmemory_migrate",
     "dashboard",

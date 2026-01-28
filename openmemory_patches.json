@@ -10,13 +10,25 @@
     "method": "diff -u",
     "description": "由于非 git repo，使用 diff -u 基于 base 快照生成补丁",
     "commands": {
-      "generate_single": "diff -u <base_file> <patched_file> > patches/openmemory/<category>/<patch_name>.patch",
-      "generate_all": "scripts/generate_om_patches.sh",
-      "apply_single": "patch -p1 < patches/openmemory/<category>/<patch_name>.patch",
-      "apply_all": "scripts/apply_om_patches.sh",
-      "verify": "sha256sum patches/openmemory/**/*.patch"
+      "generate_single": "diff -u --label 'a/<repo_path>' --label 'b/<repo_path>' <base_file> <patched_file> > patches/openmemory/<category>/<patch_name>.patch",
+      "generate_all": "scripts/generate_om_patches.sh generate",
+      "apply_single": "cd <project_root> && patch -p1 < patches/openmemory/<category>/<patch_name>.patch",
+      "apply_all": "scripts/generate_om_patches.sh apply",
+      "verify": "scripts/generate_om_patches.sh verify",
+      "verify_apply_dry_run": "scripts/generate_om_patches.sh verify-apply-dry-run"
     },
-    "base_snapshot_note": "需要上游原始文件作为 base 快照，存放于 archives/openmemory-base-<version>/ 或从上游 tarball 解压"
+    "base_snapshot_note": "需要上游原始文件作为 base 快照，存放于 archives/openmemory-base-<version>/ 或从上游 tarball 解压",
+    "strategy": {
+      "name": "路径 B（不强制 patch 文件）",
+      "description": "patch 文件为可选，用于审计和记录目的；CI 默认不强制要求 patch 文件存在",
+      "strict_scenarios": [
+        "upstream_ref 变更时自动启用严格模式",
+        "release 分支准备时手动启用",
+        "需要 patch 审计时手动启用"
+      ],
+      "env_var": "OPENMEMORY_PATCH_FILES_REQUIRED",
+      "updated_at": "2026-01-29"
+    }
   },
   "patches": [
     {
