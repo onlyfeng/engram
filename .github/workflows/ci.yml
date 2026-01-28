@@ -119,8 +119,6 @@ jobs:
             openmemory_sdk_changed:
               - 'libs/OpenMemory/packages/openmemory-py/**'
               - 'libs/OpenMemory/packages/openmemory-js/**'
-              - 'libs/OpenMemory/packages/openmemory-js/src/core/**'
-              - 'libs/OpenMemory/packages/openmemory-js/tests/**'
             openmemory_governance_changed:
               - 'OpenMemory.upstream.lock.json'
               - 'openmemory_patches.json'

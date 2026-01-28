@@ -697,9 +697,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nightly-step3-smoke-results
-          path: |
-            .artifacts/step3-smoke/
-            /tmp/step3_smoke_*.json
+          # /tmp/step3_smoke_*.json 已在 Collect Step3 Smoke artifacts 步骤复制到 .artifacts/step3-smoke/
+          path: .artifacts/step3-smoke/
           retention-days: 14
           if-no-files-found: ignore
 
