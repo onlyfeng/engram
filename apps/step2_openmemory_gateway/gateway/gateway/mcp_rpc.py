@@ -5,15 +5,51 @@ MCP JSON-RPC 2.0 协议层模块
 1. JSON-RPC 请求校验与解析
 2. method -> handler 映射
 3. 统一错误返回
+4. 结构化错误数据定义
 """
 
 import json
 import logging
-from typing import Any, Callable, Awaitable, Dict, List, Optional
+import uuid
+from typing import Any, Callable, Awaitable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("gateway.mcp_rpc")
+
+# ===================== 可选依赖导入（避免循环导入）=====================
+
+# OpenMemory 异常类（用于 to_jsonrpc_error 类型检查）
+try:
+    from gateway.openmemory_client import (
+        OpenMemoryError,
+        OpenMemoryConnectionError, 
+        OpenMemoryAPIError,
+    )
+except ImportError:
+    OpenMemoryError = None
+    OpenMemoryConnectionError = None
+    OpenMemoryAPIError = None
+
+# Step1 DB 检查异常
+try:
+    from gateway.step1_adapter import Step1DBCheckError
+    # 验证它确实是一个类型（防止被 mock 替换）
+    if not isinstance(Step1DBCheckError, type):
+        Step1DBCheckError = None
+except ImportError:
+    Step1DBCheckError = None
+
+
+def _is_exception_type(obj: Any, type_name: str) -> bool:
+    """
+    安全检查异常类型（防止 mock 导致的 isinstance 错误）
+    
+    通过类名检查，避免在 mock 环境下出错。
+    """
+    if obj is None:
+        return False
+    return type(obj).__name__ == type_name
 
 
 # ===================== JSON-RPC 2.0 错误码 =====================
@@ -27,7 +63,106 @@ class JsonRpcErrorCode:
     INVALID_PARAMS = -32602    # 无效参数
     INTERNAL_ERROR = -32603    # 内部错误
     # 自定义服务器错误 (-32000 to -32099)
-    TOOL_EXECUTION_ERROR = -32000  # 工具执行错误
+    TOOL_EXECUTION_ERROR = -32000    # 工具执行错误
+    DEPENDENCY_UNAVAILABLE = -32001  # 依赖服务不可用
+    BUSINESS_REJECTION = -32002      # 业务拒绝
+
+
+# ===================== 错误分类常量 =====================
+
+
+class ErrorCategory:
+    """错误分类常量（用于 ErrorData.category）"""
+    PROTOCOL = "protocol"           # 协议层错误（JSON-RPC 格式、方法不存在）
+    VALIDATION = "validation"       # 参数校验错误
+    BUSINESS = "business"           # 业务逻辑拒绝（策略拒绝、鉴权失败）
+    DEPENDENCY = "dependency"       # 依赖服务错误（OpenMemory/Step1 不可用）
+    INTERNAL = "internal"           # 内部错误（未处理的异常）
+
+
+# ===================== 稳定的错误 data 结构 =====================
+
+
+class ErrorData(BaseModel):
+    """
+    JSON-RPC error.data 的稳定结构
+    
+    用于向调用方提供结构化的错误上下文，便于自动化处理和调试。
+    
+    字段说明:
+    - category: 错误分类 (protocol/validation/business/dependency/internal)
+    - reason: 错误原因码（如 OPENMEMORY_UNAVAILABLE, POLICY_REJECT）
+    - retryable: 是否可重试
+    - correlation_id: 请求追踪 ID
+    - details: 附加详情（可选）
+    
+    Example:
+        {
+            "category": "dependency",
+            "reason": "OPENMEMORY_CONNECTION_FAILED",
+            "retryable": true,
+            "correlation_id": "corr-abc123",
+            "details": {"service": "openmemory", "status_code": 503}
+        }
+    """
+    category: str = Field(..., description="错误分类: protocol/validation/business/dependency/internal")
+    reason: str = Field(..., description="错误原因码")
+    retryable: bool = Field(False, description="是否可重试")
+    correlation_id: Optional[str] = Field(None, description="请求追踪 ID")
+    details: Optional[Dict[str, Any]] = Field(None, description="附加详情")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为 dict（排除 None 值）"""
+        d = {
+            "category": self.category,
+            "reason": self.reason,
+            "retryable": self.retryable,
+        }
+        if self.correlation_id:
+            d["correlation_id"] = self.correlation_id
+        if self.details:
+            d["details"] = self.details
+        return d
+
+
+# ===================== 错误原因码 =====================
+
+
+class ErrorReason:
+    """错误原因码常量"""
+    # 协议层
+    PARSE_ERROR = "PARSE_ERROR"
+    INVALID_REQUEST = "INVALID_REQUEST"
+    METHOD_NOT_FOUND = "METHOD_NOT_FOUND"
+    
+    # 参数校验
+    MISSING_REQUIRED_PARAM = "MISSING_REQUIRED_PARAM"
+    INVALID_PARAM_TYPE = "INVALID_PARAM_TYPE"
+    INVALID_PARAM_VALUE = "INVALID_PARAM_VALUE"
+    UNKNOWN_TOOL = "UNKNOWN_TOOL"
+    
+    # 业务拒绝
+    POLICY_REJECT = "POLICY_REJECT"
+    AUTH_FAILED = "AUTH_FAILED"
+    ACTOR_UNKNOWN = "ACTOR_UNKNOWN"
+    GOVERNANCE_UPDATE_DENIED = "GOVERNANCE_UPDATE_DENIED"
+    
+    # 依赖不可用
+    OPENMEMORY_UNAVAILABLE = "OPENMEMORY_UNAVAILABLE"
+    OPENMEMORY_CONNECTION_FAILED = "OPENMEMORY_CONNECTION_FAILED"
+    OPENMEMORY_API_ERROR = "OPENMEMORY_API_ERROR"
+    STEP1_DB_UNAVAILABLE = "STEP1_DB_UNAVAILABLE"
+    STEP1_DB_CHECK_FAILED = "STEP1_DB_CHECK_FAILED"
+    
+    # 内部错误
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+    TOOL_EXECUTOR_NOT_REGISTERED = "TOOL_EXECUTOR_NOT_REGISTERED"
+    UNHANDLED_EXCEPTION = "UNHANDLED_EXCEPTION"
+
+
+def generate_correlation_id() -> str:
+    """生成关联 ID"""
+    return f"corr-{uuid.uuid4().hex[:16]}"
 
 
 # ===================== JSON-RPC 2.0 数据模型 =====================
@@ -174,26 +309,47 @@ class JsonRpcRouter:
         """列出所有已注册的方法"""
         return list(self._handlers.keys())
     
-    async def dispatch(self, request: JsonRpcRequest) -> JsonRpcResponse:
+    async def dispatch(
+        self,
+        request: JsonRpcRequest,
+        correlation_id: Optional[str] = None,
+    ) -> JsonRpcResponse:
         """
         分发 JSON-RPC 请求到对应的处理器
         
+        所有错误都通过 to_jsonrpc_error() 转换，确保返回结构化的 ErrorData。
+        
         Args:
             request: 已解析的 JSON-RPC 请求
+            correlation_id: 可选的关联 ID，用于追踪
             
         Returns:
-            JSON-RPC 响应
+            JSON-RPC 响应（成功或错误）
         """
         method = request.method
         params = request.params or {}
         req_id = request.id
         
+        # 生成或使用提供的 correlation_id
+        corr_id = correlation_id or generate_correlation_id()
+        
+        # 提取工具名（如果是 tools/call）
+        tool_name = params.get("name") if method == "tools/call" else None
+        
         # 检查方法是否存在
         if method not in self._handlers:
+            error_data = ErrorData(
+                category=ErrorCategory.PROTOCOL,
+                reason=ErrorReason.METHOD_NOT_FOUND,
+                retryable=False,
+                correlation_id=corr_id,
+                details={"method": method, "available_methods": list(self._handlers.keys())},
+            )
             return make_jsonrpc_error(
                 req_id,
                 JsonRpcErrorCode.METHOD_NOT_FOUND,
                 f"未知方法: {method}",
+                data=error_data.to_dict(),
             )
         
         # 执行处理器
@@ -201,20 +357,14 @@ class JsonRpcRouter:
             handler = self._handlers[method]
             result = await handler(params)
             return make_jsonrpc_result(req_id, result)
-        except ValueError as e:
-            # 参数错误
-            return make_jsonrpc_error(
-                req_id,
-                JsonRpcErrorCode.INVALID_PARAMS,
-                str(e),
-            )
         except Exception as e:
-            # 内部错误
+            # 使用 to_jsonrpc_error 统一处理所有异常
             logger.exception(f"JSON-RPC 方法执行失败: {method}")
-            return make_jsonrpc_error(
-                req_id,
-                JsonRpcErrorCode.INTERNAL_ERROR,
-                f"内部错误: {str(e)}",
+            return to_jsonrpc_error(
+                error=e,
+                req_id=req_id,
+                tool_name=tool_name,
+                correlation_id=corr_id,
             )
 
 
@@ -339,10 +489,10 @@ def make_tool_error(
 
 
 class GatewayErrorCategory:
-    """网关错误分类"""
-    PROTOCOL = "protocol"      # 协议层错误（使用 JSON-RPC error）
-    BUSINESS = "business"      # 业务层错误（作为 result.content 返回）
-    DEPENDENCY = "dependency"  # 依赖服务错误（可降级，作为 result.content 返回）
+    """网关错误分类（兼容旧代码）"""
+    PROTOCOL = ErrorCategory.PROTOCOL
+    BUSINESS = ErrorCategory.BUSINESS
+    DEPENDENCY = ErrorCategory.DEPENDENCY
 
 
 class GatewayError(Exception):
@@ -353,28 +503,52 @@ class GatewayError(Exception):
     
     Attributes:
         message: 错误消息
-        category: 错误分类 (protocol/business/dependency)
-        gateway_error_code: 网关内部错误码（如 OPENMEMORY_WRITE_FAILED）
+        category: 错误分类 (protocol/business/dependency/validation/internal)
+        reason: 错误原因码（使用 ErrorReason 常量）
+        retryable: 是否可重试
         correlation_id: 请求追踪 ID
         status_code: HTTP 状态码（依赖服务返回的）
-        extra_data: 附加数据
+        details: 附加详情
+        
+        # 兼容旧版本
+        gateway_error_code: 已废弃，使用 reason
+        extra_data: 已废弃，使用 details
     """
     def __init__(
         self,
         message: str,
-        category: str = GatewayErrorCategory.BUSINESS,
-        gateway_error_code: Optional[str] = None,
+        category: str = ErrorCategory.BUSINESS,
+        reason: Optional[str] = None,
+        retryable: bool = False,
         correlation_id: Optional[str] = None,
         status_code: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None,
+        # 兼容旧版本参数
+        gateway_error_code: Optional[str] = None,
         extra_data: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(message)
         self.message = message
         self.category = category
-        self.gateway_error_code = gateway_error_code
+        self.reason = reason or gateway_error_code or ErrorReason.INTERNAL_ERROR
+        self.retryable = retryable
         self.correlation_id = correlation_id
         self.status_code = status_code
-        self.extra_data = extra_data or {}
+        self.details = details or extra_data or {}
+        
+        # 兼容旧版本属性
+        self.gateway_error_code = self.reason
+        self.extra_data = self.details
+    
+    def to_error_data(self, override_correlation_id: Optional[str] = None) -> ErrorData:
+        """转换为 ErrorData 结构"""
+        return ErrorData(
+            category=self.category,
+            reason=self.reason,
+            retryable=self.retryable,
+            correlation_id=override_correlation_id or self.correlation_id,
+            details=self.details if self.details else None,
+        )
 
 
 def to_jsonrpc_error(
@@ -386,14 +560,25 @@ def to_jsonrpc_error(
     """
     将异常转换为 JSON-RPC 响应
     
+    统一的错误转换函数，支持：
+    - GatewayError: 网关自定义错误
+    - OpenMemoryError/OpenMemoryConnectionError/OpenMemoryAPIError: OpenMemory 依赖错误
+    - Step1DBCheckError: Step1 数据库错误
+    - ValueError: 参数校验错误
+    - RuntimeError: 内部运行时错误
+    - 其他异常: 作为内部错误处理
+    
     错误处理策略:
     1. 协议层错误（解析失败、方法不存在、参数无效）→ 返回 JSON-RPC error response
-    2. 业务层错误（策略拒绝、鉴权失败）→ 作为 result.content 返回，isError=True
-    3. 依赖服务错误（OpenMemory 不可用）→ 作为 result.content 返回，isError=True
+    2. 业务层错误（策略拒绝、鉴权失败）→ 返回 JSON-RPC error response (business_rejection)
+    3. 依赖服务错误（OpenMemory/Step1 不可用）→ 返回 JSON-RPC error response (dependency_unavailable)
     
-    这种设计避免把可恢复的降级场景当成协议失败，让调用方能区分：
-    - 协议失败：需要修复请求格式
-    - 业务/依赖失败：请求格式正确，但执行过程中出现问题
+    所有错误都返回结构化的 error.data（ErrorData 格式），包含:
+    - category: 错误分类
+    - reason: 错误原因码
+    - retryable: 是否可重试
+    - correlation_id: 追踪 ID
+    - details: 附加详情
     
     Args:
         error: 异常对象
@@ -402,120 +587,339 @@ def to_jsonrpc_error(
         correlation_id: 关联 ID（可选，用于追踪）
         
     Returns:
-        JsonRpcResponse - 错误响应或包含错误的成功响应
+        JsonRpcResponse - 包含结构化 error.data 的错误响应
         
     Example:
-        # 协议错误 → JSON-RPC error
-        >>> to_jsonrpc_error(ValueError("缺少参数"), req_id=1)
-        JsonRpcResponse(error={"code": -32602, "message": "..."})
+        # 参数错误
+        >>> to_jsonrpc_error(ValueError("缺少参数 name"), req_id=1)
+        JsonRpcResponse(error={"code": -32602, "message": "...", "data": {"category": "validation", ...}})
         
-        # 业务错误 → result with isError
-        >>> err = GatewayError("策略拒绝", category="business")
-        >>> to_jsonrpc_error(err, req_id=1)
-        JsonRpcResponse(result={"content": [...], "isError": True})
+        # 依赖不可用
+        >>> to_jsonrpc_error(OpenMemoryConnectionError("连接超时"), req_id=1)
+        JsonRpcResponse(error={"code": -32001, "message": "...", "data": {"category": "dependency", "retryable": true, ...}})
     """
-    # 1. 处理 GatewayError（结构化错误）
+    # 确保有 correlation_id
+    corr_id = correlation_id or generate_correlation_id()
+    
+    # 构建 details 基础信息
+    base_details: Dict[str, Any] = {}
+    if tool_name:
+        base_details["tool"] = tool_name
+    
+    # 使用类型名称检查，避免导入失败或 mock 导致的问题
+    error_type_name = type(error).__name__
+    error_module = type(error).__module__ if hasattr(type(error), '__module__') else ""
+    
+    # ===== 1. 处理 GatewayError（网关自定义错误）=====
     if isinstance(error, GatewayError):
-        # 构建 error.data 附加信息
-        error_data = {}
-        if error.gateway_error_code:
-            error_data["gateway_error_code"] = error.gateway_error_code
-        if error.correlation_id or correlation_id:
-            error_data["correlation_id"] = error.correlation_id or correlation_id
+        # 合并 details
+        details = {**base_details, **error.details} if error.details else base_details
         if error.status_code:
-            error_data["status_code"] = error.status_code
-        if error.extra_data:
-            error_data.update(error.extra_data)
-        if tool_name:
-            error_data["tool"] = tool_name
+            details["status_code"] = error.status_code
         
-        # 协议层错误 → JSON-RPC error response
-        if error.category == GatewayErrorCategory.PROTOCOL:
-            return make_jsonrpc_error(
-                req_id,
-                JsonRpcErrorCode.INVALID_REQUEST,
-                error.message,
-                data=error_data if error_data else None,
-            )
+        error_data = ErrorData(
+            category=error.category,
+            reason=error.reason,
+            retryable=error.retryable,
+            correlation_id=corr_id,
+            details=details if details else None,
+        )
         
-        # 业务/依赖错误 → 作为 result.content 返回（MCP 规范）
-        # 这样调用方能通过 isError=True 识别错误，但不会认为协议失败
-        error_content = {
-            "ok": False,
-            "error": error.message,
-            "category": error.category,
-        }
-        if error.gateway_error_code:
-            error_content["gateway_error_code"] = error.gateway_error_code
-        if error.correlation_id or correlation_id:
-            error_content["correlation_id"] = error.correlation_id or correlation_id
-        if error.status_code:
-            error_content["status_code"] = error.status_code
-        if error.extra_data:
-            error_content["extra"] = error.extra_data
+        # 根据分类选择错误码
+        if error.category == ErrorCategory.PROTOCOL:
+            code = JsonRpcErrorCode.INVALID_REQUEST
+        elif error.category == ErrorCategory.VALIDATION:
+            code = JsonRpcErrorCode.INVALID_PARAMS
+        elif error.category == ErrorCategory.BUSINESS:
+            code = JsonRpcErrorCode.BUSINESS_REJECTION
+        elif error.category == ErrorCategory.DEPENDENCY:
+            code = JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE
+        else:
+            code = JsonRpcErrorCode.INTERNAL_ERROR
         
-        return make_jsonrpc_result(
+        return make_jsonrpc_error(
             req_id,
-            {
-                "content": [
-                    {"type": "text", "text": json.dumps(error_content, ensure_ascii=False)}
-                ],
-                "isError": True,
-            },
+            code,
+            error.message,
+            data=error_data.to_dict(),
         )
     
-    # 2. 处理 ValueError → 参数错误（协议层）
+    # ===== 2. 处理 OpenMemory 异常 =====
+    if OpenMemoryConnectionError is not None and isinstance(error, OpenMemoryConnectionError):
+        details = {**base_details, "service": "openmemory"}
+        if hasattr(error, 'status_code') and error.status_code:
+            details["status_code"] = error.status_code
+        
+        error_data = ErrorData(
+            category=ErrorCategory.DEPENDENCY,
+            reason=ErrorReason.OPENMEMORY_CONNECTION_FAILED,
+            retryable=True,  # 连接错误通常可重试
+            correlation_id=corr_id,
+            details=details,
+        )
+        
+        return make_jsonrpc_error(
+            req_id,
+            JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
+            f"OpenMemory 连接失败: {error.message if hasattr(error, 'message') else str(error)}",
+            data=error_data.to_dict(),
+        )
+    
+    if OpenMemoryAPIError is not None and isinstance(error, OpenMemoryAPIError):
+        details = {**base_details, "service": "openmemory"}
+        if hasattr(error, 'status_code') and error.status_code:
+            details["status_code"] = error.status_code
+        if hasattr(error, 'response') and error.response:
+            details["api_response"] = error.response
+        
+        # 5xx 错误可重试，4xx 不可重试
+        retryable = hasattr(error, 'status_code') and error.status_code and error.status_code >= 500
+        
+        error_data = ErrorData(
+            category=ErrorCategory.DEPENDENCY,
+            reason=ErrorReason.OPENMEMORY_API_ERROR,
+            retryable=retryable,
+            correlation_id=corr_id,
+            details=details,
+        )
+        
+        return make_jsonrpc_error(
+            req_id,
+            JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
+            f"OpenMemory API 错误: {error.message if hasattr(error, 'message') else str(error)}",
+            data=error_data.to_dict(),
+        )
+    
+    if OpenMemoryError is not None and isinstance(error, OpenMemoryError):
+        details = {**base_details, "service": "openmemory"}
+        if hasattr(error, 'status_code') and error.status_code:
+            details["status_code"] = error.status_code
+        
+        error_data = ErrorData(
+            category=ErrorCategory.DEPENDENCY,
+            reason=ErrorReason.OPENMEMORY_UNAVAILABLE,
+            retryable=True,
+            correlation_id=corr_id,
+            details=details,
+        )
+        
+        return make_jsonrpc_error(
+            req_id,
+            JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
+            f"OpenMemory 错误: {error.message if hasattr(error, 'message') else str(error)}",
+            data=error_data.to_dict(),
+        )
+    
+    # ===== 3. 处理 Step1 DB 异常 =====
+    if Step1DBCheckError is not None and isinstance(error, Step1DBCheckError):
+        details = {**base_details, "service": "step1_db"}
+        if hasattr(error, 'missing_items') and error.missing_items:
+            details["missing_items"] = error.missing_items
+        
+        error_data = ErrorData(
+            category=ErrorCategory.DEPENDENCY,
+            reason=ErrorReason.STEP1_DB_CHECK_FAILED,
+            retryable=False,  # DB 结构问题通常不可自动重试
+            correlation_id=corr_id,
+            details=details,
+        )
+        
+        return make_jsonrpc_error(
+            req_id,
+            JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
+            f"Step1 DB 检查失败: {error.message if hasattr(error, 'message') else str(error)}",
+            data=error_data.to_dict(),
+        )
+    
+    # ===== 4. 处理 ValueError → 参数校验错误 =====
     if isinstance(error, ValueError):
-        error_data = {}
-        if correlation_id:
-            error_data["correlation_id"] = correlation_id
-        if tool_name:
-            error_data["tool"] = tool_name
+        error_msg = str(error)
+        
+        # 根据错误消息推断更具体的原因码
+        if "缺少" in error_msg or "missing" in error_msg.lower() or "required" in error_msg.lower():
+            reason = ErrorReason.MISSING_REQUIRED_PARAM
+        elif "未知工具" in error_msg or "unknown tool" in error_msg.lower():
+            reason = ErrorReason.UNKNOWN_TOOL
+        elif "类型" in error_msg or "type" in error_msg.lower():
+            reason = ErrorReason.INVALID_PARAM_TYPE
+        else:
+            reason = ErrorReason.INVALID_PARAM_VALUE
+        
+        error_data = ErrorData(
+            category=ErrorCategory.VALIDATION,
+            reason=reason,
+            retryable=False,
+            correlation_id=corr_id,
+            details=base_details if base_details else None,
+        )
         
         return make_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.INVALID_PARAMS,
-            str(error),
-            data=error_data if error_data else None,
+            error_msg,
+            data=error_data.to_dict(),
         )
     
-    # 3. 处理 RuntimeError → 内部错误（协议层）
+    # ===== 5. 处理 RuntimeError → 内部错误 =====
     if isinstance(error, RuntimeError):
-        error_data = {"gateway_error_code": "INTERNAL_ERROR"}
-        if correlation_id:
-            error_data["correlation_id"] = correlation_id
-        if tool_name:
-            error_data["tool"] = tool_name
+        error_msg = str(error)
+        
+        # 判断是否是执行器未注册
+        if "执行器未注册" in error_msg or "not registered" in error_msg.lower():
+            reason = ErrorReason.TOOL_EXECUTOR_NOT_REGISTERED
+        else:
+            reason = ErrorReason.INTERNAL_ERROR
+        
+        error_data = ErrorData(
+            category=ErrorCategory.INTERNAL,
+            reason=reason,
+            retryable=False,
+            correlation_id=corr_id,
+            details=base_details if base_details else None,
+        )
         
         return make_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.INTERNAL_ERROR,
-            str(error),
-            data=error_data,
+            error_msg,
+            data=error_data.to_dict(),
         )
     
-    # 4. 其他未知异常 → 作为业务错误返回（避免暴露内部细节）
-    logger.exception(f"未分类的异常: {type(error).__name__}: {error}")
+    # ===== 6. 处理 psycopg2/数据库异常 =====
+    error_type_name = type(error).__name__
+    if "psycopg2" in error_type_name.lower() or "database" in error_type_name.lower() or "operational" in error_type_name.lower():
+        error_data = ErrorData(
+            category=ErrorCategory.DEPENDENCY,
+            reason=ErrorReason.STEP1_DB_UNAVAILABLE,
+            retryable=True,  # 数据库连接问题通常可重试
+            correlation_id=corr_id,
+            details={**base_details, "service": "step1_db", "exception_type": error_type_name},
+        )
+        
+        return make_jsonrpc_error(
+            req_id,
+            JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
+            f"数据库错误: {str(error)}",
+            data=error_data.to_dict(),
+        )
     
-    error_content = {
-        "ok": False,
-        "error": f"内部错误: {str(error)}",
-        "category": GatewayErrorCategory.BUSINESS,
-        "gateway_error_code": "UNHANDLED_EXCEPTION",
-    }
-    if correlation_id:
-        error_content["correlation_id"] = correlation_id
+    # ===== 7. 其他未知异常 → 内部错误 =====
+    logger.exception(f"未分类的异常: {error_type_name}: {error}")
     
-    return make_jsonrpc_result(
+    error_data = ErrorData(
+        category=ErrorCategory.INTERNAL,
+        reason=ErrorReason.UNHANDLED_EXCEPTION,
+        retryable=False,
+        correlation_id=corr_id,
+        details={**base_details, "exception_type": error_type_name} if base_details else {"exception_type": error_type_name},
+    )
+    
+    return make_jsonrpc_error(
         req_id,
-        {
-            "content": [
-                {"type": "text", "text": json.dumps(error_content, ensure_ascii=False)}
-            ],
-            "isError": True,
-        },
+        JsonRpcErrorCode.INTERNAL_ERROR,
+        f"内部错误: {str(error)}",
+        data=error_data.to_dict(),
     )
 
+
+def make_business_error_response(
+    req_id: Optional[Any],
+    error_msg: str,
+    reason: str = ErrorReason.POLICY_REJECT,
+    correlation_id: Optional[str] = None,
+    retryable: bool = False,
+    details: Optional[Dict[str, Any]] = None,
+) -> JsonRpcResponse:
+    """
+    构造业务层错误响应（JSON-RPC error response）
+    
+    用于业务逻辑拒绝（如策略拒绝、鉴权失败）。
+    
+    Args:
+        req_id: JSON-RPC 请求 ID
+        error_msg: 错误消息
+        reason: 错误原因码（使用 ErrorReason 常量）
+        correlation_id: 关联 ID
+        retryable: 是否可重试
+        details: 附加详情
+        
+    Returns:
+        JsonRpcResponse with error (code: -32002 BUSINESS_REJECTION)
+    """
+    corr_id = correlation_id or generate_correlation_id()
+    
+    error_data = ErrorData(
+        category=ErrorCategory.BUSINESS,
+        reason=reason,
+        retryable=retryable,
+        correlation_id=corr_id,
+        details=details,
+    )
+    
+    return make_jsonrpc_error(
+        req_id,
+        JsonRpcErrorCode.BUSINESS_REJECTION,
+        error_msg,
+        data=error_data.to_dict(),
+    )
+
+
+def make_dependency_error_response(
+    req_id: Optional[Any],
+    error_msg: str,
+    reason: str = ErrorReason.OPENMEMORY_UNAVAILABLE,
+    correlation_id: Optional[str] = None,
+    retryable: bool = True,
+    service_name: Optional[str] = None,
+    status_code: Optional[int] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> JsonRpcResponse:
+    """
+    构造依赖服务错误响应（JSON-RPC error response）
+    
+    用于依赖服务（如 OpenMemory、Step1 DB）不可用时返回错误。
+    
+    Args:
+        req_id: JSON-RPC 请求 ID
+        error_msg: 错误消息
+        reason: 错误原因码（使用 ErrorReason 常量）
+        correlation_id: 关联 ID
+        retryable: 是否可重试（默认 True，依赖服务通常可重试）
+        service_name: 依赖服务名称
+        status_code: 依赖服务返回的 HTTP 状态码
+        details: 附加详情
+        
+    Returns:
+        JsonRpcResponse with error (code: -32001 DEPENDENCY_UNAVAILABLE)
+    """
+    corr_id = correlation_id or generate_correlation_id()
+    
+    # 构建 details
+    full_details: Dict[str, Any] = {}
+    if service_name:
+        full_details["service"] = service_name
+    if status_code:
+        full_details["status_code"] = status_code
+    if details:
+        full_details.update(details)
+    
+    error_data = ErrorData(
+        category=ErrorCategory.DEPENDENCY,
+        reason=reason,
+        retryable=retryable,
+        correlation_id=corr_id,
+        details=full_details if full_details else None,
+    )
+    
+    return make_jsonrpc_error(
+        req_id,
+        JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
+        error_msg,
+        data=error_data.to_dict(),
+    )
+
+
+# ==================== 兼容旧版本的别名 ====================
 
 def make_business_error_result(
     req_id: Optional[Any],
@@ -526,44 +930,21 @@ def make_business_error_result(
     extra_data: Optional[Dict[str, Any]] = None,
 ) -> JsonRpcResponse:
     """
-    构造业务层错误响应（作为 result 返回，非 JSON-RPC error）
+    [已废弃] 请使用 make_business_error_response()
     
-    用于可恢复的业务错误，调用方可以根据 isError=True 和 content 中的
-    错误信息决定如何处理。
-    
-    Args:
-        req_id: JSON-RPC 请求 ID
-        error_msg: 错误消息
-        gateway_error_code: 网关错误码
-        correlation_id: 关联 ID
-        status_code: HTTP 状态码
-        extra_data: 附加数据
-        
-    Returns:
-        JsonRpcResponse with result (not error)
+    保留用于向后兼容。
     """
-    error_content = {
-        "ok": False,
-        "error": error_msg,
-        "category": GatewayErrorCategory.BUSINESS,
-    }
-    if gateway_error_code:
-        error_content["gateway_error_code"] = gateway_error_code
-    if correlation_id:
-        error_content["correlation_id"] = correlation_id
+    details = extra_data.copy() if extra_data else {}
     if status_code:
-        error_content["status_code"] = status_code
-    if extra_data:
-        error_content["extra"] = extra_data
+        details["status_code"] = status_code
     
-    return make_jsonrpc_result(
-        req_id,
-        {
-            "content": [
-                {"type": "text", "text": json.dumps(error_content, ensure_ascii=False)}
-            ],
-            "isError": True,
-        },
+    return make_business_error_response(
+        req_id=req_id,
+        error_msg=error_msg,
+        reason=gateway_error_code or ErrorReason.POLICY_REJECT,
+        correlation_id=correlation_id,
+        retryable=False,
+        details=details if details else None,
     )
 
 
@@ -577,46 +958,19 @@ def make_dependency_error_result(
     extra_data: Optional[Dict[str, Any]] = None,
 ) -> JsonRpcResponse:
     """
-    构造依赖服务错误响应（作为 result 返回，非 JSON-RPC error）
+    [已废弃] 请使用 make_dependency_error_response()
     
-    用于依赖服务（如 OpenMemory）不可用时，返回可降级的错误。
-    
-    Args:
-        req_id: JSON-RPC 请求 ID
-        error_msg: 错误消息
-        gateway_error_code: 网关错误码
-        correlation_id: 关联 ID
-        status_code: 依赖服务返回的 HTTP 状态码
-        service_name: 依赖服务名称
-        extra_data: 附加数据
-        
-    Returns:
-        JsonRpcResponse with result (not error)
+    保留用于向后兼容。
     """
-    error_content = {
-        "ok": False,
-        "error": error_msg,
-        "category": GatewayErrorCategory.DEPENDENCY,
-    }
-    if gateway_error_code:
-        error_content["gateway_error_code"] = gateway_error_code
-    if correlation_id:
-        error_content["correlation_id"] = correlation_id
-    if status_code:
-        error_content["status_code"] = status_code
-    if service_name:
-        error_content["service"] = service_name
-    if extra_data:
-        error_content["extra"] = extra_data
-    
-    return make_jsonrpc_result(
-        req_id,
-        {
-            "content": [
-                {"type": "text", "text": json.dumps(error_content, ensure_ascii=False)}
-            ],
-            "isError": True,
-        },
+    return make_dependency_error_response(
+        req_id=req_id,
+        error_msg=error_msg,
+        reason=gateway_error_code or ErrorReason.OPENMEMORY_UNAVAILABLE,
+        correlation_id=correlation_id,
+        retryable=True,
+        service_name=service_name,
+        status_code=status_code,
+        details=extra_data,
     )
 
 

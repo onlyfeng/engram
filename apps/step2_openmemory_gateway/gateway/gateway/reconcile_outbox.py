@@ -27,6 +27,19 @@ import psycopg
 
 from . import step1_adapter
 
+# 导入统一错误码
+try:
+    from engram_step1.errors import ErrorCode
+except ImportError:
+    import sys
+    print(
+        "\n"
+        "=" * 60 + "\n"
+        "[ERROR] 缺少依赖: engram_step1\n"
+        "=" * 60 + "\n"
+    )
+    sys.exit(1)
+
 logger = logging.getLogger(__name__)
 
 
@@ -358,7 +371,7 @@ def reconcile_sent_records(
                 try:
                     audit_id = write_reconcile_audit(
                         outbox=record,
-                        reason="outbox_flush_success",
+                        reason=ErrorCode.OUTBOX_FLUSH_SUCCESS,
                         action="allow",
                         extra_evidence={"reconciled": True},
                     )
@@ -409,7 +422,7 @@ def reconcile_dead_records(
                 try:
                     audit_id = write_reconcile_audit(
                         outbox=record,
-                        reason="outbox_flush_dead",
+                        reason=ErrorCode.OUTBOX_FLUSH_DEAD,
                         action="reject",
                         extra_evidence={
                             "reconciled": True,
@@ -479,7 +492,7 @@ def reconcile_stale_records(
                     # 写入 stale 审计
                     audit_id = write_reconcile_audit(
                         outbox=record,
-                        reason="outbox_stale",
+                        reason=ErrorCode.OUTBOX_STALE,
                         action="redirect",
                         extra_evidence={
                             "stale_threshold_seconds": config.stale_threshold_seconds,

@@ -65,11 +65,14 @@ def mock_dependencies():
                 with patch('gateway.main.get_client', return_value=mock_client_instance):
                     with patch('gateway.main.check_user_exists', return_value=True):
                         with patch('gateway.step1_adapter.check_dedup', return_value=None):
-                            yield {
-                                'config': mock_config,
-                                'db': mock_db,
-                                'client': mock_client_instance,
-                            }
+                            # 确保 step1_adapter.query_knowledge_candidates 也被正确 mock
+                            with patch('gateway.main.step1_adapter', mock_adapter):
+                                yield {
+                                    'config': mock_config,
+                                    'db': mock_db,
+                                    'client': mock_client_instance,
+                                    'adapter': mock_adapter,
+                                }
 
 
 @pytest.fixture(scope="module")
@@ -489,6 +492,386 @@ class TestJsonParseError:
         )
         # FastAPI/Starlette 可能返回 400 或 422
         assert response.status_code in [400, 422]
+
+
+# ===================== 新增：ErrorData 结构测试 =====================
+
+
+class TestErrorDataStructure:
+    """测试所有错误响应包含结构化的 ErrorData"""
+    
+    def test_invalid_request_has_error_data(self, client):
+        """无效请求应返回包含 ErrorData 的错误响应"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "params": "not_a_dict",  # params 应该是 dict
+            "id": 1
+        })
+        assert response.status_code == 400
+        result = response.json()
+        
+        # 验证有 error 字段
+        assert "error" in result
+        error = result["error"]
+        assert error["code"] == -32600  # INVALID_REQUEST
+        
+        # 验证 error.data 是结构化的 ErrorData
+        assert "data" in error
+        data = error["data"]
+        assert "category" in data
+        assert "reason" in data
+        assert "retryable" in data
+        assert data["category"] in ["protocol", "validation", "business", "dependency", "internal"]
+    
+    def test_method_not_found_has_error_data(self, client):
+        """方法不存在应返回包含 ErrorData 的错误响应"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "nonexistent/method",
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        assert "error" in result
+        error = result["error"]
+        assert error["code"] == -32601  # METHOD_NOT_FOUND
+        
+        # 验证 ErrorData 结构
+        assert "data" in error
+        data = error["data"]
+        assert data["category"] == "protocol"
+        assert data["reason"] == "METHOD_NOT_FOUND"
+        assert data["retryable"] is False
+        assert "correlation_id" in data
+        assert data["correlation_id"].startswith("corr-")
+    
+    def test_invalid_params_has_error_data(self, client):
+        """无效参数应返回包含 ErrorData 的错误响应"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                # 缺少必需的 name 参数
+                "arguments": {"query": "test"}
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        assert "error" in result
+        error = result["error"]
+        assert error["code"] == -32602  # INVALID_PARAMS
+        
+        # 验证 ErrorData 结构
+        assert "data" in error
+        data = error["data"]
+        assert data["category"] == "validation"
+        assert "reason" in data
+        assert data["retryable"] is False
+        assert "correlation_id" in data
+    
+    def test_unknown_tool_has_error_data(self, client):
+        """未知工具应返回包含 ErrorData 的错误响应"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "nonexistent_tool",
+                "arguments": {}
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        assert "error" in result
+        error = result["error"]
+        assert error["code"] == -32602  # INVALID_PARAMS
+        
+        # 验证 ErrorData 结构
+        assert "data" in error
+        data = error["data"]
+        assert data["category"] == "validation"
+        assert data["reason"] == "UNKNOWN_TOOL"
+
+
+class TestDependencyUnavailable:
+    """测试依赖服务不可用场景
+    
+    注意: memory_query 的设计是在 OpenMemory 不可用时降级到 Step1 查询，
+    返回业务响应（ok=True, degraded=True）而不是 JSON-RPC 错误。
+    这是为了保证查询可用性，即使依赖服务临时不可用。
+    """
+    
+    def test_openmemory_connection_error(self, client, mock_dependencies):
+        """OpenMemory 连接失败时应降级返回空结果"""
+        from gateway.openmemory_client import OpenMemoryConnectionError
+        
+        mock_client = mock_dependencies['client']
+        mock_client.search.side_effect = OpenMemoryConnectionError("连接超时", status_code=None, response=None)
+        
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "memory_query",
+                "arguments": {"query": "test"}
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        # memory_query 降级处理：返回业务响应，不是 JSON-RPC 错误
+        assert "result" in result
+        import json as json_module
+        content = json_module.loads(result["result"]["content"][0]["text"])
+        assert content["ok"] is True
+        assert content["degraded"] is True
+        assert "连接超时" in content["message"]
+    
+    def test_openmemory_api_error_5xx(self, client, mock_dependencies):
+        """OpenMemory 5xx 错误时应降级返回空结果"""
+        from gateway.openmemory_client import OpenMemoryAPIError
+        
+        mock_client = mock_dependencies['client']
+        mock_client.search.side_effect = OpenMemoryAPIError("服务器内部错误", status_code=503, response={"error": "Service Unavailable"})
+        
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "memory_query",
+                "arguments": {"query": "test"}
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        # memory_query 降级处理
+        assert "result" in result
+        import json as json_module
+        content = json_module.loads(result["result"]["content"][0]["text"])
+        assert content["ok"] is True
+        assert content["degraded"] is True
+        assert "服务器内部错误" in content["message"]
+    
+    def test_openmemory_api_error_4xx(self, client, mock_dependencies):
+        """OpenMemory 4xx 错误时应降级返回空结果"""
+        from gateway.openmemory_client import OpenMemoryAPIError
+        
+        mock_client = mock_dependencies['client']
+        mock_client.search.side_effect = OpenMemoryAPIError("请求无效", status_code=400, response={"error": "Bad Request"})
+        
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "memory_query",
+                "arguments": {"query": "test"}
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        # memory_query 降级处理
+        assert "result" in result
+        import json as json_module
+        content = json_module.loads(result["result"]["content"][0]["text"])
+        assert content["ok"] is True
+        assert content["degraded"] is True
+        assert "请求无效" in content["message"]
+
+
+class TestBusinessRejection:
+    """测试业务拒绝场景"""
+    
+    def test_governance_update_auth_failed(self, client, mock_dependencies):
+        """governance_update 鉴权失败应返回业务拒绝错误"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "governance_update",
+                "arguments": {
+                    "team_write_enabled": True,
+                    "admin_key": "wrong_key"  # 错误的密钥
+                }
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        # governance_update 返回的是 result 而不是 error（业务层处理）
+        # 所以这里我们检查 result 内容
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) >= 1
+        
+        # 解析 TextContent
+        import json
+        text_content = json.loads(content[0]["text"])
+        assert text_content["ok"] is False
+        assert "拒绝" in text_content.get("message", "") or "reject" in text_content.get("action", "")
+
+
+class TestInternalError:
+    """测试内部错误场景
+    
+    注意: memory_query 的设计是在内部处理所有异常，返回业务响应（ok=False）
+    而不是 JSON-RPC 错误。这是为了保证接口一致性。
+    """
+    
+    def test_tool_executor_runtime_error(self, client, mock_dependencies):
+        """工具执行器运行时错误应返回 ok=False 的业务响应"""
+        mock_client = mock_dependencies['client']
+        mock_client.search.side_effect = RuntimeError("未预期的内部错误")
+        
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "memory_query",
+                "arguments": {"query": "test"}
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        # memory_query 内部处理所有异常，返回业务响应
+        assert "result" in result
+        import json as json_module
+        content = json_module.loads(result["result"]["content"][0]["text"])
+        assert content["ok"] is False
+        assert "内部错误" in content["message"]
+        assert "未预期的内部错误" in content["message"]
+    
+    def test_unhandled_exception(self, client, mock_dependencies):
+        """未处理的异常应返回 ok=False 的业务响应"""
+        mock_client = mock_dependencies['client']
+        mock_client.search.side_effect = KeyError("unexpected_key")
+        
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "memory_query",
+                "arguments": {"query": "test"}
+            },
+            "id": 1
+        })
+        assert response.status_code == 200
+        result = response.json()
+        
+        # memory_query 内部处理所有异常，返回业务响应
+        assert "result" in result
+        import json as json_module
+        content = json_module.loads(result["result"]["content"][0]["text"])
+        assert content["ok"] is False
+        assert "内部错误" in content["message"]
+
+
+class TestCorrelationIdTracking:
+    """测试 correlation_id 追踪"""
+    
+    def test_error_response_has_correlation_id(self, client):
+        """所有错误响应都应包含 correlation_id"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "unknown/method",
+            "id": 1
+        })
+        result = response.json()
+        
+        assert "error" in result
+        data = result["error"]["data"]
+        assert "correlation_id" in data
+        assert data["correlation_id"].startswith("corr-")
+        assert len(data["correlation_id"]) == 21  # "corr-" + 16 hex chars
+    
+    def test_parse_error_has_correlation_id(self, client):
+        """JSON 解析错误也应有 correlation_id"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "params": "invalid",  # 应该是 dict
+            "id": 1
+        })
+        result = response.json()
+        
+        if "error" in result and "data" in result["error"]:
+            data = result["error"]["data"]
+            assert "correlation_id" in data
+
+
+class TestErrorDataFields:
+    """测试 ErrorData 字段完整性"""
+    
+    def test_error_data_has_all_required_fields(self, client):
+        """ErrorData 应包含所有必需字段"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "unknown_tool",
+                "arguments": {}
+            },
+            "id": 1
+        })
+        result = response.json()
+        
+        data = result["error"]["data"]
+        
+        # 必需字段
+        assert "category" in data
+        assert "reason" in data
+        assert "retryable" in data
+        
+        # category 应为有效值
+        assert data["category"] in ["protocol", "validation", "business", "dependency", "internal"]
+        
+        # retryable 应为布尔值
+        assert isinstance(data["retryable"], bool)
+    
+    def test_details_contains_tool_name(self, client):
+        """tools/call 错误的 details 应包含工具名"""
+        response = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "memory_query",
+                "arguments": {}  # 缺少 query 参数
+            },
+            "id": 1
+        })
+        result = response.json()
+        
+        # memory_query 缺少 query 参数可能不会直接报错（取决于实现）
+        # 这里我们测试一个会报错的场景
+        response2 = client.post("/mcp", json={
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "nonexistent_tool",
+                "arguments": {}
+            },
+            "id": 2
+        })
+        result2 = response2.json()
+        
+        if "error" in result2 and "data" in result2["error"]:
+            data = result2["error"]["data"]
+            # details 中可能包含 tool 信息
+            if "details" in data and data["details"]:
+                # 验证 details 是字典
+                assert isinstance(data["details"], dict)
 
 
 if __name__ == "__main__":

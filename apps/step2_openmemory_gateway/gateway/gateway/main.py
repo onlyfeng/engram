@@ -168,6 +168,13 @@ from .mcp_rpc import (
     to_jsonrpc_error,
     make_business_error_result,
     make_dependency_error_result,
+    # 新增的稳定错误结构
+    ErrorData,
+    ErrorCategory,
+    ErrorReason,
+    make_business_error_response,
+    make_dependency_error_response,
+    generate_correlation_id,
 )
 
 
@@ -1031,22 +1038,37 @@ async def mcp_endpoint(request: Request):
     
     支持的请求头:
     - Mcp-Session-Id: MCP 会话 ID（可选，用于日志关联）
+    
+    错误响应格式:
+    - 所有 JSON-RPC 错误都返回结构化的 error.data (ErrorData)
+    - error.data 包含: category, reason, retryable, correlation_id, details
     """
+    # 生成 correlation_id 用于追踪
+    correlation_id = generate_correlation_id()
+    
     # 提取 Mcp-Session-Id 用于日志关联（可选，不强依赖）
     mcp_session_id = request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id")
     if mcp_session_id:
-        logger.info(f"MCP 请求: Mcp-Session-Id={mcp_session_id}")
+        logger.info(f"MCP 请求: Mcp-Session-Id={mcp_session_id}, correlation_id={correlation_id}")
     
     # 解析原始请求 JSON
     try:
         body = await request.json()
     except Exception as e:
-        # JSON 解析失败
+        # JSON 解析失败 - 使用结构化错误响应
+        error_data = ErrorData(
+            category=ErrorCategory.PROTOCOL,
+            reason=ErrorReason.PARSE_ERROR,
+            retryable=False,
+            correlation_id=correlation_id,
+            details={"parse_error": str(e)[:200]},
+        )
         return JSONResponse(
             content=make_jsonrpc_error(
                 None,
                 JsonRpcErrorCode.PARSE_ERROR,
                 f"JSON 解析失败: {str(e)}",
+                data=error_data.to_dict(),
             ).model_dump(exclude_none=True),
             status_code=400,
             headers=MCP_CORS_HEADERS,
@@ -1057,14 +1079,29 @@ async def mcp_endpoint(request: Request):
         # ========== JSON-RPC 2.0 分支 ==========
         rpc_request, parse_error = parse_jsonrpc_request(body)
         if parse_error:
+            # 请求解析失败 - 增强 error.data
+            if parse_error.error and parse_error.error.data is None:
+                error_data = ErrorData(
+                    category=ErrorCategory.PROTOCOL,
+                    reason=ErrorReason.INVALID_REQUEST,
+                    retryable=False,
+                    correlation_id=correlation_id,
+                )
+                parse_error.error.data = error_data.to_dict()
             return JSONResponse(
                 content=parse_error.model_dump(exclude_none=True),
                 status_code=400,
                 headers=MCP_CORS_HEADERS,
             )
         
-        # 使用路由器分发请求
-        response = await mcp_router.dispatch(rpc_request)
+        # 使用路由器分发请求（dispatch 内部已使用 to_jsonrpc_error 处理异常）
+        response = await mcp_router.dispatch(rpc_request, correlation_id=correlation_id)
+        
+        # 确保响应中的错误有 correlation_id
+        if response.error and response.error.data:
+            if isinstance(response.error.data, dict) and "correlation_id" not in response.error.data:
+                response.error.data["correlation_id"] = correlation_id
+        
         return JSONResponse(
             content=response.model_dump(exclude_none=True),
             headers=MCP_CORS_HEADERS,
@@ -1076,7 +1113,7 @@ async def mcp_endpoint(request: Request):
             mcp_request = MCPToolCall(**body)
         except Exception as e:
             return JSONResponse(
-                content={"ok": False, "error": f"无效的请求格式: {str(e)}"},
+                content={"ok": False, "error": f"无效的请求格式: {str(e)}", "correlation_id": correlation_id},
                 status_code=400,
                 headers=MCP_CORS_HEADERS,
             )

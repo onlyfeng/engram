@@ -442,5 +442,544 @@ class TestErrorCodeConsistency:
                 f"OpenMemory 错误码应以 'openmemory_write_failed:' 开头: {code}"
 
 
+# ======================== OpenMemoryAPIError 含状态码测试 ========================
+
+class TestOpenMemoryAPIErrorWithStatus:
+    """验证 OpenMemoryAPIError 含状态码的错误码生成"""
+
+    @pytest.fixture
+    def mock_config(self):
+        """模拟配置"""
+        config = MagicMock()
+        config.default_team_space = "team:test"
+        config.project_key = "test_project"
+        config.private_space_prefix = "private:"
+        config.governance_admin_key = "test_admin_key"
+        return config
+
+    @pytest.mark.asyncio
+    async def test_openmemory_api_error_with_status_404(self, mock_config):
+        """关键路径测试: OpenMemory API 404 错误 -> reason 必须包含 api_error_404"""
+        from gateway.main import memory_store_impl
+        from gateway.openmemory_client import OpenMemoryAPIError
+        
+        captured_audits = []
+        
+        def capture_audit(**kwargs):
+            captured_audits.append(kwargs)
+        
+        with patch("gateway.main.get_config") as mock_get_config, \
+             patch("gateway.main.get_db") as mock_get_db, \
+             patch("gateway.main.get_client") as mock_get_client, \
+             patch("gateway.main.step1_adapter") as mock_step1_adapter, \
+             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+            
+            mock_get_config.return_value = mock_config
+            
+            mock_db = MagicMock()
+            mock_db.get_or_create_settings.return_value = {"team_write_enabled": True}
+            mock_db.insert_audit = capture_audit
+            mock_db.enqueue_outbox.return_value = 123
+            mock_get_db.return_value = mock_db
+            
+            mock_decision = MagicMock()
+            mock_decision.action.value = "allow"
+            mock_decision.reason = "team_write_enabled"
+            mock_decision.final_space = "team:test"
+            mock_engine = MagicMock()
+            mock_engine.decide.return_value = mock_decision
+            mock_create_engine.return_value = mock_engine
+            
+            mock_step1_adapter.check_dedup.return_value = None
+            
+            # 模拟 OpenMemory API 404 错误
+            mock_client = MagicMock()
+            mock_client.store.side_effect = OpenMemoryAPIError(
+                message="Not Found",
+                status_code=404,
+                response=None
+            )
+            mock_get_client.return_value = mock_client
+            
+            result = await memory_store_impl(
+                payload_md="test content",
+                target_space="team:test",
+            )
+            
+            assert result.ok is False
+            assert len(captured_audits) == 1
+            audit = captured_audits[0]
+            
+            # 关键断言: reason 必须为 openmemory_write_failed:api_error_404
+            expected_reason = ErrorCode.openmemory_api_error(404)
+            assert audit["reason"] == expected_reason, \
+                f"OpenMemory API 404 错误时 reason 必须为 {expected_reason}，实际: {audit['reason']}"
+
+    @pytest.mark.asyncio
+    async def test_openmemory_api_error_with_status_500(self, mock_config):
+        """关键路径测试: OpenMemory API 500 错误 -> reason 必须包含 api_error_500"""
+        from gateway.main import memory_store_impl
+        from gateway.openmemory_client import OpenMemoryAPIError
+        
+        captured_audits = []
+        
+        def capture_audit(**kwargs):
+            captured_audits.append(kwargs)
+        
+        with patch("gateway.main.get_config") as mock_get_config, \
+             patch("gateway.main.get_db") as mock_get_db, \
+             patch("gateway.main.get_client") as mock_get_client, \
+             patch("gateway.main.step1_adapter") as mock_step1_adapter, \
+             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+            
+            mock_get_config.return_value = mock_config
+            
+            mock_db = MagicMock()
+            mock_db.get_or_create_settings.return_value = {"team_write_enabled": True}
+            mock_db.insert_audit = capture_audit
+            mock_db.enqueue_outbox.return_value = 123
+            mock_get_db.return_value = mock_db
+            
+            mock_decision = MagicMock()
+            mock_decision.action.value = "allow"
+            mock_decision.reason = "team_write_enabled"
+            mock_decision.final_space = "team:test"
+            mock_engine = MagicMock()
+            mock_engine.decide.return_value = mock_decision
+            mock_create_engine.return_value = mock_engine
+            
+            mock_step1_adapter.check_dedup.return_value = None
+            
+            # 模拟 OpenMemory API 500 错误
+            mock_client = MagicMock()
+            mock_client.store.side_effect = OpenMemoryAPIError(
+                message="Internal Server Error",
+                status_code=500,
+                response=None
+            )
+            mock_get_client.return_value = mock_client
+            
+            result = await memory_store_impl(
+                payload_md="test content",
+                target_space="team:test",
+            )
+            
+            assert result.ok is False
+            assert len(captured_audits) == 1
+            audit = captured_audits[0]
+            
+            # 关键断言: reason 必须为 openmemory_write_failed:api_error_500
+            expected_reason = ErrorCode.openmemory_api_error(500)
+            assert audit["reason"] == expected_reason, \
+                f"OpenMemory API 500 错误时 reason 必须为 {expected_reason}，实际: {audit['reason']}"
+
+
+# ======================== 未知异常测试 ========================
+
+class TestUnknownExceptionErrorCodes:
+    """验证未知异常的错误码处理"""
+
+    @pytest.fixture
+    def mock_config(self):
+        config = MagicMock()
+        config.default_team_space = "team:test"
+        config.project_key = "test_project"
+        config.private_space_prefix = "private:"
+        return config
+
+    @pytest.mark.asyncio
+    async def test_openmemory_generic_error_reason(self, mock_config):
+        """关键路径测试: OpenMemory 通用错误 -> reason 必须为 openmemory_write_failed:openmemory_error"""
+        from gateway.main import memory_store_impl
+        from gateway.openmemory_client import OpenMemoryError
+        
+        captured_audits = []
+        
+        def capture_audit(**kwargs):
+            captured_audits.append(kwargs)
+        
+        with patch("gateway.main.get_config") as mock_get_config, \
+             patch("gateway.main.get_db") as mock_get_db, \
+             patch("gateway.main.get_client") as mock_get_client, \
+             patch("gateway.main.step1_adapter") as mock_step1_adapter, \
+             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+            
+            mock_get_config.return_value = mock_config
+            
+            mock_db = MagicMock()
+            mock_db.get_or_create_settings.return_value = {"team_write_enabled": True}
+            mock_db.insert_audit = capture_audit
+            mock_db.enqueue_outbox.return_value = 123
+            mock_get_db.return_value = mock_db
+            
+            mock_decision = MagicMock()
+            mock_decision.action.value = "allow"
+            mock_decision.reason = "team_write_enabled"
+            mock_decision.final_space = "team:test"
+            mock_engine = MagicMock()
+            mock_engine.decide.return_value = mock_decision
+            mock_create_engine.return_value = mock_engine
+            
+            mock_step1_adapter.check_dedup.return_value = None
+            
+            # 模拟 OpenMemory 通用错误
+            mock_client = MagicMock()
+            mock_client.store.side_effect = OpenMemoryError(
+                message="Some generic error",
+                status_code=None,
+                response=None
+            )
+            mock_get_client.return_value = mock_client
+            
+            result = await memory_store_impl(
+                payload_md="test content",
+                target_space="team:test",
+            )
+            
+            assert result.ok is False
+            assert len(captured_audits) == 1
+            audit = captured_audits[0]
+            
+            # 关键断言
+            assert audit["reason"] == ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC, \
+                f"OpenMemory 通用错误时 reason 必须为 {ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC}，实际: {audit['reason']}"
+
+
+# ======================== DB Timeout vs DB Error 测试 ========================
+
+class TestDBTimeoutVsDBError:
+    """验证 DB timeout 和 DB error 的区分"""
+
+    def test_db_timeout_error_classification(self):
+        """测试 DB timeout 错误分类"""
+        from gateway.outbox_worker import _classify_db_error
+        import psycopg.errors
+        
+        # 模拟 QueryCanceled 异常（statement_timeout）
+        timeout_exc = psycopg.errors.QueryCanceled()
+        error_type, reason = _classify_db_error(timeout_exc)
+        
+        assert error_type == "db_timeout"
+        assert reason == ErrorCode.OUTBOX_FLUSH_DB_TIMEOUT, \
+            f"DB timeout 时 reason 必须为 {ErrorCode.OUTBOX_FLUSH_DB_TIMEOUT}，实际: {reason}"
+
+    def test_db_general_error_classification(self):
+        """测试普通 DB 错误分类"""
+        from gateway.outbox_worker import _classify_db_error
+        import psycopg.errors
+        
+        # 模拟普通数据库错误
+        db_exc = psycopg.errors.OperationalError()
+        error_type, reason = _classify_db_error(db_exc)
+        
+        assert error_type == "db_error"
+        assert reason == ErrorCode.OUTBOX_FLUSH_DB_ERROR, \
+            f"普通 DB 错误时 reason 必须为 {ErrorCode.OUTBOX_FLUSH_DB_ERROR}，实际: {reason}"
+
+    def test_is_db_timeout_error_with_sqlstate(self):
+        """测试通过 SQLSTATE 判断 DB timeout"""
+        from gateway.outbox_worker import _is_db_timeout_error
+        
+        # 创建模拟对象，设置 sqlstate
+        class MockException(Exception):
+            sqlstate = '57014'  # SQLSTATE for query_canceled
+        
+        exc = MockException()
+        assert _is_db_timeout_error(exc) is True
+
+    def test_is_db_timeout_error_with_pgcode(self):
+        """测试通过 pgcode 判断 DB timeout（psycopg2 兼容）"""
+        from gateway.outbox_worker import _is_db_timeout_error
+        
+        class MockException(Exception):
+            pgcode = '57014'
+        
+        exc = MockException()
+        assert _is_db_timeout_error(exc) is True
+
+
+# ======================== Conflict 路径 Reason 测试 ========================
+
+class TestConflictPathErrorCodes:
+    """验证 conflict 路径的错误码使用"""
+
+    @pytest.fixture
+    def config(self):
+        from gateway.outbox_worker import WorkerConfig
+        return WorkerConfig(max_retries=3, jitter_factor=0.0)
+
+    def make_outbox_item(
+        self,
+        outbox_id: int = 1,
+        target_space: str = "private:user_001",
+        payload_md: str = "# Test Memory",
+        payload_sha: str = "a" * 64,
+        retry_count: int = 0,
+    ):
+        from gateway.step1_adapter import OutboxItem
+        return OutboxItem(
+            outbox_id=outbox_id,
+            item_id=None,
+            target_space=target_space,
+            payload_md=payload_md,
+            payload_sha=payload_sha,
+            retry_count=retry_count,
+        )
+
+    def test_outbox_flush_conflict_reason(self, config):
+        """关键路径测试: Outbox lease 冲突 -> reason 必须为 outbox_flush_conflict"""
+        from gateway.outbox_worker import _handle_conflict
+        
+        captured_audits = []
+        
+        with patch("gateway.outbox_worker.step1_adapter") as mock_adapter:
+            # 模拟 get_outbox_by_id 返回被其他 worker 占用的状态
+            mock_adapter.get_outbox_by_id.return_value = {
+                "status": "pending",
+                "locked_by": "other-worker",
+                "last_error": None,
+            }
+            mock_adapter.insert_write_audit = lambda **kwargs: captured_audits.append(kwargs) or 1
+            
+            result = _handle_conflict(
+                outbox_id=1,
+                worker_id="my-worker",
+                attempt_id="attempt-123",
+                user_id="user_001",
+                target_space="private:user_001",
+                payload_sha="a" * 64,
+                intended_action="success",
+                correlation_id="corr-456",
+            )
+            
+            # 验证返回
+            assert result.conflict is True
+            assert result.action == "redirect"
+            
+            # 关键断言: reason 必须为 outbox_flush_conflict
+            assert result.reason == ErrorCode.OUTBOX_FLUSH_CONFLICT, \
+                f"Lease 冲突时 reason 必须为 {ErrorCode.OUTBOX_FLUSH_CONFLICT}，实际: {result.reason}"
+            
+            # 验证审计记录
+            assert len(captured_audits) == 1
+            assert captured_audits[0]["reason"] == ErrorCode.OUTBOX_FLUSH_CONFLICT
+
+    def test_conflict_on_dedup_hit_ack(self, config):
+        """测试 dedup_hit 时 ack 失败的 conflict"""
+        from gateway.outbox_worker import process_single_item
+        
+        item = self.make_outbox_item(outbox_id=10)
+        mock_client = MagicMock()
+        
+        captured_audits = []
+        
+        with patch("gateway.outbox_worker.step1_adapter") as mock_adapter:
+            # 模拟 dedup 命中
+            mock_adapter.check_dedup.return_value = {
+                "outbox_id": 100,
+                "status": "sent",
+                "last_error": "memory_id=mem_original",
+            }
+            # 模拟 ack_sent 返回 False（冲突）
+            mock_adapter.ack_sent.return_value = False
+            mock_adapter.get_outbox_by_id.return_value = {
+                "status": "sent",
+                "locked_by": "other-worker",
+            }
+            mock_adapter.insert_write_audit = lambda **kwargs: captured_audits.append(kwargs) or 1
+            
+            result = process_single_item(item, "my-worker", mock_client, config)
+            
+            assert result.conflict is True
+            assert result.reason == ErrorCode.OUTBOX_FLUSH_CONFLICT
+
+
+# ======================== Governance 更新拒绝/缺凭证测试 ========================
+
+class TestGovernanceUpdateErrorCodes:
+    """验证 governance_update 拒绝和缺凭证的错误码"""
+
+    @pytest.fixture
+    def mock_config(self):
+        config = MagicMock()
+        config.project_key = "test_project"
+        config.governance_admin_key = "real_admin_key"
+        return config
+
+    @pytest.mark.asyncio
+    async def test_governance_missing_credentials_reason(self, mock_config):
+        """关键路径测试: 治理更新缺少凭证 -> reason 必须为 governance_update:missing_credentials"""
+        from gateway.main import governance_update_impl
+        
+        captured_audits = []
+        
+        def capture_audit(**kwargs):
+            captured_audits.append(kwargs)
+        
+        with patch("gateway.main.get_config") as mock_get_config, \
+             patch("gateway.main.get_db") as mock_get_db:
+            
+            mock_get_config.return_value = mock_config
+            
+            mock_db = MagicMock()
+            mock_db.get_or_create_settings.return_value = {
+                "team_write_enabled": True,
+                "policy_json": {"allowlist_users": []},
+            }
+            mock_db.insert_audit = capture_audit
+            mock_get_db.return_value = mock_db
+            
+            # 不提供任何凭证
+            result = await governance_update_impl(
+                team_write_enabled=False,
+                admin_key=None,
+                actor_user_id=None,
+            )
+            
+            assert result.ok is False
+            assert result.action == "reject"
+            
+            # 关键断言
+            assert len(captured_audits) == 1
+            assert captured_audits[0]["reason"] == ErrorCode.GOVERNANCE_UPDATE_MISSING_CREDENTIALS, \
+                f"缺少凭证时 reason 必须为 {ErrorCode.GOVERNANCE_UPDATE_MISSING_CREDENTIALS}，实际: {captured_audits[0]['reason']}"
+
+    @pytest.mark.asyncio
+    async def test_governance_invalid_admin_key_reason(self, mock_config):
+        """关键路径测试: 无效的 admin_key -> reason 必须为 governance_update:invalid_admin_key"""
+        from gateway.main import governance_update_impl
+        
+        captured_audits = []
+        
+        def capture_audit(**kwargs):
+            captured_audits.append(kwargs)
+        
+        with patch("gateway.main.get_config") as mock_get_config, \
+             patch("gateway.main.get_db") as mock_get_db:
+            
+            mock_get_config.return_value = mock_config
+            
+            mock_db = MagicMock()
+            mock_db.get_or_create_settings.return_value = {
+                "team_write_enabled": True,
+                "policy_json": {"allowlist_users": []},
+            }
+            mock_db.insert_audit = capture_audit
+            mock_get_db.return_value = mock_db
+            
+            # 提供无效的 admin_key
+            result = await governance_update_impl(
+                team_write_enabled=False,
+                admin_key="wrong_key",
+                actor_user_id=None,
+            )
+            
+            assert result.ok is False
+            assert result.action == "reject"
+            
+            assert len(captured_audits) == 1
+            assert captured_audits[0]["reason"] == ErrorCode.GOVERNANCE_UPDATE_INVALID_ADMIN_KEY, \
+                f"无效 admin_key 时 reason 必须为 {ErrorCode.GOVERNANCE_UPDATE_INVALID_ADMIN_KEY}，实际: {captured_audits[0]['reason']}"
+
+    @pytest.mark.asyncio
+    async def test_governance_user_not_in_allowlist_reason(self, mock_config):
+        """关键路径测试: 用户不在 allowlist -> reason 必须为 governance_update:user_not_in_allowlist"""
+        from gateway.main import governance_update_impl
+        
+        captured_audits = []
+        
+        def capture_audit(**kwargs):
+            captured_audits.append(kwargs)
+        
+        with patch("gateway.main.get_config") as mock_get_config, \
+             patch("gateway.main.get_db") as mock_get_db:
+            
+            mock_get_config.return_value = mock_config
+            
+            mock_db = MagicMock()
+            mock_db.get_or_create_settings.return_value = {
+                "team_write_enabled": True,
+                "policy_json": {"allowlist_users": ["admin1", "admin2"]},
+            }
+            mock_db.insert_audit = capture_audit
+            mock_get_db.return_value = mock_db
+            
+            # 提供不在 allowlist 中的 user_id
+            result = await governance_update_impl(
+                team_write_enabled=False,
+                admin_key=None,
+                actor_user_id="not_in_list_user",
+            )
+            
+            assert result.ok is False
+            assert result.action == "reject"
+            
+            assert len(captured_audits) == 1
+            assert captured_audits[0]["reason"] == ErrorCode.GOVERNANCE_UPDATE_USER_NOT_IN_ALLOWLIST, \
+                f"用户不在 allowlist 时 reason 必须为 {ErrorCode.GOVERNANCE_UPDATE_USER_NOT_IN_ALLOWLIST}，实际: {captured_audits[0]['reason']}"
+
+    @pytest.mark.asyncio
+    async def test_governance_internal_error_reason(self, mock_config):
+        """关键路径测试: 治理更新内部错误 -> reason 必须为 governance_update:internal_error"""
+        from gateway.main import governance_update_impl
+        
+        captured_audits = []
+        
+        def capture_audit(**kwargs):
+            captured_audits.append(kwargs)
+        
+        with patch("gateway.main.get_config") as mock_get_config, \
+             patch("gateway.main.get_db") as mock_get_db, \
+             patch("gateway.main.step1_adapter") as mock_step1_adapter:
+            
+            mock_get_config.return_value = mock_config
+            
+            mock_db = MagicMock()
+            mock_db.get_or_create_settings.return_value = {
+                "team_write_enabled": True,
+                "policy_json": {"allowlist_users": []},
+            }
+            mock_db.insert_audit = capture_audit
+            mock_db.get_settings.return_value = {}
+            mock_get_db.return_value = mock_db
+            
+            # 模拟内部错误
+            mock_adapter = MagicMock()
+            mock_adapter.upsert_settings.side_effect = Exception("DB connection lost")
+            mock_step1_adapter.get_adapter.return_value = mock_adapter
+            
+            # 提供有效的 admin_key
+            result = await governance_update_impl(
+                team_write_enabled=False,
+                admin_key="real_admin_key",
+                actor_user_id=None,
+            )
+            
+            assert result.ok is False
+            assert result.action == "reject"
+            
+            # 应该有两条审计：尝试前不会写入，仅在失败后写入
+            assert len(captured_audits) == 1
+            assert captured_audits[0]["reason"] == ErrorCode.GOVERNANCE_UPDATE_INTERNAL_ERROR, \
+                f"内部错误时 reason 必须为 {ErrorCode.GOVERNANCE_UPDATE_INTERNAL_ERROR}，实际: {captured_audits[0]['reason']}"
+
+
+# ======================== Reconcile Outbox ErrorCode 测试 ========================
+
+class TestReconcileOutboxErrorCodes:
+    """验证 reconcile_outbox 模块的 ErrorCode 使用"""
+
+    def test_outbox_stale_error_code_exists(self):
+        """验证 OUTBOX_STALE 错误码存在"""
+        assert hasattr(ErrorCode, 'OUTBOX_STALE')
+        assert ErrorCode.OUTBOX_STALE == "outbox_stale"
+
+    def test_reconcile_uses_error_code_constants(self):
+        """验证 reconcile_outbox 模块导入了 ErrorCode"""
+        from gateway import reconcile_outbox
+        # 验证模块已导入 ErrorCode
+        assert hasattr(reconcile_outbox, 'ErrorCode')
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

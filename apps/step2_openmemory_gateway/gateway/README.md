@@ -78,6 +78,51 @@ Access-Control-Allow-Headers: Content-Type,Authorization,Mcp-Session-Id
 }
 ```
 
+#### error.data 字段说明
+
+当错误响应需要携带额外的诊断信息时，可使用 `error.data` 字段。该字段为可选，格式如下：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `error.data.reason` | string | 错误原因的详细描述 |
+| `error.data.field` | string | 导致错误的字段名（参数校验错误时） |
+| `error.data.hint` | string | 修复建议或参考信息 |
+| `error.data.trace_id` | string | 请求追踪 ID（用于日志关联） |
+
+**示例：参数校验错误**
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32602,
+    "message": "Invalid params",
+    "data": {
+      "reason": "缺少必需参数",
+      "field": "payload_md",
+      "hint": "payload_md 为必填字段，请提供记忆内容"
+    }
+  },
+  "id": 1
+}
+```
+
+**示例：工具执行错误**
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32000,
+    "message": "Tool execution failed",
+    "data": {
+      "reason": "OpenMemory 服务不可用",
+      "hint": "记忆已降级写入 outbox，将在服务恢复后自动同步",
+      "trace_id": "req_abc123"
+    }
+  },
+  "id": 2
+}
+```
+
 ---
 
 ## /mcp 请求/响应示例
