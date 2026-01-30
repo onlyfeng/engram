@@ -1139,8 +1139,7 @@ async def governance_update_impl(
         else:
             new_policy = current_policy
         
-        # 导入 logbook_adapter 以获取 upsert_settings
-        from . import logbook_adapter
+        # 使用模块级 logbook_adapter 获取 adapter（便于测试 patch）
         adapter = logbook_adapter.get_adapter()
         
         # 执行更新

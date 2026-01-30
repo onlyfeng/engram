@@ -504,6 +504,15 @@ def insert_write_audit(
     conn = get_connection(config=config)
     try:
         with conn.cursor() as cur:
+            if actor_user_id:
+                cur.execute(
+                    """
+                    INSERT INTO identity.users (user_id, display_name)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    (actor_user_id, actor_user_id),
+                )
             cur.execute(
                 """
                 INSERT INTO write_audit
