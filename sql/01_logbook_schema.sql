@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS logbook.kv (
 -- 用于 Step2 写入失败时的补偿队列（outbox）
 CREATE TABLE IF NOT EXISTS logbook.outbox_memory (
   outbox_id          bigserial PRIMARY KEY,
-  item_id            bigint REFERENCES logbook.items(item_id),
+  item_id            bigint,
   target_space       text NOT NULL, -- team:<project> / private:<user> / org:shared
   payload_md         text NOT NULL,
   payload_sha        text NOT NULL,
@@ -105,6 +105,10 @@ CREATE TABLE IF NOT EXISTS logbook.outbox_memory (
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
+
+-- 兼容老库：移除 item_id 外键约束
+ALTER TABLE logbook.outbox_memory
+  DROP CONSTRAINT IF EXISTS outbox_memory_item_id_fkey;
 
 -- outbox_memory 索引：按状态+下次尝试时间查询优化（用于 claim_outbox）
 CREATE INDEX IF NOT EXISTS idx_outbox_memory_pending
@@ -124,7 +128,8 @@ CREATE INDEX IF NOT EXISTS idx_outbox_pending_lease
 -- outbox_memory 唯一索引：用于幂等去重 (dedupe)
 -- 相同 (target_space, payload_sha) 且 status='sent' 的记录表示已成功写入，无需重复写入
 -- 注意：此索引仅针对 sent 状态，允许 pending/dead 状态的重复（用于重试场景）
-CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_dedup_sent
+DROP INDEX IF EXISTS logbook.idx_outbox_dedup_sent;
+CREATE INDEX IF NOT EXISTS idx_outbox_dedup_sent
   ON logbook.outbox_memory(target_space, payload_sha)
   WHERE status = 'sent';
 
@@ -354,7 +359,7 @@ CREATE TABLE IF NOT EXISTS governance.write_audit (
   audit_id           bigserial PRIMARY KEY,
   created_at         timestamptz NOT NULL DEFAULT now(),
   ts                 timestamptz NOT NULL DEFAULT now(),
-  actor_user_id      text REFERENCES identity.users(user_id),
+  actor_user_id      text,
   target_space       text NOT NULL,
   action             text NOT NULL, -- allow/redirect/reject
   reason             text,
@@ -365,6 +370,10 @@ CREATE TABLE IF NOT EXISTS governance.write_audit (
 -- 兼容老库：补充 created_at 字段
 ALTER TABLE governance.write_audit
   ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+
+-- 兼容老库：移除 actor_user_id 外键约束
+ALTER TABLE governance.write_audit
+  DROP CONSTRAINT IF EXISTS write_audit_actor_user_id_fkey;
 
 -- ============ write_audit: evidence_refs_json 结构规范 ============
 -- 与 analysis.knowledge_candidates.evidence_refs_json 结构相同:

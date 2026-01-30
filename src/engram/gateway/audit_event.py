@@ -553,9 +553,12 @@ def build_outbox_worker_audit_event(
     构建 Outbox Worker 来源的审计事件（简化版）
     
     自动设置 source="outbox_worker"
-    将 worker_id 和 attempt_id 放入 extra
+    将 worker_id、attempt_id、correlation_id 放入 extra
     """
+    if correlation_id is None:
+        correlation_id = generate_correlation_id()
     worker_extra = extra.copy() if extra else {}
+    worker_extra.setdefault("correlation_id", correlation_id)
     if worker_id:
         worker_extra["worker_id"] = worker_id
     if attempt_id:
@@ -887,8 +890,19 @@ def build_evidence_refs_json(
         result["payload_sha"] = gateway_event["payload_sha"]
     
     # 额外追踪字段（用于可观测性）
-    if gateway_event.get("extra"):
-        result["extra"] = gateway_event["extra"]
+    extra = dict(gateway_event.get("extra") or {})
+    correlation_id = gateway_event.get("correlation_id")
+    if correlation_id and "correlation_id" not in extra:
+        extra["correlation_id"] = correlation_id
+    if extra:
+        result["extra"] = extra
+    if correlation_id:
+        result["correlation_id"] = correlation_id
+
+    # 顶层提升关键 worker 字段（便于 SQL 查询与审计断言）
+    for key in ("worker_id", "attempt_id", "intended_action", "original_outbox_id"):
+        if key in extra:
+            result[key] = extra[key]
     
     return result
 

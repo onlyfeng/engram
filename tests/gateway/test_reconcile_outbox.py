@@ -55,6 +55,9 @@ def db_conn_for_reconcile(migrated_db: dict):
     
     with conn.cursor() as cur:
         cur.execute("SET search_path TO logbook, governance, scm, identity, analysis, public")
+        # 每个测试用例前清空关键表，避免跨测试污染
+        cur.execute("TRUNCATE logbook.outbox_memory, governance.write_audit")
+    conn.commit()
     
     yield conn
     
@@ -296,7 +299,7 @@ class TestReconcileSentRecords:
                 """
                 SELECT audit_id, reason, evidence_refs_json
                 FROM write_audit
-                WHERE reason LIKE 'outbox_flush_success%'
+                WHERE reason LIKE 'outbox_flush_success%%'
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,
                 (outbox_id,),
@@ -469,7 +472,7 @@ class TestReconcileDeadRecords:
                 """
                 SELECT audit_id, reason, evidence_refs_json
                 FROM write_audit
-                WHERE reason LIKE 'outbox_flush_dead%'
+                WHERE reason LIKE 'outbox_flush_dead%%'
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,
                 (outbox_id,),
@@ -655,7 +658,7 @@ class TestReconcileStaleRecords:
                 """
                 SELECT audit_id, reason, evidence_refs_json
                 FROM write_audit
-                WHERE reason LIKE 'outbox_stale%'
+                WHERE reason LIKE 'outbox_stale%%'
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,
                 (outbox_id,),
