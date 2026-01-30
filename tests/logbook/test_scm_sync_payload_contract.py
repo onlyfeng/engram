@@ -11,6 +11,7 @@ test_scm_sync_payload_contract.py - SCM Sync Payload JSON Schema 契约测试
 
 import json
 import os
+from pathlib import Path
 import pytest
 
 # 尝试导入 jsonschema，如果不可用则跳过测试
@@ -36,13 +37,9 @@ from engram.logbook.scm_sync_payload import (
 )
 
 
-# Schema 文件路径 - 从测试目录回溯到项目根目录
-# tests/ -> scripts/ -> logbook_postgres/ -> apps/ -> engram/
-SCHEMA_PATH = os.path.normpath(os.path.join(
-    os.path.dirname(__file__),
-    "..", "..", "..", "..",
-    "schemas", "scm_sync_job_payload_v1.schema.json"
-))
+# Schema 文件路径（tests/logbook -> tests -> repo root）
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCHEMA_PATH = str(REPO_ROOT / "schemas" / "scm_sync_job_payload_v1.schema.json")
 
 
 @pytest.fixture(scope="module")

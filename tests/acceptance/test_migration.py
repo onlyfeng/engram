@@ -187,7 +187,7 @@ class TestSchemaVerification:
                 
                 # 尝试插入一条测试数据
                 cur.execute("""
-                    INSERT INTO logbook.items (item_type, title, project_key)
+                    INSERT INTO items (item_type, title, project_key)
                     VALUES ('test', 'Migration Test Item', 'test_project')
                     RETURNING id
                 """)
@@ -195,7 +195,7 @@ class TestSchemaVerification:
                 assert item_id is not None
                 
                 # 读取数据
-                cur.execute("SELECT title FROM logbook.items WHERE id = %s", (item_id,))
+                cur.execute("SELECT title FROM items WHERE id = %s", (item_id,))
                 title = cur.fetchone()[0]
                 assert title == "Migration Test Item"
             

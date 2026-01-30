@@ -73,24 +73,9 @@ jobs:
           TEST_PG_DSN: postgresql://postgres:postgres@localhost:5432/engram_test
           TEST_PG_ADMIN_DSN: postgresql://postgres:postgres@localhost:5432/postgres
           PROJECT_KEY: test
+          SEEKDB_ENABLE: "1"
         run: |
-          # 注意: 
-          # - tests/logbook/ 目录包含依赖尚未迁移模块的遗留测试，暂时跳过
-          # - 部分集成测试需要完整的数据库迁移环境，暂时排除
-          # - 部分测试需要调整断言以匹配新行为，暂时排除
-          pytest tests/gateway/ -v \
-            --ignore=tests/gateway/test_outbox_worker_integration.py \
-            --ignore=tests/gateway/test_reconcile_outbox.py \
-            --ignore=tests/gateway/test_validate_refs.py \
-            --ignore=tests/gateway/test_migrate_import.py \
-            --ignore=tests/gateway/test_unified_stack_integration.py \
-            --deselect=tests/gateway/test_actor_user_id.py::TestActorUserIdInAudit::test_actor_user_id_passed_to_audit_on_success \
-            --deselect=tests/gateway/test_actor_user_id.py::TestActorUserIdInAudit::test_actor_user_id_passed_to_audit_on_openmemory_error \
-            --deselect=tests/gateway/test_audit_event_contract.py::TestAuditFirstSemantics::test_openmemory_failure_outbox_then_audit \
-            --deselect=tests/gateway/test_error_codes.py::TestOpenMemoryAPIErrorWithStatus \
-            --deselect=tests/gateway/test_error_codes.py::TestUnknownExceptionErrorCodes::test_openmemory_generic_error_reason \
-            --deselect=tests/gateway/test_error_codes.py::TestGovernanceUpdateErrorCodes::test_governance_internal_error_reason \
-            --junitxml=test-results-${{ matrix.python-version }}.xml
+          pytest tests/gateway/ -v --junitxml=test-results-${{ matrix.python-version }}.xml
 
       - name: Run acceptance tests
         env:
@@ -98,24 +83,9 @@ jobs:
           TEST_PG_DSN: postgresql://postgres:postgres@localhost:5432/engram_test
           TEST_PG_ADMIN_DSN: postgresql://postgres:postgres@localhost:5432/postgres
           PROJECT_KEY: test
-          # Gateway 需要的环境变量（用于 CLI 测试）
-          OPENMEMORY_BASE_URL: http://localhost:8080
+          SEEKDB_ENABLE: "1"
         run: |
-          # 排除需要完整数据库或特殊配置的 acceptance 测试
-          pytest tests/acceptance/ -v \
-            --ignore=tests/acceptance/test_e2e_workflow.py \
-            --ignore=tests/acceptance/test_migration.py \
-            --ignore=tests/acceptance/test_gateway_startup.py \
-            --deselect=tests/acceptance/test_cli.py::TestLogbookCLI::test_health_with_valid_dsn \
-            --deselect=tests/acceptance/test_cli.py::TestLogbookCLI::test_health_with_invalid_dsn \
-            --deselect=tests/acceptance/test_cli.py::TestMigrateCLI::test_with_valid_dsn \
-            --deselect=tests/acceptance/test_cli.py::TestCLIEnvironmentVariables \
-            --deselect=tests/acceptance/test_cli.py::TestCLIOutputFormat \
-            --deselect=tests/acceptance/test_cli.py::TestGatewayCLI \
-            --deselect=tests/acceptance/test_env_config.py \
-            --deselect=tests/acceptance/test_installation.py::TestGatewayImport::test_gateway_audit_event \
-            --deselect=tests/acceptance/test_installation.py::TestLogbookModuleStructure::test_config_module_structure \
-            --junitxml=acceptance-results-${{ matrix.python-version }}.xml
+          pytest tests/acceptance/ -v --junitxml=acceptance-results-${{ matrix.python-version }}.xml
 
       - name: Upload test results
         if: always()

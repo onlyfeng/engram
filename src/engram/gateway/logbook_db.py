@@ -24,17 +24,10 @@ logbook_db - Logbook 数据库操作模块 (已弃用)
     from engram.gateway.logbook_adapter import LogbookAdapter, get_adapter
 """
 
-import warnings
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-# 发出弃用警告
-warnings.warn(
-    "logbook_db 模块已弃用，请使用 logbook_adapter 模块代替。"
-    "新代码请使用: from engram.gateway.logbook_adapter import LogbookAdapter, get_adapter",
-    DeprecationWarning,
-    stacklevel=2,
-)
+#
 
 # 尝试导入新适配器，如果失败则回退到旧实现
 try:

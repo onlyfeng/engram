@@ -66,17 +66,17 @@ class TestRenderViewsDefaults:
     
     def test_default_out_dir_constant(self):
         """验证默认输出目录常量"""
-        from render_views import DEFAULT_OUT_DIR as ACTUAL_DEFAULT
+        from engram.logbook.views import DEFAULT_OUT_DIR as ACTUAL_DEFAULT
         assert ACTUAL_DEFAULT == "./.agentx/logbook/views"
     
     def test_default_limit_constant(self):
         """验证默认 limit 常量"""
-        from render_views import DEFAULT_LIMIT
+        from engram.logbook.views import DEFAULT_LIMIT
         assert DEFAULT_LIMIT == 50
     
     def test_auto_generated_marker_constant(self):
         """验证自动生成标记常量"""
-        from render_views import AUTO_GENERATED_MARKER as ACTUAL_MARKER
+        from engram.logbook.views import AUTO_GENERATED_MARKER as ACTUAL_MARKER
         assert "AUTO-GENERATED" in ACTUAL_MARKER
         assert "DO NOT EDIT" in ACTUAL_MARKER
 
@@ -88,7 +88,7 @@ class TestRenderViewsEmptyData:
     
     def test_empty_items_generates_valid_files(self):
         """空数据时应生成有效的空文件结构"""
-        from render_views import generate_manifest_csv, generate_index_md
+        from engram.logbook.views import generate_manifest_csv, generate_index_md
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_path = Path(tmp_dir)
@@ -110,7 +110,7 @@ class TestRenderViewsEmptyData:
     
     def test_empty_items_index_shows_zero_count(self):
         """空数据时 index.md 应显示 0 条记录"""
-        from render_views import generate_index_md
+        from engram.logbook.views import generate_index_md
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_path = Path(tmp_dir)
@@ -126,10 +126,10 @@ class TestRenderViewsEmptyData:
             assert "Total items: 0" in content
             assert "Showing: 0" in content
     
-    @patch("render_views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
     def test_render_views_empty_database(self, mock_get_items):
         """数据库为空时的完整渲染流程"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         mock_get_items.return_value = []
         
@@ -158,7 +158,7 @@ class TestRenderViewsSmallData:
     
     def test_few_items_manifest(self):
         """少量数据生成的 manifest.csv 验证"""
-        from render_views import generate_manifest_csv
+        from engram.logbook.views import generate_manifest_csv
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             items = create_mock_items(3)
@@ -180,7 +180,7 @@ class TestRenderViewsSmallData:
     
     def test_few_items_index_table(self):
         """少量数据生成的 index.md 表格验证"""
-        from render_views import generate_index_md
+        from engram.logbook.views import generate_index_md
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             items = create_mock_items(3, with_events=True)
@@ -200,7 +200,7 @@ class TestRenderViewsSmallData:
     
     def test_limit_truncates_index(self):
         """limit 参数应截断 index.md 中显示的条目数"""
-        from render_views import generate_index_md
+        from engram.logbook.views import generate_index_md
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             items = create_mock_items(10)
@@ -218,10 +218,10 @@ class TestRenderViewsSmallData:
             assert "| 5 |" in content
             assert "| 6 |" not in content
     
-    @patch("render_views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
     def test_render_views_small_dataset(self, mock_get_items):
         """少量数据的完整渲染流程"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         mock_get_items.return_value = create_mock_items(5)
         
@@ -250,10 +250,10 @@ class TestRenderViewsSmallData:
 class TestRenderViewsWithAttachments:
     """测试包含 attachment 的场景"""
     
-    @patch("render_views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
     def test_items_with_attachment_events(self, mock_get_items):
         """包含 attachment 类型事件的 items 应正常渲染"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         # 创建包含 attachment 事件的 items
         items = create_mock_items(3)
@@ -278,10 +278,10 @@ class TestRenderViewsWithAttachments:
             assert "attachment_added" in content
             assert "file_uploaded" in content
     
-    @patch("render_views.db.get_items_with_latest_event")
-    @patch("render_views.db.add_event")
-    @patch("render_views.db.attach")
-    @patch("render_views.get_effective_artifacts_root")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.add_event")
+    @patch("engram.logbook.views.db.attach")
+    @patch("engram.logbook.views.get_effective_artifacts_root")
     def test_log_event_creates_attachment_records(
         self,
         mock_artifacts_root,
@@ -290,7 +290,7 @@ class TestRenderViewsWithAttachments:
         mock_get_items,
     ):
         """使用 --log-event 时应创建 attachment 记录"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         mock_get_items.return_value = create_mock_items(2)
         mock_add_event.return_value = 999  # event_id
@@ -320,10 +320,10 @@ class TestRenderViewsWithAttachments:
 class TestRenderViewsOverwritePolicy:
     """测试文件覆盖策略"""
     
-    @patch("render_views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
     def test_overwrites_existing_files(self, mock_get_items):
         """应完全覆盖已存在的文件"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         mock_get_items.return_value = create_mock_items(2)
         
@@ -349,10 +349,10 @@ class TestRenderViewsOverwritePolicy:
             assert AUTO_GENERATED_MARKER in new_manifest_content
             assert AUTO_GENERATED_MARKER in new_index_content
     
-    @patch("render_views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
     def test_creates_directory_if_not_exists(self, mock_get_items):
         """目标目录不存在时应自动创建"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         mock_get_items.return_value = create_mock_items(1)
         
@@ -373,10 +373,10 @@ class TestRenderViewsOverwritePolicy:
 class TestRenderViewsMetadata:
     """测试元数据文件生成"""
     
-    @patch("render_views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
     def test_meta_file_structure(self, mock_get_items):
         """验证 .views_meta.json 结构"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         mock_get_items.return_value = create_mock_items(3)
         
@@ -403,10 +403,10 @@ class TestRenderViewsMetadata:
                 assert "size" in info
                 assert len(info["sha256"]) == 64  # SHA256 长度
     
-    @patch("render_views.db.get_items_with_latest_event")
+    @patch("engram.logbook.views.db.get_items_with_latest_event")
     def test_meta_sha256_matches_actual_files(self, mock_get_items):
         """验证元数据中的 SHA256 与实际文件一致"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         from engram.logbook.hashing import get_file_info
         
         mock_get_items.return_value = create_mock_items(2)
@@ -435,7 +435,7 @@ class TestRenderViewsEdgeCases:
     
     def test_title_with_pipe_character(self):
         """标题包含 | 字符时应正确转义"""
-        from render_views import generate_index_md
+        from engram.logbook.views import generate_index_md
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             items = [{
@@ -461,7 +461,7 @@ class TestRenderViewsEdgeCases:
     
     def test_items_without_latest_event(self):
         """没有事件的 items 应显示 - 占位符"""
-        from render_views import generate_index_md
+        from engram.logbook.views import generate_index_md
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             items = create_mock_items(2, with_events=False)
@@ -489,20 +489,20 @@ class TestRenderViewsIntegration:
     
     def test_render_with_real_database(self, db_conn, migrated_db):
         """使用真实数据库的集成测试"""
-        from render_views import render_views
+        from engram.logbook.views import render_views
         from engram.logbook import db as db_module
         
         # 插入测试数据
         with db_conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO logbook.items (item_type, title, status)
+                INSERT INTO items (item_type, title, status)
                 VALUES ('task', 'Integration Test Item', 'open')
                 RETURNING item_id
             """)
             item_id = cur.fetchone()[0]
             
             cur.execute("""
-                INSERT INTO logbook.events (item_id, event_type, source)
+                INSERT INTO events (item_id, event_type, source)
                 VALUES (%s, 'create', 'test')
             """, (item_id,))
             

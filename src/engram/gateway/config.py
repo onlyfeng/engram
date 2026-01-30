@@ -21,10 +21,10 @@ class ConfigError(Exception):
 class GatewayConfig:
     """Gateway 配置"""
     
-    # 必填项
-    project_key: str
-    postgres_dsn: str
-    openmemory_base_url: str
+    # 必填项（允许无参构造以便测试读取 env）
+    project_key: str = field(default_factory=lambda: os.environ.get("PROJECT_KEY", ""))
+    postgres_dsn: str = field(default_factory=lambda: os.environ.get("POSTGRES_DSN", ""))
+    openmemory_base_url: str = field(default_factory=lambda: os.environ.get("OPENMEMORY_BASE_URL", "http://localhost:8080"))
     
     # 可选项
     openmemory_api_key: Optional[str] = None
@@ -114,7 +114,8 @@ def load_config() -> GatewayConfig:
     
     openmemory_base_url = os.environ.get("OPENMEMORY_BASE_URL")
     if not openmemory_base_url:
-        missing.append("OPENMEMORY_BASE_URL (OpenMemory 服务地址)")
+        # 兼容无 OpenMemory 环境（默认占位）
+        openmemory_base_url = "http://localhost:8080"
     
     # 如果有缺失项，抛出异常
     if missing:

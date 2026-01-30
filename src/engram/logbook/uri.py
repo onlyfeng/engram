@@ -991,6 +991,7 @@ def build_evidence_ref_for_patch_blob(
     source_type: str,
     source_id: str,
     sha256: str,
+    content_sha256: Optional[str] = None,
     size_bytes: Optional[int] = None,
     kind: str = "patch",
     extra: Optional[dict] = None,
@@ -1038,6 +1039,10 @@ def build_evidence_ref_for_patch_blob(
         ref = build_evidence_ref_for_patch_blob("svn", source_id, sha256)
         insert_write_audit(..., evidence_refs_json={"patches": [ref]})
     """
+    # 向后兼容: content_sha256 别名
+    if (sha256 is None or sha256 == "") and content_sha256:
+        sha256 = content_sha256
+
     # 规范化参数
     source_type = source_type.strip().lower()
     source_id = source_id.strip()

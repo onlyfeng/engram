@@ -121,6 +121,47 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+# ===================== 审计事件结构（兼容导出） =====================
+
+
+@dataclass
+class AuditEvent:
+    """
+    兼容导出的审计事件结构。
+    """
+
+    source: str
+    operation: str
+    correlation_id: str
+    schema_version: str = "1.1"
+    actor_user_id: Optional[str] = None
+    requested_space: Optional[str] = None
+    final_space: Optional[str] = None
+    decision: Optional[Dict[str, Any]] = None
+    payload_sha: Optional[str] = None
+    payload_len: Optional[int] = None
+    evidence_summary: Optional[Dict[str, Any]] = None
+    trim: Optional[Dict[str, Any]] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = {
+            "schema_version": self.schema_version,
+            "source": self.source,
+            "operation": self.operation,
+            "correlation_id": self.correlation_id,
+            "actor_user_id": self.actor_user_id,
+            "requested_space": self.requested_space,
+            "final_space": self.final_space,
+            "decision": self.decision,
+            "payload_sha": self.payload_sha,
+            "payload_len": self.payload_len,
+            "evidence_summary": self.evidence_summary,
+            "trim": self.trim,
+        }
+        if self.extra:
+            data.update(self.extra)
+        return {k: v for k, v in data.items() if v is not None}
 
 
 # ===================== 审计写入错误 =====================

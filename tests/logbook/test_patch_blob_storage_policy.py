@@ -6031,7 +6031,7 @@ class TestPatchBlobIntegrityCheck:
         mock_conn.cursor.return_value = mock_cursor
         
         # 导入并测试
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         issues = check_patch_blobs(mock_conn)
         
@@ -6061,7 +6061,7 @@ class TestPatchBlobIntegrityCheck:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         issues = check_patch_blobs(mock_conn)
         
@@ -6091,10 +6091,10 @@ class TestPatchBlobIntegrityCheck:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         # Mock artifact_exists 返回 False
-        with mock_patch("scm_integrity_check.artifact_exists", return_value=False):
+        with mock_patch("engram.logbook.scm_integrity_check.artifact_exists", return_value=False):
             issues = check_patch_blobs(mock_conn, check_artifacts=True)
         
         assert len(issues) == 1
@@ -6126,11 +6126,11 @@ class TestPatchBlobIntegrityCheck:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         # Mock artifact_exists 和 get_artifact_info
-        with mock_patch("scm_integrity_check.artifact_exists", return_value=True):
-            with mock_patch("scm_integrity_check.get_artifact_info", return_value={"sha256": actual_sha256}):
+        with mock_patch("engram.logbook.scm_integrity_check.artifact_exists", return_value=True):
+            with mock_patch("engram.logbook.scm_integrity_check.get_artifact_info", return_value={"sha256": actual_sha256}):
                 issues = check_patch_blobs(mock_conn, check_artifacts=True, verify_sha256=True)
         
         assert len(issues) == 1
@@ -6161,11 +6161,11 @@ class TestPatchBlobIntegrityCheck:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         # Mock artifact_exists 和 get_artifact_info 返回正确值
-        with mock_patch("scm_integrity_check.artifact_exists", return_value=True):
-            with mock_patch("scm_integrity_check.get_artifact_info", return_value={"sha256": sha256_value}):
+        with mock_patch("engram.logbook.scm_integrity_check.artifact_exists", return_value=True):
+            with mock_patch("engram.logbook.scm_integrity_check.get_artifact_info", return_value={"sha256": sha256_value}):
                 issues = check_patch_blobs(mock_conn, check_artifacts=True, verify_sha256=True)
         
         assert len(issues) == 0
@@ -6182,7 +6182,7 @@ class TestPatchBlobIntegrityCheck:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         # 测试带 limit 的调用
         check_patch_blobs(mock_conn, verify_sha256=True, verify_limit=100)
@@ -6213,7 +6213,7 @@ class TestPatchBlobIntegrityCheck:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         issues = check_patch_blobs(mock_conn, check_artifacts=True)
         
@@ -6260,11 +6260,11 @@ class TestPatchBlobIntegrityCheckWithRealArtifacts:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         # 使用真实的 artifact 函数，但 mock artifacts_root
-        with mock_patch("scm_integrity_check.artifact_exists") as mock_exists:
-            with mock_patch("scm_integrity_check.get_artifact_info") as mock_info:
+        with mock_patch("engram.logbook.scm_integrity_check.artifact_exists") as mock_exists:
+            with mock_patch("engram.logbook.scm_integrity_check.get_artifact_info") as mock_info:
                 mock_exists.return_value = True
                 mock_info.return_value = {"sha256": content_sha256, "size_bytes": len(content)}
                 
@@ -6313,7 +6313,7 @@ class TestPatchBlobIntegrityCheckWithRealArtifacts:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
         
-        from scm_integrity_check import check_patch_blobs
+        from engram.logbook.scm_integrity_check import check_patch_blobs
         
         issues = check_patch_blobs(mock_conn)
         
@@ -6329,7 +6329,7 @@ class TestPatchBlobIssueDataclass:
 
     def test_patch_blob_issue_creation(self):
         """测试 PatchBlobIssue 数据类创建"""
-        from scm_integrity_check import PatchBlobIssue
+        from engram.logbook.scm_integrity_check import PatchBlobIssue
         
         issue = PatchBlobIssue(
             blob_id=1,
@@ -6349,7 +6349,7 @@ class TestPatchBlobIssueDataclass:
 
     def test_integrity_check_result_includes_patch_blob_issues(self):
         """测试 IntegrityCheckResult 包含 patch_blob_issues"""
-        from scm_integrity_check import IntegrityCheckResult, PatchBlobIssue
+        from engram.logbook.scm_integrity_check import IntegrityCheckResult, PatchBlobIssue
         
         result = IntegrityCheckResult()
         assert result.patch_blob_issues == []
@@ -6371,7 +6371,7 @@ class TestPatchBlobIssueDataclass:
 
     def test_integrity_check_result_to_dict(self):
         """测试 IntegrityCheckResult.to_dict 包含 patch_blob_issues"""
-        from scm_integrity_check import IntegrityCheckResult, PatchBlobIssue
+        from engram.logbook.scm_integrity_check import IntegrityCheckResult, PatchBlobIssue
         
         result = IntegrityCheckResult()
         result.patch_blob_issues.append(PatchBlobIssue(

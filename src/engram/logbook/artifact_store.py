@@ -726,6 +726,35 @@ class LocalArtifactsStore(ArtifactStore):
                     self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
                     os.replace(temp_path, full_path)
                     temp_path = None
+            elif self._overwrite_policy == OVERWRITE_ALLOW_SAME_HASH:
+                try:
+                    # 尝试原子创建，避免并发写入覆盖
+                    os.link(temp_path, full_path)
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
+                    temp_path = None
+                except FileExistsError:
+                    # 已存在则比较 hash；一致则视为成功（不覆盖）
+                    self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
+                    temp_path = None
+                except OSError:
+                    # 回退：若文件已存在且 hash 一致，直接复用；否则尝试 replace
+                    if full_path.exists():
+                        self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
+                        try:
+                            temp_path.unlink()
+                        except OSError:
+                            pass
+                        temp_path = None
+                    else:
+                        os.replace(temp_path, full_path)
+                        temp_path = None
             else:
                 # 其他策略：先检查后 replace
                 self._check_overwrite_policy(full_path, new_sha256, normalized_uri)

@@ -119,6 +119,32 @@ def main():
         help="执行权限验证脚本 99_verify_permissions.sql。"
              "用于验证角色和权限配置是否正确",
     )
+
+    # 迁移后回填参数
+    parser.add_argument(
+        "--post-backfill",
+        action="store_true",
+        default=False,
+        help="迁移完成后执行 evidence_uri 回填（patch_blobs）",
+    )
+    parser.add_argument(
+        "--backfill-chunking-version",
+        type=str,
+        default=None,
+        help="迁移完成后回填 chunking_version（同时处理 patch_blobs 和 attachments）",
+    )
+    parser.add_argument(
+        "--backfill-batch-size",
+        type=int,
+        default=1000,
+        help="backfill 每批处理记录数（默认 1000）",
+    )
+    parser.add_argument(
+        "--backfill-dry-run",
+        action="store_true",
+        default=False,
+        help="backfill dry-run 模式（仅统计不写入）",
+    )
     
     args = parser.parse_args()
 
@@ -132,6 +158,10 @@ def main():
         apply_openmemory_grants=args.apply_openmemory_grants,
         precheck_only=args.precheck_only,
         verify=args.verify,
+        post_backfill=args.post_backfill,
+        backfill_chunking_version=args.backfill_chunking_version,
+        backfill_batch_size=args.backfill_batch_size,
+        backfill_dry_run=args.backfill_dry_run,
     )
     output_json(result, pretty=opts["pretty"])
 

@@ -32,9 +32,15 @@ import psycopg
 
 def ensure_logbook_path():
     """确保可以导入 engram_logbook 包"""
-    scripts_dir = Path(__file__).parent.parent.parent.parent / "logbook_postgres" / "scripts"
-    if scripts_dir.exists() and str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        repo_root / "logbook_postgres" / "scripts",
+        repo_root.parent / "logbook_postgres" / "scripts",
+    ]
+    for scripts_dir in candidates:
+        if scripts_dir.exists() and str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+            break
 
 
 ensure_logbook_path()

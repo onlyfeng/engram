@@ -18,6 +18,7 @@ test_scm_sync_run_contract.py - sync_runs 记录构建器模块测试
 
 import json
 import os
+from pathlib import Path
 import pytest
 import traceback
 
@@ -1137,11 +1138,17 @@ class TestEdgeCases:
 
 # Schema 文件路径 - 从测试目录回溯到项目根目录
 # tests/ -> scripts/ -> logbook_postgres/ -> apps/ -> engram/
-RUN_SCHEMA_PATH = os.path.normpath(os.path.join(
-    os.path.dirname(__file__),
-    "..", "..", "..", "..",
-    "schemas", "scm_sync_run_v1.schema.json"
-))
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_CANDIDATE_PATHS = [
+    _REPO_ROOT / "schemas" / "scm_sync_run_v1.schema.json",
+    _REPO_ROOT.parent / "schemas" / "scm_sync_run_v1.schema.json",
+]
+for _candidate in _CANDIDATE_PATHS:
+    if _candidate.exists():
+        RUN_SCHEMA_PATH = str(_candidate)
+        break
+else:
+    RUN_SCHEMA_PATH = str(_CANDIDATE_PATHS[0])
 
 
 @pytest.fixture(scope="module")

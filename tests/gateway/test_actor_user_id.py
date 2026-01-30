@@ -223,7 +223,7 @@ class TestActorUserIdInAudit:
             )
 
             assert result.ok is False
-            assert result.action == "error"
+            assert result.action == "deferred"
 
             # 验证 actor_user_id 传入审计
             mock_db.insert_audit.assert_called_once()

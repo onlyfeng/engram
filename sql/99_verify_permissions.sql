@@ -226,7 +226,12 @@ BEGIN
     RAISE NOTICE '=== 3. public schema CREATE 权限验证 ===';
     
     -- PUBLIC 不应有 CREATE 权限
-    SELECT pg_catalog.has_schema_privilege('PUBLIC', 'public', 'CREATE') INTO can_create;
+    BEGIN
+        SELECT pg_catalog.has_schema_privilege('PUBLIC', 'public', 'CREATE') INTO can_create;
+    EXCEPTION WHEN undefined_object THEN
+        -- 某些环境下 PUBLIC 不是实际角色，视为无权限
+        can_create := false;
+    END;
     IF can_create THEN
         RAISE WARNING 'FAIL: PUBLIC 仍有 public schema 的 CREATE 权限';
         RAISE NOTICE '  remedy: REVOKE CREATE ON SCHEMA public FROM PUBLIC;';
@@ -923,7 +928,11 @@ BEGIN
     RAISE NOTICE '--- 6.1 PUBLIC 权限硬化验证 ---';
     
     -- PUBLIC 不应有 CREATE 权限
-    SELECT has_database_privilege('PUBLIC', v_db, 'CREATE') INTO v_has_create;
+    BEGIN
+        SELECT has_database_privilege('PUBLIC', v_db, 'CREATE') INTO v_has_create;
+    EXCEPTION WHEN undefined_object THEN
+        v_has_create := false;
+    END;
     IF v_has_create THEN
         RAISE WARNING 'FAIL: PUBLIC 有数据库 CREATE 权限（硬化未生效）';
         RAISE NOTICE '  remedy: REVOKE CREATE ON DATABASE % FROM PUBLIC;', v_db;
@@ -933,7 +942,11 @@ BEGIN
     END IF;
     
     -- PUBLIC 不应有 TEMP 权限
-    SELECT has_database_privilege('PUBLIC', v_db, 'TEMP') INTO v_has_temp;
+    BEGIN
+        SELECT has_database_privilege('PUBLIC', v_db, 'TEMP') INTO v_has_temp;
+    EXCEPTION WHEN undefined_object THEN
+        v_has_temp := false;
+    END;
     IF v_has_temp THEN
         RAISE WARNING 'FAIL: PUBLIC 有数据库 TEMP 权限（硬化未生效）';
         RAISE NOTICE '  remedy: REVOKE TEMP ON DATABASE % FROM PUBLIC;', v_db;
@@ -1027,7 +1040,7 @@ END $$;
 -- 7. 验证 Engram schema 权限
 DO $$
 DECLARE
-    schema_name TEXT;
+    v_schema_name TEXT;
     can_create BOOLEAN;
     can_usage BOOLEAN;
     engram_schemas TEXT[] := ARRAY['identity', 'logbook', 'scm', 'analysis', 'governance'];
@@ -1036,38 +1049,40 @@ BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '=== 7. Engram schema 权限验证 ===';
     
-    FOREACH schema_name IN ARRAY engram_schemas LOOP
+    FOREACH v_schema_name IN ARRAY engram_schemas LOOP
         -- 检查 schema 是否存在
-        IF NOT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = schema_name) THEN
-            RAISE NOTICE 'SKIP: schema % 不存在', schema_name;
+        IF NOT EXISTS(
+            SELECT 1 FROM information_schema.schemata s WHERE s.schema_name = v_schema_name
+        ) THEN
+            RAISE NOTICE 'SKIP: schema % 不存在', v_schema_name;
             CONTINUE;
         END IF;
         
         -- engram_migrator 应有 CREATE 权限
-        SELECT pg_catalog.has_schema_privilege('engram_migrator', schema_name, 'CREATE') INTO can_create;
+        SELECT pg_catalog.has_schema_privilege('engram_migrator', v_schema_name, 'CREATE') INTO can_create;
         IF can_create THEN
-            RAISE NOTICE 'OK: engram_migrator 有 % schema CREATE 权限', schema_name;
+            RAISE NOTICE 'OK: engram_migrator 有 % schema CREATE 权限', v_schema_name;
         ELSE
-            RAISE WARNING 'FAIL: engram_migrator 无 % schema CREATE 权限', schema_name;
-            RAISE NOTICE '  remedy: GRANT ALL PRIVILEGES ON SCHEMA % TO engram_migrator;', schema_name;
+            RAISE WARNING 'FAIL: engram_migrator 无 % schema CREATE 权限', v_schema_name;
+            RAISE NOTICE '  remedy: GRANT ALL PRIVILEGES ON SCHEMA % TO engram_migrator;', v_schema_name;
             v_fail_count := v_fail_count + 1;
         END IF;
         
         -- engram_app_readwrite 应有 USAGE 权限
-        SELECT pg_catalog.has_schema_privilege('engram_app_readwrite', schema_name, 'USAGE') INTO can_usage;
+        SELECT pg_catalog.has_schema_privilege('engram_app_readwrite', v_schema_name, 'USAGE') INTO can_usage;
         IF can_usage THEN
-            RAISE NOTICE 'OK: engram_app_readwrite 有 % schema USAGE 权限', schema_name;
+            RAISE NOTICE 'OK: engram_app_readwrite 有 % schema USAGE 权限', v_schema_name;
         ELSE
-            RAISE WARNING 'FAIL: engram_app_readwrite 无 % schema USAGE 权限', schema_name;
-            RAISE NOTICE '  remedy: GRANT USAGE ON SCHEMA % TO engram_app_readwrite;', schema_name;
+            RAISE WARNING 'FAIL: engram_app_readwrite 无 % schema USAGE 权限', v_schema_name;
+            RAISE NOTICE '  remedy: GRANT USAGE ON SCHEMA % TO engram_app_readwrite;', v_schema_name;
             v_fail_count := v_fail_count + 1;
         END IF;
         
         -- engram_app_readwrite 不应有 CREATE 权限
-        SELECT pg_catalog.has_schema_privilege('engram_app_readwrite', schema_name, 'CREATE') INTO can_create;
+        SELECT pg_catalog.has_schema_privilege('engram_app_readwrite', v_schema_name, 'CREATE') INTO can_create;
         IF can_create THEN
-            RAISE WARNING 'WARN: engram_app_readwrite 有 % schema CREATE 权限（应仅限 DML）', schema_name;
-            RAISE NOTICE '  remedy: REVOKE CREATE ON SCHEMA % FROM engram_app_readwrite;', schema_name;
+            RAISE WARNING 'WARN: engram_app_readwrite 有 % schema CREATE 权限（应仅限 DML）', v_schema_name;
+            RAISE NOTICE '  remedy: REVOKE CREATE ON SCHEMA % FROM engram_app_readwrite;', v_schema_name;
         END IF;
     END LOOP;
     

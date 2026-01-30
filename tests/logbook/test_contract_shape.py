@@ -360,13 +360,8 @@ class TestIdentitySyncContractShape:
     
     def test_sync_success_shape(self, migrated_db: dict, tmp_path: Path):
         """测试同步成功响应的 shape"""
-        import sys
         from pathlib import Path
         from unittest.mock import MagicMock
-        
-        scripts_dir = Path(__file__).parent.parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
         
         # 创建测试用户配置
         users_dir = tmp_path / ".agentx" / "users"
@@ -446,7 +441,7 @@ class TestRenderViewsContractShape:
             "postgres.dsn": migrated_db["dsn"],
         }.get(key, f"mock_{key}")
         
-        from render_views import render_views
+        from engram.logbook.views import render_views
         
         out_dir = tmp_path / "views"
         result = render_views(
@@ -1122,13 +1117,8 @@ class TestRenderViewsContractShapeEnhanced:
     
     def test_render_views_full_contract_shape(self, migrated_db: dict, tmp_path: Path):
         """测试 render_views 完整契约响应的 shape"""
-        import sys
         from pathlib import Path
         from unittest.mock import MagicMock
-        
-        scripts_dir = Path(__file__).parent.parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
         
         schemas = migrated_db["schemas"]
         search_path_list = [
@@ -1148,7 +1138,7 @@ class TestRenderViewsContractShapeEnhanced:
             "postgres.dsn": migrated_db["dsn"],
         }.get(key, f"mock_{key}")
         
-        from render_views import render_views
+        from engram.logbook.views import render_views
         from engram.logbook.errors import make_success_result
         
         out_dir = tmp_path / "views"
@@ -1747,7 +1737,7 @@ class TestViewsIntegrityContractShape:
             "message": "SHA256 不匹配: manifest.csv",
             "expected": "abc123...",
             "actual": "def456...",
-            "remedy": "文件 manifest.csv 可能被手动修改，请选择:\n  1. 恢复自动生成: python logbook_cli.py render_views",
+            "remedy": "文件 manifest.csv 可能被手动修改，请选择:\n  1. 恢复自动生成: python -m engram.logbook.cli.logbook render_views",
         }
         
         assert sample_issue["error_code"] in expected_error_codes

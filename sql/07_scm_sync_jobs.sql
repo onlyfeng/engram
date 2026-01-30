@@ -111,6 +111,11 @@ CREATE INDEX IF NOT EXISTS idx_sync_jobs_repo_job_type
     ON scm.sync_jobs(repo_id, job_type, status)
     WHERE status IN ('pending', 'running');
 
+-- 防止重复活跃任务（同一 repo + job_type + mode 只能有一个 pending/running）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_unique_active
+    ON scm.sync_jobs(repo_id, job_type, mode)
+    WHERE status IN ('pending', 'running');
+
 -- 按 worker 查询其持有的任务
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_locked_by
     ON scm.sync_jobs(locked_by)

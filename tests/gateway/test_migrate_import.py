@@ -18,13 +18,25 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 
+def _resolve_scripts_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        repo_root / "logbook_postgres" / "scripts",
+        repo_root.parent / "logbook_postgres" / "scripts",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 class TestMigrateModuleImport:
     """engram_logbook.migrate 模块导入测试"""
 
     def test_import_migrate_module(self):
         """测试 engram_logbook.migrate 模块可以正常导入"""
         # 确保 sys.path 中包含 logbook scripts 目录
-        scripts_dir = Path(__file__).parent.parent.parent.parent / "logbook_postgres" / "scripts"
+        scripts_dir = _resolve_scripts_dir()
         if scripts_dir.exists() and str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
         
@@ -120,7 +132,7 @@ class TestDbMigrateCliBackwardCompatibility:
 
     def test_db_migrate_imports_from_migrate_module(self):
         """测试 db_migrate.py 从 engram_logbook.migrate 导入"""
-        scripts_dir = Path(__file__).parent.parent.parent.parent / "logbook_postgres" / "scripts"
+        scripts_dir = _resolve_scripts_dir()
         db_migrate_path = scripts_dir / "db_migrate.py"
         
         assert db_migrate_path.exists(), f"db_migrate.py 不存在: {db_migrate_path}"
@@ -135,7 +147,7 @@ class TestDbMigrateCliBackwardCompatibility:
 
     def test_db_migrate_exports_backward_compatible_names(self):
         """测试 db_migrate.py 导出向后兼容的名称"""
-        scripts_dir = Path(__file__).parent.parent.parent.parent / "logbook_postgres" / "scripts"
+        scripts_dir = _resolve_scripts_dir()
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
         

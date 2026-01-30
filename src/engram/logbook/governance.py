@@ -385,6 +385,65 @@ def _validate_evidence_refs_json(evidence_refs: Dict) -> None:
                     {"index": i, "ref": ref},
                 )
 
+    # 验证 attachments 列表（如果存在）
+    attachments = evidence_refs.get("attachments")
+    if attachments is not None:
+        if not isinstance(attachments, list):
+            raise ValidationError(
+                "evidence_refs_json.attachments 必须是 list 类型",
+                {"actual_type": type(attachments).__name__},
+            )
+        from .uri import parse_attachment_evidence_uri_strict
+        for i, ref in enumerate(attachments):
+            if not isinstance(ref, dict):
+                raise ValidationError(
+                    f"evidence_refs_json.attachments[{i}] 必须是 dict 类型",
+                    {"actual_type": type(ref).__name__},
+                )
+            artifact_uri = ref.get("artifact_uri")
+            sha256 = ref.get("sha256")
+            if not artifact_uri:
+                raise ValidationError(
+                    f"evidence_refs_json.attachments[{i}] 缺少必需字段: artifact_uri",
+                    {"index": i, "ref": ref},
+                )
+            if not sha256:
+                raise ValidationError(
+                    f"evidence_refs_json.attachments[{i}] 缺少必需字段: sha256",
+                    {"index": i, "ref": ref},
+                )
+            parsed = parse_attachment_evidence_uri_strict(artifact_uri)
+            if not parsed.success:
+                raise ValidationError(
+                    f"evidence_refs_json.attachments[{i}] artifact_uri 无效: {parsed.error_message}",
+                    {"index": i, "ref": ref, "error_code": parsed.error_code},
+                )
+            if parsed.sha256 and parsed.sha256.lower() != str(sha256).lower():
+                raise ValidationError(
+                    f"evidence_refs_json.attachments[{i}] sha256 与 artifact_uri 不一致",
+                    {"index": i, "ref": ref, "parsed_sha256": parsed.sha256},
+                )
+
+    # 验证 external 列表（如果存在）
+    external = evidence_refs.get("external")
+    if external is not None:
+        if not isinstance(external, list):
+            raise ValidationError(
+                "evidence_refs_json.external 必须是 list 类型",
+                {"actual_type": type(external).__name__},
+            )
+        for i, ref in enumerate(external):
+            if not isinstance(ref, dict):
+                raise ValidationError(
+                    f"evidence_refs_json.external[{i}] 必须是 dict 类型",
+                    {"actual_type": type(ref).__name__},
+                )
+            if not ref.get("uri"):
+                raise ValidationError(
+                    f"evidence_refs_json.external[{i}] 缺少必需字段: uri",
+                    {"index": i, "ref": ref},
+                )
+
 
 def insert_write_audit(
     actor_user_id: Optional[str],

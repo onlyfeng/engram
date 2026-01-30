@@ -1,0 +1,1 @@
+-- SeekDB index definitions (placeholder)

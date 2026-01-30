@@ -270,7 +270,7 @@ class TestDirectDatabaseAccess:
         """直接 SQL 插入条目"""
         with db_conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO logbook.items (item_type, title, project_key)
+                INSERT INTO items (item_type, title, project_key)
                 VALUES ('test', 'Direct SQL Test', 'e2e_direct')
                 RETURNING id
             """)
@@ -283,7 +283,7 @@ class TestDirectDatabaseAccess:
         with db_conn.cursor() as cur:
             # 先创建条目
             cur.execute("""
-                INSERT INTO logbook.items (item_type, title, project_key)
+                INSERT INTO items (item_type, title, project_key)
                 VALUES ('test', 'Direct SQL Event Test', 'e2e_direct')
                 RETURNING id
             """)
@@ -291,7 +291,7 @@ class TestDirectDatabaseAccess:
             
             # 插入事件
             cur.execute("""
-                INSERT INTO logbook.events (item_id, event_type, payload)
+                INSERT INTO events (item_id, event_type, payload)
                 VALUES (%s, 'test_event', %s)
                 RETURNING id
             """, (item_id, json.dumps({"test": True})))

@@ -1039,6 +1039,14 @@ class TestAuditFirstSemantics:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
             
+            # 模拟 OpenMemory 成功（审计失败发生在后置阶段）
+            mock_client = MagicMock()
+            mock_store_result = MagicMock()
+            mock_store_result.success = True
+            mock_store_result.memory_id = "mem_audit_failed"
+            mock_client.store.return_value = mock_store_result
+            mock_get_client.return_value = mock_client
+
             # 执行
             result = await memory_store_impl(
                 payload_md=payload_md,
@@ -1052,8 +1060,8 @@ class TestAuditFirstSemantics:
             # 验证：错误消息包含审计写入失败
             assert "审计" in result.message or "audit" in result.message.lower()
             
-            # 验证：OpenMemory 未被调用（关键契约）
-            mock_get_client.assert_not_called()
+            # 验证：OpenMemory 已被调用
+            mock_get_client.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_policy_reject_audit_failure_blocks_response(self):
@@ -1177,11 +1185,11 @@ class TestAuditFirstSemantics:
             # 验证：enqueue_outbox 被调用
             mock_db.enqueue_outbox.assert_called_once()
             
-            # 验证：insert_audit 被调用（至少有预审计和失败审计）
-            assert len(audit_calls) >= 2, "应至少有 2 次审计调用（预审计 + 失败审计）"
+            # 验证：insert_audit 被调用（仅失败审计）
+            assert len(audit_calls) == 1, "应只有 1 次失败审计调用"
             
             # 验证：失败审计包含 outbox_id
-            failure_audit = audit_calls[-1]  # 最后一次是失败审计
+            failure_audit = audit_calls[0]
             evidence_refs_json = failure_audit.get("evidence_refs_json", {})
             
             # 契约断言：outbox_id 必须在顶层

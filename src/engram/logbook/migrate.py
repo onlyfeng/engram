@@ -79,8 +79,7 @@ DEFAULT_SCHEMA_SUFFIXES = ["identity", "logbook", "scm", "analysis", "governance
 # 11: sync_jobs_dimension_columns
 # 12: governance_artifact_ops_audit
 # 13: governance_object_store_audit_events
-# 15: write_audit_created_at
-DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "10", "11", "12", "13", "15"}
+DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "10", "11", "12", "13"}
 # 可选执行：权限脚本（需要 admin/superuser）
 PERMISSION_SCRIPT_PREFIXES = {"04", "05"}
 # 验证脚本：仅通过 --verify 执行

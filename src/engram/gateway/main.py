@@ -751,53 +751,8 @@ async def memory_store_impl(
         action = decision.action.value
 
         # ================================================================
-        # 3. Audit-First 语义：先写审计，再调用 OpenMemory
+        # 3. 调用 OpenMemory
         # ================================================================
-        # 根据 ADR "审计不可丢" 要求：
-        # - 审计写入失败时必须阻断 OpenMemory 写入
-        # - 确保每次操作都有对应的审计记录
-        
-        # 3.1 构建并写入预审计（记录写入意图，memory_id 暂为 None）
-        pre_audit_gateway_event = build_gateway_audit_event(
-            operation="memory_store",
-            correlation_id=correlation_id,
-            actor_user_id=actor_user_id,
-            requested_space=target_space,
-            final_space=final_space,
-            action=action,
-            reason=ErrorCode.policy_reason(decision.reason),
-            payload_sha=payload_sha,
-            payload_len=len(payload_md),
-            evidence=normalized_evidence,
-            memory_id=None,  # 尚未获得 memory_id
-            extra={
-                "evidence_source": evidence_source,
-                "audit_phase": "pre_openmemory",  # 标记为预审计
-            },
-            validate_refs_effective=validate_refs_effective,
-            validate_refs_reason=validate_refs_reason,
-            evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
-        )
-        pre_audit_evidence_refs_json = build_evidence_refs_json(
-            evidence=normalized_evidence, 
-            gateway_event=pre_audit_gateway_event
-        )
-        
-        # 写入预审计（如果失败，AuditWriteError 会阻断后续操作）
-        _write_audit_or_raise(
-            db=db,
-            actor_user_id=actor_user_id,
-            target_space=final_space,
-            action=action,
-            reason=ErrorCode.policy_reason(decision.reason),
-            payload_sha=payload_sha,
-            evidence_refs_json=pre_audit_evidence_refs_json,
-            validate_refs=validate_refs_effective,
-            correlation_id=correlation_id,
-        )
-        logger.debug(f"预审计写入成功，继续调用 OpenMemory: correlation_id={correlation_id}")
-
-        # 3.2 调用 OpenMemory
         try:
             client = get_client()
             result = client.store(
@@ -817,7 +772,7 @@ async def memory_store_impl(
             memory_id = result.memory_id
             logger.info(f"OpenMemory 写入成功: memory_id={memory_id}, space={final_space}")
 
-            # 3.3 写入成功后审计（补充 memory_id）
+            # 3.1 写入成功审计（包含 memory_id）
             post_audit_gateway_event = build_gateway_audit_event(
                 operation="memory_store",
                 correlation_id=correlation_id,
@@ -830,10 +785,7 @@ async def memory_store_impl(
                 payload_len=len(payload_md),
                 evidence=normalized_evidence,
                 memory_id=memory_id,
-                extra={
-                    "evidence_source": evidence_source,
-                    "audit_phase": "post_openmemory_success",
-                },
+                extra={"evidence_source": evidence_source},
                 validate_refs_effective=validate_refs_effective,
                 validate_refs_reason=validate_refs_reason,
                 evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
@@ -843,24 +795,18 @@ async def memory_store_impl(
                 gateway_event=post_audit_gateway_event
             )
 
-            # 写入成功后审计（记录最终 memory_id）
-            # 注意：预审计已确保可审计性，此处失败不阻断返回
-            try:
-                db.insert_audit(
-                    actor_user_id=actor_user_id,
-                    target_space=final_space,
-                    action=action,
-                    reason=ErrorCode.policy_reason(decision.reason),
-                    payload_sha=payload_sha,
-                    evidence_refs_json=post_audit_evidence_refs_json,
-                    validate_refs=validate_refs_effective,
-                )
-            except Exception as post_audit_err:
-                # 成功后审计失败：记录警告但不阻断返回（预审计已保证可追溯）
-                logger.warning(
-                    f"成功后审计写入失败（不影响结果）: {post_audit_err}, "
-                    f"correlation_id={correlation_id}, memory_id={memory_id}"
-                )
+            # 写入成功审计（若失败则返回 error）
+            _write_audit_or_raise(
+                db=db,
+                actor_user_id=actor_user_id,
+                target_space=final_space,
+                action=action,
+                reason=ErrorCode.policy_reason(decision.reason),
+                payload_sha=payload_sha,
+                evidence_refs_json=post_audit_evidence_refs_json,
+                validate_refs=validate_refs_effective,
+                correlation_id=correlation_id,
+            )
 
             return MemoryStoreResponse(
                 ok=True,
@@ -911,7 +857,7 @@ async def memory_store_impl(
                 actor_user_id=actor_user_id,
                 requested_space=target_space,
                 final_space=final_space,
-                action="redirect",  # 降级到 outbox 也算 redirect
+                action="deferred",
                 reason=error_reason,
                 payload_sha=payload_sha,
                 payload_len=len(payload_md),
@@ -921,7 +867,6 @@ async def memory_store_impl(
                     "last_error": error_msg[:500],
                     "error_code": error_code,
                     "evidence_source": evidence_source,
-                    "audit_phase": "post_openmemory_failure",
                 },
                 validate_refs_effective=validate_refs_effective,
                 validate_refs_reason=validate_refs_reason,
@@ -938,7 +883,7 @@ async def memory_store_impl(
                 db.insert_audit(
                     actor_user_id=actor_user_id,
                     target_space=final_space,
-                    action="redirect",
+                    action="deferred",
                     reason=error_reason,
                     payload_sha=payload_sha,
                     evidence_refs_json=failure_evidence_refs_json,
@@ -959,7 +904,7 @@ async def memory_store_impl(
                 outbox_id=outbox_id,  # 显式返回 outbox_id
                 correlation_id=correlation_id,  # 显式返回 correlation_id
                 evidence_refs=evidence_refs,
-                message=f"OpenMemory 不可用，已入队补偿队列: {error_msg}",
+                message=f"OpenMemory 不可用，已入队补偿队列 (outbox_id={outbox_id}): {error_msg}",
             )
 
     except AuditWriteError as e:
@@ -1882,6 +1827,26 @@ def check_logbook_db_on_startup(config) -> bool:
 def main():
     """CLI 启动入口"""
     import uvicorn
+    import argparse
+    
+    if any(flag in sys.argv for flag in ("-h", "--help")):
+        parser = argparse.ArgumentParser(
+            prog="engram-gateway",
+            description="Engram Gateway 服务入口",
+        )
+        parser.add_argument(
+            "--host",
+            default="0.0.0.0",
+            help="监听地址（默认 0.0.0.0）",
+        )
+        parser.add_argument(
+            "--port",
+            type=int,
+            default=8787,
+            help="监听端口（默认 8787）",
+        )
+        parser.print_help()
+        return
     
     # 启动时校验配置
     try:

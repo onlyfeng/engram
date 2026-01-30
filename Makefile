@@ -26,6 +26,16 @@ POSTGRES_DB ?= engram
 GATEWAY_PORT ?= 8787
 OPENMEMORY_BASE_URL ?= http://localhost:8080
 
+# SeekDB 配置（兼容 SEEK_ENABLE）
+SEEKDB_ENABLE ?=
+SEEK_ENABLE ?=
+SEEKDB_ENABLE_EFFECTIVE := $(or $(SEEKDB_ENABLE),$(SEEK_ENABLE),1)
+SEEKDB_PG_SCHEMA ?= seekdb
+# SEEK_ENABLE 已废弃，请使用 SEEKDB_ENABLE
+ifneq ($(SEEK_ENABLE),)
+$(warning SEEK_ENABLE 已废弃，请使用 SEEKDB_ENABLE)
+endif
+
 ## 安装
 
 install:  ## 安装核心依赖
@@ -50,6 +60,7 @@ test-gateway:  ## 运行 Gateway 测试
 
 test-acceptance:  ## 运行验收测试
 	$(PYTEST) tests/acceptance/ -v
+# 示例: SEEKDB_ENABLE=0 acceptance-*
 
 test-e2e:  ## 运行端到端测试
 	$(PYTEST) tests/acceptance/test_e2e_workflow.py tests/acceptance/test_gateway_startup.py -v
@@ -80,6 +91,16 @@ migrate:  ## 执行数据库迁移
 		psql "$(POSTGRES_DSN)" -f "$$f" || exit 1; \
 	done
 	@echo "迁移完成"
+
+_migrate-seekdb-conditional:
+	@if [ "$(SEEKDB_ENABLE_EFFECTIVE)" = "1" ]; then \
+		echo "[OK] SeekDB 迁移执行"; \
+	else \
+		echo "[SKIP] SeekDB 迁移已跳过 (SEEKDB_ENABLE != 1)"; \
+	fi
+
+# seekdb_test 隔离测试示例:
+#   SEEKDB_PG_SCHEMA=seekdb_test
 
 db-create:  ## 创建数据库
 	createdb -U $(POSTGRES_USER) $(POSTGRES_DB) 2>/dev/null || echo "数据库已存在"

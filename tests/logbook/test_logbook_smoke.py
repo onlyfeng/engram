@@ -661,7 +661,6 @@ class TestRenderViews:
     def test_render_views_generates_files(self, migrated_db: dict, tmp_path: Path):
         """测试 render_views 生成 manifest.csv 和 index.md 且 latest_event_ts 正确"""
         import csv
-        import sys
         from datetime import datetime, timedelta
         from unittest.mock import MagicMock
         
@@ -721,13 +720,7 @@ class TestRenderViews:
                 "postgres.dsn": migrated_db["dsn"],
             }.get(key, f"mock_{key}")
             
-            # 将 scripts 目录添加到 path 以便导入 render_views
-            scripts_dir = Path(__file__).parent.parent
-            if str(scripts_dir) not in sys.path:
-                sys.path.insert(0, str(scripts_dir))
-            
-            # 调用 render_views
-            from render_views import render_views
+            from engram.logbook.views import render_views
             
             out_dir = tmp_path / "views"
             result = render_views(
@@ -2566,14 +2559,7 @@ class TestBackfillEvidenceUriSmoke:
 
     def test_backfill_module_import(self):
         """测试 backfill_evidence_uri 模块可导入"""
-        import sys
-        from pathlib import Path
-        
-        scripts_dir = Path(__file__).parent.parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-        
-        from backfill_evidence_uri import (
+        from engram.logbook.backfill_evidence_uri import (
             backfill_evidence_uri,
             get_blobs_missing_evidence_uri,
             update_evidence_uri,
@@ -2589,12 +2575,9 @@ class TestBackfillEvidenceUriSmoke:
         """测试 backfill_evidence_uri CLI --help 可执行"""
         import subprocess
         import sys
-        from pathlib import Path
-        
-        script_path = Path(__file__).parent.parent / "backfill_evidence_uri.py"
         
         result = subprocess.run(
-            [sys.executable, str(script_path), "--help"],
+            [sys.executable, "-m", "engram.logbook.backfill_evidence_uri", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -2610,14 +2593,7 @@ class TestBackfillChunkingVersionSmoke:
 
     def test_backfill_chunking_module_import(self):
         """测试 backfill_chunking_version 模块可导入"""
-        import sys
-        from pathlib import Path
-        
-        scripts_dir = Path(__file__).parent.parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-        
-        from backfill_chunking_version import (
+        from engram.logbook.backfill_chunking_version import (
             backfill_chunking_version,
             backfill_patch_blobs,
             backfill_attachments,
@@ -2633,12 +2609,9 @@ class TestBackfillChunkingVersionSmoke:
         """测试 backfill_chunking_version CLI --help 可执行"""
         import subprocess
         import sys
-        from pathlib import Path
-        
-        script_path = Path(__file__).parent.parent / "backfill_chunking_version.py"
         
         result = subprocess.run(
-            [sys.executable, str(script_path), "--help"],
+            [sys.executable, "-m", "engram.logbook.backfill_chunking_version", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -2700,15 +2673,9 @@ class TestBackfillWithMigratedDb:
 
     def test_backfill_evidence_uri_dry_run(self, migrated_db: dict):
         """测试 backfill_evidence_uri dry-run 模式"""
-        import sys
-        from pathlib import Path
         from unittest.mock import MagicMock
         
-        scripts_dir = Path(__file__).parent.parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-        
-        from backfill_evidence_uri import backfill_evidence_uri
+        from engram.logbook.backfill_evidence_uri import backfill_evidence_uri
         
         # 构建 mock_config
         schemas = migrated_db["schemas"]
@@ -2734,15 +2701,9 @@ class TestBackfillWithMigratedDb:
 
     def test_backfill_chunking_version_dry_run(self, migrated_db: dict):
         """测试 backfill_chunking_version dry-run 模式"""
-        import sys
-        from pathlib import Path
         from unittest.mock import MagicMock
         
-        scripts_dir = Path(__file__).parent.parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-        
-        from backfill_chunking_version import backfill_chunking_version
+        from engram.logbook.backfill_chunking_version import backfill_chunking_version
         
         # 构建 mock_config
         schemas = migrated_db["schemas"]
@@ -2944,15 +2905,14 @@ class TestCLIOutputFormat:
         import sys
         from pathlib import Path
         
-        scripts_dir = Path(__file__).parent.parent
-        cli_path = scripts_dir / "logbook_cli.py"
+        repo_root = Path(__file__).resolve().parents[2]
         
         # 使用 -q 模式确保 stderr 不干扰，只检查 stdout
         result = subprocess.run(
-            [sys.executable, str(cli_path), "health", "-q"],
+            [sys.executable, "-m", "engram.logbook.cli.logbook", "health", "-q"],
             capture_output=True,
             text=True,
-            cwd=str(scripts_dir),
+            cwd=str(repo_root),
             timeout=30,
         )
         
@@ -2972,14 +2932,13 @@ class TestCLIOutputFormat:
         import sys
         from pathlib import Path
         
-        scripts_dir = Path(__file__).parent.parent
-        cli_path = scripts_dir / "logbook_cli.py"
+        repo_root = Path(__file__).resolve().parents[2]
         
         result = subprocess.run(
-            [sys.executable, str(cli_path), "health", "-q"],
+            [sys.executable, "-m", "engram.logbook.cli.logbook", "health", "-q"],
             capture_output=True,
             text=True,
-            cwd=str(scripts_dir),
+            cwd=str(repo_root),
             timeout=30,
         )
         
@@ -3000,15 +2959,14 @@ class TestCLIOutputFormat:
         import sys
         from pathlib import Path
         
-        scripts_dir = Path(__file__).parent.parent
-        cli_path = scripts_dir / "logbook_cli.py"
+        repo_root = Path(__file__).resolve().parents[2]
         
         # 不提供必需参数，应该返回验证错误
         result = subprocess.run(
-            [sys.executable, str(cli_path), "create_item", "-q"],
+            [sys.executable, "-m", "engram.logbook.cli.logbook", "create_item", "-q"],
             capture_output=True,
             text=True,
-            cwd=str(scripts_dir),
+            cwd=str(repo_root),
             timeout=30,
         )
         
@@ -3030,15 +2988,14 @@ class TestCLIOutputFormat:
         import sys
         from pathlib import Path
         
-        scripts_dir = Path(__file__).parent.parent
-        cli_path = scripts_dir / "logbook_cli.py"
+        repo_root = Path(__file__).resolve().parents[2]
         
         # 不提供必需参数
         result = subprocess.run(
-            [sys.executable, str(cli_path), "add_event", "-q"],
+            [sys.executable, "-m", "engram.logbook.cli.logbook", "add_event", "-q"],
             capture_output=True,
             text=True,
-            cwd=str(scripts_dir),
+            cwd=str(repo_root),
             timeout=30,
         )
         
@@ -3059,14 +3016,12 @@ class TestCLIOutputFormat:
         import sys
         from pathlib import Path
         
-        scripts_dir = Path(__file__).parent.parent
-        cli_path = scripts_dir / "logbook_cli.py"
-        
+        repo_root = Path(__file__).resolve().parents[2]
         result = subprocess.run(
-            [sys.executable, str(cli_path), "attach", "-q"],
+            [sys.executable, "-m", "engram.logbook.cli.logbook", "attach", "-q"],
             capture_output=True,
             text=True,
-            cwd=str(scripts_dir),
+            cwd=str(repo_root),
             timeout=30,
         )
         
@@ -3087,15 +3042,14 @@ class TestCLIOutputFormat:
         import sys
         from pathlib import Path
         
-        scripts_dir = Path(__file__).parent.parent
-        cli_path = scripts_dir / "logbook_cli.py"
+        repo_root = Path(__file__).resolve().parents[2]
         
         # --log-event 需要 --item-id，不提供应该报错
         result = subprocess.run(
-            [sys.executable, str(cli_path), "render_views", "--log-event", "-q"],
+            [sys.executable, "-m", "engram.logbook.cli.logbook", "render_views", "--log-event", "-q"],
             capture_output=True,
             text=True,
-            cwd=str(scripts_dir),
+            cwd=str(repo_root),
             timeout=30,
         )
         

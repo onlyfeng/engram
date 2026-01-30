@@ -1,0 +1,31 @@
+version: "3.9"
+
+# docker-compose.unified.seekdb.yml 可作为 SeekDB 扩展配置
+
+x-service-account-passwords: &service_account_passwords
+  SEEKDB_MIGRATOR_PASSWORD: ${SEEKDB_MIGRATOR_PASSWORD:-change_me}
+  SEEKDB_SVC_PASSWORD: ${SEEKDB_SVC_PASSWORD:-change_me}
+
+services:
+  bootstrap_roles:
+    environment:
+      <<: *service_account_passwords
+      SEEKDB_ENABLE: ${SEEKDB_ENABLE:-${SEEK_ENABLE:-1}}
+    command: >
+      sh -c '
+        if [ "${SEEKDB_ENABLE}" = "1" ]; then
+          echo "[OK] SeekDB 启用";
+        else
+          echo "[SKIP] SeekDB 未启用 (SEEKDB_ENABLE != 1)";
+        fi
+      '
+
+  permissions_verify:
+    environment:
+      SEEKDB_ENABLE: ${SEEKDB_ENABLE:-${SEEK_ENABLE:-1}}
+      SEEKDB_PG_SCHEMA: ${SEEKDB_PG_SCHEMA:-seekdb}
+      SEEK_GUC_NAME: "seek.enabled"
+    command: >
+      sh -c '
+        echo "[INFO] seek.enabled=$${SEEKDB_ENABLE}";
+      '

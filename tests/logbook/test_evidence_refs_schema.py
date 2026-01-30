@@ -376,7 +376,7 @@ class TestBackfillEvidenceUriIntegration:
     def test_backfill_function_import(self):
         """测试 backfill_evidence_uri 函数可以被导入"""
         try:
-            from backfill_evidence_uri import backfill_evidence_uri
+            from engram.logbook.backfill_evidence_uri import backfill_evidence_uri
             assert callable(backfill_evidence_uri)
         except ImportError:
             pytest.skip("backfill_evidence_uri 模块不可用")
@@ -384,7 +384,7 @@ class TestBackfillEvidenceUriIntegration:
     def test_backfill_chunking_version_import(self):
         """测试 backfill_chunking_version 函数可以被导入"""
         try:
-            from backfill_chunking_version import backfill_chunking_version
+            from engram.logbook.backfill_chunking_version import backfill_chunking_version
             assert callable(backfill_chunking_version)
         except ImportError:
             pytest.skip("backfill_chunking_version 模块不可用")

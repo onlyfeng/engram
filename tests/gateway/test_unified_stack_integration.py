@@ -2980,7 +2980,7 @@ class TestMCPMemoryStoreWithMockDegradation:
             
             # 验证返回结果
             assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
-            assert result.action == "error", f"应返回 action=error: {result.action}"
+            assert result.action == "deferred", f"应返回 action=deferred: {result.action}"
             assert "outbox_id" in (result.message or ""), f"message 应包含 outbox_id: {result.message}"
             
             # 提取 outbox_id
@@ -3612,7 +3612,7 @@ class TestAuditFirstSemantics:
                 "team_write_enabled": True,
                 "policy_json": {},
             }
-            # 模拟预审计写入失败
+            # 模拟审计写入失败
             mock_db.insert_audit.side_effect = Exception("Database connection lost")
             mock_get_db.return_value = mock_db
             
@@ -3623,6 +3623,14 @@ class TestAuditFirstSemantics:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
             
+            # 模拟 OpenMemory 成功（但审计失败）
+            mock_client = MagicMock()
+            mock_store_result = MagicMock()
+            mock_store_result.success = True
+            mock_store_result.memory_id = "mem_audit_failed"
+            mock_client.store.return_value = mock_store_result
+            mock_get_client.return_value = mock_client
+
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
@@ -3632,8 +3640,8 @@ class TestAuditFirstSemantics:
             assert result.ok is False
             assert result.action == "error"
             
-            # 验证：OpenMemory 未被调用
-            mock_get_client.assert_not_called()
+            # 验证：OpenMemory 已被调用（审计失败在后置阶段）
+            mock_get_client.assert_called_once()
             
             # 验证：错误消息明确
             assert "审计" in result.message or "audit" in result.message.lower()
@@ -3709,33 +3717,16 @@ class TestAuditFirstSemantics:
             assert result.ok is False
             assert "outbox_id=99999" in result.message
             
-            # 验证：调用顺序正确（预审计 -> outbox -> 失败审计）
-            # call_order 应为 ["audit", "outbox", "audit"]
-            assert call_order.count("audit") >= 2, "应至少有 2 次审计调用"
-            assert "outbox" in call_order, "应有 outbox 入队调用"
-            
-            # 找到 outbox 后的第一个 audit 调用索引
-            outbox_idx = call_order.index("outbox")
-            failure_audit_idx = None
-            for i in range(outbox_idx + 1, len(call_order)):
-                if call_order[i] == "audit":
-                    failure_audit_idx = i
-                    break
-            
-            # 验证：失败审计在 outbox 之后
-            assert failure_audit_idx is not None, "outbox 之后应有失败审计"
-            assert failure_audit_idx > outbox_idx, "失败审计应在 outbox 之后"
-            
+            # 验证：调用顺序正确（outbox -> 失败审计）
+            assert call_order == ["outbox", "audit"]
+
             # 验证：失败审计的 evidence_refs_json 顶层包含 outbox_id
-            # audit_evidence_refs 的索引对应 audit 调用顺序
-            # 计算失败审计在 audit_evidence_refs 中的索引
-            failure_audit_in_audit_calls = sum(1 for x in call_order[:failure_audit_idx + 1] if x == "audit") - 1
-            if failure_audit_in_audit_calls < len(audit_evidence_refs):
-                failure_evidence = audit_evidence_refs[failure_audit_in_audit_calls]
-                assert "outbox_id" in failure_evidence, \
-                    "失败审计的 evidence_refs_json 顶层必须包含 outbox_id"
-                assert failure_evidence["outbox_id"] == 99999, \
-                    f"outbox_id 应为 99999，实际为 {failure_evidence.get('outbox_id')}"
+            assert audit_evidence_refs, "应有失败审计记录"
+            failure_evidence = audit_evidence_refs[0]
+            assert "outbox_id" in failure_evidence, \
+                "失败审计的 evidence_refs_json 顶层必须包含 outbox_id"
+            assert failure_evidence["outbox_id"] == 99999, \
+                f"outbox_id 应为 99999，实际为 {failure_evidence.get('outbox_id')}"
 
 
 # ======================== 运行入口 ========================

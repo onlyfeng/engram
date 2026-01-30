@@ -88,7 +88,7 @@ def insert_outbox_record(
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO logbook.outbox_memory
+            INSERT INTO outbox_memory
                 (target_space, payload_md, payload_sha, status, locked_at, locked_by, last_error, retry_count)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING outbox_id
@@ -124,7 +124,7 @@ def insert_audit_record(
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO governance.write_audit
+            INSERT INTO write_audit
                 (target_space, action, reason, payload_sha, evidence_refs_json)
             VALUES (%s, %s, %s, %s, %s)
             RETURNING audit_id
@@ -146,7 +146,7 @@ def count_audits_for_outbox(
         cur.execute(
             """
             SELECT COUNT(*)
-            FROM governance.write_audit
+            FROM write_audit
             WHERE reason LIKE %s
               AND (evidence_refs_json->>'outbox_id')::int = %s
             """,
@@ -164,7 +164,7 @@ def get_outbox_record(
         cur.execute(
             """
             SELECT outbox_id, status, locked_at, locked_by, next_attempt_at
-            FROM logbook.outbox_memory
+            FROM outbox_memory
             WHERE outbox_id = %s
             """,
             (outbox_id,),
@@ -295,7 +295,7 @@ class TestReconcileSentRecords:
             cur.execute(
                 """
                 SELECT audit_id, reason, evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE reason LIKE 'outbox_flush_success%'
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,
@@ -468,7 +468,7 @@ class TestReconcileDeadRecords:
             cur.execute(
                 """
                 SELECT audit_id, reason, evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE reason LIKE 'outbox_flush_dead%'
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,
@@ -516,7 +516,7 @@ class TestReconcileDeadRecords:
             cur.execute(
                 """
                 SELECT evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE reason = 'outbox_flush_dead'
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,
@@ -654,7 +654,7 @@ class TestReconcileStaleRecords:
             cur.execute(
                 """
                 SELECT audit_id, reason, evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE reason LIKE 'outbox_stale%'
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,
@@ -695,7 +695,7 @@ class TestReconcileStaleRecords:
         # 设置 next_attempt_at
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE logbook.outbox_memory SET next_attempt_at = %s WHERE outbox_id = %s",
+                "UPDATE outbox_memory SET next_attempt_at = %s WHERE outbox_id = %s",
                 (old_next_attempt, outbox_id),
             )
         conn.commit()
@@ -1180,7 +1180,7 @@ class TestAuditOutboxInvariants:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO governance.write_audit
+                INSERT INTO write_audit
                     (target_space, action, reason, payload_sha, evidence_refs_json)
                 VALUES (%s, %s, %s, %s, %s)
                 RETURNING audit_id
@@ -1202,7 +1202,7 @@ class TestAuditOutboxInvariants:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT action, reason FROM governance.write_audit
+                SELECT action, reason FROM write_audit
                 WHERE audit_id = %s
                 """,
                 (redirect_audit_id,),
@@ -1215,7 +1215,7 @@ class TestAuditOutboxInvariants:
         # 4. 验证 outbox 记录存在且 status=pending
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT status FROM logbook.outbox_memory WHERE outbox_id = %s",
+                "SELECT status FROM outbox_memory WHERE outbox_id = %s",
                 (outbox_id,),
             )
             row = cur.fetchone()
@@ -1258,7 +1258,7 @@ class TestAuditOutboxInvariants:
             cur.execute(
                 """
                 SELECT action, reason, evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE (evidence_refs_json->>'outbox_id')::int = %s
                   AND reason = %s
                 """,
@@ -1330,7 +1330,7 @@ class TestAuditOutboxInvariants:
             cur.execute(
                 """
                 SELECT action, reason, evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE (evidence_refs_json->>'outbox_id')::int = %s
                   AND reason = %s
                 """,
@@ -1404,7 +1404,7 @@ class TestAuditOutboxInvariants:
             cur.execute(
                 """
                 SELECT action, reason, evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE (evidence_refs_json->>'outbox_id')::int = %s
                   AND reason = %s
                 """,
@@ -1478,7 +1478,7 @@ class TestAuditOutboxInvariants:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO governance.write_audit
+                INSERT INTO write_audit
                     (target_space, action, reason, payload_sha, evidence_refs_json)
                 VALUES (%s, %s, %s, %s, %s)
                 RETURNING audit_id
@@ -1500,7 +1500,7 @@ class TestAuditOutboxInvariants:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE logbook.outbox_memory
+                UPDATE outbox_memory
                 SET status = 'sent', last_error = 'memory_id=mem_loop_success'
                 WHERE outbox_id = %s
                 """,
@@ -1523,7 +1523,7 @@ class TestAuditOutboxInvariants:
         # 5.1 验证 redirect 审计
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT action, reason FROM governance.write_audit WHERE audit_id = %s",
+                "SELECT action, reason FROM write_audit WHERE audit_id = %s",
                 (redirect_audit_id,),
             )
             row = cur.fetchone()
@@ -1535,7 +1535,7 @@ class TestAuditOutboxInvariants:
             cur.execute(
                 """
                 SELECT action, reason, evidence_refs_json
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE (evidence_refs_json->>'outbox_id')::int = %s
                   AND reason = %s
                 """,
@@ -1601,7 +1601,7 @@ class TestAuditOutboxInvariants:
             cur.execute(
                 """
                 SELECT COUNT(*)
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE reason LIKE %s
                   AND (evidence_refs_json->>'outbox_id')::int = %s
                 """,

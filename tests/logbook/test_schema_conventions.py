@@ -41,6 +41,12 @@ SCHEMA_PREFIX_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# SQL 关键字（用于判断字符串是否为 SQL）
+SQL_KEYWORDS_PATTERN = re.compile(
+    r'\b(select|insert|update|delete|create|alter|drop|grant|revoke|with)\b',
+    re.IGNORECASE
+)
+
 # 允许包含 schema 前缀的上下文（例外情况）
 # 这些模式用于识别应跳过检查的字符串
 # 注意：此列表仅包含合法的非 SQL 场景，不泛化放行真实 SQL 语句
@@ -93,6 +99,11 @@ SKIP_FUNCTIONS: Set[str] = {
 
 def get_scripts_dir() -> Path:
     """获取 scripts 目录路径"""
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        scripts_dir = parent / "scripts"
+        if scripts_dir.exists():
+            return scripts_dir
     return Path(__file__).parent.parent
 
 
@@ -258,6 +269,11 @@ def extract_string_content(node: ast.expr) -> Optional[str]:
     return None
 
 
+def looks_like_sql(text: str) -> bool:
+    """判断字符串是否为 SQL 语句"""
+    return bool(SQL_KEYWORDS_PATTERN.search(text))
+
+
 def check_file(file_path: Path) -> List[SchemaViolation]:
     """
     检查单个文件中的 schema 规范违反
@@ -275,60 +291,61 @@ def check_file(file_path: Path) -> List[SchemaViolation]:
     except Exception as e:
         return []
     
-    lines = source.split('\n')
-    
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
     # 预先解析 AST 获取跳过函数的范围
     skip_ranges = get_skip_function_ranges(source)
-    
-    # 逐行扫描
-    for line_no, line in enumerate(lines, 1):
-        # 跳过跳过函数内的代码
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Constant, ast.JoinedStr)):
+            continue
+
+        if not hasattr(node, "lineno"):
+            continue
+
+        line_no = node.lineno
         if is_in_skip_function(skip_ranges, line_no):
             continue
-        
-        # 查找 schema 前缀
-        for match in SCHEMA_PREFIX_PATTERN.finditer(line):
-            # 跳过注释
-            if is_in_comment(line, match.start()):
-                continue
-            
-            # 获取上下文（前后 2 行）
-            context_start = max(0, line_no - 3)
-            context_end = min(len(lines), line_no + 2)
-            context_lines = lines[context_start:context_end]
-            full_context = '\n'.join(context_lines)
-            
-            # 检查是否为允许的上下文
-            if is_allowed_context(line, full_context):
-                continue
-            
-            # 提取匹配的 schema 名称
+        if is_in_docstring_or_comment_block(source, line_no):
+            continue
+
+        content = extract_string_content(node)
+        if not content:
+            continue
+        if not looks_like_sql(content):
+            continue
+
+        if is_allowed_context(content, content):
+            continue
+
+        for match in SCHEMA_PREFIX_PATTERN.finditer(content):
             schema_name = match.group(1).lower()
             matched_text = match.group(0)
-            
-            # 确定要展示的行上下文
-            display_line = line.strip()
+            display_line = content.strip().replace("\n", " ")
             if len(display_line) > 120:
-                # 截取匹配位置附近的内容
                 start = max(0, match.start() - 40)
-                end = min(len(line), match.end() + 40)
-                display_line = "..." + line[start:end].strip() + "..."
-            
-            # 生成建议
+                end = min(len(content), match.end() + 40)
+                display_line = "..." + content[start:end].strip().replace("\n", " ") + "..."
+
             suggestion = (
                 f"移除 '{schema_name}.' 前缀，改用无前缀表名。\n"
                 f"  例如: 将 '{schema_name}.table_name' 改为 'table_name'\n"
                 f"  原因: 项目使用 search_path 管理 schema，SQL 应使用无前缀表名"
             )
-            
-            violations.append(SchemaViolation(
-                file_path=str(file_path),
-                line_no=line_no,
-                col_offset=match.start(),
-                matched_text=matched_text,
-                context=display_line,
-                suggestion=suggestion,
-            ))
+
+            violations.append(
+                SchemaViolation(
+                    file_path=str(file_path),
+                    line_no=line_no,
+                    col_offset=getattr(node, "col_offset", 0) + match.start(),
+                    matched_text=matched_text,
+                    context=display_line,
+                    suggestion=suggestion,
+                )
+            )
     
     return violations
 

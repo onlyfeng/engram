@@ -692,6 +692,35 @@ class Config:
         # 确定配置文件路径
         self._resolve_config_path(config_path)
 
+    @classmethod
+    def from_env(cls) -> "Config":
+        """
+        从环境变量构建 Config 实例（兼容旧接口）。
+        """
+        config = cls(config_path=None)
+        postgres_dsn = (
+            os.environ.get("POSTGRES_DSN")
+            or os.environ.get("TEST_PG_DSN")
+            or os.environ.get("DATABASE_URL")
+        )
+        project_key = os.environ.get("PROJECT_KEY") or "default"
+
+        config._data = {
+            "postgres": {"dsn": postgres_dsn or ""},
+            "project": {"project_key": project_key},
+        }
+        config._loaded = True
+        return config
+
+    @classmethod
+    def from_file(cls, path: str) -> "Config":
+        """
+        从配置文件构建 Config 实例（兼容旧接口）。
+        """
+        config = cls(config_path=path)
+        config.load()
+        return config
+
     def _resolve_config_path(self, explicit_path: Optional[str] = None) -> None:
         """解析配置文件路径"""
         # 1. 显式指定的路径（--config 参数）
@@ -850,6 +879,22 @@ class Config:
 
     def __repr__(self) -> str:
         return f"Config(path={self._config_path}, loaded={self._loaded})"
+
+    @property
+    def postgres_dsn(self) -> Optional[str]:
+        """兼容旧字段：postgres_dsn"""
+        try:
+            return self.to_app_config().postgres.dsn
+        except Exception:
+            return self.get("postgres.dsn")
+
+    @property
+    def project_key(self) -> Optional[str]:
+        """兼容旧字段：project_key"""
+        try:
+            return self.to_app_config().project.project_key
+        except Exception:
+            return self.get("project.project_key")
 
 
 # 全局配置实例（延迟初始化）

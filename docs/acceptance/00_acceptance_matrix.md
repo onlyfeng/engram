@@ -23,6 +23,10 @@
 
 ## 验收记录
 
+## SeekDB 兼容说明
+
+- 当 `SEEKDB_ENABLE=0` 时，SeekDB 相关步骤应标记为 `SKIP` 并记录原因。
+
 ### 迭代 YYYY-MM-DD（模板示例）
 
 | 字段 | 内容 |
