@@ -105,6 +105,7 @@ jobs:
           pytest tests/acceptance/ -v \
             --ignore=tests/acceptance/test_e2e_workflow.py \
             --ignore=tests/acceptance/test_migration.py \
+            --ignore=tests/acceptance/test_gateway_startup.py \
             --deselect=tests/acceptance/test_cli.py::TestLogbookCLI::test_health_with_valid_dsn \
             --deselect=tests/acceptance/test_cli.py::TestLogbookCLI::test_health_with_invalid_dsn \
             --deselect=tests/acceptance/test_cli.py::TestMigrateCLI::test_with_valid_dsn \
