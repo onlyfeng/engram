@@ -23,11 +23,32 @@ def main() -> int:
     """
     Logbook CLI 主入口点
     
-    委托给 logbook_cli 模块的 main 函数。
+    TODO: 实现完整的 CLI 功能
     """
-    # 导入放在函数内部，避免循环导入
-    from logbook_cli import main as logbook_main
-    return logbook_main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        prog="engram-logbook",
+        description="Engram Logbook 命令行工具"
+    )
+    parser.add_argument("--version", action="version", version="engram-logbook 0.1.0")
+    
+    subparsers = parser.add_subparsers(dest="command", help="可用命令")
+    
+    # health 子命令
+    health_parser = subparsers.add_parser("health", help="检查数据库健康状态")
+    health_parser.add_argument("--dsn", help="PostgreSQL 连接字符串")
+    
+    args = parser.parse_args()
+    
+    if args.command == "health":
+        print("TODO: 实现 health 命令")
+        return 0
+    elif args.command is None:
+        parser.print_help()
+        return 0
+    
+    return 0
 
 
 if __name__ == "__main__":

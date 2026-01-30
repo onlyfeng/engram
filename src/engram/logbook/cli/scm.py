@@ -19,29 +19,41 @@ engram_logbook.cli.scm - SCM CLI 入口
 
 import sys
 
-import typer
-
-# 延迟导入避免循环依赖
-_scm_app = None
-
-
-def get_scm_app() -> typer.Typer:
-    """获取 SCM Typer 应用实例"""
-    global _scm_app
-    if _scm_app is None:
-        from logbook_cli_main import scm_app
-        _scm_app = scm_app
-    return _scm_app
+import argparse
 
 
 def main() -> None:
     """
     SCM CLI 主入口点
     
-    直接运行 SCM 子应用，无需通过父应用。
+    TODO: 实现完整的 SCM CLI 功能
     """
-    app = get_scm_app()
-    app()
+    parser = argparse.ArgumentParser(
+        prog="engram-scm",
+        description="Engram SCM 同步命令行工具"
+    )
+    parser.add_argument("--version", action="version", version="engram-scm 0.1.0")
+    
+    subparsers = parser.add_subparsers(dest="command", help="可用命令")
+    
+    # ensure-repo 子命令
+    ensure_parser = subparsers.add_parser("ensure-repo", help="确保仓库存在")
+    ensure_parser.add_argument("--repo-type", required=True, help="仓库类型 (git/svn)")
+    ensure_parser.add_argument("--repo-url", required=True, help="仓库 URL")
+    ensure_parser.add_argument("--project-key", required=True, help="项目标识")
+    
+    # sync 子命令
+    sync_parser = subparsers.add_parser("sync", help="同步仓库数据")
+    sync_parser.add_argument("--repo-id", required=True, help="仓库 ID")
+    
+    args = parser.parse_args()
+    
+    if args.command == "ensure-repo":
+        print("TODO: 实现 ensure-repo 命令")
+    elif args.command == "sync":
+        print("TODO: 实现 sync 命令")
+    elif args.command is None:
+        parser.print_help()
 
 
 if __name__ == "__main__":

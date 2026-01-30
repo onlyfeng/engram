@@ -1905,7 +1905,7 @@ def main():
         sys.exit(1)
     
     uvicorn.run(
-        "gateway.main:app",
+        "engram.gateway.main:app",
         host="0.0.0.0",
         port=config.gateway_port,
         reload=False,
