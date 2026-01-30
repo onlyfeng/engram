@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "unified_stack_import_v1",
+  "title": "Unified Stack Import Manifest",
+  "description": "定义将 Engram Unified Stack 集成到已有项目时的文件复制清单",
+  "manifest_version": "1.0",
+  "version_policy": {
+    "description": "遵循 docs/contracts/versioning.md 版本策略",
+    "file_naming": "unified_stack_import_v{major}.json",
+    "minor_evolution": "manifest_version 字段支持 1.x 演进（如 1.0 → 1.1）",
+    "major_breaking": "删除字段、修改语义、收紧约束时需升级至 v2"
+  },
+  "files": {
+    "required": [
+      {
+        "id": "compose_unified",
+        "description": "统一栈主 Compose 配置",
+        "source_path": "docker-compose.unified.yml",
+        "target_path": "docker-compose.engram.yml",
+        "type": "file"
+      },
+      {
+        "id": "logbook_sql",
+        "description": "Logbook SQL 初始化脚本",
+        "source_path": "apps/logbook_postgres/sql",
+        "target_path": "apps/logbook_postgres/sql",
+        "type": "directory"
+      },
+      {
+        "id": "logbook_scripts",
+        "description": "Logbook 迁移脚本（含 engram_logbook 包，Gateway 构建依赖）",
+        "source_path": "apps/logbook_postgres/scripts",
+        "target_path": "apps/logbook_postgres/scripts",
+        "type": "directory"
+      },
+      {
+        "id": "gateway_code",
+        "description": "Gateway 服务代码",
+        "source_path": "apps/openmemory_gateway/gateway",
+        "target_path": "apps/openmemory_gateway/gateway",
+        "type": "directory"
+      },
+      {
+        "id": "openmemory_lib",
+        "description": "OpenMemory 源码",
+        "source_path": "libs/OpenMemory",
+        "target_path": "libs/OpenMemory",
+        "type": "directory"
+      }
+    ],
+    "optional": [
+      {
+        "id": "compose_stepwise",
+        "description": "分步部署 Compose 配置",
+        "source_paths": [
+          "compose/logbook.yml",
+          "compose/openmemory.yml",
+          "compose/gateway.yml"
+        ],
+        "target_paths": [
+          "compose/logbook.yml",
+          "compose/openmemory.yml",
+          "compose/gateway.yml"
+        ],
+        "type": "files",
+        "use_case": "需要分步部署各组件时使用"
+      },
+      {
+        "id": "seekdb_compose_override",
+        "description": "SeekDB override compose 文件",
+        "source_path": "docker-compose.unified.seekdb.yml",
+        "target_path": "docker-compose.engram.seekdb.yml",
+        "type": "file",
+        "use_case": "启用 SeekDB 时叠加使用：docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d"
+      },
+      {
+        "id": "seekdb_sql",
+        "description": "SeekDB RAG 索引 SQL（仅在使用 SeekDB override compose 时必需）",
+        "source_path": "apps/seekdb_rag_hybrid/sql",
+        "target_path": "apps/seekdb_rag_hybrid/sql",
+        "type": "directory",
+        "use_case": "使用 docker-compose.engram.seekdb.yml 叠加时复制",
+        "note": "禁用 SeekDB 时无需复制此目录，启用时需配合 seekdb_compose_override 使用"
+      },
+      {
+        "id": "seekdb_sql_minimal",
+        "description": "SeekDB SQL 最小文件集（仅在使用 SeekDB override compose 时必需）",
+        "source_paths": [
+          "apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql",
+          "apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql"
+        ],
+        "target_paths": [
+          "apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql",
+          "apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql"
+        ],
+        "type": "files",
+        "use_case": "使用 docker-compose.engram.seekdb.yml 叠加时的最小复制集",
+        "note": "禁用 SeekDB 时无需复制，可替代 seekdb_sql 整目录复制"
+      },
+      {
+        "id": "logbook_templates",
+        "description": "Logbook 模板文件（MinIO profile 依赖）",
+        "source_path": "apps/logbook_postgres/templates",
+        "target_path": "apps/logbook_postgres/templates",
+        "type": "directory",
+        "use_case": "启用 --profile minio 时必需"
+      },
+      {
+        "id": "gateway_templates",
+        "description": "Gateway 模板文件（.mcp.json 示例、环境变量示例）",
+        "source_path": "apps/openmemory_gateway/templates",
+        "target_path": "apps/openmemory_gateway/templates",
+        "type": "directory",
+        "use_case": "需要 MCP 配置示例时使用"
+      }
+    ]
+  },
+  "constraints": [
+    {
+      "id": "compose_file_must_live_at_repo_root",
+      "description": "主 Compose 文件必须位于项目根目录",
+      "applies_to": ["compose_unified"],
+      "rationale": "Gateway 构建上下文需要从项目根目录访问 apps/ 和 libs/"
+    },
+    {
+      "id": "seekdb_uses_override_compose",
+      "description": "SeekDB 通过 override compose 文件启用，禁用时无需复制任何 SeekDB 文件",
+      "applies_to": ["seekdb_compose_override", "seekdb_sql", "seekdb_sql_minimal"],
+      "rationale": "SeekDB volume bind 已移至 docker-compose.unified.seekdb.yml，主 compose 文件不再有硬性依赖。docker-compose.unified.yml 不引用 seekdb_rag_hybrid 路径，仅当叠加 seekdb override compose 时需要这些文件",
+      "usage": {
+        "enable": "docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d",
+        "disable": "docker compose -f docker-compose.engram.yml up -d（无需任何 SeekDB 文件）"
+      }
+    },
+    {
+      "id": "gateway_build_context_is_root",
+      "description": "Gateway Dockerfile 需要项目根目录作为构建上下文",
+      "applies_to": ["gateway_code", "logbook_scripts"],
+      "rationale": "Dockerfile COPY 指令需要访问 apps/logbook_postgres/scripts 和 apps/openmemory_gateway/gateway"
+    },
+    {
+      "id": "relative_paths_must_be_adjusted",
+      "description": "Compose 文件中的相对路径在复制后可能需要调整",
+      "applies_to": ["compose_unified", "compose_stepwise"],
+      "rationale": "Volume bind 和 build context 路径相对于 Compose 文件位置"
+    },
+    {
+      "id": "logbook_scripts_required_for_gateway_build",
+      "description": "logbook_scripts 是 Gateway 镜像构建的必需依赖",
+      "applies_to": ["logbook_scripts"],
+      "rationale": "Gateway Dockerfile COPY engram_logbook 包到容器中"
+    }
+  ],
+  "env_vars": {
+    "required": [
+      {
+        "name": "PROJECT_KEY",
+        "description": "项目标识符",
+        "example": "myproject"
+      },
+      {
+        "name": "POSTGRES_DB",
+        "description": "PostgreSQL 数据库名",
+        "example": "myproject"
+      },
+      {
+        "name": "LOGBOOK_MIGRATOR_PASSWORD",
+        "description": "Logbook DDL 迁移账号密码"
+      },
+      {
+        "name": "LOGBOOK_SVC_PASSWORD",
+        "description": "Logbook 运行时 DML 账号密码"
+      },
+      {
+        "name": "OPENMEMORY_MIGRATOR_PASSWORD",
+        "description": "OpenMemory DDL 迁移账号密码"
+      },
+      {
+        "name": "OPENMEMORY_SVC_PASSWORD",
+        "description": "OpenMemory 运行时 DML 账号密码"
+      }
+    ],
+    "optional": [
+      {
+        "name": "POSTGRES_PASSWORD",
+        "description": "PostgreSQL 超级用户密码",
+        "default": "postgres"
+      },
+      {
+        "name": "POSTGRES_PORT",
+        "description": "PostgreSQL 端口",
+        "default": "5432"
+      },
+      {
+        "name": "OM_PORT",
+        "description": "OpenMemory 端口",
+        "default": "8080"
+      },
+      {
+        "name": "GATEWAY_PORT",
+        "description": "Gateway 端口",
+        "default": "8787"
+      },
+      {
+        "name": "SEEKDB_ENABLE",
+        "description": "SeekDB 开关",
+        "default": "1"
+      },
+      {
+        "name": "OM_API_KEY",
+        "description": "OpenMemory API 密钥"
+      },
+      {
+        "name": "DASHBOARD_PORT",
+        "description": "Dashboard 端口（启用 dashboard profile 时）",
+        "default": "3000"
+      }
+    ]
+  },
+  "profiles": {
+    "description": "可选 Docker Compose profiles",
+    "available": [
+      {
+        "name": "dashboard",
+        "description": "OpenMemory Web UI",
+        "required_files": ["libs/OpenMemory/dashboard/"]
+      },
+      {
+        "name": "minio",
+        "description": "对象存储（开发/CI）",
+        "required_files": ["apps/logbook_postgres/templates/", "apps/logbook_postgres/scripts/ops/"]
+      },
+      {
+        "name": "scm_sync",
+        "description": "SCM 增量同步",
+        "required_files": ["apps/logbook_postgres/scripts/"]
+      },
+      {
+        "name": "tools",
+        "description": "Logbook 工具容器",
+        "required_files": ["apps/logbook_postgres/scripts/"]
+      },
+      {
+        "name": "test",
+        "description": "测试容器",
+        "required_files": ["apps/logbook_postgres/"]
+      }
+    ]
+  },
+  "health_checks": {
+    "postgres": {
+      "command": "docker compose -f docker-compose.engram.yml exec postgres pg_isready -U postgres -d ${POSTGRES_DB:-myproject}",
+      "success_indicator": "accepting connections"
+    },
+    "openmemory": {
+      "command": "curl -sf http://localhost:${OM_PORT:-8080}/health",
+      "success_indicator": "{\"status\":\"ok\"}"
+    },
+    "gateway": {
+      "command": "curl -sf http://localhost:${GATEWAY_PORT:-8787}/health",
+      "success_indicator": "{\"status\":\"ok\"}"
+    }
+  },
+  "_meta": {
+    "source_doc": "docs/guides/integrate_existing_project.md",
+    "created": "2026-01-30",
+    "last_updated": "2026-01-30"
+  }
+}

@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engram.example.com/schemas/scm_sync_result_v1.schema.json",
+  "title": "SCM Sync Result V1",
+  "description": "SCM 同步任务执行结果的契约定义。定义同步函数返回值的标准格式，供 worker 校验和处理。",
+  "type": "object",
+  "required": ["success"],
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "同步是否成功（无不可恢复错误）"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "[已废弃] 旧版成功状态字段，请使用 success",
+      "deprecated": true
+    },
+    "has_more": {
+      "type": "boolean",
+      "description": "是否还有更多数据待同步",
+      "default": false
+    },
+    "synced_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "成功写入 DB 的记录数（commits/mrs/events/revisions）",
+      "default": 0
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "[已废弃] 旧版计数字段，请使用 synced_count",
+      "deprecated": true
+    },
+    "skipped_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "跳过的记录数（去重/水位过滤/幂等跳过）",
+      "default": 0
+    },
+    "diff_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "成功写入 patch_blobs 的数量（包含完整 diff 或降级后的 ministat）",
+      "default": 0
+    },
+    "degraded_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "diff 获取失败但仍写入 ministat/diffstat 的数量",
+      "default": 0
+    },
+    "bulk_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "被标记为 bulk 的 commit 数（变更文件过多）",
+      "default": 0
+    },
+    "diff_none_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "diff_mode=none 时完全跳过 diff fetch 的数量",
+      "default": 0
+    },
+    "scanned_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "API 返回的 MR 数量（GitLab MRs）",
+      "default": 0
+    },
+    "inserted_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "新插入的 MR 数（GitLab MRs）",
+      "default": 0
+    },
+    "synced_mr_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "同步的 MR 数（包含 events，GitLab Reviews）",
+      "default": 0
+    },
+    "synced_event_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "同步的事件数（GitLab Reviews）",
+      "default": 0
+    },
+    "skipped_event_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "跳过的事件数（幂等，GitLab Reviews）",
+      "default": 0
+    },
+    "patch_success": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "patch 获取成功数（SVN）",
+      "default": 0
+    },
+    "patch_failed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "patch 获取失败数（SVN）",
+      "default": 0
+    },
+    "skipped_by_controller": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "被控制器跳过的数量（限流等）",
+      "default": 0
+    },
+    "error": {
+      "type": "string",
+      "description": "错误消息（如果 success=false）"
+    },
+    "error_category": {
+      "type": "string",
+      "description": "错误分类（如 rate_limit, timeout, auth_error 等）",
+      "enum": [
+        "auth_error",
+        "auth_missing",
+        "auth_invalid",
+        "repo_not_found",
+        "repo_type_unknown",
+        "permission_denied",
+        "rate_limit",
+        "timeout",
+        "network",
+        "server_error",
+        "connection",
+        "exception",
+        "unknown",
+        "lease_lost",
+        "unknown_job_type",
+        "lock_held",
+        "contract_error"
+      ]
+    },
+    "request_stats": {
+      "type": "object",
+      "description": "HTTP 请求统计（从 client.stats.to_dict()）",
+      "properties": {
+        "total_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_429_hits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeout_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "avg_wait_time_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "degraded_reasons": {
+      "type": "object",
+      "description": "降级原因统计 {reason: count}",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "unrecoverable_errors": {
+      "type": "array",
+      "description": "不可恢复错误列表",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cursor_after": {
+      "type": "object",
+      "description": "同步后的游标（用于下次增量同步）"
+    },
+    "cursor_persisted": {
+      "type": "boolean",
+      "description": "游标是否已持久化",
+      "default": false
+    },
+    "watermark_updated": {
+      "type": "boolean",
+      "description": "水位是否已更新（backfill 模式）",
+      "default": false
+    },
+    "logbook_item_id": {
+      "type": "integer",
+      "description": "关联的 logbook item ID"
+    },
+    "patch_stats": {
+      "type": "object",
+      "description": "SVN patch_stats（向后兼容）",
+      "properties": {
+        "success": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_by_controller": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "mode": {
+      "type": "string",
+      "description": "同步模式（incremental/backfill）",
+      "enum": ["incremental", "backfill"]
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "是否为 dry-run 模式",
+      "default": false
+    },
+    "last_rev": {
+      "type": "integer",
+      "description": "最后处理的 revision（SVN）"
+    },
+    "last_commit_sha": {
+      "type": "string",
+      "description": "最后处理的 commit SHA（GitLab）"
+    },
+    "last_commit_ts": {
+      "type": "string",
+      "description": "最后处理的 commit 时间戳（GitLab）"
+    },
+    "message": {
+      "type": "string",
+      "description": "摘要消息（例如 dry-run 模式的描述）"
+    },
+    "locked": {
+      "type": "boolean",
+      "description": "是否因外部资源锁定而无法执行",
+      "default": false
+    },
+    "skipped": {
+      "type": "boolean",
+      "description": "是否跳过执行（与 locked 配合使用）",
+      "default": false
+    },
+    "retry_after": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "建议的重试等待时间（秒）"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "关联的 sync_run ID"
+    }
+  },
+  "examples": [
+    {
+      "success": true,
+      "synced_count": 100,
+      "diff_count": 95,
+      "degraded_count": 3,
+      "bulk_count": 2,
+      "has_more": false
+    },
+    {
+      "success": false,
+      "error": "GitLab API rate limit exceeded",
+      "error_category": "rate_limit",
+      "synced_count": 50,
+      "retry_after": 120
+    },
+    {
+      "success": true,
+      "ok": true,
+      "count": 25,
+      "synced_count": 25,
+      "has_more": true
+    },
+    {
+      "success": true,
+      "synced_count": 0,
+      "skipped_count": 10,
+      "locked": true,
+      "skipped": true,
+      "message": "watermark lock held by another process"
+    }
+  ]
+}

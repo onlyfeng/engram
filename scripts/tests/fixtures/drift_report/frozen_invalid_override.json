@@ -1,0 +1,36 @@
+{
+  "check_timestamp": "2026-01-30T00:00:00Z",
+  "upstream_url": "https://github.com/CaviraOSS/OpenMemory",
+  "upstream_owner": "CaviraOSS",
+  "upstream_repo": "OpenMemory",
+  "current_ref": "v1.3.0",
+  "current_ref_type": "tag",
+  "latest_ref": "v1.4.0",
+  "latest_ref_type": "release",
+  "is_behind": true,
+  "drift_level": "minor",
+  "priority": "normal",
+  "api_success": true,
+  "api_error": null,
+  "releases": [
+    {
+      "tag_name": "v1.4.0",
+      "name": "Release v1.4.0",
+      "prerelease": false,
+      "draft": false,
+      "published_at": "2026-01-28T12:00:00Z"
+    }
+  ],
+  "tags": [],
+  "freeze_status": {
+    "is_frozen": true,
+    "freeze_reason": "unified_stack_migration",
+    "freeze_expires_at": null,
+    "override_requested": true,
+    "override_valid": false,
+    "override_reason": "too short"
+  },
+  "_fixture_description": "演练场景：冻结状态且 override 无效（原因太短）",
+  "_expected_exit_code": 3,
+  "_expected_actions": ["阻断升级步骤", "提示 override 原因不满足要求"]
+}

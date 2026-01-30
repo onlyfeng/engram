@@ -1,0 +1,631 @@
+{
+  "$schema": "workflow_contract.v1.schema.json",
+  "version": "1.11.0",
+  "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
+  "last_updated": "2026-01-30",
+  "_changelog_v1.11.0": "Nightly workflow 优化：核心验证链收敛到 acceptance-unified-full（方案 A）；移除独立的 Verify unified stack 和 Run Gateway integration tests 步骤；Upload acceptance-unified-full results 增加 verify-results.json",
+  "_changelog_v1.10.0": "CI unified-standard 增加 Collect acceptance artifacts 和 Record acceptance run 步骤；增强 record_acceptance_run.py 调用（--command、--metadata-kv 参数）；Upload verification results 增加 acceptance-unified-min 目录；新增 openmemory-base-snapshot、openmemory-patches-generate、openmemory-patches-backfill make targets",
+  "_changelog_v1.9.0": "新增 artifact_archive 合约：定义 ci/nightly 必需的 artifact paths（.artifacts/acceptance-runs/, .artifacts/verify-results.json 等）；validate_workflows.py 新增 upload-artifact 步骤扫描验证",
+  "_changelog_v1.8.0": "新增验收测试 make targets (acceptance-unified-min, acceptance-unified-full, acceptance-logbook-only)；Nightly 增加 Run acceptance-unified-full 和 Upload acceptance-unified-full results 步骤；冻结验收相关 step text",
+  "_changelog_v1.7.0": "新增 [Optional] Seek Compat Strict job；添加 ci:seek-compat-strict label 和 has_compat_strict_label output；SEEKDB_COMPAT_STRICT=1 模式验证废弃环境变量",
+  "_changelog_v1.6.0": "CI contract 审计：统一 OPENMEMORY_PATCH_FILES_REQUIRED/schema-strict/lock-consistency-check 触发条件均由 upstream_ref_changed 驱动；新增 docs/openmemory/02_ci_governance_contract.md",
+  "_changelog_v1.5.0": "新增 contract_changed 输出键；Makefile 和 docs/ci_nightly_workflow_refactor/** 变更触发 workflow-contract-check；新增 docs-check job",
+  "_changelog_v1.4.0": "新增 SeekDB 可选层策略标记定义（CI non-blocking vs Nightly strict）",
+  "_changelog_v1.3.0": "upstream_ref 变更时先生成补丁再校验；新增 'Generate OpenMemory patch bundle (strict mode)' step",
+  "ci": {
+    "file": ".github/workflows/ci.yml",
+    "detect_changes": {
+      "outputs": [
+        "logbook_changed",
+        "gateway_changed",
+        "seek_changed",
+        "stack_changed",
+        "openmemory_sdk_changed",
+        "openmemory_governance_changed",
+        "schemas_changed",
+        "workflows_changed",
+        "contract_changed",
+        "upstream_ref_changed",
+        "has_migrate_dry_run_label",
+        "has_dual_read_label",
+        "has_freeze_override_label",
+        "has_compat_strict_label"
+      ]
+    },
+    "labels": [
+      "ci:seek-migrate-dry-run",
+      "ci:dual-read",
+      "openmemory:freeze-override",
+      "ci:seek-compat-strict"
+    ],
+    "job_ids": [
+      "detect-changes",
+      "precheck-static",
+      "workflow-contract-check",
+      "schema-validate",
+      "docs-check",
+      "python-logbook-unit",
+      "python-gateway-unit",
+      "python-seek",
+      "openmemory-governance-check",
+      "unified-standard",
+      "openmemory-sdk",
+      "seek-migrate-dry-run",
+      "seek-compat-strict"
+    ],
+    "job_names": [
+      "Detect Changes",
+      "[Fast] Precheck & Static Build Verify",
+      "[Fast] Workflow Contract Check",
+      "[Fast] Schema Validation",
+      "[Fast] Docs Link Check",
+      "[Fast] Logbook Unit Tests",
+      "[Fast] Gateway Unit Tests",
+      "[Fast] Seek Chunking Tests",
+      "[Fast] OpenMemory Governance Check",
+      "[Standard] Unified Stack Integration Test (${{ matrix.profile }})",
+      "[Fast] OpenMemory SDK Tests",
+      "[Optional] Seek Migrate Dry-Run",
+      "[Optional] Seek Compat Strict"
+    ],
+    "required_jobs": [
+      {
+        "id": "detect-changes",
+        "name": "Detect Changes",
+        "required_steps": [
+          "Checkout repository",
+          "Detect file changes",
+          "Check PR labels",
+          "Check if upstream_ref changed"
+        ],
+        "required_outputs": [
+          "logbook_changed",
+          "gateway_changed",
+          "seek_changed",
+          "stack_changed",
+          "openmemory_sdk_changed",
+          "openmemory_governance_changed",
+          "schemas_changed",
+          "workflows_changed",
+          "contract_changed",
+          "upstream_ref_changed",
+          "has_migrate_dry_run_label",
+          "has_dual_read_label",
+          "has_freeze_override_label"
+        ]
+      },
+      {
+        "id": "precheck-static",
+        "name": "[Fast] Precheck & Static Build Verify",
+        "required_steps": [
+          "Checkout repository",
+          "Run CI precheck",
+          "Verify build static (Dockerfile/compose config check)",
+          "Check no legacy stage aliases",
+          "Check deprecated env var usage",
+          "Verify OpenMemory vendor structure",
+          "Verify OpenMemory.upstream.lock.json format",
+          "Verify import manifest consistency"
+        ]
+      },
+      {
+        "id": "workflow-contract-check",
+        "name": "[Fast] Workflow Contract Check",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install minimal dependencies",
+          "Run workflow contract validation (strict)",
+          "Validate SeekDB policy markers (strict)"
+        ]
+      },
+      {
+        "id": "schema-validate",
+        "name": "[Fast] Schema Validation",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Create artifacts directory",
+          "Run schema validation (with fixtures)"
+        ]
+      },
+      {
+        "id": "docs-check",
+        "name": "[Fast] Docs Link Check",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Create output directory",
+          "Run docs link check"
+        ]
+      },
+      {
+        "id": "python-logbook-unit",
+        "name": "[Fast] Logbook Unit Tests",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies and run unit tests"
+        ]
+      },
+      {
+        "id": "python-gateway-unit",
+        "name": "[Fast] Gateway Unit Tests",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install Logbook dependency (engram_logbook)",
+          "Install Gateway and run unit tests"
+        ]
+      },
+      {
+        "id": "python-seek",
+        "name": "[Fast] Seek Chunking Tests",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Run Seek unit tests"
+        ]
+      },
+      {
+        "id": "openmemory-governance-check",
+        "name": "[Fast] OpenMemory Governance Check",
+        "required_steps": [
+          "Checkout repository",
+          "Check OpenMemory freeze status",
+          "Set up Python",
+          "Install pytest",
+          "Run openmemory_sync unit tests",
+          "Create artifacts directory",
+          "Run OpenMemory schema validation",
+          "Run OpenMemory sync check",
+          "Run OpenMemory sync apply (dry-run with manual strategy)",
+          "Run OpenMemory sync verify"
+        ]
+      },
+      {
+        "id": "unified-standard",
+        "name": "[Standard] Unified Stack Integration Test (${{ matrix.profile }})",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Start unified stack",
+          "Wait for services to be ready",
+          "Verify unified stack",
+          "Run OpenMemory artifact audit",
+          "Generate OpenMemory patch bundle (strict mode)",
+          "Run OpenMemory patch check",
+          "Run Gateway integration tests",
+          "Collect acceptance artifacts",
+          "Record acceptance run"
+        ],
+        "_comment": "upstream_ref_changed 时，Generate patch bundle 在 Run patch check 之前执行；Collect acceptance artifacts 收集关键产物用于验收记录"
+      },
+      {
+        "id": "openmemory-sdk",
+        "name": "[Fast] OpenMemory SDK Tests",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Set up Node.js",
+          "Run Python SDK tests",
+          "Run Node SDK tests"
+        ]
+      }
+    ],
+    "required_env_vars": [],
+    "artifact_archive": {
+      "_comment": "CI workflow 必需的 artifact 路径，确保验收测试和关键验证结果被上传",
+      "required_artifact_paths": [
+        ".artifacts/acceptance-runs/",
+        ".artifacts/verify-results.json",
+        ".artifacts/acceptance-unified-min/"
+      ],
+      "artifact_step_names": [
+        "Upload verification results",
+        "Upload acceptance run records",
+        "Collect acceptance artifacts"
+      ]
+    }
+  },
+  "nightly": {
+    "file": ".github/workflows/nightly.yml",
+    "job_ids": [
+      "nightly-full"
+    ],
+    "job_names": [
+      "Nightly Full Test Suite"
+    ],
+    "required_jobs": [
+      {
+        "id": "nightly-full",
+        "name": "Nightly Full Test Suite",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install Python dependencies",
+          "Verify OpenMemory vendor structure",
+          "Verify OpenMemory.upstream.lock.json format",
+          "Deploy unified stack",
+          "Run Seek PGVector integration tests",
+          "Run Seek Collection Migrate (dry-run)",
+          "Run Seek Smoke Test",
+          "Run Seek Nightly Rebuild",
+          "Run Seek Dual-Read Test",
+          "Run Seek PGVector Migration Drill Test",
+          "Run acceptance-unified-full",
+          "Upload acceptance-unified-full results"
+        ],
+        "_comment": "核心验证链（verify-unified + gateway-integration）已收敛到 acceptance-unified-full 内部执行"
+      }
+    ],
+    "required_env_vars": [
+      "COMPOSE_PROJECT_NAME",
+      "COMPOSE_FILE",
+      "POSTGRES_USER",
+      "POSTGRES_PASSWORD",
+      "POSTGRES_DB",
+      "SEEKDB_ENABLE"
+    ],
+    "artifact_archive": {
+      "_comment": "Nightly workflow 必需的 artifact 路径，确保完整验收测试结果被上传",
+      "required_artifact_paths": [
+        ".artifacts/acceptance-unified-full/",
+        ".artifacts/acceptance-runs/",
+        ".artifacts/verify-results.json"
+      ],
+      "artifact_step_names": [
+        "Upload acceptance-unified-full results",
+        "Upload verification results"
+      ]
+    }
+  },
+  "release": {
+    "file": ".github/workflows/release.yml",
+    "job_ids": [
+      "gate",
+      "build",
+      "summary"
+    ],
+    "job_names": [
+      "Release Gate Check",
+      "Build & Push Images",
+      "Release Summary"
+    ],
+    "required_jobs": [
+      {
+        "id": "gate",
+        "name": "Release Gate Check",
+        "required_steps": [
+          "Checkout repository",
+          "Extract version from tag",
+          "Set up Python",
+          "Install Python dependencies",
+          "Run release gate checks (with OpenMemory governance)"
+        ],
+        "required_outputs": [
+          "version",
+          "version_short"
+        ]
+      },
+      {
+        "id": "build",
+        "name": "Build & Push Images",
+        "required_steps": [
+          "Checkout repository",
+          "Extract version",
+          "Set up QEMU",
+          "Set up Docker Buildx",
+          "Login to Container Registry",
+          "Build gateway",
+          "Build worker",
+          "Build openmemory",
+          "Build openmemory_migrate"
+        ],
+        "required_outputs": [
+          "digest_gateway",
+          "digest_worker",
+          "digest_openmemory",
+          "digest_openmemory_migrate"
+        ]
+      },
+      {
+        "id": "summary",
+        "name": "Release Summary",
+        "required_steps": [
+          "Download digest report",
+          "Generate Release Summary"
+        ]
+      }
+    ],
+    "required_env_vars": [
+      "COMPOSE_PROJECT_NAME",
+      "COMPOSE_FILE",
+      "REGISTRY",
+      "IMAGE_PREFIX"
+    ]
+  },
+  "make": {
+    "targets_required": [
+      "ci-precheck",
+      "deploy",
+      "verify-build-static",
+      "verify-build",
+      "verify-unified",
+      "verify-import-manifest",
+      "release-gate",
+      "test-logbook-unit",
+      "test-logbook-integration",
+      "test-gateway-integration",
+      "test-seek-unit",
+      "test-seek-pgvector",
+      "test-seek-pgvector-migration-drill",
+      "openmemory-vendor-check",
+      "openmemory-lock-format-check",
+      "openmemory-audit",
+      "openmemory-sync-check",
+      "openmemory-sync-verify",
+      "openmemory-release-preflight",
+      "openmemory-patches-strict-bundle",
+      "openmemory-test-multi-schema",
+      "validate-schemas",
+      "validate-workflows",
+      "validate-workflows-strict",
+      "docs-check",
+      "docs-lint",
+      "docs-check-refs",
+      "seek-run-smoke",
+      "seek-nightly-rebuild",
+      "seek-migrate-dry-run",
+      "acceptance-unified-min",
+      "acceptance-unified-full",
+      "acceptance-logbook-only",
+      "verify-logbook-consistency",
+      "test-seek-optional-layer",
+      "openmemory-base-snapshot",
+      "openmemory-patches-generate",
+      "openmemory-patches-backfill"
+    ]
+  },
+  "frozen_job_names": {
+    "_comment": "Job names that are frozen and must match exactly (used for CI contract validation)",
+    "allowlist": [
+      "Detect Changes",
+      "[Fast] Precheck & Static Build Verify",
+      "[Fast] Workflow Contract Check",
+      "[Fast] Schema Validation",
+      "[Fast] Docs Link Check",
+      "[Fast] Logbook Unit Tests",
+      "[Fast] Gateway Unit Tests",
+      "[Fast] Seek Chunking Tests",
+      "[Fast] OpenMemory Governance Check",
+      "[Standard] Unified Stack Integration Test (${{ matrix.profile }})",
+      "[Fast] OpenMemory SDK Tests",
+      "Nightly Full Test Suite",
+      "Release Gate Check",
+      "Build & Push Images",
+      "Release Summary"
+    ]
+  },
+  "frozen_step_text": {
+    "_comment": "Step names that are frozen and must match exactly (used for CI contract validation)",
+    "allowlist": [
+      "Checkout repository",
+      "Set up Python",
+      "Set up Node.js",
+      "Set up QEMU",
+      "Set up Docker Buildx",
+      "Detect file changes",
+      "Check PR labels",
+      "Check if upstream_ref changed",
+      "Run CI precheck",
+      "Verify build static (Dockerfile/compose config check)",
+      "Check no legacy stage aliases",
+      "Check deprecated env var usage",
+      "Verify OpenMemory vendor structure",
+      "Verify OpenMemory.upstream.lock.json format",
+      "Install minimal dependencies",
+      "Run workflow contract validation (strict)",
+      "Validate SeekDB policy markers (strict)",
+      "Check OpenMemory freeze status",
+      "Run openmemory_sync unit tests",
+      "Run OpenMemory schema validation",
+      "Run OpenMemory sync check",
+      "Run OpenMemory sync apply (dry-run with manual strategy)",
+      "Run OpenMemory sync verify",
+      "Generate OpenMemory patch bundle (strict mode)",
+      "Run OpenMemory patch check",
+      "Run OpenMemory multi-schema isolation test",
+      "Run OpenMemory artifact audit",
+      "Run OpenMemory release preflight (optional aggregated check)",
+      "Run schema validation (with fixtures)",
+      "Install dependencies and run unit tests",
+      "Install Logbook dependency (engram_logbook)",
+      "Install Gateway and run unit tests",
+      "Run Seek unit tests",
+      "Start unified stack",
+      "Wait for services to be ready",
+      "Verify unified stack",
+      "Run release gate checks (with OpenMemory governance)",
+      "Run Seek smoke test",
+      "Run Seek PGVector integration tests",
+      "Run Seek Nightly Rebuild Gate (DRY_RUN)",
+      "Run Seek Collection Migrate (dry-run)",
+      "Run Seek Smoke Test",
+      "Run Seek Nightly Rebuild",
+      "Run Seek Dual-Read Test",
+      "Run Seek PGVector Migration Drill Test",
+      "Deploy unified stack",
+      "Extract version from tag",
+      "Extract version",
+      "Login to Container Registry",
+      "Build gateway",
+      "Build worker",
+      "Build openmemory",
+      "Build openmemory_migrate",
+      "Build dashboard",
+      "Generate artifact audit report",
+      "Download digest report",
+      "Generate Release Summary",
+      "Run Python SDK tests",
+      "Run Node SDK tests",
+      "Run Logbook Integration Tests (MinIO)",
+      "Run OpenMemory patch sync check",
+      "Run OpenMemory upstream drift check",
+      "Run Artifact Audit",
+      "Generate Summary",
+      "Verify upstream_ref change requirements",
+      "Run lock consistency check (hard gate when upstream_ref changed)",
+      "Verify import manifest consistency",
+      "Run acceptance-unified-full",
+      "Upload acceptance-unified-full results",
+      "Collect acceptance artifacts",
+      "Record acceptance run"
+    ]
+  },
+  "seekdb_ci_budgets": {
+    "_comment": "SeekDB CI 耗时预算定义（基于 GitHub Actions ubuntu-latest runner 统计）",
+    "_source": {
+      "runner": "GitHub Actions ubuntu-latest",
+      "baseline_date": "2026-01-30",
+      "statistics_source": "nightly.yml artifact JUnit XML + migrate JSON"
+    },
+    "budgets": {
+      "test-seek-unit": {
+        "max_duration": "5m",
+        "description": "Seek 单元测试",
+        "artifact_pattern": ".artifacts/test-results/seek-unit.xml"
+      },
+      "test-seek-pgvector": {
+        "max_duration": "10m",
+        "description": "Seek PGVector 集成测试（含 backend + e2e minimal）",
+        "artifact_pattern": ".artifacts/test-results/seek-pgvector.xml"
+      },
+      "seek-migrate-dry-run": {
+        "max_duration": "5m",
+        "description": "Seek 迁移 dry-run（shared-table + table-per-collection）",
+        "artifact_pattern": ".artifacts/seek-migrate/*.json"
+      },
+      "seek-run-smoke": {
+        "max_duration": "10m",
+        "description": "Seek Smoke 测试（索引同步 + 检索验证 + 一致性检查）",
+        "artifact_pattern": ".artifacts/seek-smoke/*.json"
+      },
+      "seek-nightly-rebuild": {
+        "max_duration": "30m",
+        "description": "Seek Nightly Rebuild（full rebuild + gate + activate）",
+        "artifact_pattern": ".artifacts/seek-nightly-rebuild/*.json"
+      },
+      "seek-dual-read": {
+        "max_duration": "10m",
+        "description": "Seek Dual-Read 比较测试（primary/shadow 一致性）",
+        "artifact_pattern": ".artifacts/dual-read/*.json"
+      },
+      "test-seek-pgvector-migration-drill": {
+        "max_duration": "15m",
+        "description": "Seek PGVector 迁移演练集成测试",
+        "artifact_pattern": ".artifacts/test-results/seek-pgvector-migration-drill.xml"
+      }
+    },
+    "p95_warning_threshold": 0.9,
+    "regression_delta_threshold": 0.2
+  },
+  "seekdb_policy_markers": {
+    "_comment": "SeekDB 可选层失败策略标记定义，用于 validate_seekdb_policy_markers.py 校验",
+    "marker_types": [
+      "[SEEKDB:NON-BLOCKING]",
+      "[SEEKDB:MUST-PASS]",
+      "[SEEKDB:FAIL-OPEN]",
+      "[SEEKDB:NO-FAIL-OPEN]"
+    ],
+    "ci_required": {
+      "markers": [
+        {"marker": "[SEEKDB:NON-BLOCKING]", "context": "Run Seek smoke test"},
+        {"marker": "[SEEKDB:FAIL-OPEN]", "context": "Run Seek smoke test"},
+        {"marker": "[SEEKDB:MUST-PASS]", "context": "Run Seek PGVector integration tests"},
+        {"marker": "[SEEKDB:NON-BLOCKING]", "context": "Run Seek Nightly Rebuild Gate"}
+      ],
+      "env_vars": [
+        "SEEKDB_SKIP_CHECK",
+        "SEEKDB_PG_SCHEMA",
+        "SEEKDB_PG_TABLE",
+        "SEEKDB_ALLOW_ACTIVE_COLLECTION_SWITCH"
+      ]
+    },
+    "nightly_required": {
+      "markers": [
+        {"marker": "[SEEKDB:MUST-PASS]", "context": "Run Seek Smoke Test"},
+        {"marker": "[SEEKDB:MUST-PASS]", "context": "Run Seek Nightly Rebuild"},
+        {"marker": "[SEEKDB:NO-FAIL-OPEN]", "context": "Run Seek Nightly Rebuild"},
+        {"marker": "[SEEKDB:MUST-PASS]", "context": "Run Seek Dual-Read Test"},
+        {"marker": "[SEEKDB:NO-FAIL-OPEN]", "context": "Run Seek Dual-Read Test"},
+        {"marker": "[SEEKDB:MUST-PASS]", "context": "Run Seek PGVector Migration Drill Test"}
+      ],
+      "env_vars": [
+        "SEEKDB_SKIP_CHECK",
+        "SEEKDB_INDEX_VERIFY_SHA256",
+        "SEEKDB_GATE_PROFILE",
+        "SEEKDB_NIGHTLY_ACTIVATE",
+        "SEEKDB_PG_SCHEMA"
+      ]
+    }
+  },
+  "openmemory_governance_contract": {
+    "_comment": "OpenMemory 治理检查契约定义，详见 docs/openmemory/02_ci_governance_contract.md",
+    "_doc_ref": "docs/openmemory/02_ci_governance_contract.md",
+    "trigger_signal": {
+      "primary": "upstream_ref_changed",
+      "secondary": "openmemory_governance_changed",
+      "_comment": "upstream_ref_changed 是唯一的强制验证触发信号"
+    },
+    "strict_mode_drivers": {
+      "_comment": "以下检查的 strict 模式均由 upstream_ref_changed 驱动",
+      "OPENMEMORY_PATCH_FILES_REQUIRED": "upstream_ref_changed",
+      "schema-validate --schema-strict": "upstream_ref_changed",
+      "lock-consistency-check --strict": "upstream_ref_changed"
+    },
+    "required_checks_when_upstream_ref_changed": [
+      {"command": "make openmemory-vendor-check", "layer": "precheck-static"},
+      {"command": "make openmemory-lock-format-check", "layer": "precheck-static"},
+      {"command": "schema-validate --schema-strict", "layer": "Fast"},
+      {"command": "make openmemory-sync-check", "layer": "Fast + Standard"},
+      {"command": "make openmemory-sync-verify", "layer": "Fast + Standard"},
+      {"command": "lock-consistency-check --strict", "layer": "Fast"},
+      {"command": "make openmemory-test-multi-schema", "layer": "Standard"}
+    ],
+    "fail_strategy": {
+      "_comment": "统一的 Fail/Warn 策略，由 openmemory_sync_parse.py 实现",
+      "fail_conditions": [
+        "verify_final_status=error",
+        "category_mismatch_A > 0",
+        "apply_conflicts_A > 0",
+        "strict_patch_files + missing_patch_files > 0",
+        "strict_patch_files + sha256_mismatch > 0",
+        "strict_patch_files + bundle_sha256_status=mismatch",
+        "lock_consistency_check --strict 失败"
+      ],
+      "warn_conditions": [
+        "category_mismatch_B > 0",
+        "apply_conflicts_B > 0",
+        "missing_patch_files > 0 (non-strict)"
+      ],
+      "notice_conditions": [
+        "category_mismatch_C > 0"
+      ]
+    },
+    "layer_responsibilities": {
+      "Fast": {
+        "job_id": "openmemory-governance-check",
+        "purpose": "快速发现治理问题，无需部署服务",
+        "docker_required": false
+      },
+      "Standard": {
+        "job_id": "unified-standard",
+        "purpose": "在集成测试环境中再次验证",
+        "docker_required": true
+      }
+    }
+  }
+}

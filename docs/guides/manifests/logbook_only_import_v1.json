@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "logbook_only_import_v1",
+  "title": "Logbook-only Import Manifest",
+  "description": "定义将 Engram Logbook 独立集成到已有项目时的文件复制清单",
+  "manifest_version": "1.0",
+  "version_policy": {
+    "description": "遵循 docs/contracts/versioning.md 版本策略",
+    "file_naming": "logbook_only_import_v{major}.json",
+    "minor_evolution": "manifest_version 字段支持 1.x 演进（如 1.0 → 1.1）",
+    "major_breaking": "删除字段、修改语义、收紧约束时需升级至 v2"
+  },
+  "files": {
+    "required": [
+      {
+        "id": "compose_logbook",
+        "description": "Logbook Compose 配置",
+        "source_path": "compose/logbook.yml",
+        "target_path": "compose/logbook.yml",
+        "type": "file"
+      },
+      {
+        "id": "logbook_sql",
+        "description": "Logbook SQL 初始化脚本（Schema、索引、权限）",
+        "source_path": "apps/logbook_postgres/sql",
+        "target_path": "apps/logbook_postgres/sql",
+        "type": "directory"
+      }
+    ],
+    "optional": [
+      {
+        "id": "logbook_scripts",
+        "description": "Logbook CLI & 迁移脚本（含 engram_logbook 包）",
+        "source_path": "apps/logbook_postgres/scripts",
+        "target_path": "apps/logbook_postgres/scripts",
+        "type": "directory",
+        "use_case": "需要 logbook health、logbook-smoke、数据库迁移或完整验收时使用"
+      }
+    ]
+  },
+  "constraints": [
+    {
+      "id": "compose_relative_paths",
+      "description": "Compose 文件中的相对路径基于 compose/ 目录",
+      "applies_to": ["compose_logbook"],
+      "rationale": "compose/logbook.yml 中的 volume bind 使用 ../apps/logbook_postgres/sql"
+    },
+    {
+      "id": "sql_directory_complete",
+      "description": "SQL 目录需要完整复制，包含 00-99 编号的初始化脚本",
+      "applies_to": ["logbook_sql"],
+      "rationale": "PostgreSQL 按文件名顺序执行初始化脚本，缺少任何文件会导致 schema 不完整"
+    }
+  ],
+  "env_vars": {
+    "required": [
+      {
+        "name": "PROJECT_KEY",
+        "description": "项目标识符",
+        "example": "myproject"
+      },
+      {
+        "name": "POSTGRES_DB",
+        "description": "PostgreSQL 数据库名",
+        "example": "myproject"
+      },
+      {
+        "name": "POSTGRES_PASSWORD",
+        "description": "PostgreSQL 超级用户密码",
+        "example": "changeme"
+      }
+    ],
+    "optional": [
+      {
+        "name": "POSTGRES_PORT",
+        "description": "PostgreSQL 端口",
+        "default": "5432"
+      },
+      {
+        "name": "LOGBOOK_MIGRATOR_PASSWORD",
+        "description": "Logbook DDL 迁移账号密码（启用服务账号时必需）",
+        "use_case": "需要角色分离或 Acceptance-ready 验收级别时设置"
+      },
+      {
+        "name": "LOGBOOK_SVC_PASSWORD",
+        "description": "Logbook 运行时 DML 账号密码（启用服务账号时必需）",
+        "use_case": "需要角色分离或运行 logbook health CLI 时设置"
+      }
+    ]
+  },
+  "health_checks": {
+    "postgres": {
+      "command": "docker compose -f compose/logbook.yml exec postgres pg_isready -U postgres -d ${POSTGRES_DB:-myproject}",
+      "success_indicator": "accepting connections"
+    },
+    "logbook_cli": {
+      "command": "logbook health",
+      "success_indicator": "{\"ok\": true}",
+      "requires": ["logbook_scripts"],
+      "note": "需要安装 engram_logbook 包：pip install -e apps/logbook_postgres/scripts"
+    }
+  },
+  "acceptance_levels": {
+    "description": "两种验收级别，按需选择",
+    "levels": [
+      {
+        "id": "A",
+        "name": "DB Baseline-only",
+        "description": "最小验证，仅检查 PostgreSQL 连接",
+        "check_method": "pg_isready",
+        "required_files": ["compose_logbook", "logbook_sql"],
+        "required_env_vars": ["PROJECT_KEY", "POSTGRES_DB", "POSTGRES_PASSWORD"]
+      },
+      {
+        "id": "B",
+        "name": "Acceptance-ready",
+        "description": "完整验证，包含 CLI 健康检查和冒烟测试",
+        "check_method": "logbook health / make logbook-smoke",
+        "required_files": ["compose_logbook", "logbook_sql", "logbook_scripts"],
+        "required_env_vars": ["PROJECT_KEY", "POSTGRES_DB", "POSTGRES_PASSWORD"],
+        "optional_env_vars_note": "LOGBOOK_MIGRATOR_PASSWORD/LOGBOOK_SVC_PASSWORD 仅在启用 service-account 模式时需要设置"
+      }
+    ]
+  },
+  "_meta": {
+    "source_doc": "docs/guides/integrate_existing_project.md",
+    "created": "2026-01-30",
+    "last_updated": "2026-01-30"
+  }
+}

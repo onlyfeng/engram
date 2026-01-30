@@ -1,0 +1,9 @@
+{
+  "$comment": "成功完成的同步运行记录 - 用于 CI schema 校验",
+  "status": "completed",
+  "counts": {
+    "synced_count": 100,
+    "diff_count": 95,
+    "bulk_count": 100
+  }
+}

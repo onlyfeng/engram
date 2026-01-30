@@ -1,0 +1,36 @@
+{
+  "check_timestamp": "2026-01-30T00:00:00Z",
+  "upstream_url": "https://github.com/CaviraOSS/OpenMemory",
+  "upstream_owner": "CaviraOSS",
+  "upstream_repo": "OpenMemory",
+  "current_ref": "v1.3.0",
+  "current_ref_type": "tag",
+  "latest_ref": "v1.3.0",
+  "latest_ref_type": "release",
+  "is_behind": false,
+  "drift_level": "none",
+  "priority": "none",
+  "api_success": true,
+  "api_error": null,
+  "releases": [
+    {
+      "tag_name": "v1.3.0",
+      "name": "Release v1.3.0",
+      "prerelease": false,
+      "draft": false,
+      "published_at": "2026-01-15T12:00:00Z"
+    }
+  ],
+  "tags": [],
+  "freeze_status": {
+    "is_frozen": false,
+    "freeze_reason": null,
+    "freeze_expires_at": null,
+    "override_requested": false,
+    "override_valid": false,
+    "override_reason": null
+  },
+  "_fixture_description": "演练场景：无漂移（版本为最新）",
+  "_expected_exit_code": 0,
+  "_expected_actions": ["正常通过，无需干预"]
+}

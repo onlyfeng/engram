@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "provider": "minio",
+  "event_ts": "2024-01-15T10:00:00.000Z",
+  "bucket": "engram-artifacts",
+  "object_key": "scm/1/git/commits/abc123.diff",
+  "operation": "s3:PutObject",
+  "status_code": 200,
+  "success": true,
+  "request_id": "REQ-123-456",
+  "principal": "AKIAIOSFODNN7EXAMPLE",
+  "remote_ip": "192.168.1.100",
+  "user_agent": "MinIO Console",
+  "bytes_sent": 0,
+  "bytes_received": 1024,
+  "duration_ms": 15,
+  "raw": {
+    "version": "1",
+    "deploymentid": "test-deployment",
+    "time": "2024-01-15T10:00:00.000Z",
+    "api": {
+      "name": "PutObject",
+      "bucket": "engram-artifacts",
+      "object": "scm/1/git/commits/abc123.diff",
+      "statusCode": 200
+    }
+  }
+}

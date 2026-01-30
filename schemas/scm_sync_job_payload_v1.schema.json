@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/scm_sync_job_payload_v1.schema.json",
+  "title": "SCM Sync Job Payload V1 Schema",
+  "description": "Engram SCM 同步任务 payload_json 字段的 JSON Schema (V1)",
+  
+  "type": "object",
+  "additionalProperties": true,
+  
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Payload 版本号",
+      "enum": ["v1"],
+      "default": "v1"
+    },
+    
+    "gitlab_instance": {
+      "type": ["string", "null"],
+      "description": "GitLab 实例标识（规范化后的 host，如 gitlab.example.com）",
+      "examples": ["gitlab.example.com"]
+    },
+    "tenant_id": {
+      "type": ["string", "null"],
+      "description": "租户 ID（用于多租户隔离）",
+      "examples": ["tenant-acme"]
+    },
+    "project_key": {
+      "type": ["string", "null"],
+      "description": "项目 key（如 group/project）",
+      "examples": ["mygroup/myproject"]
+    },
+    
+    "window_type": {
+      "type": ["string", "null"],
+      "description": "窗口类型（time = 时间窗口，rev/revision = SVN revision 窗口）",
+      "enum": ["time", "rev", "revision", null],
+      "default": "time"
+    },
+    "since_ts": {
+      "type": ["number", "null"],
+      "description": "时间窗口开始（Unix timestamp）",
+      "minimum": 0,
+      "maximum": 4102444800
+    },
+    "until_ts": {
+      "type": ["number", "null"],
+      "description": "时间窗口结束（Unix timestamp）",
+      "minimum": 0,
+      "maximum": 4102444800
+    },
+    "since": {
+      "type": ["string", "number", "null"],
+      "description": "时间窗口开始（兼容字段，支持 ISO8601 或 Unix timestamp）"
+    },
+    "until": {
+      "type": ["string", "number", "null"],
+      "description": "时间窗口结束（兼容字段，支持 ISO8601 或 Unix timestamp）"
+    },
+    
+    "start_rev": {
+      "type": ["integer", "null"],
+      "description": "SVN revision 窗口开始",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "end_rev": {
+      "type": ["integer", "null"],
+      "description": "SVN revision 窗口结束",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    
+    "mode": {
+      "type": "string",
+      "description": "同步模式",
+      "enum": ["incremental", "backfill"],
+      "default": "incremental"
+    },
+    "diff_mode": {
+      "type": "string",
+      "description": "Diff 获取模式",
+      "enum": ["always", "best_effort", "none"],
+      "default": "best_effort"
+    },
+    "strict": {
+      "type": "boolean",
+      "description": "严格模式（true = 失败即停止）",
+      "default": false
+    },
+    "update_watermark": {
+      "type": "boolean",
+      "description": "是否更新 watermark（游标）",
+      "default": true
+    },
+    
+    "batch_size": {
+      "type": ["integer", "null"],
+      "description": "批量大小",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "forward_window_seconds": {
+      "type": ["integer", "null"],
+      "description": "前向窗口秒数",
+      "minimum": 60,
+      "maximum": 2592000
+    },
+    
+    "chunk_size": {
+      "type": ["integer", "null"],
+      "description": "分块大小（时间秒数或 revision 数量）",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "total_chunks": {
+      "type": ["integer", "null"],
+      "description": "总分块数",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 1
+    },
+    "current_chunk": {
+      "type": ["integer", "null"],
+      "description": "当前分块索引（0-based）",
+      "minimum": 0,
+      "maximum": 9999,
+      "default": 0
+    },
+    "chunk_total": {
+      "type": ["integer", "null"],
+      "description": "总分块数（别名，与 total_chunks 等价）",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "chunk_index": {
+      "type": ["integer", "null"],
+      "description": "当前分块索引（别名，与 current_chunk 等价）",
+      "minimum": 0,
+      "maximum": 9999
+    },
+    
+    "window_since": {
+      "type": ["string", "null"],
+      "description": "分块时间窗口开始（ISO8601，TimeWindowChunk 生成）"
+    },
+    "window_until": {
+      "type": ["string", "null"],
+      "description": "分块时间窗口结束（ISO8601，TimeWindowChunk 生成）"
+    },
+    "window_start_rev": {
+      "type": ["integer", "null"],
+      "description": "分块 revision 窗口开始（RevisionWindowChunk 生成）",
+      "minimum": 0
+    },
+    "window_end_rev": {
+      "type": ["integer", "null"],
+      "description": "分块 revision 窗口结束（RevisionWindowChunk 生成）",
+      "minimum": 0
+    },
+    
+    "suggested_batch_size": {
+      "type": ["integer", "null"],
+      "description": "熔断降级建议的 batch_size（scheduler 注入）"
+    },
+    "suggested_forward_window_seconds": {
+      "type": ["integer", "null"],
+      "description": "熔断降级建议的前向时间窗口秒数（scheduler 注入）"
+    },
+    "suggested_diff_mode": {
+      "type": ["string", "null"],
+      "description": "熔断降级建议的 diff 获取模式（scheduler 注入）",
+      "enum": ["always", "best_effort", "none", null]
+    },
+    
+    "is_backfill_only": {
+      "type": "boolean",
+      "description": "是否仅执行 backfill（熔断降级模式）",
+      "default": false
+    },
+    "circuit_state": {
+      "type": ["string", "null"],
+      "description": "熔断器状态",
+      "enum": ["closed", "half_open", "open", "degraded", null]
+    },
+    "is_probe_mode": {
+      "type": "boolean",
+      "description": "是否为探测模式",
+      "default": false
+    },
+    "probe_budget": {
+      "type": ["integer", "null"],
+      "description": "探测预算"
+    },
+    
+    "verbose": {
+      "type": "boolean",
+      "description": "是否输出详细日志",
+      "default": false
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "是否为试运行模式",
+      "default": false
+    },
+    
+    "reason": {
+      "type": ["string", "null"],
+      "description": "任务调度原因"
+    },
+    "scheduled_at": {
+      "type": ["string", "null"],
+      "description": "调度时间戳（ISO8601）"
+    },
+    "logical_job_type": {
+      "type": ["string", "null"],
+      "description": "逻辑任务类型"
+    },
+    "physical_job_type": {
+      "type": ["string", "null"],
+      "description": "物理任务类型"
+    },
+    
+    "token": {
+      "type": ["string", "null"],
+      "description": "可选的 payload 内联认证 token"
+    }
+  },
+  
+  "examples": [
+    {
+      "version": "v1",
+      "gitlab_instance": "gitlab.example.com",
+      "mode": "incremental",
+      "diff_mode": "best_effort"
+    },
+    {
+      "version": "v1",
+      "window_type": "time",
+      "since": "2024-01-01T00:00:00Z",
+      "until": "2024-01-02T00:00:00Z",
+      "mode": "backfill",
+      "update_watermark": true
+    },
+    {
+      "version": "v1",
+      "window_type": "rev",
+      "start_rev": 1000,
+      "end_rev": 1100,
+      "mode": "backfill"
+    }
+  ]
+}

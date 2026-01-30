@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "memory-gateway": {
-      "type": "http",
-      "url": "http://<server-ip>:<gateway-port>/mcp"
-    }
-  }
-}

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "provider": "minio",
+  "event_ts": "2024-01-15T12:00:00.000Z",
+  "bucket": "engram",
+  "object_key": null,
+  "operation": "s3:ListBucket",
+  "status_code": 200,
+  "success": true,
+  "request_id": "REQ-789",
+  "principal": null,
+  "remote_ip": "10.0.0.1",
+  "user_agent": null,
+  "bytes_sent": null,
+  "bytes_received": null,
+  "duration_ms": null,
+  "raw": {
+    "version": "1",
+    "api": {
+      "name": "ListBucket",
+      "bucket": "engram",
+      "statusCode": 200
+    }
+  }
+}

@@ -151,6 +151,15 @@ temp/
 .artifacts/
 
 # ------------------------------------------------------------------------------
+# Local Development Tools (IDE/Editor-specific, not for version control)
+# ------------------------------------------------------------------------------
+# Cursor IDE indexing configuration
+.cursorindexingignore
+
+# SpecStory conversation auto-save directory
+.specstory/
+
+# ------------------------------------------------------------------------------
 # Archives (build outputs, not for version control)
 # ------------------------------------------------------------------------------
 archives/

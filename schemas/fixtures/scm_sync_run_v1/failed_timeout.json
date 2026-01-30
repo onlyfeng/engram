@@ -1,0 +1,12 @@
+{
+  "$comment": "超时失败的同步运行记录 - 用于 CI schema 校验",
+  "status": "failed",
+  "counts": {
+    "synced_count": 0
+  },
+  "error_summary_json": {
+    "error_category": "timeout",
+    "error_message": "Request timed out after 30s",
+    "exception_type": "TimeoutError"
+  }
+}

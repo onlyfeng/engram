@@ -3,19 +3,19 @@
 # 详见: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # ============================================================================
-# Step1: Logbook Postgres 组件
+# Logbook: Logbook Postgres 组件
 # ============================================================================
-/apps/step1_logbook_postgres/                    @engram/step1-owners
+/apps/logbook_postgres/                            @engram/logbook-owners
 
 # ============================================================================
-# Step2: OpenMemory Gateway 组件
+# Gateway: OpenMemory Gateway 组件
 # ============================================================================
-/apps/step2_openmemory_gateway/                  @engram/step2-owners
+/apps/openmemory_gateway/                          @engram/gateway-owners
 
 # ============================================================================
-# Step3: SeekDB RAG Hybrid 组件
+# Seek: SeekDB RAG Hybrid 组件
 # ============================================================================
-/apps/step3_seekdb_rag_hybrid/                   @engram/step3-owners
+/apps/seekdb_rag_hybrid/                           @engram/seek-owners
 
 # ============================================================================
 # OpenMemory 上游库及补丁配置
@@ -25,9 +25,38 @@
 /openmemory_patches.json                         @engram/openmemory-owners
 
 # ============================================================================
+# 跨边界契约: Gateway <-> Logbook 共享接口
+# 修改这些文件需要 Gateway 和 Logbook 两个团队同时 Review
+# ============================================================================
+/schemas/**                                                             @engram/gateway-owners @engram/logbook-owners
+/docs/contracts/**                                                      @engram/gateway-owners @engram/logbook-owners
+/apps/logbook_postgres/scripts/engram_logbook/uri.py                    @engram/gateway-owners @engram/logbook-owners
+/apps/logbook_postgres/scripts/engram_logbook/outbox.py                 @engram/gateway-owners @engram/logbook-owners
+/apps/openmemory_gateway/gateway/gateway/logbook_adapter.py             @engram/gateway-owners @engram/logbook-owners
+/apps/openmemory_gateway/gateway/gateway/reconcile_outbox.py            @engram/gateway-owners @engram/logbook-owners
+
+# ============================================================================
 # 基础设施: Docker Compose、脚本、构建配置
 # ============================================================================
 /compose/                                        @engram/infra-owners
 /docker-compose.unified.yml                      @engram/infra-owners
 /scripts/                                        @engram/infra-owners
 /Makefile                                        @engram/infra-owners
+
+# ============================================================================
+# CI/Workflow 合约: Workflow 配置、验证脚本、合约文档
+# 修改这些文件需要 Infra 和 Architecture 两个团队同时 Review
+# ============================================================================
+/.github/workflows/**                                                      @engram/infra-owners @engram/architecture-owners
+/scripts/ci/workflow_contract*.json                                        @engram/infra-owners @engram/architecture-owners
+/scripts/ci/validate_workflows.py                                          @engram/infra-owners @engram/architecture-owners
+/docs/ci_nightly_workflow_refactor/**                                      @engram/infra-owners @engram/architecture-owners
+
+# ============================================================================
+# 文档: 文档中心及各类文档目录
+# ============================================================================
+/docs/README.md                                  @engram/docs-owners
+/docs/architecture/**                            @engram/docs-owners @engram/architecture-owners
+/docs/reference/**                               @engram/docs-owners
+/docs/guides/**                                  @engram/docs-owners
+/docs/legacy/**                                  @engram/docs-owners

@@ -1,0 +1,5 @@
+{
+  "$comment": "最小增量同步 payload - 用于 CI schema 校验",
+  "version": "v1",
+  "mode": "incremental"
+}

@@ -1,0 +1,7 @@
+{
+  "$comment": "无数据的同步运行记录 - 用于 CI schema 校验",
+  "status": "no_data",
+  "counts": {
+    "synced_count": 0
+  }
+}

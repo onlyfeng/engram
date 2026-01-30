@@ -1,0 +1,36 @@
+{
+  "check_timestamp": "2026-01-30T00:00:00Z",
+  "upstream_url": "https://github.com/CaviraOSS/OpenMemory",
+  "upstream_owner": "CaviraOSS",
+  "upstream_repo": "OpenMemory",
+  "current_ref": "v1.3.0",
+  "current_ref_type": "tag",
+  "latest_ref": "v1.3.1-security",
+  "latest_ref_type": "release",
+  "is_behind": true,
+  "drift_level": "patch",
+  "priority": "security",
+  "api_success": true,
+  "api_error": null,
+  "releases": [
+    {
+      "tag_name": "v1.3.1-security",
+      "name": "Security Release v1.3.1",
+      "prerelease": false,
+      "draft": false,
+      "published_at": "2026-01-29T12:00:00Z"
+    }
+  ],
+  "tags": [],
+  "freeze_status": {
+    "is_frozen": false,
+    "freeze_reason": null,
+    "freeze_expires_at": null,
+    "override_requested": false,
+    "override_valid": false,
+    "override_reason": null
+  },
+  "_fixture_description": "演练场景：检测到安全更新（非冻结状态）",
+  "_expected_exit_code": 1,
+  "_expected_actions": ["创建 Security Issue", "Summary 中显示告警"]
+}

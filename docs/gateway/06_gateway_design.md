@@ -1,0 +1,130 @@
+# Memory Gateway（MCP）设计
+
+> **术语说明**：Memory Gateway 是 Gateway 组件的完整名称，后续简称 Gateway。详见 [命名规范](../architecture/naming.md)。
+
+## 目标
+- Cursor 只连 Gateway（/mcp）
+- Gateway 负责：
+  1) team_write_enabled + policy 校验
+  2) 写入裁剪（长度/证据链/去重）
+  3) 写入审计（governance.write_audit）
+  4) 失败降级（logbook.outbox_memory）
+  5) promotion：个人/团队/公共提升队列（可选）
+
+## 对外暴露的 MCP 工具（建议）
+- memory_store(payload_md, target_space?, meta_json?) -> {action, space_written, memory_id?, evidence_refs}
+- memory_query(query, spaces=[...], filters={owner,module,kind}, topk=...) -> results
+- memory_promote(candidate_id, to_space, reason) -> promo_id
+- memory_reinforce(memory_id, delta_md) -> ok
+
+## 关键治理逻辑（写入）
+- 默认 target_space = team:<project>
+- 若 team_write_enabled=false：redirect -> private:<actor>
+- 若策略不满足：redirect -> private:<actor> 或 reject（建议优先 redirect）
+
+## Gateway ↔ Logbook 边界与数据流
+
+### 架构边界
+- **Logbook (engram_logbook)**: 本地 PostgreSQL 数据库层，负责治理设置、审计日志、失败补偿队列（outbox）
+- **Gateway**: MCP 网关层，负责策略校验、写入裁剪、与 OpenMemory 的交互
+- **数据流向**: Cursor → Gateway → OpenMemory + Logbook(持久化/降级)
+
+### Gateway 依赖 Logbook 的原语接口
+
+Gateway 依赖 `engram_logbook` 提供的原语接口进行治理、审计和失败补偿。
+
+→ **完整接口列表与签名**：[docs/contracts/gateway_logbook_boundary.md](../contracts/gateway_logbook_boundary.md#logbook-原语接口由-engram_logbook-提供)
+
+→ **降级契约约束**：[docs/contracts/gateway_logbook_boundary.md](../contracts/gateway_logbook_boundary.md#降级契约)
+
+接口分类：
+- **治理模块** (`engram_logbook.governance`)：设置读写、审计记录
+- **Outbox 模块** (`engram_logbook.outbox`)：入队、租约、确认、重试、死信
+- **URI 模块** (`engram_logbook.uri`)：Evidence URI 构建与解析
+
+### 数据流示意
+
+```
+┌─────────┐    memory_store     ┌──────────────┐
+│ Cursor  │ ─────────────────>  │   Gateway    │
+│  (MCP)  │ <─────────────────  │              │
+└─────────┘    response         └──────┬───────┘
+                                       │
+                    ┌──────────────────┼──────────────────┐
+                    │                  │                  │
+                    ▼                  ▼                  ▼
+            ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+            │  OpenMemory  │   │   Logbook DB   │   │   Logbook DB   │
+            │   (写入)     │   │ write_audit  │   │   outbox     │
+            └──────────────┘   └──────────────┘   └──────────────┘
+                  ↑                                      │
+                  │       失败重试                        │
+                  └──────────────────────────────────────┘
+```
+
+---
+
+## Audit / Outbox / Reliability Report 一致性闭环
+
+Gateway 通过 audit、outbox 和 reliability_report 三者协同，确保写入操作的可追溯性和最终一致性。
+
+> **相关 ADR**：审计记录的原子性保证方案见 [ADR: Gateway 审计原子性](../architecture/adr_gateway_audit_atomicity.md)。
+
+### 闭环关系
+
+```
+                    ┌───────────────────────────────────────────────┐
+                    │              Gateway 写入操作                  │
+                    └───────────────────┬───────────────────────────┘
+                                        │
+                    ┌───────────────────┴───────────────────┐
+                    │                                       │
+                    ▼                                       ▼
+            ┌──────────────┐                        ┌──────────────┐
+            │    Audit     │                        │    Outbox    │
+            │  (写入审计)   │                        │  (失败缓冲)   │
+            └──────┬───────┘                        └──────┬───────┘
+                   │                                       │
+                   │   统计聚合                              │
+                   ▼                                       ▼
+            ┌────────────────────────────────────────────────────┐
+            │              Reliability Report                    │
+            │   (汇总 audit 结果 + outbox 状态 → 可靠性度量)      │
+            └────────────────────────────────────────────────────┘
+```
+
+### 一致性保证
+
+| 组件 | 写入时机 | 一致性约束 |
+|------|----------|------------|
+| **Audit** | 每次写入操作（无论成功/失败/redirect） | 必须与操作同步写入，不可丢失 |
+| **Outbox** | 仅在 OpenMemory 写入失败时 | 入队必须在 audit 记录之后 |
+| **Reliability Report** | 定期聚合或按需生成 | 必须基于 audit + outbox 的完整数据 |
+
+### 闭环校验规则
+
+```
+invariant: audit.count(action=redirect) == outbox.count(status in [pending, sent, dead])
+invariant: reliability_report.total_writes == audit.count(*)
+invariant: reliability_report.success_rate == audit.count(action=allow) / audit.count(*)
+```
+
+**不变量映射表**（审计 reason/action 与 outbox 状态）：
+
+| outbox 状态 | 审计 reason | 审计 action | 说明 |
+|-------------|-------------|-------------|------|
+| sent | `outbox_flush_success` 或 `outbox_flush_dedup_hit` | allow | flush 成功 |
+| dead | `outbox_flush_dead` | reject | 重试耗尽 |
+| pending (stale) | `outbox_stale` | redirect | 锁过期，需重新调度 |
+
+**SQL 查询契约**：`evidence_refs_json->>'outbox_id'` 必须能定位审计记录（outbox_id 需在顶层）。
+
+**测试互证**：上述不变量由集成测试验证，参见：
+- [`apps/openmemory_gateway/gateway/tests/test_reconcile_outbox.py::TestAuditOutboxInvariants`](../../apps/openmemory_gateway/gateway/tests/test_reconcile_outbox.py) - 完整闭环测试
+- [`apps/openmemory_gateway/gateway/tests/test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../apps/openmemory_gateway/gateway/tests/test_audit_event_contract.py) - evidence_refs_json 顶层字段契约测试
+
+### 异常处理
+
+- **Audit 写入失败**：Gateway 应阻止主操作继续，避免不可审计的写入
+- **Outbox 入队失败**：记录到 audit 并返回错误，确保可追溯
+- **Report 生成失败**：不影响主流程，但应触发告警

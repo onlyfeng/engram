@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.1",
+  "source": "gateway",
+  "operation": "memory_store",
+  "correlation_id": "corr-a1b2c3d4e5f67890",
+  "actor_user_id": "user1",
+  "requested_space": "team:project",
+  "final_space": "team:project",
+  "decision": {
+    "action": "allow",
+    "reason": "policy_passed"
+  },
+  "payload_sha": "abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+  "payload_len": 1024,
+  "evidence_summary": {
+    "count": 2,
+    "has_strong": true,
+    "uris": ["memory://patch_blobs/git/1:abc/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+  },
+  "trim": {
+    "was_trimmed": false,
+    "why": null,
+    "original_len": null
+  },
+  "refs": ["memory://patch_blobs/git/1:abc/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+  "event_ts": "2024-01-15T10:30:00.000000+00:00"
+}

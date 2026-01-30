@@ -1,0 +1,326 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/reliability_report_v1.schema.json",
+  "title": "Reliability Report V1 Schema",
+  "description": "Engram 可靠性报告结构 JSON Schema (V1)，覆盖 gateway/logbook_adapter.py 中 get_reliability_report() 输出结构",
+
+  "type": "object",
+  "required": ["outbox_stats", "audit_stats", "v2_evidence_stats", "content_intercept_stats", "generated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "outbox_stats": {
+      "$ref": "#/definitions/outbox_stats"
+    },
+    "audit_stats": {
+      "$ref": "#/definitions/audit_stats"
+    },
+    "v2_evidence_stats": {
+      "$ref": "#/definitions/v2_evidence_stats"
+    },
+    "content_intercept_stats": {
+      "$ref": "#/definitions/content_intercept_stats"
+    },
+    "generated_at": {
+      "$ref": "#/definitions/iso8601_datetime"
+    }
+  },
+
+  "definitions": {
+    "iso8601_datetime": {
+      "type": "string",
+      "description": "ISO8601 格式的日期时间字符串",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+
+    "non_negative_integer": {
+      "type": "integer",
+      "minimum": 0
+    },
+
+    "non_negative_number": {
+      "type": "number",
+      "minimum": 0
+    },
+
+    "percentage": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+
+    "outbox_stats": {
+      "type": "object",
+      "description": "logbook.outbox_memory 表统计信息",
+      "required": ["total", "by_status", "avg_retry_count", "oldest_pending_age_seconds"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "outbox 总记录数"
+        },
+        "by_status": {
+          "type": "object",
+          "description": "按状态分组的记录数",
+          "required": ["pending", "sent", "dead"],
+          "additionalProperties": false,
+          "properties": {
+            "pending": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "待处理记录数"
+            },
+            "sent": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "已发送记录数"
+            },
+            "dead": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "死信记录数"
+            }
+          }
+        },
+        "avg_retry_count": {
+          "$ref": "#/definitions/non_negative_number",
+          "description": "平均重试次数"
+        },
+        "oldest_pending_age_seconds": {
+          "$ref": "#/definitions/non_negative_number",
+          "description": "最老的 pending 记录的年龄（秒）"
+        }
+      }
+    },
+
+    "audit_stats": {
+      "type": "object",
+      "description": "governance.write_audit 表统计信息",
+      "required": ["total", "by_action", "recent_24h", "by_reason"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "审计记录总数"
+        },
+        "by_action": {
+          "type": "object",
+          "description": "按 action 分组的记录数",
+          "required": ["allow", "redirect", "reject"],
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "allow 操作数"
+            },
+            "redirect": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "redirect 操作数"
+            },
+            "reject": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "reject 操作数"
+            }
+          }
+        },
+        "recent_24h": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "最近 24 小时的记录数"
+        },
+        "by_reason": {
+          "type": "object",
+          "description": "按 reason 类别分组的记录数",
+          "additionalProperties": {
+            "$ref": "#/definitions/non_negative_integer"
+          },
+          "properties": {
+            "policy": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "policy:* 原因的记录数"
+            },
+            "openmemory_write_failed": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "openmemory_write_failed:* 原因的记录数"
+            },
+            "outbox_flush_success": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "outbox_flush_success 原因的记录数"
+            },
+            "dedup_hit": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "dedup_hit 原因的记录数"
+            },
+            "other": {
+              "$ref": "#/definitions/non_negative_integer",
+              "description": "其他原因的记录数"
+            }
+          }
+        }
+      }
+    },
+
+    "artifact_coverage": {
+      "type": "object",
+      "description": "artifact 覆盖率统计",
+      "required": ["total", "with_evidence_uri", "coverage_pct"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "artifact 总数"
+        },
+        "with_evidence_uri": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "有 evidence_uri 的 artifact 数"
+        },
+        "coverage_pct": {
+          "$ref": "#/definitions/percentage",
+          "description": "覆盖率百分比"
+        }
+      }
+    },
+
+    "audit_mode_stats": {
+      "type": "object",
+      "description": "审计模式统计（最近 7 天）",
+      "required": ["total", "strict_mode_count", "compat_mode_count", "with_v2_evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "总记录数"
+        },
+        "strict_mode_count": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "strict 模式记录数"
+        },
+        "compat_mode_count": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "compat 模式记录数"
+        },
+        "with_v2_evidence": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "包含 v2 evidence 的记录数"
+        }
+      }
+    },
+
+    "v2_evidence_stats": {
+      "type": "object",
+      "description": "v2 evidence 覆盖率统计",
+      "required": ["patch_blobs", "attachments", "v2_coverage_pct", "invalid_evidence_count", "total_with_evidence", "audit_mode_stats_7d"],
+      "additionalProperties": false,
+      "properties": {
+        "patch_blobs": {
+          "$ref": "#/definitions/artifact_coverage",
+          "description": "scm.patch_blobs 表覆盖率"
+        },
+        "attachments": {
+          "$ref": "#/definitions/artifact_coverage",
+          "description": "logbook.attachments 表覆盖率"
+        },
+        "v2_coverage_pct": {
+          "$ref": "#/definitions/percentage",
+          "description": "总体 v2 覆盖率百分比"
+        },
+        "invalid_evidence_count": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "无效 evidence_uri 数量"
+        },
+        "total_with_evidence": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "有 evidence 的 artifact 总数"
+        },
+        "audit_mode_stats_7d": {
+          "$ref": "#/definitions/audit_mode_stats",
+          "description": "最近 7 天的审计模式统计"
+        }
+      }
+    },
+
+    "content_intercept_stats": {
+      "type": "object",
+      "description": "内容拦截统计（diff/log 拦截次数）",
+      "required": ["diff_reject_count", "log_reject_count", "diff_log_reject_count", "total_intercept_count", "recent_24h_intercept"],
+      "additionalProperties": false,
+      "properties": {
+        "diff_reject_count": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "因包含 diff 被拒绝的次数"
+        },
+        "log_reject_count": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "因包含 log 被拒绝的次数"
+        },
+        "diff_log_reject_count": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "因同时包含 diff 和 log 被拒绝的次数"
+        },
+        "total_intercept_count": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "总拦截次数"
+        },
+        "recent_24h_intercept": {
+          "$ref": "#/definitions/non_negative_integer",
+          "description": "最近 24 小时的拦截次数"
+        }
+      }
+    }
+  },
+
+  "examples": [
+    {
+      "outbox_stats": {
+        "total": 100,
+        "by_status": {
+          "pending": 5,
+          "sent": 90,
+          "dead": 5
+        },
+        "avg_retry_count": 0.5,
+        "oldest_pending_age_seconds": 3600.0
+      },
+      "audit_stats": {
+        "total": 500,
+        "by_action": {
+          "allow": 400,
+          "redirect": 80,
+          "reject": 20
+        },
+        "recent_24h": 50,
+        "by_reason": {
+          "policy": 300,
+          "openmemory_write_failed": 10,
+          "outbox_flush_success": 50,
+          "dedup_hit": 100,
+          "other": 40
+        }
+      },
+      "v2_evidence_stats": {
+        "patch_blobs": {
+          "total": 200,
+          "with_evidence_uri": 180,
+          "coverage_pct": 90.0
+        },
+        "attachments": {
+          "total": 50,
+          "with_evidence_uri": 40,
+          "coverage_pct": 80.0
+        },
+        "v2_coverage_pct": 88.0,
+        "invalid_evidence_count": 2,
+        "total_with_evidence": 220,
+        "audit_mode_stats_7d": {
+          "total": 200,
+          "strict_mode_count": 50,
+          "compat_mode_count": 150,
+          "with_v2_evidence": 100
+        }
+      },
+      "content_intercept_stats": {
+        "diff_reject_count": 5,
+        "log_reject_count": 3,
+        "diff_log_reject_count": 2,
+        "total_intercept_count": 10,
+        "recent_24h_intercept": 1
+      },
+      "generated_at": "2026-01-29T10:30:00.000000+00:00"
+    }
+  ]
+}

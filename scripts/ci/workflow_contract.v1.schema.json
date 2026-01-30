@@ -1,0 +1,247 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "workflow_contract.v1.schema.json",
+  "title": "Workflow Contract Schema",
+  "description": "JSON Schema for Engram CI/CD workflow contract validation",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Reference to this schema file"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Contract version in semver format (e.g., 1.4.0)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the contract"
+    },
+    "last_updated": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Last update date in YYYY-MM-DD format"
+    },
+    "ci": {
+      "$ref": "#/definitions/workflow_definition",
+      "description": "CI workflow definition"
+    },
+    "nightly": {
+      "$ref": "#/definitions/workflow_definition",
+      "description": "Nightly workflow definition"
+    },
+    "release": {
+      "$ref": "#/definitions/workflow_definition",
+      "description": "Release workflow definition"
+    },
+    "make": {
+      "$ref": "#/definitions/make_definition",
+      "description": "Makefile targets contract"
+    },
+    "frozen_step_text": {
+      "$ref": "#/definitions/frozen_step_text_definition",
+      "description": "Frozen step names that must match exactly"
+    },
+    "seekdb_policy_markers": {
+      "$ref": "#/definitions/seekdb_policy_markers_definition",
+      "description": "SeekDB policy marker definitions"
+    }
+  },
+  "additionalProperties": {
+    "description": "Changelog entries or other metadata fields starting with underscore",
+    "anyOf": [
+      { "type": "string" },
+      { "type": "object" }
+    ]
+  },
+  "definitions": {
+    "workflow_definition": {
+      "type": "object",
+      "required": ["file"],
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "^\\.github/workflows/.*\\.yml$",
+          "description": "Path to the workflow file"
+        },
+        "detect_changes": {
+          "type": "object",
+          "properties": {
+            "outputs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of output names from change detection"
+            }
+          }
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "PR labels used by this workflow"
+        },
+        "job_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of job IDs in this workflow"
+        },
+        "job_names": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of job display names"
+        },
+        "required_jobs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/required_job" },
+          "description": "Jobs that must exist with specific requirements"
+        },
+        "required_env_vars": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Environment variables required at workflow level"
+        },
+        "artifact_archive": {
+          "$ref": "#/definitions/artifact_archive_contract",
+          "description": "Artifact archive contract for this workflow"
+        }
+      },
+      "additionalProperties": {
+        "description": "Comment fields starting with underscore",
+        "type": "string"
+      }
+    },
+    "required_job": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Job ID (must match jobs.<id> in workflow)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Expected job display name"
+        },
+        "required_steps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Step names that must exist in this job"
+        },
+        "required_outputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Output names that must be defined"
+        }
+      },
+      "additionalProperties": {
+        "description": "Comment fields starting with underscore",
+        "type": "string"
+      }
+    },
+    "make_definition": {
+      "type": "object",
+      "required": ["targets_required"],
+      "properties": {
+        "targets_required": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Makefile targets that must exist"
+        }
+      },
+      "additionalProperties": {
+        "description": "Comment fields starting with underscore",
+        "type": "string"
+      }
+    },
+    "frozen_step_text_definition": {
+      "type": "object",
+      "required": ["allowlist"],
+      "properties": {
+        "allowlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Step names that are frozen and must match exactly"
+        }
+      },
+      "additionalProperties": {
+        "description": "Comment fields starting with underscore",
+        "type": "string"
+      }
+    },
+    "seekdb_policy_markers_definition": {
+      "type": "object",
+      "required": ["marker_types"],
+      "properties": {
+        "marker_types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\[SEEKDB:[A-Z-]+\\]$"
+          },
+          "description": "Valid SeekDB policy marker types"
+        },
+        "ci_required": {
+          "$ref": "#/definitions/seekdb_requirement",
+          "description": "Markers required in CI workflow"
+        },
+        "nightly_required": {
+          "$ref": "#/definitions/seekdb_requirement",
+          "description": "Markers required in Nightly workflow"
+        }
+      },
+      "additionalProperties": {
+        "description": "Comment fields starting with underscore",
+        "type": "string"
+      }
+    },
+    "seekdb_requirement": {
+      "type": "object",
+      "properties": {
+        "markers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["marker", "context"],
+            "properties": {
+              "marker": {
+                "type": "string",
+                "description": "The marker type"
+              },
+              "context": {
+                "type": "string",
+                "description": "The step or context where this marker is required"
+              }
+            }
+          },
+          "description": "Required marker instances"
+        },
+        "env_vars": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Environment variables related to this requirement"
+        }
+      }
+    },
+    "artifact_archive_contract": {
+      "type": "object",
+      "description": "Artifact archive contract for validating upload-artifact steps",
+      "properties": {
+        "required_artifact_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of artifact paths that must be uploaded (supports glob patterns)"
+        },
+        "artifact_step_names": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional: limit validation to steps with these names"
+        }
+      },
+      "additionalProperties": {
+        "description": "Comment fields starting with underscore",
+        "type": "string"
+      }
+    }
+  }
+}

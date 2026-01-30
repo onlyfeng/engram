@@ -1,0 +1,8 @@
+{
+  "$comment": "SVN revision 窗口 backfill payload - 用于 CI schema 校验",
+  "version": "v1",
+  "window_type": "rev",
+  "start_rev": 1000,
+  "end_rev": 1100,
+  "mode": "backfill"
+}

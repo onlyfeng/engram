@@ -1,0 +1,15 @@
+{
+  "$comment": "带降级的成功同步运行记录 - 用于 CI schema 校验",
+  "status": "completed",
+  "counts": {
+    "synced_count": 50,
+    "degraded_count": 10
+  },
+  "degradation_json": {
+    "is_degraded": true,
+    "degraded_reasons": {
+      "diff_timeout": 10
+    },
+    "circuit_state": "half_open"
+  }
+}
