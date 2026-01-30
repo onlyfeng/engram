@@ -1238,8 +1238,9 @@ def run_migrate(
             log_info(f"使用 schema 前缀: {schema_prefix}", quiet=quiet)
 
         # SQL 文件路径 - 使用相对于此模块的路径
-        # migrate.py 在 engram_logbook/ 目录下，sql 在 ../sql/
-        sql_dir = Path(__file__).parent.parent / "sql"
+        # migrate.py 在 src/engram/logbook/ 目录下，sql 在项目根目录 sql/
+        # 路径: src/engram/logbook/migrate.py -> sql/
+        sql_dir = Path(__file__).parent.parent.parent.parent / "sql"
         
         # 确定是否执行角色权限脚本
         should_apply_roles = apply_roles
