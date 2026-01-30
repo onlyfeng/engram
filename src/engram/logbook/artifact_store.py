@@ -980,17 +980,18 @@ class FileUriStore(ArtifactStore):
 
         if os.name == "nt":
             # Windows 系统
+            backslash = "\\"
             if netloc:
                 # UNC 路径: file://server/share/path -> \\server\share\path
                 # netloc 是服务器名，path 以 / 开头
-                unc_path = f"\\\\{netloc}{path.replace('/', '\\')}"
+                unc_path = f"\\\\{netloc}{path.replace('/', backslash)}"
                 result_path = Path(unc_path)
             else:
                 # 本地路径: file:///C:/path -> C:\path
                 # path 格式为 /C:/path，需要移除前导 /
                 if path.startswith("/") and len(path) > 2 and path[2] == ":":
                     path = path[1:]  # 移除前导 /
-                result_path = Path(path.replace("/", "\\"))
+                result_path = Path(path.replace("/", backslash))
         else:
             # Unix/Linux/macOS 系统
             if netloc:
