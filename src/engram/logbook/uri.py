@@ -990,7 +990,7 @@ def build_evidence_uri_from_patch_blob(
 def build_evidence_ref_for_patch_blob(
     source_type: str,
     source_id: str,
-    sha256: str,
+    sha256: Optional[str] = None,
     content_sha256: Optional[str] = None,
     size_bytes: Optional[int] = None,
     kind: str = "patch",
@@ -1040,13 +1040,15 @@ def build_evidence_ref_for_patch_blob(
         insert_write_audit(..., evidence_refs_json={"patches": [ref]})
     """
     # 向后兼容: content_sha256 别名
-    if (sha256 is None or sha256 == "") and content_sha256:
+    if not sha256 and content_sha256:
         sha256 = content_sha256
+    if not sha256:
+        raise ValueError("sha256 不能为空")
 
     # 规范化参数
     source_type = source_type.strip().lower()
     source_id = source_id.strip()
-    sha256 = sha256.strip().lower()
+    sha256 = str(sha256).strip().lower()
     
     # 构建 canonical artifact_uri
     artifact_uri = build_evidence_uri(source_type, source_id, sha256)

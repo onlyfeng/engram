@@ -76,6 +76,31 @@ CREATE INDEX IF NOT EXISTS idx_sync_locks_locked_at
 CREATE INDEX IF NOT EXISTS idx_sync_locks_job_type
     ON scm.sync_locks(job_type);
 
+-- ============================================================
+-- governance.security_events 表（安全事件审计）
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS governance.security_events (
+    event_id        bigserial PRIMARY KEY,
+    event_ts        timestamptz NOT NULL DEFAULT now(),
+    action          text NOT NULL,
+    object_type     text,
+    object_id       text,
+    actor_user_id   text,
+    details         jsonb DEFAULT '{}'
+);
+
+-- 索引：按时间、动作、对象类型查询
+CREATE INDEX IF NOT EXISTS idx_security_events_ts
+    ON governance.security_events(event_ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_security_events_action
+    ON governance.security_events(action, event_ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_security_events_object_type
+    ON governance.security_events(object_type, event_ts DESC)
+    WHERE object_type IS NOT NULL;
+
 COMMIT;
 
 -- ============================================================
