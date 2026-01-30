@@ -158,13 +158,13 @@ def mock_dependencies():
     with patch.dict('sys.modules', {
         'gateway.logbook_adapter': mock_adapter,
     }):
-        with patch('gateway.main.get_config', return_value=mock_config):
-            with patch('gateway.main.get_db', return_value=mock_db):
-                with patch('gateway.main.get_client', return_value=mock_client_instance):
-                    with patch('gateway.main.check_user_exists', return_value=True):
-                        with patch('gateway.logbook_adapter.check_dedup', return_value=None):
+        with patch('engram.gateway.main.get_config', return_value=mock_config):
+            with patch('engram.gateway.main.get_db', return_value=mock_db):
+                with patch('engram.gateway.main.get_client', return_value=mock_client_instance):
+                    with patch('engram.gateway.main.check_user_exists', return_value=True):
+                        with patch('engram.gateway.logbook_adapter.check_dedup', return_value=None):
                             # 确保 logbook_adapter.query_knowledge_candidates 也被正确 mock
-                            with patch('gateway.main.logbook_adapter', mock_adapter):
+                            with patch('engram.gateway.main.logbook_adapter', mock_adapter):
                                 yield {
                                     'config': mock_config,
                                     'db': mock_db,
@@ -482,7 +482,7 @@ class TestToolsCall:
     def test_tools_call_reliability_report(self, client, mock_dependencies):
         """调用 reliability_report 工具"""
         # Mock get_reliability_report
-        with patch('gateway.main.get_reliability_report') as mock_report:
+        with patch('engram.gateway.main.get_reliability_report') as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {"pending": 0, "success": 5},
                 "audit_stats": {"allow": 10, "reject": 2},
@@ -582,7 +582,7 @@ class TestLegacyProtocol:
 
     def test_legacy_format_with_empty_arguments(self, client, mock_dependencies):
         """旧格式空 arguments 应正常处理"""
-        with patch('gateway.main.get_reliability_report') as mock_report:
+        with patch('engram.gateway.main.get_reliability_report') as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},

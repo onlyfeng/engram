@@ -921,7 +921,7 @@ class TestMockDegradationFlow:
         )
         
         # Mock get_client 返回的客户端的 store 方法
-        with patch('gateway.main.get_client') as mock_get_client:
+        with patch('engram.gateway.main.get_client') as mock_get_client:
             mock_client = MagicMock(spec=OpenMemoryClient)
             mock_client.store.side_effect = mock_store_error
             mock_get_client.return_value = mock_client
@@ -1040,7 +1040,7 @@ class TestMockDegradationFlow:
         )
         
         # 使用 worker 的 process_batch，需要 Mock openmemory_client 模块中的 OpenMemoryClient
-        with patch('gateway.outbox_worker.openmemory_client.OpenMemoryClient') as MockClientClass:
+        with patch('engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient') as MockClientClass:
             mock_client_instance = MagicMock()
             mock_client_instance.store.return_value = mock_store_success
             MockClientClass.return_value = mock_client_instance
@@ -1263,7 +1263,7 @@ class TestMockQueryDegradation:
             response=None,
         )
         
-        with patch('gateway.main.get_client') as mock_get_client:
+        with patch('engram.gateway.main.get_client') as mock_get_client:
             mock_client = MagicMock(spec=OpenMemoryClient)
             mock_client.search.side_effect = mock_search_error
             mock_get_client.return_value = mock_client
@@ -1333,8 +1333,8 @@ class TestMockQueryDegradation:
             response=None,
         )
         
-        with patch('gateway.main.get_client') as mock_get_client, \
-             patch('gateway.main.logbook_adapter.query_knowledge_candidates') as mock_logbook_query:
+        with patch('engram.gateway.main.get_client') as mock_get_client, \
+             patch('engram.gateway.main.logbook_adapter.query_knowledge_candidates') as mock_logbook_query:
             
             mock_client = MagicMock(spec=OpenMemoryClient)
             mock_client.search.side_effect = mock_search_error
@@ -2218,7 +2218,7 @@ class TestStartupVerificationErrors:
             response=None,
         )
         
-        with patch('gateway.main.get_client') as mock_get_client:
+        with patch('engram.gateway.main.get_client') as mock_get_client:
             mock_client = MagicMock(spec=OpenMemoryClient)
             mock_client.store.side_effect = mock_error
             mock_get_client.return_value = mock_client
@@ -2945,7 +2945,7 @@ class TestMCPMemoryStoreWithMockDegradation:
         
         outbox_id = None
         
-        with patch('gateway.main.get_client') as mock_get_client:
+        with patch('engram.gateway.main.get_client') as mock_get_client:
             mock_client = MagicMock(spec=OpenMemoryClient)
             mock_client.store.side_effect = mock_connection_error
             mock_get_client.return_value = mock_client
@@ -3030,7 +3030,7 @@ class TestMCPMemoryStoreWithMockDegradation:
             data={"id": mock_memory_id},
         )
         
-        with patch('gateway.outbox_worker.openmemory_client.OpenMemoryClient') as MockClientClass:
+        with patch('engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient') as MockClientClass:
             mock_client_instance = MagicMock()
             mock_client_instance.store.return_value = mock_store_success
             MockClientClass.return_value = mock_client_instance

@@ -171,7 +171,7 @@ class TestGatewayDbCheckPath:
         from engram.gateway.logbook_adapter import LogbookAdapter
         
         # Mock run_all_checks
-        with patch('gateway.logbook_adapter.run_all_checks') as mock_check:
+        with patch('engram.gateway.logbook_adapter.run_all_checks') as mock_check:
             mock_check.return_value = {
                 "ok": True,
                 "checks": {
@@ -184,11 +184,11 @@ class TestGatewayDbCheckPath:
                 }
             }
             
-            with patch('gateway.logbook_adapter.get_connection') as mock_conn:
+            with patch('engram.gateway.logbook_adapter.get_connection') as mock_conn:
                 mock_conn_instance = MagicMock()
                 mock_conn.return_value = mock_conn_instance
                 
-                with patch('gateway.logbook_adapter._DB_MIGRATE_AVAILABLE', True):
+                with patch('engram.gateway.logbook_adapter._DB_MIGRATE_AVAILABLE', True):
                     adapter = LogbookAdapter(dsn="postgresql://test@localhost/test")
                     result = adapter.check_db_schema()
                     
@@ -200,13 +200,13 @@ class TestGatewayDbCheckPath:
         """测试 run_migration 使用 engram_logbook.migrate 模块"""
         from engram.gateway.logbook_adapter import LogbookAdapter
         
-        with patch('gateway.logbook_adapter.run_migrate') as mock_migrate:
+        with patch('engram.gateway.logbook_adapter.run_migrate') as mock_migrate:
             mock_migrate.return_value = {
                 "ok": True,
                 "schemas": ["identity", "logbook", "scm", "analysis", "governance"],
             }
             
-            with patch('gateway.logbook_adapter._DB_MIGRATE_AVAILABLE', True):
+            with patch('engram.gateway.logbook_adapter._DB_MIGRATE_AVAILABLE', True):
                 adapter = LogbookAdapter(dsn="postgresql://test@localhost/test")
                 result = adapter.run_migration(quiet=True)
                 
@@ -227,15 +227,15 @@ class TestGatewayDbCheckPath:
             else:
                 return {"ok": True, "checks": {"schemas": {"ok": True, "missing": []}}}
         
-        with patch('gateway.logbook_adapter.run_all_checks', side_effect=mock_check_side_effect):
-            with patch('gateway.logbook_adapter.run_migrate') as mock_migrate:
+        with patch('engram.gateway.logbook_adapter.run_all_checks', side_effect=mock_check_side_effect):
+            with patch('engram.gateway.logbook_adapter.run_migrate') as mock_migrate:
                 mock_migrate.return_value = {"ok": True}
                 
-                with patch('gateway.logbook_adapter.get_connection') as mock_conn:
+                with patch('engram.gateway.logbook_adapter.get_connection') as mock_conn:
                     mock_conn_instance = MagicMock()
                     mock_conn.return_value = mock_conn_instance
                     
-                    with patch('gateway.logbook_adapter._DB_MIGRATE_AVAILABLE', True):
+                    with patch('engram.gateway.logbook_adapter._DB_MIGRATE_AVAILABLE', True):
                         adapter = LogbookAdapter(dsn="postgresql://test@localhost/test")
                         result = adapter.ensure_db_ready(auto_migrate=True)
                         
@@ -257,8 +257,8 @@ class TestGatewayDbCheckPath:
             auto_migrate_on_startup=False,
         )
         
-        with patch('gateway.main.is_db_migrate_available', return_value=True):
-            with patch('gateway.main.ensure_db_ready') as mock_ensure:
+        with patch('engram.gateway.main.is_db_migrate_available', return_value=True):
+            with patch('engram.gateway.main.ensure_db_ready') as mock_ensure:
                 mock_ensure.return_value = LogbookDBCheckResult(
                     ok=True,
                     checks={"schemas": {"ok": True, "missing": []}},
