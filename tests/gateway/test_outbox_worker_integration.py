@@ -91,7 +91,7 @@ class TestOutboxWorkerIntegrationSuccess:
             )
             
             # 3. 执行 worker 处理
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, jitter_factor=0.0)
@@ -177,7 +177,7 @@ class TestOutboxWorkerIntegrationSuccess:
             mock_client = MagicMock()
             mock_client.store.return_value = MockStoreResult(success=True, memory_id="mem_team_002")
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3)
@@ -233,7 +233,7 @@ class TestOutboxWorkerIntegrationRetry:
                 error="connection_timeout"
             )
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, jitter_factor=0.0, base_backoff_seconds=60)
@@ -325,7 +325,7 @@ class TestOutboxWorkerIntegrationRetry:
                 error="permanent_failure"
             )
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3)
@@ -422,7 +422,7 @@ class TestOutboxWorkerIntegrationDedup:
             mock_client.store.return_value = MockStoreResult(success=True, memory_id="should_not_be_called")
             
             # 4. 执行 worker
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3)
@@ -518,7 +518,7 @@ class TestOutboxWorkerIntegrationDedup:
             
             mock_client = MagicMock()
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3)
@@ -606,7 +606,7 @@ class TestOutboxWorkerIntegrationLocking:
             mock_client = MagicMock()
             mock_client.store.side_effect = mock_store
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, lease_seconds=120)
@@ -676,7 +676,7 @@ class TestOutboxWorkerIntegrationAuditValidation:
                 else:
                     mock_client.store.return_value = MockStoreResult(success=False, error="test_error")
                 
-                with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+                with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                     from engram.gateway.outbox_worker import WorkerConfig, process_batch
                     
                     config = WorkerConfig(batch_size=1, max_retries=3, jitter_factor=0.0)
@@ -766,7 +766,7 @@ class TestOutboxWorkerIntegrationConflict:
             mock_client.store.side_effect = mock_store_and_steal_lease
             
             # 2. 执行 worker1 处理
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, jitter_factor=0.0)
@@ -876,7 +876,7 @@ class TestOutboxWorkerIntegrationConflict:
             mock_client = MagicMock()
             mock_client.store.side_effect = mock_store_fail_and_steal
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, jitter_factor=0.0)
@@ -957,7 +957,7 @@ class TestOutboxWorkerIntegrationConflict:
             mock_client = MagicMock()
             mock_client.store.side_effect = mock_store_and_steal
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3)
@@ -1047,7 +1047,7 @@ class TestOutboxWorkerLeaseConflict:
                     mock_client = MagicMock()
                     mock_client.store.side_effect = slow_store_worker1
                     
-                    with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+                    with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                         from engram.gateway.outbox_worker import WorkerConfig, process_batch
                         
                         # 关闭 jitter，使用短 lease
@@ -1070,7 +1070,7 @@ class TestOutboxWorkerLeaseConflict:
                     mock_client = MagicMock()
                     mock_client.store.side_effect = fast_store_worker2
                     
-                    with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+                    with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                         from engram.gateway.outbox_worker import WorkerConfig, process_batch
                         
                         config = WorkerConfig(
@@ -1397,7 +1397,7 @@ class TestOutboxWorkerLeaseRenewal:
             mock_client.store.side_effect = slow_store
             
             # 使用较短的 lease_seconds
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 # lease_seconds=3 很短，但 renew_lease 会续期
@@ -1467,8 +1467,8 @@ class TestOutboxWorkerLeaseRenewal:
                 })
                 return original_renew(outbox_id, worker_id)
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
-                with patch("gateway.outbox_worker.logbook_adapter.renew_lease", side_effect=tracked_renew):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+                with patch("engram.gateway.outbox_worker.logbook_adapter.renew_lease", side_effect=tracked_renew):
                     from engram.gateway.outbox_worker import WorkerConfig, process_batch
                     
                     config = WorkerConfig(batch_size=10, max_retries=3)
@@ -1643,7 +1643,7 @@ class TestOutboxWorkerSlowStoreTimeout:
             
             # 使用短超时（但因为我们 mock 了整个 client，超时不会实际生效）
             # 这里主要验证配置传递和调用次数
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(
@@ -1717,7 +1717,7 @@ class TestOutboxWorkerSlowStoreTimeout:
             mock_client = MagicMock()
             mock_client.store.side_effect = timeout_store
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(
@@ -1800,7 +1800,7 @@ class TestOutboxWorkerSlowStoreTimeout:
             mock_client = MagicMock()
             mock_client.store.side_effect = controlled_store
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(
@@ -1909,7 +1909,7 @@ class TestOutboxWorkerDatabaseTimeout:
             mock_client.store.return_value = MockStoreResult(success=True, memory_id="should_not_be_called")
             
             # 5. 执行 worker
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, jitter_factor=0.0)
@@ -2016,7 +2016,7 @@ class TestOutboxWorkerDatabaseTimeout:
             mock_client.store.return_value = MockStoreResult(success=True, memory_id="mem_recover_001")
             
             # 3. 第一次处理
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, jitter_factor=0.0)
@@ -2036,7 +2036,7 @@ class TestOutboxWorkerDatabaseTimeout:
                 """, (outbox_id,))
             
             # 5. 第二次处理（check_dedup 已恢复正常）
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 results_second = process_batch(config, worker_id="recover-worker-2")
             
             # 6. 断言第二次处理成功
@@ -2093,7 +2093,7 @@ class TestOutboxWorkerDatabaseTimeout:
             
             mock_client = MagicMock()
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=3, jitter_factor=0.0)
@@ -2196,7 +2196,7 @@ class TestOutboxDegradationRecoveryE2E:
                 memory_id="mem_e2e_recovery_001"
             )
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=5, jitter_factor=0.0)
@@ -2320,7 +2320,7 @@ class TestOutboxDegradationRecoveryE2E:
                 error="openmemory_still_unavailable"
             )
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=5, jitter_factor=0.0)
@@ -2530,7 +2530,7 @@ class TestOutboxWorkerFullAcceptance:
             mock_client = MagicMock()
             mock_client.store.side_effect = mock_store
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=5, jitter_factor=0.0)
@@ -2621,7 +2621,7 @@ class TestOutboxWorkerFullAcceptance:
             mock_client = MagicMock()
             mock_client.store.side_effect = mock_store
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=5, jitter_factor=0.0)
@@ -2703,7 +2703,7 @@ class TestOutboxWorkerFullAcceptance:
             mock_client = MagicMock()
             mock_client.store.return_value = MockStoreResult(success=True, memory_id=f"mem_{test_prefix}")
             
-            with patch("gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
+            with patch("engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient", return_value=mock_client):
                 from engram.gateway.outbox_worker import WorkerConfig, process_batch
                 
                 config = WorkerConfig(batch_size=10, max_retries=5)

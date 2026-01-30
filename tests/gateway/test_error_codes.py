@@ -125,11 +125,11 @@ class TestGatewayErrorCodes:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter, \
-             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_create_engine:
             
             mock_get_config.return_value = mock_config
             
@@ -206,8 +206,8 @@ class TestGatewayErrorCodes:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.check_user_exists") as mock_check_user:
+        with patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user:
             
             mock_db = MagicMock()
             mock_db.insert_audit = capture_audit
@@ -282,7 +282,7 @@ class TestOutboxWorkerErrorCodes:
         
         captured_audits = []
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None
             mock_adapter.insert_write_audit = lambda **kwargs: captured_audits.append(kwargs)
             
@@ -311,7 +311,7 @@ class TestOutboxWorkerErrorCodes:
         
         captured_audits = []
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None
             mock_adapter.insert_write_audit = lambda **kwargs: captured_audits.append(kwargs)
             
@@ -340,7 +340,7 @@ class TestOutboxWorkerErrorCodes:
         
         captured_audits = []
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None
             mock_adapter.insert_write_audit = lambda **kwargs: captured_audits.append(kwargs)
             
@@ -368,7 +368,7 @@ class TestOutboxWorkerErrorCodes:
         
         captured_audits = []
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = {
                 "outbox_id": 100,
                 "status": "sent",
@@ -401,7 +401,7 @@ class TestOutboxWorkerErrorCodes:
         
         captured_audits = []
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None
             mock_adapter.insert_write_audit = lambda **kwargs: captured_audits.append(kwargs)
             
@@ -487,11 +487,11 @@ class TestOpenMemoryAPIErrorWithStatus:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter, \
-             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_create_engine:
             
             mock_get_config.return_value = mock_config
             
@@ -545,11 +545,11 @@ class TestOpenMemoryAPIErrorWithStatus:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter, \
-             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_create_engine:
             
             mock_get_config.return_value = mock_config
             
@@ -617,11 +617,11 @@ class TestUnknownExceptionErrorCodes:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter, \
-             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_create_engine:
             
             mock_get_config.return_value = mock_config
             
@@ -751,7 +751,7 @@ class TestConflictPathErrorCodes:
         
         captured_audits = []
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             # 模拟 get_outbox_by_id 返回被其他 worker 占用的状态
             mock_adapter.get_outbox_by_id.return_value = {
                 "status": "pending",
@@ -792,7 +792,7 @@ class TestConflictPathErrorCodes:
         
         captured_audits = []
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             # 模拟 dedup 命中
             mock_adapter.check_dedup.return_value = {
                 "outbox_id": 100,
@@ -835,8 +835,8 @@ class TestGovernanceUpdateErrorCodes:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db:
             
             mock_get_config.return_value = mock_config
             
@@ -873,8 +873,8 @@ class TestGovernanceUpdateErrorCodes:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db:
             
             mock_get_config.return_value = mock_config
             
@@ -910,8 +910,8 @@ class TestGovernanceUpdateErrorCodes:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db:
             
             mock_get_config.return_value = mock_config
             
@@ -947,9 +947,9 @@ class TestGovernanceUpdateErrorCodes:
         def capture_audit(**kwargs):
             captured_audits.append(kwargs)
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter:
             
             mock_get_config.return_value = mock_config
             
@@ -1028,11 +1028,11 @@ class TestUnifiedResponseContract:
         from engram.gateway.main import memory_store_impl
         from engram.gateway.openmemory_client import OpenMemoryConnectionError
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter, \
-             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_create_engine:
             
             mock_get_config.return_value = mock_config
             
@@ -1079,11 +1079,11 @@ class TestUnifiedResponseContract:
         from engram.gateway.main import memory_store_impl
         from engram.gateway.openmemory_client import StoreResult
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter, \
-             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_create_engine:
             
             mock_get_config.return_value = mock_config
             
@@ -1133,10 +1133,10 @@ class TestUnifiedResponseContract:
         from engram.gateway.main import memory_store_impl
         from engram.gateway.policy import PolicyAction
         
-        with patch("gateway.main.get_config") as mock_get_config, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.logbook_adapter") as mock_logbook_adapter, \
-             patch("gateway.main.create_engine_from_settings") as mock_create_engine:
+        with patch("engram.gateway.main.get_config") as mock_get_config, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.logbook_adapter") as mock_logbook_adapter, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_create_engine:
             
             mock_get_config.return_value = mock_config
             

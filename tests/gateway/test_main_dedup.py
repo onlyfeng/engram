@@ -24,10 +24,10 @@ class TestMemoryStoreDedup:
         target_space = "team:test"
         payload_sha = compute_payload_sha(payload_md)
         
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client:
             
             # 配置 mock
             mock_config.return_value.default_team_space = "team:default"
@@ -87,9 +87,9 @@ class TestMemoryStoreDedup:
         target_space = "private:alice"
         payload_sha = compute_payload_sha(payload_md)
         
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db:
             
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -128,11 +128,11 @@ class TestMemoryStoreDedup:
         payload_md = "# Unique content"
         target_space = "team:unique"
         
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
             
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -183,9 +183,9 @@ class TestMemoryStoreDedup:
         """使用默认 target_space 时 dedupe 正常工作"""
         payload_md = "# Default space test"
         
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db:
             
             mock_config.return_value.default_team_space = "team:default_project"
             mock_config.return_value.project_key = "test_project"

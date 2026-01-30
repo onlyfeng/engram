@@ -135,7 +135,7 @@ class TestDeduplication:
         mock_client = MagicMock()  # OpenMemory 客户端
         worker_id = "dedup-worker"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             # 模拟 check_dedup 返回已存在的记录
             mock_adapter.check_dedup.return_value = {
                 "outbox_id": 50,  # 原始成功的 outbox_id
@@ -173,7 +173,7 @@ class TestDeduplication:
         mock_client = MagicMock()
         worker_id = "audit-dedup-worker"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = {
                 "outbox_id": 60,
                 "target_space": "private:alice",
@@ -213,7 +213,7 @@ class TestDeduplication:
         )
         worker_id = "normal-worker"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             # 模拟 check_dedup 返回 None（无重复）
             mock_adapter.check_dedup.return_value = None
             
@@ -241,7 +241,7 @@ class TestDeduplication:
         ]
         
         for last_error, expected_memory_id in test_cases:
-            with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+            with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
                 mock_adapter.check_dedup.return_value = {
                     "outbox_id": 70,
                     "target_space": "team:test",
@@ -283,7 +283,7 @@ class TestSpaceParameter:
         
         worker_id = "test-worker"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, worker_id, mock_client, config)
             
@@ -319,7 +319,7 @@ class TestSpaceParameter:
         
         worker_id = "test-worker"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, worker_id, mock_client, config)
             
@@ -346,8 +346,8 @@ class TestLeaseProtocolCalls:
 
     def test_claim_outbox_call_shape(self, config):
         """验证 claim_outbox 调用包含 worker_id, limit, lease_seconds"""
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter, \
-             patch("gateway.outbox_worker.openmemory_client"):
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.outbox_worker.openmemory_client"):
             mock_adapter.claim_outbox.return_value = []
             
             process_batch(config, worker_id="my-worker-123")
@@ -371,7 +371,7 @@ class TestLeaseProtocolCalls:
         
         worker_id = "worker-abc"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             process_single_item(item, worker_id, mock_client, config)
             
@@ -397,7 +397,7 @@ class TestLeaseProtocolCalls:
         
         worker_id = "worker-xyz"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             before_time = datetime.now(timezone.utc)
             process_single_item(item, worker_id, mock_client, config_no_jitter)
@@ -452,7 +452,7 @@ class TestLeaseProtocolCalls:
                 error="test_error",
             )
             
-            with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+            with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
                 mock_adapter.check_dedup.return_value = None  # 非重复记录
                 before_time = datetime.now(timezone.utc)
                 process_single_item(item, "test-worker", mock_client, config_no_jitter)
@@ -481,7 +481,7 @@ class TestLeaseProtocolCalls:
         
         worker_id = "worker-dead"
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, worker_id, mock_client, config)
             
@@ -513,7 +513,7 @@ class TestProcessResults:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=True, memory_id="mem_1")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, "worker", mock_client, config)
             
@@ -529,7 +529,7 @@ class TestProcessResults:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=False, error="temp_error")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, "worker", mock_client, config)
             
@@ -545,7 +545,7 @@ class TestProcessResults:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=False, error="perm_error")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, "worker", mock_client, config)
             
@@ -579,7 +579,7 @@ class TestOpenMemoryClientConfig:
             captured_client_args.update(kwargs)
             original_init(self, *args, **kwargs)
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter, \
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter, \
              patch.object(openmemory_client.OpenMemoryClient, "__init__", capture_init):
             mock_adapter.claim_outbox.return_value = [{
                 "outbox_id": 1,
@@ -619,7 +619,7 @@ class TestOpenMemoryClientConfig:
             captured_client_args.update(kwargs)
             original_init(self, *args, **kwargs)
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter, \
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter, \
              patch.object(openmemory_client.OpenMemoryClient, "__init__", capture_init):
             mock_adapter.claim_outbox.return_value = []
             
@@ -628,7 +628,7 @@ class TestOpenMemoryClientConfig:
         # 即使没有任务，客户端也不会被创建，所以这里检查空记录情况
         # 需要有任务才会创建客户端
         # 重新测试有任务的情况
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter, \
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter, \
              patch.object(openmemory_client.OpenMemoryClient, "__init__", capture_init):
             mock_adapter.claim_outbox.return_value = [{
                 "outbox_id": 1,
@@ -663,7 +663,7 @@ class TestProcessBatch:
 
     def test_empty_batch(self, config):
         """无待处理记录时返回空列表"""
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.claim_outbox.return_value = []
             
             results = process_batch(config, worker_id="test-worker")
@@ -685,8 +685,8 @@ class TestProcessBatch:
             for i in range(3)
         ]
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter, \
-             patch("gateway.outbox_worker.openmemory_client") as mock_om:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.outbox_worker.openmemory_client") as mock_om:
             mock_adapter.claim_outbox.return_value = raw_items
             mock_adapter.OutboxItem = OutboxItem
             mock_adapter.check_dedup.return_value = None  # 非重复记录
@@ -724,7 +724,7 @@ class TestAuditLogging:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=True, memory_id="audit_mem")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             process_single_item(item, "audit-worker", mock_client, config)
             
@@ -761,7 +761,7 @@ class TestAuditFieldValidation:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=True, memory_id="mem_200")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, "worker-test", mock_client, config)
             
@@ -805,7 +805,7 @@ class TestAuditFieldValidation:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=False, error="connection_failed")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, "worker-test", mock_client, config)
             
@@ -853,7 +853,7 @@ class TestAuditFieldValidation:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=False, error="permanent_error")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             result = process_single_item(item, "worker-test", mock_client, config)
             
@@ -899,7 +899,7 @@ class TestAuditFieldValidation:
         mock_client = MagicMock()
         mock_client.store.return_value = MockStoreResult(success=True, memory_id="mem_team")
         
-        with patch("gateway.outbox_worker.logbook_adapter") as mock_adapter:
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
             result = process_single_item(item, "worker-test", mock_client, config)
             
             # 验证审计调用
@@ -970,7 +970,7 @@ class TestRunOnce:
         """run_once 返回处理结果"""
         config = WorkerConfig(batch_size=5)
         
-        with patch("gateway.outbox_worker.process_batch") as mock_batch:
+        with patch("engram.gateway.outbox_worker.process_batch") as mock_batch:
             mock_batch.return_value = [
                 ProcessResult(outbox_id=1, success=True, action="allow", reason="ok"),
                 ProcessResult(outbox_id=2, success=False, action="redirect", reason="retry"),

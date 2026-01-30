@@ -34,8 +34,8 @@ def compute_sha256(content: str) -> str:
 class TestEvidenceUploadBasic:
     """基础上传功能测试"""
     
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_upload_text_content(self, mock_attach, mock_get_store):
         """测试上传普通文本内容"""
         content = "Hello, world!"
@@ -70,8 +70,8 @@ class TestEvidenceUploadBasic:
         mock_store.put.assert_called_once()
         mock_attach.assert_called_once()
     
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_upload_markdown_content(self, mock_attach, mock_get_store):
         """测试上传 Markdown 内容"""
         content = "# Title\n\nSome content"
@@ -95,8 +95,8 @@ class TestEvidenceUploadBasic:
         assert result.content_type == "text/markdown"
         assert ".md" in result.artifact_uri
     
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_upload_without_item_id_raises_error(self, mock_attach, mock_get_store):
         """测试不提供 item_id 时应抛出 EvidenceItemRequiredError"""
         content = "test"
@@ -126,8 +126,8 @@ class TestEvidenceUploadBasic:
         # 应该不调用 attach
         mock_attach.assert_not_called()
     
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_to_evidence_object(self, mock_attach, mock_get_store):
         """测试转换为 evidence(v2) 对象"""
         content = "test content"
@@ -168,8 +168,8 @@ class TestEvidenceUploadBasic:
 class TestEvidenceCanonicalUri:
     """验证成功上传时返回 canonical URI 格式"""
     
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_successful_upload_returns_canonical_uri(self, mock_attach, mock_get_store):
         """测试成功上传后返回 memory://attachments/<id>/<sha256> 格式的 canonical URI"""
         content = "canonical uri test"
@@ -353,7 +353,7 @@ class TestEvidenceUploadMCP:
         mock_cfg.gateway_port = 8787
         mock_cfg.governance_admin_key = None
         
-        with patch("gateway.main.get_config", return_value=mock_cfg):
+        with patch("engram.gateway.main.get_config", return_value=mock_cfg):
             yield mock_cfg
     
     @pytest.fixture
@@ -363,9 +363,9 @@ class TestEvidenceUploadMCP:
         from engram.gateway.main import app
         return TestClient(app)
     
-    @patch("gateway.main.logbook_adapter")
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.main.logbook_adapter")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_evidence_upload_without_item_id_auto_creates_item(
         self, mock_attach, mock_get_store, mock_logbook_adapter, client, mock_config
     ):
@@ -438,9 +438,9 @@ class TestEvidenceUploadMCP:
         # 验证 create_item 被调用
         mock_logbook_adapter.create_item.assert_called_once()
     
-    @patch("gateway.main.logbook_adapter")
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.main.logbook_adapter")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_evidence_upload_with_explicit_item_id_does_not_create_item(
         self, mock_attach, mock_get_store, mock_logbook_adapter, client, mock_config
     ):
@@ -502,8 +502,8 @@ class TestEvidenceUploadMCP:
         # 验证 create_item 未被调用
         mock_logbook_adapter.create_item.assert_not_called()
     
-    @patch("gateway.evidence_store.get_artifact_store")
-    @patch("gateway.evidence_store.db_attach")
+    @patch("engram.gateway.evidence_store.get_artifact_store")
+    @patch("engram.gateway.evidence_store.db_attach")
     def test_evidence_upload_via_mcp(self, mock_attach, mock_get_store, client, mock_config):
         """通过 MCP 端点测试 evidence_upload（带 item_id）"""
         content = "test"
@@ -559,7 +559,7 @@ class TestEvidenceUploadMCP:
         # 验证 evidence.uri 存在
         assert "uri" in tool_result["evidence"]
     
-    @patch("gateway.main.logbook_adapter")
+    @patch("engram.gateway.main.logbook_adapter")
     def test_evidence_upload_size_exceeded_via_mcp(self, mock_logbook_adapter, client, mock_config):
         """
         通过 MCP 端点测试大小超限错误
@@ -604,7 +604,7 @@ class TestEvidenceUploadMCP:
         assert tool_result["suggestion"] is not None
         assert len(tool_result["suggestion"]) > 0
     
-    @patch("gateway.main.logbook_adapter")
+    @patch("engram.gateway.main.logbook_adapter")
     def test_evidence_upload_invalid_content_type_via_mcp(self, mock_logbook_adapter, client, mock_config):
         """
         通过 MCP 端点测试内容类型错误

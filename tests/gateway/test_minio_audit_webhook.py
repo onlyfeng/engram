@@ -64,7 +64,7 @@ def valid_minio_event():
 @pytest.fixture
 def mock_config():
     """创建测试用的配置"""
-    with patch("gateway.minio_audit_webhook.get_config") as mock:
+    with patch("engram.gateway.minio_audit_webhook.get_config") as mock:
         config = MagicMock()
         config.minio_audit_webhook_auth_token = "test-secret-token"
         config.minio_audit_max_payload_size = 1024 * 1024  # 1MB
@@ -76,7 +76,7 @@ def mock_config():
 @pytest.fixture
 def mock_db_insert():
     """Mock 数据库插入操作"""
-    with patch("gateway.minio_audit_webhook._insert_audit_to_db") as mock:
+    with patch("engram.gateway.minio_audit_webhook._insert_audit_to_db") as mock:
         mock.return_value = 12345  # 返回模拟的 event_id
         yield mock
 
@@ -172,7 +172,7 @@ class TestMinioAuditTokenNotConfigured:
         os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost/test")
         os.environ.setdefault("OPENMEMORY_BASE_URL", "http://localhost:8080")
         
-        with patch("gateway.minio_audit_webhook.get_config") as mock_config:
+        with patch("engram.gateway.minio_audit_webhook.get_config") as mock_config:
             config = MagicMock()
             config.minio_audit_webhook_auth_token = None  # 未配置
             config.minio_audit_max_payload_size = 1024 * 1024
@@ -239,7 +239,7 @@ class TestMinioAuditPayloadValidation:
         os.environ.setdefault("OPENMEMORY_BASE_URL", "http://localhost:8080")
         
         # 配置很小的 max payload size
-        with patch("gateway.minio_audit_webhook.get_config") as mock_config:
+        with patch("engram.gateway.minio_audit_webhook.get_config") as mock_config:
             config = MagicMock()
             config.minio_audit_webhook_auth_token = "test-secret-token"
             config.minio_audit_max_payload_size = 100  # 只允许 100 字节
@@ -395,7 +395,7 @@ class TestMinioAuditDbError:
 
     def test_db_error_returns_500(self, client, valid_minio_event):
         """数据库错误返回 500"""
-        with patch("gateway.minio_audit_webhook._insert_audit_to_db") as mock_insert:
+        with patch("engram.gateway.minio_audit_webhook._insert_audit_to_db") as mock_insert:
             from engram.gateway.minio_audit_webhook import MinioAuditError
             mock_insert.side_effect = MinioAuditError("数据库连接失败", status_code=500)
             
@@ -689,7 +689,7 @@ class TestMinioAuditDbInsertWithSchema:
 
     def test_db_insert_uses_normalized_data(self, mock_config, valid_minio_event):
         """数据库插入应使用归一化后的数据"""
-        with patch("gateway.minio_audit_webhook._insert_audit_to_db") as mock_insert:
+        with patch("engram.gateway.minio_audit_webhook._insert_audit_to_db") as mock_insert:
             mock_insert.return_value = 12345
             
             os.environ.setdefault("PROJECT_KEY", "test_project")

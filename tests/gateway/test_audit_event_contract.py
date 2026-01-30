@@ -1009,11 +1009,11 @@ class TestAuditFirstSemantics:
         payload_md = "# Test content for audit failure"
         target_space = "team:test_project"
         
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
             
             # 配置 mock
             mock_config.return_value.default_team_space = "team:default"
@@ -1069,10 +1069,10 @@ class TestAuditFirstSemantics:
         payload_md = "# Content for policy reject with audit failure"
         target_space = "team:restricted"
         
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
             
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -1125,11 +1125,11 @@ class TestAuditFirstSemantics:
         payload_md = "# Content for OpenMemory failure"
         target_space = "team:test_project"
         
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
             
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"

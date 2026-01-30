@@ -29,10 +29,10 @@ class TestActorUserIdInAudit:
         actor_user_id = "user_alice_123"
         payload_sha = compute_payload_sha(payload_md)
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.check_user_exists") as mock_check_user:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -71,11 +71,11 @@ class TestActorUserIdInAudit:
         target_space = "team:restricted"
         actor_user_id = "user_bob_456"
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.check_user_exists") as mock_check_user, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -120,12 +120,12 @@ class TestActorUserIdInAudit:
         target_space = "team:success"
         actor_user_id = "user_charlie_789"
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.check_user_exists") as mock_check_user, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -179,12 +179,12 @@ class TestActorUserIdInAudit:
         target_space = "team:error"
         actor_user_id = "user_dave_999"
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.check_user_exists") as mock_check_user, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -237,9 +237,9 @@ class TestActorUserIdInAudit:
         target_space = "team:anon"
         payload_sha = compute_payload_sha(payload_md)
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -312,10 +312,10 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "unknown_user_001"
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.check_user_exists") as mock_check_user:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -352,12 +352,12 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "unknown_user_002"
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.check_user_exists") as mock_check_user, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -410,13 +410,13 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "new_user_003"
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.get_client") as mock_get_client, \
-             patch("gateway.main.check_user_exists") as mock_check_user, \
-             patch("gateway.main.ensure_user") as mock_ensure_user, \
-             patch("gateway.main.create_engine_from_settings") as mock_engine:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.get_client") as mock_get_client, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
+             patch("engram.gateway.main.ensure_user") as mock_ensure_user, \
+             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
@@ -485,10 +485,10 @@ class TestActorUserValidation:
         actor_user_id = "existing_user_004"
         payload_sha = compute_payload_sha(payload_md)
 
-        with patch("gateway.main.get_config") as mock_config, \
-             patch("gateway.main.logbook_adapter") as mock_adapter, \
-             patch("gateway.main.get_db") as mock_get_db, \
-             patch("gateway.main.check_user_exists") as mock_check_user:
+        with patch("engram.gateway.main.get_config") as mock_config, \
+             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
+             patch("engram.gateway.main.get_db") as mock_get_db, \
+             patch("engram.gateway.main.check_user_exists") as mock_check_user:
 
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
