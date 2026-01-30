@@ -25,7 +25,7 @@ class TestDSNPriority:
         验证强覆盖策略: os.environ['POSTGRES_DSN'] = dsn
         """
         # 先清理全局状态
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter.reset_adapter()
         
         # 设置环境变量
@@ -58,7 +58,7 @@ class TestDSNPriority:
         """
         不传入 dsn 参数时应该保留已存在的环境变量
         """
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter.reset_adapter()
         
         # 设置环境变量
@@ -89,7 +89,7 @@ class TestDSNPriority:
         """
         get_adapter(dsn) 应该正确传递 dsn 到 LogbookAdapter
         """
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter.reset_adapter()
         
         original_dsn = os.environ.get("POSTGRES_DSN")
@@ -117,7 +117,7 @@ class TestDSNPriority:
         
         两个模块应该遵循相同的优先级: 显式参数 > POSTGRES_DSN > TEST_PG_DSN
         """
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         
         # 检查 LogbookAdapter.__init__ 的 docstring 包含正确的优先级描述
         docstring = logbook_adapter.LogbookAdapter.__init__.__doc__
@@ -133,7 +133,7 @@ class TestDSNOverrideWithMock:
         """
         使用 patch 验证显式 dsn 会触发环境变量更新
         """
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter.reset_adapter()
         
         with patch.dict(os.environ, {"POSTGRES_DSN": "old_value"}, clear=False):
@@ -155,7 +155,7 @@ class TestDSNOverrideWithMock:
         
         这验证了强覆盖策略的一致性
         """
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter.reset_adapter()
         
         original_dsn = os.environ.get("POSTGRES_DSN")

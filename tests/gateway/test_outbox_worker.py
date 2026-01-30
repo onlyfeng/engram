@@ -562,7 +562,7 @@ class TestOpenMemoryClientConfig:
 
     def test_process_batch_creates_client_with_configured_timeout_and_retries(self):
         """验证 process_batch 使用 WorkerConfig 中的 timeout 和 max_retries 创建客户端"""
-        from gateway import openmemory_client
+        from engram.gateway import openmemory_client
         
         config = WorkerConfig(
             batch_size=5,
@@ -607,7 +607,7 @@ class TestOpenMemoryClientConfig:
 
     def test_default_openmemory_client_config_no_retries(self):
         """验证默认配置下 OpenMemory 客户端不进行内部重试"""
-        from gateway import openmemory_client
+        from engram.gateway import openmemory_client
         
         config = WorkerConfig()  # 使用默认值
         

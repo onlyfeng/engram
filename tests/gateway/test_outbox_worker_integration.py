@@ -1219,7 +1219,7 @@ class TestOutboxWorkerLeaseConflict:
                 outbox_id = cur.fetchone()[0]
             
             # 2. Worker1 claim 任务
-            from gateway import logbook_adapter
+            from engram.gateway import logbook_adapter
             
             claimed_items = logbook_adapter.claim_outbox(
                 worker_id="worker-1-seq",
@@ -1456,7 +1456,7 @@ class TestOutboxWorkerLeaseRenewal:
             mock_client.store.return_value = MockStoreResult(success=True, memory_id="mem_renew_002")
             
             # 包装 renew_lease 以追踪调用
-            from gateway import logbook_adapter
+            from engram.gateway import logbook_adapter
             original_renew = logbook_adapter.renew_lease
             
             def tracked_renew(outbox_id, worker_id):
@@ -1516,7 +1516,7 @@ class TestOutboxWorkerLeaseRenewal:
                 outbox_id = cur.fetchone()[0]
             
             # Worker 1 claim
-            from gateway import logbook_adapter
+            from engram.gateway import logbook_adapter
             
             claimed_items = logbook_adapter.claim_outbox(
                 worker_id="worker-1",
@@ -1577,7 +1577,7 @@ class TestOutboxWorkerLeaseRenewal:
                 """)
                 outbox_id = cur.fetchone()[0]
             
-            from gateway import logbook_adapter
+            from engram.gateway import logbook_adapter
             
             # Worker 2 应该能够 claim 这条过期的记录
             claimed_items = logbook_adapter.claim_outbox(
@@ -1900,7 +1900,7 @@ class TestOutboxWorkerDatabaseTimeout:
                 return original_check_dedup(*args, **kwargs)
             
             # 保存原始函数并替换
-            from gateway import logbook_adapter as adapter_module
+            from engram.gateway import logbook_adapter as adapter_module
             original_check_dedup = adapter_module.check_dedup
             monkeypatch.setattr(adapter_module, "check_dedup", slow_check_dedup_wrapper)
             
@@ -2009,7 +2009,7 @@ class TestOutboxWorkerDatabaseTimeout:
                 # 后续正常返回
                 return None  # 无 dedup 记录
             
-            from gateway import logbook_adapter as adapter_module
+            from engram.gateway import logbook_adapter as adapter_module
             monkeypatch.setattr(adapter_module, "check_dedup", failing_then_ok_check_dedup)
             
             mock_client = MagicMock()
@@ -2088,7 +2088,7 @@ class TestOutboxWorkerDatabaseTimeout:
             def raise_db_error(*args, **kwargs):
                 raise psycopg.OperationalError("connection reset by peer")
             
-            from gateway import logbook_adapter as adapter_module
+            from engram.gateway import logbook_adapter as adapter_module
             monkeypatch.setattr(adapter_module, "check_dedup", raise_db_error)
             
             mock_client = MagicMock()

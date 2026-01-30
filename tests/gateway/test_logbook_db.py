@@ -18,13 +18,13 @@ class TestGetDbSingleton:
     def setup_method(self):
         """每个测试前重置状态"""
         # 导入并重置模块状态
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         logbook_db._db_instances.clear()
         logbook_db._default_dsn = None
 
     def teardown_method(self):
         """每个测试后清理"""
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         logbook_db._db_instances.clear()
         logbook_db._default_dsn = None
 
@@ -88,7 +88,7 @@ class TestGetDbSingleton:
 
     def test_reset_db_with_specific_dsn(self):
         """reset_db(dsn) 只清除指定 DSN 的实例"""
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         
         with patch('engram.gateway.logbook_db.LogbookDatabase') as MockDB:
             MockDB.return_value = MagicMock()
@@ -108,7 +108,7 @@ class TestGetDbSingleton:
 
     def test_set_default_dsn(self):
         """set_default_dsn() 设置默认 DSN"""
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         
         with patch('engram.gateway.logbook_db.LogbookDatabase') as MockDB:
             mock_instance = MagicMock()
@@ -121,7 +121,7 @@ class TestGetDbSingleton:
 
     def test_get_db_uses_default_dsn_when_no_param(self):
         """get_db() 无参数时使用默认 DSN"""
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         
         with patch('engram.gateway.logbook_db.LogbookDatabase') as MockDB:
             mock_instance = MagicMock()
@@ -141,7 +141,7 @@ class TestGetDbSingleton:
 
     def test_config_dsn_overrides_env_var(self):
         """配置的 DSN 可以覆盖环境变量中的 DSN"""
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         
         env_dsn = "postgresql://env:env@localhost/env_db"
         config_dsn = "postgresql://config:config@localhost/config_db"
@@ -168,23 +168,23 @@ class TestGatewayConfigIntegration:
 
     def setup_method(self):
         """每个测试前重置状态"""
-        from gateway import logbook_db
-        from gateway import config as config_module
+        from engram.gateway import logbook_db
+        from engram.gateway import config as config_module
         logbook_db._db_instances.clear()
         logbook_db._default_dsn = None
         config_module.reset_config()
 
     def teardown_method(self):
         """每个测试后清理"""
-        from gateway import logbook_db
-        from gateway import config as config_module
+        from engram.gateway import logbook_db
+        from engram.gateway import config as config_module
         logbook_db._db_instances.clear()
         logbook_db._default_dsn = None
         config_module.reset_config()
 
     def test_gateway_uses_config_dsn(self):
         """验证 Gateway 使用配置中的 DSN 而非仅环境变量"""
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         from engram.gateway.config import get_config, reset_config
         
         config_dsn = "postgresql://config:pass@confighost:5432/config_db"
@@ -219,7 +219,7 @@ class TestGatewayConfigIntegration:
 
     def test_different_config_dsn_creates_separate_db(self):
         """不同配置的 postgres_dsn 创建独立的 DB 实例"""
-        from gateway import logbook_db
+        from engram.gateway import logbook_db
         
         dsn1 = "postgresql://user1:pass@host1:5432/db1"
         dsn2 = "postgresql://user2:pass@host2:5432/db2"
@@ -249,12 +249,12 @@ class TestLogbookDBCheck:
 
     def setup_method(self):
         """每个测试前重置状态"""
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter._adapter_instance = None
 
     def teardown_method(self):
         """每个测试后清理"""
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter._adapter_instance = None
 
     def test_check_db_schema_success(self):
@@ -405,15 +405,15 @@ class TestCheckLogbookDbOnStartup:
 
     def setup_method(self):
         """每个测试前重置状态"""
-        from gateway import logbook_adapter
-        from gateway import config as config_module
+        from engram.gateway import logbook_adapter
+        from engram.gateway import config as config_module
         logbook_adapter._adapter_instance = None
         config_module.reset_config()
 
     def teardown_method(self):
         """每个测试后清理"""
-        from gateway import logbook_adapter
-        from gateway import config as config_module
+        from engram.gateway import logbook_adapter
+        from engram.gateway import config as config_module
         logbook_adapter._adapter_instance = None
         config_module.reset_config()
 
@@ -499,12 +499,12 @@ class TestLogbookDBErrorCode:
 
     def setup_method(self):
         """每个测试前重置状态"""
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter._adapter_instance = None
 
     def teardown_method(self):
         """每个测试后清理"""
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         logbook_adapter._adapter_instance = None
 
     def test_error_code_schema_missing(self):
@@ -727,15 +727,15 @@ class TestCheckLogbookDbOnStartupWithErrorCode:
 
     def setup_method(self):
         """每个测试前重置状态"""
-        from gateway import logbook_adapter
-        from gateway import config as config_module
+        from engram.gateway import logbook_adapter
+        from engram.gateway import config as config_module
         logbook_adapter._adapter_instance = None
         config_module.reset_config()
 
     def teardown_method(self):
         """每个测试后清理"""
-        from gateway import logbook_adapter
-        from gateway import config as config_module
+        from engram.gateway import logbook_adapter
+        from engram.gateway import config as config_module
         logbook_adapter._adapter_instance = None
         config_module.reset_config()
 

@@ -86,7 +86,7 @@ class TestLogbookAdapterNoSysPathInjection:
 
     def test_no_sys_path_manipulation_in_adapter(self):
         """验证 logbook_adapter 不包含 sys.path 操作"""
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         import inspect
         
         # 获取模块源代码
@@ -99,7 +99,7 @@ class TestLogbookAdapterNoSysPathInjection:
 
     def test_adapter_imports_from_engram_logbook(self):
         """验证 adapter 从 engram_logbook 导入"""
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         import inspect
         
         source = inspect.getsource(logbook_adapter)
@@ -154,15 +154,15 @@ class TestGatewayDbCheckPath:
 
     def setup_method(self):
         """每个测试前重置状态"""
-        from gateway import logbook_adapter
-        from gateway import config as config_module
+        from engram.gateway import logbook_adapter
+        from engram.gateway import config as config_module
         logbook_adapter._adapter_instance = None
         config_module.reset_config()
 
     def teardown_method(self):
         """每个测试后清理"""
-        from gateway import logbook_adapter
-        from gateway import config as config_module
+        from engram.gateway import logbook_adapter
+        from engram.gateway import config as config_module
         logbook_adapter._adapter_instance = None
         config_module.reset_config()
 

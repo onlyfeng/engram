@@ -156,7 +156,7 @@ def mock_dependencies():
     mock_config.governance_admin_key = None
     
     with patch.dict('sys.modules', {
-        'gateway.logbook_adapter': mock_adapter,
+        'engram.gateway.logbook_adapter': mock_adapter,
     }):
         with patch('engram.gateway.main.get_config', return_value=mock_config):
             with patch('engram.gateway.main.get_db', return_value=mock_db):

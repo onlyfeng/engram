@@ -749,7 +749,7 @@ class TestDegradationFlow:
         # 2. 运行 outbox_worker
         try:
             result = subprocess.run(
-                ["python", "-m", "gateway.outbox_worker", "--once"],
+                ["python", "-m", "engram.gateway.outbox_worker", "--once"],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -898,7 +898,7 @@ class TestMockDegradationFlow:
             OpenMemoryConnectionError,
             StoreResult,
         )
-        from gateway import logbook_adapter
+        from engram.gateway import logbook_adapter
         
         # 生成唯一测试内容
         unique_id = uuid.uuid4().hex[:12]
@@ -2771,7 +2771,7 @@ class TestMCPMemoryStoreE2E:
         # 2. 运行 outbox_worker
         try:
             result = subprocess.run(
-                ["python", "-m", "gateway.outbox_worker", "--once"],
+                ["python", "-m", "engram.gateway.outbox_worker", "--once"],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -3214,7 +3214,7 @@ class TestOutboxWorkerRealIntegration:
             # 2. 运行 worker
             try:
                 result = subprocess.run(
-                    ["python", "-m", "gateway.outbox_worker", "--once"],
+                    ["python", "-m", "engram.gateway.outbox_worker", "--once"],
                     capture_output=True,
                     text=True,
                     timeout=60,

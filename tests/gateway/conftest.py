@@ -315,7 +315,7 @@ def logbook_adapter_config(migrated_db: dict):
     os.environ["POSTGRES_DSN"] = dsn
     
     # 重置全局适配器
-    from gateway import logbook_adapter
+    from engram.gateway import logbook_adapter
     logbook_adapter.reset_adapter()
     
     yield dsn

@@ -995,7 +995,7 @@ class TestReconcileOutboxErrorCodes:
 
     def test_reconcile_uses_error_code_constants(self):
         """验证 reconcile_outbox 模块导入了 ErrorCode"""
-        from gateway import reconcile_outbox
+        from engram.gateway import reconcile_outbox
         # 验证模块已导入 ErrorCode
         assert hasattr(reconcile_outbox, 'ErrorCode')
 

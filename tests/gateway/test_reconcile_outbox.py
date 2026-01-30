@@ -856,7 +856,7 @@ class TestReconcileReasonErrorCodeContract:
         通过检查模块代码确保使用的是 ErrorCode 枚举而非硬编码字符串
         """
         import inspect
-        from gateway import reconcile_outbox
+        from engram.gateway import reconcile_outbox
         from engram.logbook.errors import ErrorCode
         
         # 获取 reconcile_outbox 模块的源代码
@@ -968,7 +968,7 @@ class TestReconcileSmokeTest:
         # 执行 reconcile --once
         result = subprocess.run(
             [
-                sys.executable, "-m", "gateway.reconcile_outbox",
+                sys.executable, "-m", "engram.gateway.reconcile_outbox",
                 "--once",
                 "--scan-window", "1",  # 仅扫描最近 1 小时
                 "--batch-size", "10",
@@ -1000,7 +1000,7 @@ class TestReconcileSmokeTest:
         # 执行 reconcile --once
         result = subprocess.run(
             [
-                sys.executable, "-m", "gateway.reconcile_outbox",
+                sys.executable, "-m", "engram.gateway.reconcile_outbox",
                 "--once",
                 "--scan-window", "1",
                 "--batch-size", "10",
@@ -1043,7 +1043,7 @@ class TestReconcileSmokeTest:
         # 执行 reconcile --report
         result = subprocess.run(
             [
-                sys.executable, "-m", "gateway.reconcile_outbox",
+                sys.executable, "-m", "engram.gateway.reconcile_outbox",
                 "--report",
                 "--scan-window", "1",
             ],
