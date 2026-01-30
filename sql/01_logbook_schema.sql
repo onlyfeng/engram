@@ -352,6 +352,7 @@ CREATE TABLE IF NOT EXISTS governance.settings (
 
 CREATE TABLE IF NOT EXISTS governance.write_audit (
   audit_id           bigserial PRIMARY KEY,
+  created_at         timestamptz NOT NULL DEFAULT now(),
   ts                 timestamptz NOT NULL DEFAULT now(),
   actor_user_id      text REFERENCES identity.users(user_id),
   target_space       text NOT NULL,
@@ -360,6 +361,10 @@ CREATE TABLE IF NOT EXISTS governance.write_audit (
   payload_sha        text,
   evidence_refs_json jsonb NOT NULL DEFAULT '{}'::jsonb  -- 证据引用，使用 canonical evidence URI
 );
+
+-- 兼容老库：补充 created_at 字段
+ALTER TABLE governance.write_audit
+  ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
 
 -- ============ write_audit: evidence_refs_json 结构规范 ============
 -- 与 analysis.knowledge_candidates.evidence_refs_json 结构相同:
