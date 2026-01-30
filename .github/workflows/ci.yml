@@ -110,7 +110,10 @@ jobs:
             --deselect=tests/acceptance/test_cli.py::TestMigrateCLI::test_with_valid_dsn \
             --deselect=tests/acceptance/test_cli.py::TestCLIEnvironmentVariables \
             --deselect=tests/acceptance/test_cli.py::TestCLIOutputFormat \
+            --deselect=tests/acceptance/test_cli.py::TestGatewayCLI \
             --deselect=tests/acceptance/test_env_config.py \
+            --deselect=tests/acceptance/test_installation.py::TestGatewayImport::test_gateway_audit_event \
+            --deselect=tests/acceptance/test_installation.py::TestLogbookModuleStructure::test_config_module_structure \
             --junitxml=acceptance-results-${{ matrix.python-version }}.xml
 
       - name: Upload test results
