@@ -90,11 +90,16 @@ def check_dedup(
 
 
 def enqueue_memory(
-    payload_md: str,
-    target_space: str,
+    payload_md: Optional[str] = None,
+    target_space: Optional[str] = None,
     item_id: Optional[int] = None,
     last_error: Optional[str] = None,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
+    user_id: Optional[str] = None,
+    space: Optional[str] = None,
+    kind: Optional[str] = None,
+    project_key: Optional[str] = None,
 ) -> int:
     """
     将记忆入队到 outbox_memory 表
@@ -105,14 +110,26 @@ def enqueue_memory(
         item_id: 关联的 items.item_id（可选）
         last_error: 最后一次错误信息（可选，用于重入队场景）
         config: 配置实例
+        dsn: 数据库 DSN（可选）
+        user_id: 用户 ID（可选，用于构建 target_space）
+        space: target_space 的别名（可选）
+        kind: 证据类型（兼容参数，当前不落库）
+        project_key: 项目键（兼容参数，当前不落库）
 
     Returns:
         创建的 outbox_id
     """
+    if payload_md is None:
+        raise ValueError("payload_md 不能为空")
+    if target_space is None:
+        target_space = space or (f"private:{user_id}" if user_id else None)
+    if not target_space:
+        raise ValueError("target_space 不能为空")
+
     # 计算 payload 的 SHA256 哈希
     payload_sha = sha256(payload_md)
 
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -220,6 +237,7 @@ def mark_dead(
 def get_pending(
     limit: int = 100,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     获取待处理的 outbox 记录 (status = 'pending')
@@ -233,7 +251,7 @@ def get_pending(
     Returns:
         pending 状态的 outbox 记录列表
     """
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(

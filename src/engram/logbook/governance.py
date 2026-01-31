@@ -61,6 +61,7 @@ def _validate_policy_json(policy_json: Any) -> Dict:
 def get_settings(
     project_key: str,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     从 settings 获取项目设置
@@ -79,7 +80,7 @@ def get_settings(
             "updated_at": datetime
         }
     """
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -112,6 +113,7 @@ def get_settings(
 def get_or_create_settings(
     project_key: str,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     获取或创建项目设置（若不存在则插入默认行）
@@ -135,7 +137,7 @@ def get_or_create_settings(
     Raises:
         DatabaseError: 数据库操作失败时抛出
     """
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             # 使用 ON CONFLICT DO NOTHING 保证并发安全
@@ -193,6 +195,7 @@ def upsert_settings(
     policy_json: Optional[Dict] = None,
     updated_by: Optional[str] = None,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> bool:
     """
     在 settings 中插入或更新项目设置（upsert）
@@ -214,7 +217,7 @@ def upsert_settings(
     # 校验 policy_json 必须是 object
     validated_policy = _validate_policy_json(policy_json)
 
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -240,6 +243,49 @@ def upsert_settings(
         )
     finally:
         conn.close()
+
+
+class GovernanceSettings:
+    """治理设置便捷包装（供外部调用）"""
+
+    def __init__(self, dsn: Optional[str] = None, config: Optional[Config] = None):
+        if isinstance(dsn, Config) and config is None:
+            config = dsn
+            dsn = None
+        self._dsn = dsn
+        self._config = config or (Config.from_env() if dsn else None)
+
+    def get(self, key: str, project_key: str) -> Optional[Any]:
+        settings = get_settings(project_key, config=self._config, dsn=self._dsn)
+        if not settings:
+            return None
+        if key == "team_write_enabled":
+            return settings.get("team_write_enabled")
+        policy = settings.get("policy_json") or {}
+        return policy.get(key)
+
+    def set(
+        self,
+        key: str,
+        value: Any,
+        project_key: str,
+        updated_by: Optional[str] = None,
+    ) -> bool:
+        settings = get_or_create_settings(project_key, config=self._config, dsn=self._dsn)
+        policy = settings.get("policy_json") or {}
+        team_write_enabled = settings.get("team_write_enabled", False)
+        if key == "team_write_enabled":
+            team_write_enabled = bool(value)
+        else:
+            policy[key] = value
+        return upsert_settings(
+            project_key=project_key,
+            team_write_enabled=team_write_enabled,
+            policy_json=policy,
+            updated_by=updated_by,
+            config=self._config,
+            dsn=self._dsn,
+        )
 
 
 def query_write_audit(

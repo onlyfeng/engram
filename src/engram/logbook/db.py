@@ -18,7 +18,7 @@ Schema 管理:
 """
 
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Any, Dict, Optional, Union, List
 
 import psycopg
 
@@ -30,19 +30,28 @@ from .schema_context import SchemaContext, get_schema_context
 class Database:
     """数据库连接管理类"""
 
-    def __init__(self, config: Optional[Config] = None):
+    DEFAULT_KV_NAMESPACE = "default"
+
+    def __init__(self, dsn: Optional[str] = None, config: Optional[Config] = None):
         """
         初始化数据库连接管理器
 
         Args:
+            dsn: 数据库连接字符串（可选，优先于配置）
             config: Config 实例，为 None 时使用全局配置
         """
-        self._config = config or get_config()
+        if isinstance(dsn, Config) and config is None:
+            config = dsn
+            dsn = None
+        self._dsn_override = dsn
+        self._config = config or (Config.from_env() if dsn else get_config())
         self._conn: Optional[psycopg.Connection] = None
 
     @property
     def dsn(self) -> str:
         """获取数据库 DSN（支持环境变量兜底）"""
+        if self._dsn_override:
+            return self._dsn_override
         return get_dsn(self._config)
 
     def connect(self, autocommit: bool = False) -> psycopg.Connection:
@@ -58,14 +67,8 @@ class Database:
         Raises:
             ConnectionError: 连接失败时抛出
         """
-        try:
-            self._conn = psycopg.connect(self.dsn, autocommit=autocommit)
-            return self._conn
-        except Exception as e:
-            raise DbConnectionError(
-                f"数据库连接失败: {e}",
-                {"dsn": self._mask_dsn(self.dsn), "error": str(e)},
-            )
+        self._conn = get_connection(dsn=self._dsn_override, config=self._config, autocommit=autocommit)
+        return self._conn
 
     def disconnect(self) -> None:
         """关闭数据库连接"""
@@ -87,6 +90,74 @@ class Database:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
         return False
+
+    def create_item(
+        self,
+        item_type: str,
+        title: str,
+        project_key: Optional[str] = None,
+        **kwargs,
+    ) -> int:
+        """创建条目"""
+        return create_item(
+            item_type=item_type,
+            title=title,
+            project_key=project_key,
+            config=self._config,
+            dsn=self._dsn_override,
+            **kwargs,
+        )
+
+    def get_item(self, item_id: int) -> Optional[Dict[str, Any]]:
+        """获取条目"""
+        return get_item_by_id(
+            item_id=item_id,
+            config=self._config,
+            dsn=self._dsn_override,
+        )
+
+    def add_event(
+        self,
+        item_id: int,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> int:
+        """为条目添加事件"""
+        return add_event(
+            item_id=item_id,
+            event_type=event_type,
+            payload_json=payload,
+            config=self._config,
+            dsn=self._dsn_override,
+            **kwargs,
+        )
+
+    def set_kv(
+        self,
+        key: str,
+        value_json: Any,
+        namespace: Optional[str] = None,
+    ) -> None:
+        """设置 KV"""
+        ns = namespace or self.DEFAULT_KV_NAMESPACE
+        set_kv(
+            namespace=ns,
+            key=key,
+            value_json=value_json,
+            config=self._config,
+            dsn=self._dsn_override,
+        )
+
+    def get_kv(self, key: str, namespace: Optional[str] = None) -> Optional[Any]:
+        """获取 KV"""
+        ns = namespace or self.DEFAULT_KV_NAMESPACE
+        return get_kv(
+            namespace=ns,
+            key=key,
+            config=self._config,
+            dsn=self._dsn_override,
+        )
 
     @staticmethod
     def _mask_dsn(dsn: str) -> str:
@@ -416,6 +487,16 @@ def execute_sql_file(
     """
     try:
         sql_content = sql_path.read_text(encoding="utf-8")
+        # 过滤 psql 专用指令（\if/\endif 等），避免 psycopg 执行失败
+        sql_lines = [
+            line for line in sql_content.splitlines()
+            if not line.lstrip().startswith("\\")
+        ]
+        sql_content = "\n".join(sql_lines)
+        if ":target_schema" in sql_content:
+            import os
+            target_schema = os.environ.get("OM_PG_SCHEMA", "openmemory")
+            sql_content = sql_content.replace(":target_schema", f"'{target_schema}'")
         
         # 如果提供了 schema_context，重写 SQL 中的 schema 名
         if schema_context is not None:
@@ -448,6 +529,8 @@ def create_item(
     status: str = "open",
     owner_user_id: Optional[str] = None,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
+    project_key: Optional[str] = None,
 ) -> int:
     """
     在 logbook.items 中创建新条目
@@ -459,22 +542,23 @@ def create_item(
         status: 状态 (default: 'open')
         owner_user_id: 所有者用户 ID
         config: 配置实例
+        project_key: 项目标识（可选）
 
     Returns:
         创建的 item_id
     """
     scope = scope_json or {}
 
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO items (item_type, title, scope_json, status, owner_user_id)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO items (item_type, title, project_key, scope_json, status, owner_user_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING item_id
                 """,
-                (item_type, title, json.dumps(scope), status, owner_user_id),
+                (item_type, title, project_key, json.dumps(scope), status, owner_user_id),
             )
             result = cur.fetchone()
             conn.commit()
@@ -493,11 +577,13 @@ def add_event(
     item_id: int,
     event_type: str,
     payload_json: Optional[Dict] = None,
+    payload: Optional[Dict] = None,
     status_from: Optional[str] = None,
     status_to: Optional[str] = None,
     actor_user_id: Optional[str] = None,
     source: str = "tool",
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> int:
     """
     在 logbook.events 中添加事件
@@ -508,6 +594,7 @@ def add_event(
         item_id: 条目 ID
         event_type: 事件类型
         payload_json: 事件负载 (default: {})
+        payload: payload_json 的别名（兼容旧接口）
         status_from: 变更前状态
         status_to: 变更后状态（会更新 item 状态）
         actor_user_id: 操作者用户 ID
@@ -517,9 +604,11 @@ def add_event(
     Returns:
         创建的 event_id
     """
+    if payload_json is None and payload is not None:
+        payload_json = payload
     payload = payload_json or {}
 
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             # 插入事件
@@ -613,6 +702,7 @@ def set_kv(
     key: str,
     value_json: Any,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> bool:
     """
     在 logbook.kv 中设置键值对（upsert）
@@ -626,7 +716,7 @@ def set_kv(
     Returns:
         True 表示成功
     """
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -654,6 +744,7 @@ def get_kv(
     namespace: str,
     key: str,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> Optional[Any]:
     """
     从 logbook.kv 获取键值对
@@ -666,7 +757,7 @@ def get_kv(
     Returns:
         值，如果不存在返回 None
     """
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -784,6 +875,7 @@ def get_items_with_latest_event(
 def get_item_by_id(
     item_id: int,
     config: Optional[Config] = None,
+    dsn: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     根据 item_id 获取单个 item
@@ -795,12 +887,12 @@ def get_item_by_id(
     Returns:
         item 信息字典，不存在返回 None
     """
-    conn = get_connection(config=config)
+    conn = get_connection(dsn=dsn, config=config)
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT item_id, item_type, title, scope_json, status, owner_user_id, created_at, updated_at
+                SELECT item_id, item_type, title, project_key, scope_json, status, owner_user_id, created_at, updated_at
                 FROM items
                 WHERE item_id = %s
                 """,
@@ -810,13 +902,15 @@ def get_item_by_id(
             if row:
                 return {
                     "item_id": row[0],
+                    "id": row[0],
                     "item_type": row[1],
                     "title": row[2],
-                    "scope_json": row[3],
-                    "status": row[4],
-                    "owner_user_id": row[5],
-                    "created_at": row[6],
-                    "updated_at": row[7],
+                    "project_key": row[3],
+                    "scope_json": row[4],
+                    "status": row[5],
+                    "owner_user_id": row[6],
+                    "created_at": row[7],
+                    "updated_at": row[8],
                 }
             return None
     except psycopg.Error as e:

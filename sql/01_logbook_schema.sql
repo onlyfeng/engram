@@ -46,8 +46,10 @@ CREATE TABLE IF NOT EXISTS identity.role_profiles (
 -- ---------- logbook ----------
 CREATE TABLE IF NOT EXISTS logbook.items (
   item_id            bigserial PRIMARY KEY,
+  id                 bigint GENERATED ALWAYS AS (item_id) STORED,
   item_type          text NOT NULL,
   title              text NOT NULL,
+  project_key        text,
   scope_json         jsonb NOT NULL DEFAULT '{}'::jsonb,
   status             text NOT NULL DEFAULT 'open',
   owner_user_id      text REFERENCES identity.users(user_id),
@@ -55,17 +57,54 @@ CREATE TABLE IF NOT EXISTS logbook.items (
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
 
+-- 兼容老库：补充 id / project_key 字段
+ALTER TABLE logbook.items
+  ADD COLUMN IF NOT EXISTS project_key text;
+ALTER TABLE logbook.items
+  ADD COLUMN IF NOT EXISTS id bigint GENERATED ALWAYS AS (item_id) STORED;
+
 CREATE TABLE IF NOT EXISTS logbook.events (
   event_id           bigserial PRIMARY KEY,
+  id                 bigint GENERATED ALWAYS AS (event_id) STORED,
   item_id            bigint NOT NULL REFERENCES logbook.items(item_id) ON DELETE CASCADE,
   event_type         text NOT NULL,
   status_from        text,
   status_to          text,
+  payload            jsonb NOT NULL DEFAULT '{}'::jsonb,
   payload_json       jsonb NOT NULL DEFAULT '{}'::jsonb,
   actor_user_id      text REFERENCES identity.users(user_id),
   source             text NOT NULL DEFAULT 'tool',
   created_at         timestamptz NOT NULL DEFAULT now()
 );
+
+-- 兼容老库：补充 payload / id 字段
+ALTER TABLE logbook.events
+  ADD COLUMN IF NOT EXISTS payload jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE logbook.events
+  ADD COLUMN IF NOT EXISTS id bigint GENERATED ALWAYS AS (event_id) STORED;
+
+-- payload 与 payload_json 双向同步（兼容旧字段）
+CREATE OR REPLACE FUNCTION logbook.sync_events_payload() RETURNS trigger AS $$
+BEGIN
+  IF NEW.payload_json IS NULL THEN
+    NEW.payload_json := '{}'::jsonb;
+  END IF;
+  IF NEW.payload IS NULL THEN
+    NEW.payload := '{}'::jsonb;
+  END IF;
+  IF (NEW.payload_json = '{}'::jsonb AND NEW.payload <> '{}'::jsonb) THEN
+    NEW.payload_json := NEW.payload;
+  END IF;
+  -- 以 payload_json 为准保持一致
+  NEW.payload := NEW.payload_json;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_events_payload_sync ON logbook.events;
+CREATE TRIGGER trg_events_payload_sync
+  BEFORE INSERT OR UPDATE ON logbook.events
+  FOR EACH ROW EXECUTE FUNCTION logbook.sync_events_payload();
 
 CREATE INDEX IF NOT EXISTS idx_logbook_events_item_time ON logbook.events(item_id, created_at);
 
