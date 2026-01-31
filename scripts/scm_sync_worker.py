@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 scm_sync_worker - SCM 同步 Worker CLI 入口
 
@@ -12,15 +13,21 @@ scm_sync_worker - SCM 同步 Worker CLI 入口
 核心实现位于: src/engram/logbook/scm_sync_worker_core.py
 
 用法:
-    python scm_sync_worker.py --worker-id worker-1
-    python scm_sync_worker.py --worker-id worker-1 --once
-    python scm_sync_worker.py --worker-id worker-1 --job-types commits,mrs
+    python scripts/scm_sync_worker.py --worker-id worker-1
+    python scripts/scm_sync_worker.py --worker-id worker-1 --once
+    python scripts/scm_sync_worker.py --worker-id worker-1 --job-types commits,mrs
 """
 
 from __future__ import annotations
 
 import sys
 import warnings
+from pathlib import Path
+
+# 确保根目录在 sys.path 中，以支持导入根目录模块
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
 
 # 导出核心模块的所有公共 API（向后兼容）
 from engram.logbook.scm_sync_worker_core import (
@@ -86,10 +93,10 @@ __all__ = [
 # ============ CLI 入口（转发到新模块） ============
 
 
-def main() -> int:
+def main():
     """CLI 入口函数 - 转发到 engram.logbook.cli.scm_sync.worker_main"""
     warnings.warn(
-        "scm_sync_worker.py 已弃用，请使用 'python -m engram.logbook.cli.scm_sync worker' "
+        "scripts/scm_sync_worker.py 已弃用，请使用 'python -m engram.logbook.cli.scm_sync worker' "
         "或 'engram-scm-worker' 代替",
         DeprecationWarning,
         stacklevel=2,

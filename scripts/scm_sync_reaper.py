@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 scm_sync_reaper - SCM 同步任务回收器 CLI 入口
 
@@ -12,15 +13,21 @@ scm_sync_reaper - SCM 同步任务回收器 CLI 入口
 核心实现位于: src/engram/logbook/scm_sync_reaper_core.py
 
 用法:
-    python scm_sync_reaper.py
-    python scm_sync_reaper.py --dry-run
-    python scm_sync_reaper.py --grace-seconds 120 --policy to_pending
+    python scripts/scm_sync_reaper.py
+    python scripts/scm_sync_reaper.py --dry-run
+    python scripts/scm_sync_reaper.py --grace-seconds 120 --policy to_pending
 """
 
 from __future__ import annotations
 
 import sys
 import warnings
+from pathlib import Path
+
+# 确保根目录在 sys.path 中，以支持导入根目录模块
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
 
 # 导出核心模块的所有公共 API（向后兼容）
 from engram.logbook.scm_sync_reaper_core import (
@@ -45,7 +52,6 @@ from engram.logbook.scm_sync_reaper_core import (
 _format_error = format_error
 _mark_job_pending = mark_job_pending
 _compute_backoff_seconds = compute_backoff_seconds
-DEFAULT_BACKOFF_BASE = 60  # 兼容旧代码引用
 
 
 __all__ = [
@@ -54,7 +60,6 @@ __all__ = [
     "DEFAULT_MAX_DURATION_SECONDS",
     "DEFAULT_RETRY_DELAY_SECONDS",
     "DEFAULT_MAX_REAPER_BACKOFF_SECONDS",
-    "DEFAULT_BACKOFF_BASE",
     # 枚举
     "JobRecoveryPolicy",
     # 函数
@@ -73,26 +78,13 @@ __all__ = [
 ]
 
 
-# ============ 旧接口兼容 ============
-
-
-def scan_expired_jobs(conn, *, grace_seconds: int = DEFAULT_GRACE_SECONDS):
-    """
-    扫描过期的 running jobs（兼容旧接口）
-    
-    新代码应直接使用 db.list_expired_running_jobs()
-    """
-    from engram.logbook import scm_db as db_api
-    return db_api.list_expired_running_jobs(conn, grace_seconds=grace_seconds)
-
-
 # ============ CLI 入口（转发到新模块） ============
 
 
-def main() -> int:
+def main():
     """CLI 入口函数 - 转发到 engram.logbook.cli.scm_sync.reaper_main"""
     warnings.warn(
-        "scm_sync_reaper.py 已弃用，请使用 'python -m engram.logbook.cli.scm_sync reaper' "
+        "scripts/scm_sync_reaper.py 已弃用，请使用 'python -m engram.logbook.cli.scm_sync reaper' "
         "或 'engram-scm-reaper' 代替",
         DeprecationWarning,
         stacklevel=2,

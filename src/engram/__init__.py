@@ -8,6 +8,6 @@ Engram - AI 友好的事实账本与记忆管理模块
 
 __version__ = "0.1.0"
 
-from engram.logbook import db, config, errors
+from engram.logbook import config, db, errors
 
 __all__ = ["db", "config", "errors", "__version__"]

@@ -17,6 +17,11 @@ engram.logbook - Logbook 事实账本模块
 - errors: 错误定义
 - outbox: OpenMemory 补偿队列
 - governance: 治理功能
+- scm_sync_runner: SCM 同步运行器核心
+- scm_sync_status: SCM 同步状态摘要核心
+- scm_sync_worker_core: SCM Worker 核心
+- scm_sync_reaper_core: SCM Reaper 核心
+- scm_sync_scheduler_core: SCM 调度器核心
 """
 
 __version__ = "0.1.0"
@@ -38,14 +43,6 @@ from .db import (
     get_kv,
     reset_database,
     set_kv,
-)
-from .outbox import (
-    enqueue_memory,
-    get_by_id as get_outbox_by_id,
-    get_pending as get_pending_outbox,
-    increment_retry,
-    mark_dead,
-    mark_sent,
 )
 from .errors import (
     ConfigError,
@@ -79,6 +76,18 @@ from .io import (
     output_error,
     output_json,
     output_success,
+)
+from .outbox import (
+    enqueue_memory,
+    increment_retry,
+    mark_dead,
+    mark_sent,
+)
+from .outbox import (
+    get_by_id as get_outbox_by_id,
+)
+from .outbox import (
+    get_pending as get_pending_outbox,
 )
 from .uri import (
     ParsedUri,

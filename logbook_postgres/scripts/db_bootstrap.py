@@ -1,19 +1,36 @@
 #!/usr/bin/env python3
 """
-兼容入口: db_bootstrap.py
+db_bootstrap - 弃用兼容入口（薄包装器，纯 CLI 转发）
+
+[DEPRECATED] 此脚本已弃用。
+计划移除: v2.0.0 或 2026-Q2
+
+替代方案:
+    engram-bootstrap-roles [args]
+    python -m engram.logbook.cli.db_bootstrap [args]
+
+注意:
+    此包装器仅支持 CLI 执行，不提供兼容导出。
 """
 
-import runpy
+from __future__ import annotations
+
 import sys
-from pathlib import Path
+
+_DEPRECATION_MSG = """\
+[DEPRECATED] logbook_postgres/scripts/db_bootstrap.py 已弃用。
+计划移除: v2.0.0 或 2026-Q2
+
+替代方案:
+  engram-bootstrap-roles [args]
+  python -m engram.logbook.cli.db_bootstrap [args]"""
 
 
 def main() -> None:
-    root_script = Path(__file__).resolve().parents[2] / "db_bootstrap.py"
-    if not root_script.exists():
-        print(f"[ERROR] 未找到根目录脚本: {root_script}", file=sys.stderr)
-        sys.exit(1)
-    runpy.run_path(str(root_script), run_name="__main__")
+    """入口函数，打印弃用警告并转发到权威入口"""
+    print(_DEPRECATION_MSG, file=sys.stderr)
+    from engram.logbook.cli.db_bootstrap import main as cli_main
+    cli_main()
 
 
 if __name__ == "__main__":

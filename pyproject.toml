@@ -54,17 +54,34 @@ dev = [
     "pytest-cov",
     "jsonschema>=4.18.0",
     "requests-mock>=1.11.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    # 类型桩
+    "types-requests>=2.28.0",
+    "boto3-stubs[s3]>=1.28.0",
 ]
 
 [project.scripts]
 # Logbook CLI
 engram-logbook = "engram.logbook.cli.logbook:main"
+# Artifacts CLI（独立入口，等价于 engram-logbook artifacts ...）
+engram-artifacts = "engram.logbook.cli.artifacts:main"
 # SCM CLI（需要 scm 依赖）
 engram-scm = "engram.logbook.cli.scm:main"
 # 数据库迁移
 engram-migrate = "engram.logbook.cli.db_migrate:main"
+# 数据库 bootstrap（服务账号创建与预检）
+engram-bootstrap-roles = "engram.logbook.cli.db_bootstrap:main"
 # Gateway（需要 gateway 依赖）
 engram-gateway = "engram.gateway.main:main"
+# SCM Sync 子系统（统一入口）
+engram-scm-sync = "engram.logbook.cli.scm_sync:main"
+# SCM Sync 子命令快捷入口
+engram-scm-scheduler = "engram.logbook.cli.scm_sync:scheduler_main"
+engram-scm-worker = "engram.logbook.cli.scm_sync:worker_main"
+engram-scm-reaper = "engram.logbook.cli.scm_sync:reaper_main"
+engram-scm-status = "engram.logbook.cli.scm_sync:status_main"
+engram-scm-runner = "engram.logbook.cli.scm_sync:runner_main"
 
 [project.urls]
 Homepage = "https://github.com/onlyfeng/engram"
@@ -95,6 +112,13 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件中允许延迟导入（避免导入错误影响所有测试）
+"tests/**/*.py" = ["E402"]
+# 源码中某些文件因历史原因需要延迟导入
+"src/engram/logbook/db.py" = ["E402"]
+"src/engram/logbook/scm_auth.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.10"
