@@ -63,7 +63,7 @@ except ImportError as e:
     raise ImportError(
         f"logbook_adapter 需要 engram_logbook 模块: {e}\n"
         "请先安装:\n"
-        "  pip install -e apps/logbook_postgres/scripts"
+        "  pip install -e \".[full]\""
     )
 
 # ======================== 用户校验策略枚举 ========================
@@ -1259,10 +1259,10 @@ class LogbookAdapter:
             # 不自动迁移，返回错误信息和修复指令
             repair_hint = (
                 "请执行以下命令修复数据库结构:\n"
-                "  cd apps/logbook_postgres/scripts\n"
+                "  cd logbook_postgres/scripts\n"
                 "  python db_migrate.py --dsn <your_postgres_dsn>\n"
                 "或在项目根目录执行:\n"
-                "  python apps/logbook_postgres/scripts/db_migrate.py --dsn <your_postgres_dsn>\n"
+                "  python logbook_postgres/scripts/db_migrate.py --dsn <your_postgres_dsn>\n"
                 "或设置环境变量 AUTO_MIGRATE_ON_STARTUP=true 启用自动迁移"
             )
             raise LogbookDBCheckError(

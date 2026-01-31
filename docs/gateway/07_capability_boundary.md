@@ -38,8 +38,7 @@ Gateway 对外暴露以下 HTTP 端点：
 {
   "ok": true,
   "status": "ok",
-  "service": "memory-gateway",
-  "seekdb": "enabled"  // 或 "disabled"
+  "service": "memory-gateway"
 }
 ```
 
@@ -48,9 +47,8 @@ Gateway 对外暴露以下 HTTP 端点：
 | `ok` | boolean | 服务是否健康 |
 | `status` | string | 状态字符串（向后兼容） |
 | `service` | string | 服务名称 |
-| `seekdb` | string | SeekDB 状态：`enabled` / `disabled` |
 
-**测试引用**：[`test_unified_stack_integration.py::TestServiceHealthCheck`](../../apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py)
+**测试引用**：[`test_unified_stack_integration.py::TestServiceHealthCheck`](../../tests/gateway/test_unified_stack_integration.py)
 
 ---
 
@@ -109,9 +107,9 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 ```
 
 **测试引用**：
-- [`test_mcp_jsonrpc_contract.py`](../../apps/openmemory_gateway/gateway/tests/test_mcp_jsonrpc_contract.py) - JSON-RPC 协议契约
-- [`test_unified_stack_integration.py::TestJsonRpcProtocol`](../../apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py) - JSON-RPC 集成
-- [`test_unified_stack_integration.py::TestLegacyProtocol`](../../apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py) - 旧协议兼容
+- [`test_mcp_jsonrpc_contract.py`](../../tests/gateway/test_mcp_jsonrpc_contract.py) - JSON-RPC 协议契约
+- [`test_unified_stack_integration.py::TestJsonRpcProtocol`](../../tests/gateway/test_unified_stack_integration.py) - JSON-RPC 集成
+- [`test_unified_stack_integration.py::TestLegacyProtocol`](../../tests/gateway/test_unified_stack_integration.py) - 旧协议兼容
 
 ---
 
@@ -159,7 +157,7 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 | `reject` | `false` | 策略拒绝 |
 | `error` | `false` | 内部错误或审计失败 |
 
-**测试引用**：[`test_unified_stack_integration.py::TestMemoryOperations`](../../apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py)
+**测试引用**：[`test_unified_stack_integration.py::TestMemoryOperations`](../../tests/gateway/test_unified_stack_integration.py)
 
 ---
 
@@ -207,7 +205,7 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 
 **降级行为**：当 OpenMemory 查询失败时，自动降级到 Logbook 的 `knowledge_candidates` 表进行回退查询。
 
-**测试引用**：[`test_unified_stack_integration.py::TestMemoryOperations`](../../apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py)
+**测试引用**：[`test_unified_stack_integration.py::TestMemoryOperations`](../../tests/gateway/test_unified_stack_integration.py)
 
 ---
 
@@ -253,8 +251,8 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 **Schema 定义**：[`schemas/reliability_report_v1.schema.json`](../../schemas/reliability_report_v1.schema.json)
 
 **测试引用**：
-- [`test_reliability_report_contract.py`](../../apps/openmemory_gateway/gateway/tests/test_reliability_report_contract.py) - 报告结构契约
-- [`test_unified_stack_integration.py::TestReliabilityReport`](../../apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py) - 集成测试
+- [`test_reliability_report_contract.py`](../../tests/gateway/test_reliability_report_contract.py) - 报告结构契约
+- [`test_unified_stack_integration.py::TestReliabilityReport`](../../tests/gateway/test_unified_stack_integration.py) - 集成测试
 
 ---
 
@@ -298,7 +296,7 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 
 **审计记录**：所有更新尝试（无论成功失败）都会写入 `governance.write_audit` 表。
 
-**测试引用**：[`test_unified_stack_integration.py`](../../apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py)
+**测试引用**：[`test_unified_stack_integration.py`](../../tests/gateway/test_unified_stack_integration.py)
 
 ---
 
@@ -400,7 +398,7 @@ Gateway 的 `/mcp` 端点支持两种协议格式，实现双协议兼容。
 | `-32001` | DEPENDENCY_UNAVAILABLE | 依赖服务不可用 |
 | `-32002` | BUSINESS_REJECTION | 业务拒绝 |
 
-**代码定义**：[`mcp_rpc.py::JsonRpcErrorCode`](../../apps/openmemory_gateway/gateway/gateway/mcp_rpc.py)
+**代码定义**：[`mcp_rpc.py::JsonRpcErrorCode`](../../src/engram/gateway/mcp_rpc.py)
 
 ---
 
@@ -456,7 +454,7 @@ Gateway 的 `/mcp` 端点支持两种协议格式，实现双协议兼容。
 
 ## 工具契约（AVAILABLE_TOOLS）
 
-Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`](../../apps/openmemory_gateway/gateway/gateway/mcp_rpc.py)。
+Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`](../../src/engram/gateway/mcp_rpc.py)。
 
 ### `memory_store` - 存储记忆
 
@@ -693,7 +691,7 @@ audit.count(action='redirect' AND reason LIKE 'OPENMEMORY_%')
 
 **验证方式**：`reconcile_outbox` 定期检查
 
-**测试引用**：[`test_reconcile_outbox.py::TestAuditOutboxInvariants`](../../apps/openmemory_gateway/gateway/tests/test_reconcile_outbox.py)
+**测试引用**：[`test_reconcile_outbox.py::TestAuditOutboxInvariants`](../../tests/gateway/test_reconcile_outbox.py)
 
 **不变量映射表**：
 
@@ -715,7 +713,7 @@ success_rate = audit_stats.allow / audit_stats.total
 
 **验证方式**：报告生成时聚合校验
 
-**测试引用**：[`test_reliability_report_contract.py`](../../apps/openmemory_gateway/gateway/tests/test_reliability_report_contract.py)
+**测试引用**：[`test_reliability_report_contract.py`](../../tests/gateway/test_reliability_report_contract.py)
 
 ### 3. Lease 冲突处理的审计要求
 
@@ -727,9 +725,9 @@ success_rate = audit_stats.allow / audit_stats.total
 | Worker 处理中 lease 续期失败 | 记录 warning 但不写审计 |
 | 死信处理 | 必须写入 `outbox_flush_dead` 审计事件 |
 
-**代码实现**：[`gateway/reconcile_outbox.py`](../../apps/openmemory_gateway/gateway/gateway/reconcile_outbox.py)
+**代码实现**：[`src/engram/gateway/reconcile_outbox.py`](../../src/engram/gateway/reconcile_outbox.py)
 
-**测试引用**：[`test_outbox_worker.py`](../../apps/openmemory_gateway/gateway/tests/test_outbox_worker.py)
+**测试引用**：[`test_outbox_worker.py`](../../tests/gateway/test_outbox_worker.py)
 
 ### 4. Evidence refs_json 可查询性
 
@@ -739,7 +737,7 @@ SELECT * FROM governance.write_audit
 WHERE evidence_refs_json->>'outbox_id' = ?
 ```
 
-**测试引用**：[`test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../apps/openmemory_gateway/gateway/tests/test_audit_event_contract.py)
+**测试引用**：[`test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../tests/gateway/test_audit_event_contract.py)
 
 ---
 
@@ -794,10 +792,10 @@ make test-gateway-integration
 make test-gateway-integration-full
 
 # 单独运行契约测试
-cd apps/openmemory_gateway/gateway
-pytest tests/test_mcp_jsonrpc_contract.py -v
-pytest tests/test_reliability_report_contract.py -v
-pytest tests/test_audit_event_contract.py -v
+cd "$PROJECT_ROOT"
+pytest tests/gateway/test_mcp_jsonrpc_contract.py -v
+pytest tests/gateway/test_reliability_report_contract.py -v
+pytest tests/gateway/test_audit_event_contract.py -v
 ```
 
 ---

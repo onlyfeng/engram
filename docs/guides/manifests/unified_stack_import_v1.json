@@ -20,51 +20,70 @@
         "type": "file"
       },
       {
-        "id": "logbook_sql",
-        "description": "Logbook SQL 初始化脚本",
-        "source_path": "apps/logbook_postgres/sql",
-        "target_path": "apps/logbook_postgres/sql",
+        "id": "docker_files",
+        "description": "统一栈 Dockerfile（Gateway/Worker/OpenMemory 透传）",
+        "source_path": "docker",
+        "target_path": "docker",
         "type": "directory"
       },
       {
-        "id": "logbook_scripts",
-        "description": "Logbook 迁移脚本（含 engram_logbook 包，Gateway 构建依赖）",
-        "source_path": "apps/logbook_postgres/scripts",
-        "target_path": "apps/logbook_postgres/scripts",
+        "id": "engram_src",
+        "description": "Engram 核心源码（Gateway/Logbook）",
+        "source_path": "src",
+        "target_path": "src",
         "type": "directory"
       },
       {
-        "id": "gateway_code",
-        "description": "Gateway 服务代码",
-        "source_path": "apps/openmemory_gateway/gateway",
-        "target_path": "apps/openmemory_gateway/gateway",
+        "id": "logbook_assets",
+        "description": "Logbook 迁移与工具脚本",
+        "source_path": "logbook_postgres",
+        "target_path": "logbook_postgres",
         "type": "directory"
       },
       {
-        "id": "openmemory_lib",
-        "description": "OpenMemory 源码",
-        "source_path": "libs/OpenMemory",
-        "target_path": "libs/OpenMemory",
+        "id": "sql_migrations",
+        "description": "Logbook SQL 迁移脚本",
+        "source_path": "sql",
+        "target_path": "sql",
         "type": "directory"
+      },
+      {
+        "id": "engram_logbook_compat",
+        "description": "engram_logbook 兼容包",
+        "source_path": "engram_logbook",
+        "target_path": "engram_logbook",
+        "type": "directory"
+      },
+      {
+        "id": "db_bootstrap",
+        "description": "DB bootstrap 脚本（服务账号初始化）",
+        "source_path": "db_bootstrap.py",
+        "target_path": "db_bootstrap.py",
+        "type": "file"
+      },
+      {
+        "id": "pyproject",
+        "description": "Python 包配置",
+        "source_path": "pyproject.toml",
+        "target_path": "pyproject.toml",
+        "type": "file"
+      },
+      {
+        "id": "requirements",
+        "description": "Python 依赖清单",
+        "source_path": "requirements.txt",
+        "target_path": "requirements.txt",
+        "type": "file"
+      },
+      {
+        "id": "readme",
+        "description": "项目说明",
+        "source_path": "README.md",
+        "target_path": "README.md",
+        "type": "file"
       }
     ],
     "optional": [
-      {
-        "id": "compose_stepwise",
-        "description": "分步部署 Compose 配置",
-        "source_paths": [
-          "compose/logbook.yml",
-          "compose/openmemory.yml",
-          "compose/gateway.yml"
-        ],
-        "target_paths": [
-          "compose/logbook.yml",
-          "compose/openmemory.yml",
-          "compose/gateway.yml"
-        ],
-        "type": "files",
-        "use_case": "需要分步部署各组件时使用"
-      },
       {
         "id": "seekdb_compose_override",
         "description": "SeekDB override compose 文件",
@@ -98,20 +117,20 @@
         "note": "禁用 SeekDB 时无需复制，可替代 seekdb_sql 整目录复制"
       },
       {
-        "id": "logbook_templates",
-        "description": "Logbook 模板文件（MinIO profile 依赖）",
-        "source_path": "apps/logbook_postgres/templates",
-        "target_path": "apps/logbook_postgres/templates",
-        "type": "directory",
-        "use_case": "启用 --profile minio 时必需"
+        "id": "env_example",
+        "description": "统一栈 .env 示例",
+        "source_path": ".env.example",
+        "target_path": ".env.example",
+        "type": "file",
+        "use_case": "需要环境变量模板时使用"
       },
       {
-        "id": "gateway_templates",
-        "description": "Gateway 模板文件（.mcp.json 示例、环境变量示例）",
-        "source_path": "apps/openmemory_gateway/templates",
-        "target_path": "apps/openmemory_gateway/templates",
-        "type": "directory",
-        "use_case": "需要 MCP 配置示例时使用"
+        "id": "mcp_example",
+        "description": "MCP 配置示例",
+        "source_path": "configs/mcp/.mcp.json.example",
+        "target_path": "configs/mcp/.mcp.json.example",
+        "type": "file",
+        "use_case": "需要 Cursor MCP 配置示例时使用"
       }
     ]
   },
@@ -120,7 +139,7 @@
       "id": "compose_file_must_live_at_repo_root",
       "description": "主 Compose 文件必须位于项目根目录",
       "applies_to": ["compose_unified"],
-      "rationale": "Gateway 构建上下文需要从项目根目录访问 apps/ 和 libs/"
+      "rationale": "Gateway/Worker 构建上下文需要从项目根目录访问 src/sql/logbook_postgres 等路径"
     },
     {
       "id": "seekdb_uses_override_compose",
@@ -134,21 +153,21 @@
     },
     {
       "id": "gateway_build_context_is_root",
-      "description": "Gateway Dockerfile 需要项目根目录作为构建上下文",
-      "applies_to": ["gateway_code", "logbook_scripts"],
-      "rationale": "Dockerfile COPY 指令需要访问 apps/logbook_postgres/scripts 和 apps/openmemory_gateway/gateway"
+      "description": "Gateway/Worker Dockerfile 需要项目根目录作为构建上下文",
+      "applies_to": ["docker_files", "engram_src", "sql_migrations", "logbook_assets", "db_bootstrap"],
+      "rationale": "docker/engram.Dockerfile COPY 指令需要访问 src/sql/logbook_postgres 等路径"
     },
     {
       "id": "relative_paths_must_be_adjusted",
       "description": "Compose 文件中的相对路径在复制后可能需要调整",
-      "applies_to": ["compose_unified", "compose_stepwise"],
+      "applies_to": ["compose_unified"],
       "rationale": "Volume bind 和 build context 路径相对于 Compose 文件位置"
     },
     {
       "id": "logbook_scripts_required_for_gateway_build",
-      "description": "logbook_scripts 是 Gateway 镜像构建的必需依赖",
-      "applies_to": ["logbook_scripts"],
-      "rationale": "Gateway Dockerfile COPY engram_logbook 包到容器中"
+      "description": "logbook_postgres 是 Gateway 镜像构建的必需依赖",
+      "applies_to": ["logbook_assets", "engram_logbook_compat"],
+      "rationale": "Gateway Dockerfile COPY logbook_postgres 与 engram_logbook 包到容器中"
     }
   ],
   "env_vars": {
@@ -192,6 +211,16 @@
         "default": "5432"
       },
       {
+        "name": "POSTGRES_IMAGE",
+        "description": "PostgreSQL（含 pgvector）镜像",
+        "default": "pgvector/pgvector:pg16"
+      },
+      {
+        "name": "OPENMEMORY_IMAGE",
+        "description": "OpenMemory 上游镜像",
+        "default": "ghcr.io/caviraoss/openmemory:latest"
+      },
+      {
         "name": "OM_PORT",
         "description": "OpenMemory 端口",
         "default": "8080"
@@ -222,28 +251,28 @@
     "available": [
       {
         "name": "dashboard",
-        "description": "OpenMemory Web UI",
-        "required_files": ["libs/OpenMemory/dashboard/"]
+        "description": "管理/看板（metabase/pgadmin）",
+        "required_files": []
       },
       {
         "name": "minio",
         "description": "对象存储（开发/CI）",
-        "required_files": ["apps/logbook_postgres/templates/", "apps/logbook_postgres/scripts/ops/"]
+        "required_files": []
       },
       {
         "name": "scm_sync",
         "description": "SCM 增量同步",
-        "required_files": ["apps/logbook_postgres/scripts/"]
+        "required_files": ["logbook_postgres/scripts/"]
       },
       {
         "name": "tools",
         "description": "Logbook 工具容器",
-        "required_files": ["apps/logbook_postgres/scripts/"]
+        "required_files": ["logbook_postgres/scripts/"]
       },
       {
         "name": "test",
         "description": "测试容器",
-        "required_files": ["apps/logbook_postgres/"]
+        "required_files": ["logbook_postgres/"]
       }
     ]
   },

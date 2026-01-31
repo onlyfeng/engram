@@ -1,31 +1,245 @@
 version: "3.9"
 
-# docker-compose.unified.seekdb.yml 可作为 SeekDB 扩展配置
-
 x-service-account-passwords: &service_account_passwords
-  SEEKDB_MIGRATOR_PASSWORD: ${SEEKDB_MIGRATOR_PASSWORD:-change_me}
-  SEEKDB_SVC_PASSWORD: ${SEEKDB_SVC_PASSWORD:-change_me}
+  LOGBOOK_MIGRATOR_PASSWORD: ${LOGBOOK_MIGRATOR_PASSWORD:-change_me}
+  LOGBOOK_SVC_PASSWORD: ${LOGBOOK_SVC_PASSWORD:-change_me}
+  OPENMEMORY_MIGRATOR_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:-change_me}
+  OPENMEMORY_SVC_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:-change_me}
+
+x-postgres-admin-env: &postgres_admin_env
+  ENGRAM_PG_ADMIN_DSN: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-engram}
+  POSTGRES_DSN: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-engram}
+
+x-postgres-app-env: &postgres_app_env
+  POSTGRES_DSN: postgresql://logbook_svc:${LOGBOOK_SVC_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-engram}
+
+x-openmemory-base-env: &openmemory_base_env
+  OPENMEMORY_BASE_URL: http://openmemory:${OM_PORT:-8080}
+  OPENMEMORY_API_KEY: ${OPENMEMORY_API_KEY:-${OM_API_KEY:-}}
+  OM_API_KEY: ${OM_API_KEY:-}
+
+x-openmemory-env: &openmemory_env
+  OM_PORT: ${OM_PORT:-8080}
+  OM_API_KEY: ${OM_API_KEY:-}
+  OM_METADATA_BACKEND: ${OM_METADATA_BACKEND:-postgres}
+  OM_VECTOR_BACKEND: ${OM_VECTOR_BACKEND:-pgvector}
+  OM_PG_HOST: postgres
+  OM_PG_PORT: "5432"
+  OM_PG_DB: ${POSTGRES_DB:-engram}
+  OM_PG_USER: openmemory_svc
+  OM_PG_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:-change_me}
+  OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+  OM_PG_AUTO_DDL: ${OM_PG_AUTO_DDL:-false}
+  OM_PG_SET_ROLE: ${OM_PG_SET_ROLE:-}
+  OM_TIER: ${OM_TIER:-hybrid}
+  OM_EMBEDDINGS: ${OM_EMBEDDINGS:-synthetic}
+  OM_VEC_DIM: ${OM_VEC_DIM:-256}
+  OM_MIN_SCORE: ${OM_MIN_SCORE:-0.3}
 
 services:
-  bootstrap_roles:
+  postgres:
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
     environment:
-      <<: *service_account_passwords
-      SEEKDB_ENABLE: ${SEEKDB_ENABLE:-${SEEK_ENABLE:-1}}
+      POSTGRES_DB: ${POSTGRES_DB:-engram}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [engram_net]
+
+  bootstrap_roles:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: [*service_account_passwords, *postgres_admin_env]
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
     command: >
-      sh -c '
-        if [ "${SEEKDB_ENABLE}" = "1" ]; then
-          echo "[OK] SeekDB 启用";
-        else
-          echo "[SKIP] SeekDB 未启用 (SEEKDB_ENABLE != 1)";
-        fi
-      '
+      sh -c 'python logbook_postgres/scripts/db_bootstrap.py'
+    networks: [engram_net]
+
+  logbook_migrate:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bootstrap_roles:
+        condition: service_completed_successfully
+    environment:
+      <<: *postgres_admin_env
+      OM_METADATA_BACKEND: ${OM_METADATA_BACKEND:-postgres}
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+    command: >
+      sh -c 'python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
+    networks: [engram_net]
 
   permissions_verify:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      logbook_migrate:
+        condition: service_completed_successfully
     environment:
-      SEEKDB_ENABLE: ${SEEKDB_ENABLE:-${SEEK_ENABLE:-1}}
-      SEEKDB_PG_SCHEMA: ${SEEKDB_PG_SCHEMA:-seekdb}
-      SEEK_GUC_NAME: "seek.enabled"
+      <<: *postgres_admin_env
     command: >
+      sh -c 'python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --verify'
+    networks: [engram_net]
+
+  openmemory_migrate:
+    image: ${OPENMEMORY_IMAGE:-ghcr.io/caviraoss/openmemory:latest}
+    build:
+      context: .
+      dockerfile: docker/openmemory.Dockerfile
+      args:
+        OPENMEMORY_IMAGE: ${OPENMEMORY_IMAGE:-ghcr.io/caviraoss/openmemory:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *openmemory_env
+      OM_PG_USER: openmemory_migrator_login
+      OM_PG_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:-change_me}
+      OM_PG_SET_ROLE: openmemory_migrator
+      OM_PG_AUTO_DDL: ${OM_PG_AUTO_DDL:-true}
+    command: >
+      sh -c 'echo "[INFO] openmemory_migrate: 请按上游镜像说明执行迁移或启用 OM_PG_AUTO_DDL"'
+    networks: [engram_net]
+
+  openmemory:
+    image: ${OPENMEMORY_IMAGE:-ghcr.io/caviraoss/openmemory:latest}
+    build:
+      context: .
+      dockerfile: docker/openmemory.Dockerfile
+      args:
+        OPENMEMORY_IMAGE: ${OPENMEMORY_IMAGE:-ghcr.io/caviraoss/openmemory:latest}
+    container_name: engram_openmemory
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *openmemory_env
+    ports:
+      - "${OM_PORT:-8080}:8080"
+    networks: [engram_net]
+
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      logbook_migrate:
+        condition: service_completed_successfully
+      openmemory:
+        condition: service_started
+    environment:
+      <<: [*postgres_app_env, *openmemory_base_env]
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+      GATEWAY_PORT: ${GATEWAY_PORT:-8787}
+      GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+    ports:
+      - "${GATEWAY_PORT:-8787}:8787"
+    command: ["engram-gateway"]
+    networks: [engram_net]
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      logbook_migrate:
+        condition: service_completed_successfully
+      openmemory:
+        condition: service_started
+    environment:
+      <<: [*postgres_app_env, *openmemory_base_env]
+      PROJECT_KEY: ${PROJECT_KEY:-default}
+    command: ["python", "-m", "engram.gateway.outbox_worker", "--loop"]
+    networks: [engram_net]
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["minio"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks: [engram_net]
+
+  minio_init:
+    image: minio/mc:latest
+    profiles: ["minio"]
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-engram}
+    entrypoint: >
       sh -c '
-        echo "[INFO] seek.enabled=$${SEEKDB_ENABLE}";
+        until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 2; done;
+        mc mb --ignore-existing local/"$MINIO_BUCKET";
+        echo "[OK] MinIO bucket ready: $MINIO_BUCKET";
       '
+    networks: [engram_net]
+
+  metabase:
+    image: metabase/metabase:latest
+    profiles: ["dashboard"]
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+      MB_ENCRYPTION_SECRET_KEY: ${MB_ENCRYPTION_SECRET_KEY:-change_me}
+    ports:
+      - "${METABASE_PORT:-3000}:3000"
+    volumes:
+      - metabase-data:/metabase-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [engram_net]
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    profiles: ["dashboard"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-change_me_admin}
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks: [engram_net]
+
+networks:
+  engram_net:
+
+volumes:
+  pgdata:
+  minio-data:
+  metabase-data:
+  pgadmin-data:

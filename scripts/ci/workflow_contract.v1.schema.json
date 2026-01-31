@@ -43,10 +43,6 @@
     "frozen_step_text": {
       "$ref": "#/definitions/frozen_step_text_definition",
       "description": "Frozen step names that must match exactly"
-    },
-    "seekdb_policy_markers": {
-      "$ref": "#/definitions/seekdb_policy_markers_definition",
-      "description": "SeekDB policy marker definitions"
     }
   },
   "additionalProperties": {
@@ -167,60 +163,6 @@
       "additionalProperties": {
         "description": "Comment fields starting with underscore",
         "type": "string"
-      }
-    },
-    "seekdb_policy_markers_definition": {
-      "type": "object",
-      "required": ["marker_types"],
-      "properties": {
-        "marker_types": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^\\[SEEKDB:[A-Z-]+\\]$"
-          },
-          "description": "Valid SeekDB policy marker types"
-        },
-        "ci_required": {
-          "$ref": "#/definitions/seekdb_requirement",
-          "description": "Markers required in CI workflow"
-        },
-        "nightly_required": {
-          "$ref": "#/definitions/seekdb_requirement",
-          "description": "Markers required in Nightly workflow"
-        }
-      },
-      "additionalProperties": {
-        "description": "Comment fields starting with underscore",
-        "type": "string"
-      }
-    },
-    "seekdb_requirement": {
-      "type": "object",
-      "properties": {
-        "markers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["marker", "context"],
-            "properties": {
-              "marker": {
-                "type": "string",
-                "description": "The marker type"
-              },
-              "context": {
-                "type": "string",
-                "description": "The step or context where this marker is required"
-              }
-            }
-          },
-          "description": "Required marker instances"
-        },
-        "env_vars": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Environment variables related to this requirement"
-        }
       }
     },
     "artifact_archive_contract": {

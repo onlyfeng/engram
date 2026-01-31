@@ -3,8 +3,7 @@
 本文档按组件列出 Engram 各组件使用的环境变量、默认值及依赖关系。
 
 **模板文件**:
-- Gateway: [`apps/openmemory_gateway/templates/gateway.env.example`](../../apps/openmemory_gateway/templates/gateway.env.example)
-- OpenMemory: [`libs/OpenMemory/.env.example`](../../libs/OpenMemory/.env.example)
+- 统一栈 `.env` 示例：[`/.env.example`](../../.env.example)
 
 ---
 
@@ -14,7 +13,6 @@
 - [Logbook 组件](#logbook-组件)
 - [OpenMemory 组件](#openmemory-组件)
 - [Gateway 组件](#gateway-组件)
-- [SeekDB 组件](#seekdb-组件)
 - [统一栈 (Unified Stack)](#统一栈-unified-stack)
 - [MinIO 对象存储](#minio-对象存储)
 - [SCM 同步服务](#scm-同步服务)
@@ -49,7 +47,7 @@ PROJECT_KEY=proj_b POSTGRES_DB=proj_b make deploy
 
 ## Logbook 组件
 
-事实账本组件变量。模块路径: `apps/logbook_postgres/`
+事实账本组件变量。模块路径: `src/engram/logbook/`（脚本入口在 `logbook_postgres/`）
 
 ### 数据库连接
 
@@ -96,9 +94,7 @@ level = "INFO"
 
 ## OpenMemory 组件
 
-语义记忆存储与检索组件。模块路径: `libs/OpenMemory/`
-
-完整示例参考: [`libs/OpenMemory/.env.example`](../../libs/OpenMemory/.env.example)
+语义记忆存储与检索组件。默认使用上游镜像 `OPENMEMORY_IMAGE`（无需 vendoring）。
 
 ### 服务配置
 
@@ -114,7 +110,7 @@ level = "INFO"
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `OM_METADATA_BACKEND` | 元数据后端类型（`sqlite` / `postgres`） | `sqlite` | |
-| `OM_DB_PATH` | SQLite 数据库路径（当 backend=sqlite） | `./data/openmemory.sqlite` | |
+| `OM_DB_PATH` | SQLite 数据库路径（当 backend=sqlite） | `/path/to/openmemory.sqlite` | |
 
 ### PostgreSQL 连接（当 OM_METADATA_BACKEND=postgres）
 
@@ -200,9 +196,9 @@ level = "INFO"
 
 ## Gateway 组件
 
-MCP 网关组件。模块路径: `apps/openmemory_gateway/`
+MCP 网关组件。模块路径: `src/engram/gateway/`
 
-完整示例参考: [`apps/openmemory_gateway/templates/gateway.env.example`](../../apps/openmemory_gateway/templates/gateway.env.example)
+完整示例参考: [`.env.example`](../../.env.example)
 
 ### 服务配置
 
@@ -247,110 +243,6 @@ Outbox Worker 从 Logbook 消费事件并推送到 OpenMemory。
 
 ---
 
-## SeekDB 组件（可选层）
-
-RAG 检索索引组件。模块路径: `apps/seekdb_rag_hybrid/`
-
-> **命名规范**: `SEEKDB_*` 为 canonical 前缀，`SEEK_*` 为已废弃别名（计划于 2026-Q3 移除）。详见 [命名规范](../architecture/naming.md#33-seekdb-环境变量)。
->
-> **阈值配置来源**: 所有阈值的 canonical 名称、默认值、废弃别名均定义于 [`apps/seekdb_rag_hybrid/gate_profiles.py::THRESHOLD_REGISTRY`](../../apps/seekdb_rag_hybrid/gate_profiles.py)。
-
-### 可选层约束
-
-SeekDB 是**可选增强层**，不阻塞核心事实流：
-
-- **禁用时**: `SEEKDB_ENABLE=0` 跳过 SeekDB schema/角色迁移，核心验证正常通过
-- **失败时**: SeekDB 索引失败不阻塞 Logbook 事件写入和 Gateway 记忆卡片存储
-- **可重建**: 索引可从 Logbook/制品完全重建
-
-**验证入口**:
-
-| 入口 | 命令 | 说明 |
-|------|------|------|
-| 统一栈验证 | `make verify-unified` | 包含 SeekDB 状态检查 |
-| SeekDB 单元测试 | `make test-seek-unit` | SeekDB 模块测试 |
-| 完整验收 | `make acceptance-unified-full` | 包含 SeekDB 验证 |
-
----
-
-### Backend/Schema 配置
-
-基础后端与 Schema 配置。
-
-| 变量 | 说明 | 默认值 | 已废弃别名 |
-|------|------|--------|------------|
-| `SEEKDB_ENABLE` | SeekDB 启用开关（`0`=禁用，`1`=启用） | `1` | `SEEK_ENABLE` |
-| `SEEKDB_PG_SCHEMA` | PostgreSQL Schema | `seekdb` | `SEEK_PG_SCHEMA` |
-| `SEEKDB_PG_TABLE` | 分块表名 | `chunks` | `SEEK_PG_TABLE` |
-| `SEEKDB_PGVECTOR_DSN` | PGVector 连接字符串 | - | - |
-
-### 服务账号密码
-
-| 变量 | 说明 | 默认值 | 已废弃别名 |
-|------|------|--------|------------|
-| `SEEKDB_MIGRATOR_PASSWORD` | SeekDB 迁移账号密码（`seekdb_migrator_login`） | - | `SEEK_MIGRATOR_PASSWORD` |
-| `SEEKDB_SVC_PASSWORD` | SeekDB 服务账号密码（`seekdb_svc`） | - | `SEEK_SVC_PASSWORD` |
-
----
-
-### Consistency Check（一致性校验）
-
-Shadow 后端就绪性校验阈值，用于 Dual-Read 切换前的一致性检查。
-
-| 变量 | 说明 | 默认值 | 类型 | 已废弃别名 |
-|------|------|--------|------|------------|
-| `SEEKDB_SHADOW_DOC_COUNT_MIN` | Shadow 后端最小文档数阈值（`0` 表示不检查） | `0` | int | `SEEK_SHADOW_DOC_COUNT_MIN` |
-| `SEEKDB_SHADOW_DOC_COUNT_RATIO` | Shadow 后端文档数比例阈值（相对于 primary，`0.0` 表示不检查） | `0.0` | float | `SEEK_SHADOW_DOC_COUNT_RATIO` |
-| `SEEKDB_SHADOW_VALIDATE_BLOCK` | Shadow 就绪性校验是否阻断（`True` 时校验失败会抛异常） | `False` | bool | `SEEK_SHADOW_VALIDATE_BLOCK` |
-
----
-
-### Dual-Read（双读对比）
-
-Dual-Read 模式下新旧后端结果对比的阈值配置。
-
-| 变量 | 说明 | 默认值 | 类型 | 已废弃别名 |
-|------|------|--------|------|------------|
-| `SEEKDB_DUAL_READ_OVERLAP_MIN_WARN` | 双读命中重叠率警告阈值 | `0.7` | float | `SEEK_DUAL_READ_OVERLAP_MIN_WARN`, `SEEK_DUAL_READ_HIT_OVERLAP_MIN_WARN` |
-| `SEEKDB_DUAL_READ_OVERLAP_MIN_FAIL` | 双读命中重叠率失败阈值 | `0.5` | float | `SEEK_DUAL_READ_OVERLAP_MIN_FAIL`, `SEEK_DUAL_READ_HIT_OVERLAP_MIN_FAIL` |
-| `SEEKDB_DUAL_READ_SCORE_DRIFT_P95_MAX` | 双读 P95 分数漂移上限 | `0.1` | float | `SEEK_DUAL_READ_SCORE_DRIFT_P95_MAX` |
-| `SEEKDB_DUAL_READ_RBO_MIN_WARN` | 双读 RBO 警告阈值 | `0.8` | float | `SEEK_DUAL_READ_RBO_MIN_WARN` |
-| `SEEKDB_DUAL_READ_RBO_MIN_FAIL` | 双读 RBO 失败阈值 | `0.6` | float | `SEEK_DUAL_READ_RBO_MIN_FAIL` |
-| `SEEKDB_DUAL_READ_RANK_P95_MAX_WARN` | 双读 P95 排名漂移警告阈值 | `3` | int | `SEEK_DUAL_READ_RANK_P95_MAX_WARN` |
-| `SEEKDB_DUAL_READ_RANK_P95_MAX_FAIL` | 双读 P95 排名漂移失败阈值 | `5` | int | `SEEK_DUAL_READ_RANK_P95_MAX_FAIL` |
-| `SEEKDB_DUAL_READ_LATENCY_RATIO_MAX` | 双读延迟比率上限 | `2.0` | float | `SEEK_DUAL_READ_LATENCY_RATIO_MAX` |
-
----
-
-### Nightly Rebuild（Nightly 重建门禁）
-
-Nightly CI 重建流程的门禁阈值配置。
-
-| 变量 | 说明 | 默认值 | 类型 | 已废弃别名 |
-|------|------|--------|------|------------|
-| `SEEKDB_GATE_PROFILE` | Gate Profile 选择（`nightly_default`, `pr_gate_default`, ...） | `nightly_default` | str | `SEEK_GATE_PROFILE` |
-| `SEEKDB_NIGHTLY_MIN_OVERLAP` | Nightly 最小命中重叠率阈值（0.0-1.0） | `0.5` | float | `SEEK_NIGHTLY_MIN_OVERLAP` |
-| `SEEKDB_NIGHTLY_TOP_K` | Nightly 检索结果数量 | `10` | int | `SEEK_NIGHTLY_TOP_K` |
-| `SEEKDB_NIGHTLY_QUERY_SET` | Nightly 查询集名称 | `nightly_default` | str | `SEEK_NIGHTLY_QUERY_SET` |
-| `SEEKDB_NIGHTLY_RBO_MIN` | Nightly RBO 最小值阈值（0.0-1.0） | `0.6` | float | `SEEK_NIGHTLY_RBO_MIN` |
-| `SEEKDB_NIGHTLY_SCORE_DRIFT_P95_MAX` | Nightly P95 分数漂移上限 | `0.1` | float | `SEEK_NIGHTLY_SCORE_DRIFT_P95_MAX` |
-| `SEEKDB_NIGHTLY_RANK_P95_MAX` | Nightly P95 排名漂移上限 | `5` | int | `SEEK_NIGHTLY_RANK_P95_MAX` |
-
----
-
-### 禁用 SeekDB
-
-```bash
-SEEKDB_ENABLE=0 make deploy
-```
-
-禁用后：
-- SeekDB schema/角色迁移自动跳过
-- `verify-unified`、`acceptance-*` 等核心验证正常通过
-- Logbook + Gateway 功能不受影响
-
----
-
 ## 统一栈 (Unified Stack)
 
 完整部署（Logbook + OpenMemory + Gateway）的变量汇总。
@@ -380,6 +272,13 @@ POSTGRES_PASSWORD=postgres
 | `OM_PORT` | OpenMemory 端口 | `8080` |
 | `GATEWAY_PORT` | Gateway 端口 | `8787` |
 | `DASHBOARD_PORT` | Dashboard 端口（可选组件） | `3000` |
+
+### 镜像配置（Docker）
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `OPENMEMORY_IMAGE` | OpenMemory 上游镜像 | `ghcr.io/caviraoss/openmemory:latest` |
+| `POSTGRES_IMAGE` | PostgreSQL（含 pgvector）镜像 | `pgvector/pgvector:pg16` |
 
 ### Dashboard 配置（可选）
 
@@ -540,22 +439,6 @@ Gateway 组件中：
 2. `ENGRAM_LOGBOOK_CONFIG` 环境变量
 3. `./.agentx/config.toml`（当前目录）
 4. `~/.agentx/config.toml`（用户目录）
-
----
-
-## 废弃变量
-
-以下变量已废弃，将于 2026-Q3 移除：
-
-| 废弃变量 | 替代变量 | 说明 |
-|----------|----------|------|
-| `SEEK_ENABLE` | `SEEKDB_ENABLE` | SeekDB 启用开关 |
-| `SEEK_PG_SCHEMA` | `SEEKDB_PG_SCHEMA` | SeekDB Schema |
-| `SEEK_PG_TABLE` | `SEEKDB_PG_TABLE` | SeekDB 分块表 |
-| `SEEK_MIGRATOR_PASSWORD` | `SEEKDB_MIGRATOR_PASSWORD` | SeekDB 迁移密码 |
-| `SEEK_SVC_PASSWORD` | `SEEKDB_SVC_PASSWORD` | SeekDB 服务密码 |
-
-详见 [命名规范](../architecture/naming.md#33-seekdb-环境变量)。
 
 ---
 

@@ -19,7 +19,7 @@
 
 | 规则 | 说明 |
 |------|------|
-| **缺能力必须失败** | FULL 模式下，若任一必需能力（如 seek、reconcile）不可用，门禁必须返回失败，不允许静默降级或跳过 |
+| **缺能力必须失败** | FULL 模式下，若任一必需能力（如 reconcile）不可用，门禁必须返回失败，不允许静默降级或跳过 |
 | **skipped 仅允许显式开关** | 仅当配置中显式设置 `skip_<capability>=true` 时，才允许该能力被跳过；隐式跳过是禁止的 |
 
 ### skipped 状态的合法来源
@@ -60,84 +60,6 @@ def gate_check_full_mode(capabilities: dict, config: dict) -> GateResult:
 |------|------------|------------------|
 | **FULL** | 必须失败 | 仅显式开关 |
 | **DEGRADED** | 允许降级继续 | 显式开关或异常捕获 |
-
----
-
-## SeekDB Capability 定义
-
-SeekDB 作为 Gateway 的一个 capability（能力），其状态需要与 Gateway 门禁系统对齐。
-
-### 能力状态定义
-
-| 能力状态 | 条件 | SEEKDB_ENABLE | fail_open | 行为 |
-|----------|------|---------------|-----------|------|
-| **disabled** | `SEEKDB_ENABLE=0` 显式禁用 | `0` | N/A | SeekDB 能力完全关闭，所有检索操作跳过，返回 `status: skipped` |
-| **skipped** | 显式配置 `skip_seekdb=true` 或 API 参数 `{"skip": ["seekdb"]}` | `1` | N/A | SeekDB 启用但被显式跳过，返回 `status: skipped, reason: explicit_skip` |
-| **degraded** | SeekDB 服务部分可用（索引落后或部分分块失败） | `1` | `true` | 检索可用但结果可能不完整，返回 `status: degraded` |
-| **failed** | SeekDB 服务不可用或查询超时 | `1` | `true/false` | fail_open=true 时降级为 disabled 行为；fail_open=false 时返回错误 |
-| **ready** | SeekDB 服务正常，索引一致 | `1` | N/A | 正常提供检索服务，返回 `status: ready` |
-
-### 状态映射到 JSON 输出
-
-SeekDB 的 `seek_query.py` 输出通过 `capability_status` 字段向 Gateway 报告能力状态：
-
-```json
-{
-  "capability_status": {
-    "capability": "seekdb",
-    "status": "ready|disabled|skipped|degraded|failed",
-    "reason": "...",
-    "fail_open": true
-  },
-  "evidences": [...]
-}
-```
-
-### 与 SEEKDB_ENABLE/fail_open 的对应关系
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                  SeekDB Capability 状态决策树                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  SEEKDB_ENABLE=0?                                                   │
-│       │                                                             │
-│       ├── Yes ──► status: disabled                                  │
-│       │           (capability 完全关闭)                              │
-│       │                                                             │
-│       └── No ──► skip_seekdb=true?                                  │
-│                       │                                             │
-│                       ├── Yes ──► status: skipped                   │
-│                       │           (显式跳过)                         │
-│                       │                                             │
-│                       └── No ──► SeekDB 服务可用?                    │
-│                                       │                             │
-│                                       ├── Yes ──► 索引一致?          │
-│                                       │               │             │
-│                                       │               ├── Yes ──► status: ready
-│                                       │               │                       │
-│                                       │               └── No ──► status: degraded
-│                                       │                                       │
-│                                       └── No ──► fail_open=true?              │
-│                                                       │                       │
-│                                                       ├── Yes ──► status: disabled
-│                                                       │           (fail-open 降级)
-│                                                       │                       │
-│                                                       └── No ──► status: failed
-│                                                                   (阻塞返回错误)
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### FULL 模式下的 SeekDB 要求
-
-在 `FULL` 门禁模式下，SeekDB capability 遵循以下规则：
-
-| 场景 | FULL 模式行为 |
-|------|---------------|
-| SeekDB `disabled` | 仅当 `skip_seekdb=true` 显式配置时允许，否则门禁失败 |
-| SeekDB `skipped` | 必须有显式开关来源（见 `allowed_skip_sources`） |
-| SeekDB `degraded` | 允许继续，但记录警告 |
-| SeekDB `failed` | 门禁失败，即使 fail_open=true |
 
 ---
 
@@ -396,9 +318,6 @@ Gateway 可能异步消费 `scm.*` 表数据生成记忆卡片。此过程的降
 ```bash
 # 主入口：Makefile（推荐）
 VERIFY_FULL=1 make verify-unified
-
-# 脚本入口：直接调用
-./apps/openmemory_gateway/scripts/verify_unified_stack.sh --full
 ```
 
 ### 降级测试流程

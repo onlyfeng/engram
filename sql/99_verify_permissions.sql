@@ -45,8 +45,6 @@
 \endif
 
 -- 1. 验证角色是否存在
--- Seek 角色验证受 seek.enabled 配置变量控制（默认启用）
--- 设置方式: SET seek.enabled = 'false'; 或通过 bootstrap_roles SEEK_ENABLE 环境变量
 DO $$
 DECLARE
     role_count INT;
@@ -59,26 +57,10 @@ DECLARE
         'openmemory_migrator',
         'openmemory_app'
     ];
-    -- Seek 角色（仅当 Seek 启用时验证）
-    seek_roles TEXT[] := ARRAY[
-        'seek_migrator',
-        'seek_app'
-    ];
     role_name TEXT;
     v_fail_count INT := 0;
-    v_seek_enabled BOOLEAN;
 BEGIN
     RAISE NOTICE '=== 1. NOLOGIN 角色验证 ===';
-    
-    -- 检查 Seek 是否启用（默认启用）
-    v_seek_enabled := COALESCE(
-        NULLIF(current_setting('seek.enabled', true), ''),
-        'true'
-    ) = 'true';
-    
-    IF NOT v_seek_enabled THEN
-        RAISE NOTICE '[INFO] Seek 未启用 (seek.enabled=false)，跳过 Seek 角色验证';
-    END IF;
     
     -- 验证核心角色
     FOREACH role_name IN ARRAY core_roles LOOP
@@ -91,20 +73,6 @@ BEGIN
             RAISE NOTICE 'OK: 角色 % 存在', role_name;
         END IF;
     END LOOP;
-    
-    -- 验证 Seek 角色（仅当 Seek 启用时）
-    IF v_seek_enabled THEN
-        FOREACH role_name IN ARRAY seek_roles LOOP
-            SELECT COUNT(*) INTO role_count FROM pg_roles WHERE rolname = role_name;
-            IF role_count = 0 THEN
-                RAISE WARNING 'FAIL: 角色不存在: %', role_name;
-                RAISE NOTICE '  remedy: 执行 06_seek_roles_and_grants.sql 创建角色';
-                v_fail_count := v_fail_count + 1;
-            ELSE
-                RAISE NOTICE 'OK: 角色 % 存在', role_name;
-            END IF;
-        END LOOP;
-    END IF;
     
     IF v_fail_count > 0 THEN
         RAISE NOTICE 'NOLOGIN 角色验证: % 项 FAIL', v_fail_count;
@@ -121,22 +89,15 @@ DECLARE
     v_login_exists BOOLEAN;
     v_target_exists BOOLEAN;
     v_has_membership BOOLEAN;
-    v_seek_enabled BOOLEAN;
     
-    -- LOGIN 角色 -> NOLOGIN 角色的映射（核心角色）
+    -- LOGIN 角色 -> NOLOGIN 角色的映射
     -- 格式: login_role, target_role, description
-    core_login_mappings TEXT[][] := ARRAY[
+    login_mappings TEXT[][] := ARRAY[
         ARRAY['logbook_migrator', 'engram_migrator', 'Logbook 迁移账号'],
         ARRAY['logbook_svc', 'engram_app_readwrite', 'Logbook 运行账号'],
         ARRAY['openmemory_migrator_login', 'openmemory_migrator', 'OpenMemory 迁移账号'],
         ARRAY['openmemory_svc', 'openmemory_app', 'OpenMemory 运行账号']
     ];
-    -- Seek LOGIN 角色映射（仅当 Seek 启用时验证）
-    seek_login_mappings TEXT[][] := ARRAY[
-        ARRAY['seek_migrator_login', 'seek_migrator', 'Seek 迁移账号'],
-        ARRAY['seek_svc', 'seek_app', 'Seek 运行账号']
-    ];
-    login_mappings TEXT[][];
     v_mapping TEXT[];
     v_login_role TEXT;
     v_target_role TEXT;
@@ -144,20 +105,6 @@ DECLARE
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '=== 2. LOGIN 角色及 membership 验证 ===';
-    
-    -- 检查 Seek 是否启用
-    v_seek_enabled := COALESCE(
-        NULLIF(current_setting('seek.enabled', true), ''),
-        'true'
-    ) = 'true';
-    
-    -- 构建待验证的映射列表
-    IF v_seek_enabled THEN
-        login_mappings := core_login_mappings || seek_login_mappings;
-    ELSE
-        login_mappings := core_login_mappings;
-        RAISE NOTICE '[INFO] Seek 未启用，跳过 Seek LOGIN 角色验证';
-    END IF;
     
     FOREACH v_mapping SLICE 1 IN ARRAY login_mappings LOOP
         v_login_role := v_mapping[1];
@@ -269,17 +216,6 @@ BEGIN
         RAISE NOTICE 'OK: openmemory_migrator 无 public schema CREATE 权限';
     END IF;
     
-    -- seek_migrator 不应有 public CREATE 权限（使用独立 seek schema）
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'seek_migrator') THEN
-        SELECT pg_catalog.has_schema_privilege('seek_migrator', 'public', 'CREATE') INTO can_create;
-        IF can_create THEN
-            RAISE WARNING 'WARN: seek_migrator 有 public schema 的 CREATE 权限（应使用独立 seek schema）';
-            RAISE NOTICE '  remedy: REVOKE CREATE ON SCHEMA public FROM seek_migrator;';
-        ELSE
-            RAISE NOTICE 'OK: seek_migrator 无 public schema CREATE 权限';
-        END IF;
-    END IF;
-    
     -- 汇总
     IF v_fail_count > 0 THEN
         RAISE NOTICE 'public schema 验证: % 项 FAIL', v_fail_count;
@@ -372,271 +308,9 @@ BEGIN
     END IF;
 END $$;
 
--- 4.5 验证 seek schema 存在性、owner 和权限
--- Seek 验证受 seek.enabled 配置变量控制（默认启用）
-DO $$
-DECLARE
-    v_schema_exists BOOLEAN;
-    v_schema_owner TEXT;
-    can_create BOOLEAN;
-    can_usage BOOLEAN;
-    v_fail_count INT := 0;
-    v_seek_enabled BOOLEAN;
-BEGIN
-    RAISE NOTICE '';
-    RAISE NOTICE '=== 4.5 Seek schema 验证 ===';
-    
-    -- 检查 Seek 是否启用
-    v_seek_enabled := COALESCE(
-        NULLIF(current_setting('seek.enabled', true), ''),
-        'true'
-    ) = 'true';
-    
-    IF NOT v_seek_enabled THEN
-        RAISE NOTICE 'SKIP: Seek 未启用 (seek.enabled=false)，跳过 Seek schema 验证';
-        RETURN;
-    END IF;
-    
-    -- 检查 schema 是否存在
-    SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'seek') INTO v_schema_exists;
-    
-    IF NOT v_schema_exists THEN
-        RAISE WARNING 'FAIL: seek schema 不存在';
-        RAISE NOTICE '  remedy: 执行 06_seek_roles_and_grants.sql';
-        RAISE NOTICE '后续权限验证跳过，请先创建 seek schema';
-        RETURN;
-    END IF;
-    
-    RAISE NOTICE 'OK: seek schema 存在';
-    
-    -- 验证 schema owner = seek_migrator
-    SELECT nspowner::regrole::text INTO v_schema_owner
-    FROM pg_namespace
-    WHERE nspname = 'seek';
-    
-    IF v_schema_owner = 'seek_migrator' THEN
-        RAISE NOTICE 'OK: seek schema owner = seek_migrator';
-    ELSE
-        RAISE WARNING 'FAIL: seek schema owner = % (预期: seek_migrator)', v_schema_owner;
-        RAISE NOTICE '  remedy: ALTER SCHEMA seek OWNER TO seek_migrator;';
-        v_fail_count := v_fail_count + 1;
-    END IF;
-    
-    -- seek_migrator 应有 CREATE 权限
-    SELECT pg_catalog.has_schema_privilege('seek_migrator', 'seek', 'CREATE') INTO can_create;
-    IF can_create THEN
-        RAISE NOTICE 'OK: seek_migrator 有 seek schema CREATE 权限';
-    ELSE
-        RAISE WARNING 'FAIL: seek_migrator 无 seek schema CREATE 权限';
-        RAISE NOTICE '  remedy: GRANT ALL PRIVILEGES ON SCHEMA seek TO seek_migrator;';
-        v_fail_count := v_fail_count + 1;
-    END IF;
-    
-    -- seek_app 应有 USAGE 权限
-    SELECT pg_catalog.has_schema_privilege('seek_app', 'seek', 'USAGE') INTO can_usage;
-    IF can_usage THEN
-        RAISE NOTICE 'OK: seek_app 有 seek schema USAGE 权限';
-    ELSE
-        RAISE WARNING 'FAIL: seek_app 无 seek schema USAGE 权限';
-        RAISE NOTICE '  remedy: GRANT USAGE ON SCHEMA seek TO seek_app;';
-        v_fail_count := v_fail_count + 1;
-    END IF;
-    
-    -- seek_app 不应有 CREATE 权限
-    SELECT pg_catalog.has_schema_privilege('seek_app', 'seek', 'CREATE') INTO can_create;
-    IF can_create THEN
-        RAISE WARNING 'FAIL: seek_app 有 seek schema CREATE 权限（应仅限 DML）';
-        RAISE NOTICE '  remedy: REVOKE CREATE ON SCHEMA seek FROM seek_app;';
-        v_fail_count := v_fail_count + 1;
-    ELSE
-        RAISE NOTICE 'OK: seek_app 无 seek schema CREATE 权限';
-    END IF;
-    
-    -- 汇总
-    IF v_fail_count > 0 THEN
-        RAISE NOTICE 'Seek schema 验证: % 项 FAIL', v_fail_count;
-    ELSE
-        RAISE NOTICE 'Seek schema 验证: 全部通过';
-    END IF;
-END $$;
-
--- 4.6 验证 seek 表级 DML 权限（如果表存在）
-DO $$
-DECLARE
-    v_schema_exists BOOLEAN;
-    v_table_count INT;
-    v_fail_count INT := 0;
-    v_table_name TEXT;
-    v_has_select BOOLEAN;
-    v_has_insert BOOLEAN;
-    v_has_update BOOLEAN;
-    v_has_delete BOOLEAN;
-    v_has_truncate BOOLEAN;
-    v_seek_enabled BOOLEAN;
-BEGIN
-    RAISE NOTICE '';
-    RAISE NOTICE '=== 4.6 Seek 表级 DML 权限验证 ===';
-    
-    -- 检查 Seek 是否启用
-    v_seek_enabled := COALESCE(
-        NULLIF(current_setting('seek.enabled', true), ''),
-        'true'
-    ) = 'true';
-    
-    IF NOT v_seek_enabled THEN
-        RAISE NOTICE 'SKIP: Seek 未启用 (seek.enabled=false)，跳过表级权限验证';
-        RETURN;
-    END IF;
-    
-    -- 检查 schema 是否存在
-    SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'seek') INTO v_schema_exists;
-    
-    IF NOT v_schema_exists THEN
-        RAISE NOTICE 'SKIP: seek schema 不存在，跳过表级权限验证';
-        RETURN;
-    END IF;
-    
-    -- 获取表数量
-    SELECT COUNT(*) INTO v_table_count
-    FROM information_schema.tables
-    WHERE table_schema = 'seek' AND table_type = 'BASE TABLE';
-    
-    IF v_table_count = 0 THEN
-        RAISE NOTICE 'SKIP: seek schema 中无表，跳过表级权限验证';
-        RETURN;
-    END IF;
-    
-    RAISE NOTICE '检查 % 个表的权限...', v_table_count;
-    
-    -- 遍历每个表检查权限
-    FOR v_table_name IN 
-        SELECT table_name FROM information_schema.tables
-        WHERE table_schema = 'seek' AND table_type = 'BASE TABLE'
-    LOOP
-        -- 检查 seek_app 的 DML 权限
-        SELECT 
-            has_table_privilege('seek_app', 'seek.' || v_table_name, 'SELECT'),
-            has_table_privilege('seek_app', 'seek.' || v_table_name, 'INSERT'),
-            has_table_privilege('seek_app', 'seek.' || v_table_name, 'UPDATE'),
-            has_table_privilege('seek_app', 'seek.' || v_table_name, 'DELETE'),
-            has_table_privilege('seek_app', 'seek.' || v_table_name, 'TRUNCATE')
-        INTO v_has_select, v_has_insert, v_has_update, v_has_delete, v_has_truncate;
-        
-        -- seek_app 应有 SELECT/INSERT/UPDATE/DELETE，不应有 TRUNCATE
-        IF v_has_select AND v_has_insert AND v_has_update AND v_has_delete THEN
-            RAISE NOTICE 'OK: seek_app 对 seek.% 有 SELECT/INSERT/UPDATE/DELETE 权限', v_table_name;
-        ELSE
-            RAISE WARNING 'FAIL: seek_app 对 seek.% 缺少 DML 权限 (S=%,I=%,U=%,D=%)', 
-                v_table_name, v_has_select, v_has_insert, v_has_update, v_has_delete;
-            RAISE NOTICE '  remedy: GRANT SELECT, INSERT, UPDATE, DELETE ON seek.% TO seek_app;', v_table_name;
-            v_fail_count := v_fail_count + 1;
-        END IF;
-        
-        -- seek_app 不应有 TRUNCATE 权限（安全要求）
-        IF v_has_truncate THEN
-            RAISE WARNING 'WARN: seek_app 对 seek.% 有 TRUNCATE 权限（应仅限 migrator）', v_table_name;
-        END IF;
-        
-        -- 检查 seek_migrator 的完整权限
-        SELECT 
-            has_table_privilege('seek_migrator', 'seek.' || v_table_name, 'SELECT'),
-            has_table_privilege('seek_migrator', 'seek.' || v_table_name, 'INSERT'),
-            has_table_privilege('seek_migrator', 'seek.' || v_table_name, 'UPDATE'),
-            has_table_privilege('seek_migrator', 'seek.' || v_table_name, 'DELETE'),
-            has_table_privilege('seek_migrator', 'seek.' || v_table_name, 'TRUNCATE')
-        INTO v_has_select, v_has_insert, v_has_update, v_has_delete, v_has_truncate;
-        
-        IF v_has_select AND v_has_insert AND v_has_update AND v_has_delete AND v_has_truncate THEN
-            RAISE NOTICE 'OK: seek_migrator 对 seek.% 有完整权限', v_table_name;
-        ELSE
-            RAISE WARNING 'FAIL: seek_migrator 对 seek.% 缺少权限', v_table_name;
-            RAISE NOTICE '  remedy: GRANT ALL PRIVILEGES ON seek.% TO seek_migrator;', v_table_name;
-            v_fail_count := v_fail_count + 1;
-        END IF;
-    END LOOP;
-    
-    -- 汇总
-    IF v_fail_count > 0 THEN
-        RAISE NOTICE 'Seek 表级权限验证: % 项 FAIL', v_fail_count;
-    ELSE
-        RAISE NOTICE 'Seek 表级权限验证: 全部通过';
-    END IF;
-END $$;
-
--- 4.7 验证 seek 序列权限（如果序列存在）
-DO $$
-DECLARE
-    v_schema_exists BOOLEAN;
-    v_seq_count INT;
-    v_fail_count INT := 0;
-    v_seq_name TEXT;
-    v_has_usage BOOLEAN;
-    v_seek_enabled BOOLEAN;
-BEGIN
-    RAISE NOTICE '';
-    RAISE NOTICE '=== 4.7 Seek 序列权限验证 ===';
-    
-    -- 检查 Seek 是否启用
-    v_seek_enabled := COALESCE(
-        NULLIF(current_setting('seek.enabled', true), ''),
-        'true'
-    ) = 'true';
-    
-    IF NOT v_seek_enabled THEN
-        RAISE NOTICE 'SKIP: Seek 未启用 (seek.enabled=false)，跳过序列权限验证';
-        RETURN;
-    END IF;
-    
-    -- 检查 schema 是否存在
-    SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'seek') INTO v_schema_exists;
-    
-    IF NOT v_schema_exists THEN
-        RAISE NOTICE 'SKIP: seek schema 不存在，跳过序列权限验证';
-        RETURN;
-    END IF;
-    
-    -- 获取序列数量
-    SELECT COUNT(*) INTO v_seq_count
-    FROM information_schema.sequences
-    WHERE sequence_schema = 'seek';
-    
-    IF v_seq_count = 0 THEN
-        RAISE NOTICE 'SKIP: seek schema 中无序列，跳过序列权限验证';
-        RETURN;
-    END IF;
-    
-    RAISE NOTICE '检查 % 个序列的权限...', v_seq_count;
-    
-    -- 遍历每个序列检查权限
-    FOR v_seq_name IN 
-        SELECT sequence_name FROM information_schema.sequences
-        WHERE sequence_schema = 'seek'
-    LOOP
-        -- 检查 seek_app 的 USAGE 权限
-        SELECT has_sequence_privilege('seek_app', 'seek.' || v_seq_name, 'USAGE')
-        INTO v_has_usage;
-        
-        IF v_has_usage THEN
-            RAISE NOTICE 'OK: seek_app 对 seek.% 有 USAGE 权限', v_seq_name;
-        ELSE
-            RAISE WARNING 'FAIL: seek_app 对 seek.% 缺少 USAGE 权限', v_seq_name;
-            RAISE NOTICE '  remedy: GRANT USAGE ON SEQUENCE seek.% TO seek_app;', v_seq_name;
-            v_fail_count := v_fail_count + 1;
-        END IF;
-    END LOOP;
-    
-    -- 汇总
-    IF v_fail_count > 0 THEN
-        RAISE NOTICE 'Seek 序列权限验证: % 项 FAIL', v_fail_count;
-    ELSE
-        RAISE NOTICE 'Seek 序列权限验证: 全部通过';
-    END IF;
-END $$;
-
 -- 5. 验证 pg_default_acl 默认权限配置
 -- 检查 openmemory_migrator 对 openmemory_app 的 TABLE/SEQUENCE 默认授权
 -- 检查 engram_migrator 对 engram_app_* 的 TABLE/SEQUENCE 默认授权
--- 检查 seek_migrator 对 seek_app 的 TABLE/SEQUENCE 默认授权
 DO $$
 DECLARE
     v_schema TEXT;
@@ -715,70 +389,7 @@ BEGIN
         END IF;
     END IF;
     
-    -- 5.2 验证 seek_migrator -> seek_app 默认权限
-    RAISE NOTICE '';
-    RAISE NOTICE '--- 5.2 Seek 默认权限 ---';
-    
-    -- 检查 Seek 是否启用
-    IF COALESCE(NULLIF(current_setting('seek.enabled', true), ''), 'true') != 'true' THEN
-        RAISE NOTICE 'SKIP: Seek 未启用 (seek.enabled=false)，跳过默认权限验证';
-    ELSE
-    
-    -- 获取 seek schema OID
-    SELECT oid INTO v_schema_oid FROM pg_namespace WHERE nspname = 'seek';
-    
-    IF v_schema_oid IS NULL THEN
-        RAISE NOTICE 'SKIP: seek schema 不存在，跳过默认权限验证';
-    ELSE
-        -- 获取角色 OID
-        SELECT oid INTO v_grantor_oid FROM pg_roles WHERE rolname = 'seek_migrator';
-        SELECT oid INTO v_grantee_oid FROM pg_roles WHERE rolname = 'seek_app';
-        
-        IF v_grantor_oid IS NULL THEN
-            RAISE WARNING 'FAIL: seek_migrator 角色不存在';
-            RAISE NOTICE '  remedy: 执行 06_seek_roles_and_grants.sql';
-            v_fail_count := v_fail_count + 1;
-        ELSIF v_grantee_oid IS NULL THEN
-            RAISE WARNING 'FAIL: seek_app 角色不存在';
-            RAISE NOTICE '  remedy: 执行 06_seek_roles_and_grants.sql';
-            v_fail_count := v_fail_count + 1;
-        ELSE
-            -- 检查 TABLE 默认权限 (defaclobjtype = 'r')
-            SELECT COUNT(*) INTO v_count
-            FROM pg_default_acl da
-            WHERE da.defaclnamespace = v_schema_oid
-              AND da.defaclrole = v_grantor_oid
-              AND da.defaclobjtype = 'r'  -- TABLE
-              AND da.defaclacl::text LIKE '%' || v_grantee_oid::text || '%';
-            
-            IF v_count > 0 THEN
-                RAISE NOTICE 'OK: seek_migrator 在 seek 对 seek_app 有 TABLE 默认授权';
-            ELSE
-                RAISE WARNING 'FAIL: seek_migrator 在 seek 对 seek_app 无 TABLE 默认授权';
-                RAISE NOTICE '  remedy: ALTER DEFAULT PRIVILEGES FOR ROLE seek_migrator IN SCHEMA seek GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO seek_app;';
-                v_fail_count := v_fail_count + 1;
-            END IF;
-            
-            -- 检查 SEQUENCE 默认权限 (defaclobjtype = 'S')
-            SELECT COUNT(*) INTO v_count
-            FROM pg_default_acl da
-            WHERE da.defaclnamespace = v_schema_oid
-              AND da.defaclrole = v_grantor_oid
-              AND da.defaclobjtype = 'S'  -- SEQUENCE
-              AND da.defaclacl::text LIKE '%' || v_grantee_oid::text || '%';
-            
-            IF v_count > 0 THEN
-                RAISE NOTICE 'OK: seek_migrator 在 seek 对 seek_app 有 SEQUENCE 默认授权';
-            ELSE
-                RAISE WARNING 'FAIL: seek_migrator 在 seek 对 seek_app 无 SEQUENCE 默认授权';
-                RAISE NOTICE '  remedy: ALTER DEFAULT PRIVILEGES FOR ROLE seek_migrator IN SCHEMA seek GRANT USAGE ON SEQUENCES TO seek_app;';
-                v_fail_count := v_fail_count + 1;
-            END IF;
-        END IF;
-    END IF;
-    END IF;  -- END IF for Seek enabled check
-    
-    -- 5.3 验证 engram_migrator -> engram_app_readwrite/readonly 默认权限
+    -- 5.2 验证 engram_migrator -> engram_app_readwrite/readonly 默认权限
     RAISE NOTICE '';
     RAISE NOTICE '--- 5.3 Engram 默认权限 ---';
     
@@ -897,16 +508,11 @@ DECLARE
         -- OpenMemory 角色
         ARRAY['openmemory_migrator', 'Y', 'Y', 'Y'],      -- 迁移角色需要 CREATE/TEMP
         ARRAY['openmemory_app', 'Y', 'N', 'N'],           -- 应用角色无需 CREATE/TEMP
-        -- Seek 角色
-        ARRAY['seek_migrator', 'Y', 'Y', 'Y'],            -- 迁移角色需要 CREATE/TEMP
-        ARRAY['seek_app', 'Y', 'N', 'N'],                 -- 应用角色无需 CREATE/TEMP
         -- LOGIN 角色（如存在）
         ARRAY['logbook_migrator', 'Y', 'Y', 'Y'],           -- 继承 engram_migrator
         ARRAY['logbook_svc', 'Y', 'N', 'N'],                -- 继承 engram_app_readwrite
         ARRAY['openmemory_migrator_login', 'Y', 'Y', 'Y'],-- 继承 openmemory_migrator
-        ARRAY['openmemory_svc', 'Y', 'N', 'N'],           -- 继承 openmemory_app
-        ARRAY['seek_migrator_login', 'Y', 'Y', 'Y'],      -- 继承 seek_migrator
-        ARRAY['seek_svc', 'Y', 'N', 'N']                  -- 继承 seek_app
+        ARRAY['openmemory_svc', 'Y', 'N', 'N']            -- 继承 openmemory_app
     ];
     v_check TEXT[];
     v_role TEXT;
@@ -972,7 +578,7 @@ BEGIN
         
         IF NOT v_role_exists THEN
             -- LOGIN 角色可能不存在，作为 WARN 而非 FAIL
-            IF v_role IN ('logbook_migrator', 'logbook_svc', 'openmemory_migrator_login', 'openmemory_svc', 'seek_migrator_login', 'seek_svc') THEN
+            IF v_role IN ('logbook_migrator', 'logbook_svc', 'openmemory_migrator_login', 'openmemory_svc') THEN
                 -- 跳过不存在的 LOGIN 角色（静默）
                 CONTINUE;
             ELSE
@@ -1018,7 +624,7 @@ BEGIN
         END IF;
         
         -- 输出详细状态（仅对重要角色）
-        IF v_role IN ('engram_migrator', 'engram_app_readwrite', 'openmemory_migrator', 'openmemory_app', 'seek_migrator', 'seek_app') THEN
+        IF v_role IN ('engram_migrator', 'engram_app_readwrite', 'openmemory_migrator', 'openmemory_app') THEN
             RAISE NOTICE '  %: CONNECT=%, CREATE=%, TEMP=%',
                 v_role,
                 CASE WHEN v_has_connect THEN 'Y' ELSE 'N' END,
@@ -1237,42 +843,6 @@ BEGIN
         END LOOP;
     END IF;
     
-    -- 9.3 列出 seek_migrator 的所有默认权限
-    RAISE NOTICE '';
-    RAISE NOTICE '--- 9.3 seek_migrator 默认权限 ---';
-    
-    SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'seek_migrator') INTO v_grantor_exists;
-    IF NOT v_grantor_exists THEN
-        RAISE NOTICE 'SKIP: seek_migrator 角色不存在';
-    ELSE
-        FOR v_rec IN
-            SELECT 
-                n.nspname AS schema_name,
-                CASE da.defaclobjtype
-                    WHEN 'r' THEN 'TABLES'
-                    WHEN 'S' THEN 'SEQUENCES'
-                    WHEN 'f' THEN 'FUNCTIONS'
-                    WHEN 'T' THEN 'TYPES'
-                    ELSE da.defaclobjtype::text
-                END AS obj_type,
-                array_agg(DISTINCT 
-                    CASE 
-                        WHEN a.grantee = 0 THEN 'PUBLIC'
-                        ELSE (SELECT rolname FROM pg_roles WHERE oid = a.grantee)
-                    END
-                ) AS grantees
-            FROM pg_default_acl da
-            JOIN pg_namespace n ON n.oid = da.defaclnamespace
-            JOIN pg_roles r ON r.oid = da.defaclrole
-            CROSS JOIN LATERAL aclexplode(da.defaclacl) AS a
-            WHERE r.rolname = 'seek_migrator'
-              AND n.nspname = 'seek'
-            GROUP BY n.nspname, da.defaclobjtype
-            ORDER BY n.nspname, da.defaclobjtype
-        LOOP
-            RAISE NOTICE '  %: % -> %', v_rec.schema_name, v_rec.obj_type, v_rec.grantees;
-        END LOOP;
-    END IF;
 END $$;
 
 -- 10. 输出总结
@@ -1321,25 +891,18 @@ BEGIN
     END IF;
     RAISE NOTICE '';
     RAISE NOTICE '核心验证预期：';
-    RAISE NOTICE '  1. NOLOGIN 角色存在（engram_*, openmemory_*, seek_*）';
+    RAISE NOTICE '  1. NOLOGIN 角色存在（engram_*, openmemory_*）';
     RAISE NOTICE '  2. LOGIN 角色正确继承对应 NOLOGIN 角色';
     RAISE NOTICE '     - logbook_migrator -> engram_migrator';
     RAISE NOTICE '     - logbook_svc -> engram_app_readwrite';
     RAISE NOTICE '     - openmemory_migrator_login -> openmemory_migrator';
     RAISE NOTICE '     - openmemory_svc -> openmemory_app';
-    RAISE NOTICE '     - seek_migrator_login -> seek_migrator';
-    RAISE NOTICE '     - seek_svc -> seek_app';
     RAISE NOTICE '  3. public schema 无 CREATE 权限（所有应用角色）';
     RAISE NOTICE '  4. 目标 OM schema (%) 存在且 owner=openmemory_migrator', v_schema;
     RAISE NOTICE '  5. openmemory_migrator 在 % 有 CREATE 权限', v_schema;
     RAISE NOTICE '  6. openmemory_app 在 % 有 USAGE 且无 CREATE 权限', v_schema;
-    RAISE NOTICE '  7. seek schema 存在且 owner=seek_migrator';
-    RAISE NOTICE '  8. seek_migrator 在 seek 有 CREATE 权限（含 CREATE INDEX）';
-    RAISE NOTICE '  9. seek_app 在 seek 有 USAGE 且无 CREATE 权限';
-    RAISE NOTICE '  10. seek_app 对表有 SELECT/INSERT/UPDATE/DELETE（无 TRUNCATE）';
-    RAISE NOTICE '  11. seek_app 对序列有 USAGE 权限';
-    RAISE NOTICE '  12. pg_default_acl 默认权限正确配置';
-    RAISE NOTICE '  13. 数据库权限：CONNECT=Y, CREATE=N (非admin), TEMP=Y';
+    RAISE NOTICE '  7. pg_default_acl 默认权限正确配置';
+    RAISE NOTICE '  8. 数据库权限：CONNECT=Y, CREATE=N (非admin), TEMP=Y';
     RAISE NOTICE '';
     
     -- 状态总结

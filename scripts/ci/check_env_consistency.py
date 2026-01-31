@@ -5,7 +5,6 @@
 检查项：
 1. CI/Nightly workflow 与 Makefile acceptance targets 的环境变量一致性
 2. HTTP_ONLY_MODE / SKIP_DEGRADATION_TEST / VERIFY_FULL 的语义绑定
-3. SEEKDB_ENABLE 传递的正确性
 
 使用方式：
     python scripts/ci/check_env_consistency.py [--strict] [--json]
@@ -33,7 +32,6 @@ ENV_BASELINE = {
         "HTTP_ONLY_MODE": "1",
         "SKIP_DEGRADATION_TEST": "1",
         "VERIFY_FULL": None,  # 不设置
-        "SEEKDB_ENABLE": "1",
         "GATE_PROFILE": "http_only",
     },
     "nightly_full": {
@@ -41,7 +39,6 @@ ENV_BASELINE = {
         "HTTP_ONLY_MODE": "0",
         "SKIP_DEGRADATION_TEST": "0",
         "VERIFY_FULL": "1",
-        "SEEKDB_ENABLE": "1",
         "GATE_PROFILE": "full",
     },
 }
@@ -53,14 +50,12 @@ MAKEFILE_TARGETS = {
         "SKIP_DEGRADATION_TEST": "1",
         "VERIFY_FULL": None,
         "GATE_PROFILE": "http_only",
-        "SEEKDB_ENABLE": "$(SEEKDB_ENABLE_EFFECTIVE)",
     },
     "acceptance-unified-full": {
         "HTTP_ONLY_MODE": "0",
         "SKIP_DEGRADATION_TEST": "0",
         "VERIFY_FULL": "1",
         "GATE_PROFILE": "full",
-        "SEEKDB_ENABLE": "$(SEEKDB_ENABLE_EFFECTIVE)",
     },
 }
 
@@ -173,8 +168,8 @@ def parse_makefile_target(makefile_path: Path, target_name: str) -> dict[str, st
             results[match.group(1)] = match.group(2)
         
         # 查找 VAR=value $(MAKE) 调用（更精确的模式）
-        # 匹配 VAR=value 后跟空格和 $(MAKE) 或 SEEKDB_ENABLE_EFFECTIVE
-        for match in re.finditer(r'\b([A-Z_]+)=([^\s;]+)\s+(?:\$\(MAKE\)|SEEKDB_ENABLE)', target_content):
+        # 匹配 VAR=value 后跟空格和 $(MAKE)
+        for match in re.finditer(r'\b([A-Z_]+)=([^\s;]+)\s+\$\(MAKE\)', target_content):
             val = match.group(2).rstrip(';')
             results[match.group(1)] = val
         
@@ -249,18 +244,7 @@ def check_consistency(
             for key, expected_val in expected_env.items():
                 actual_val = actual_env.get(key)
                 
-                # SEEKDB_ENABLE 需要检查是否使用了 $(SEEKDB_ENABLE_EFFECTIVE)
-                if key == "SEEKDB_ENABLE":
-                    if actual_val and "SEEKDB_ENABLE_EFFECTIVE" not in actual_val:
-                        issues.append({
-                            "level": "warning",
-                            "layer": f"makefile:{target_name}",
-                            "variable": key,
-                            "expected": expected_val,
-                            "actual": actual_val,
-                            "message": f"Makefile {target_name} 中 {key} 应使用 $(SEEKDB_ENABLE_EFFECTIVE)",
-                        })
-                elif expected_val is not None and actual_val != expected_val:
+                if expected_val is not None and actual_val != expected_val:
                     issues.append({
                         "level": "error",
                         "layer": f"makefile:{target_name}",

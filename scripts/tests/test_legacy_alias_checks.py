@@ -452,7 +452,7 @@ class TestAllowedPaths:
         # docs/legacy/ 不在白名单中
         assert is_allowed_path("docs/legacy/guide.md") is False
         # docs/architecture/ 下其他文件不在白名单中（仅特定文档被白名单）
-        assert is_allowed_path("docs/architecture/other.md") is False
+        assert is_allowed_path("docs/architecture/README.md") is False
         # CI workflow contract 不在白名单中（已清理完毕）
         assert is_allowed_path("scripts/ci/workflow_contract.v1.json") is False
 

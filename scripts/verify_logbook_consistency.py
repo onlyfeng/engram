@@ -5,10 +5,9 @@ verify_logbook_consistency.py - Logbook 部署配置一致性检查
 功能:
   A) 检查 compose/logbook.yml 的 initdb 是否会在缺省 .env 下致命失败
   B) 检查 Makefile 的 acceptance-logbook-only 是否只依赖 stepwise compose
-  C) 检查 verify-permissions 是否按 SEEKDB_ENABLE 注入 seek.enabled
-  D) 检查 docs/logbook/03_deploy_verify_troubleshoot.md 中的 up-logbook 描述与 Makefile 实现一致
-  E) 检查 README.md Logbook-only 分步验收命令使用 migrate-logbook-stepwise 与 verify-permissions-logbook
-  F) 检查 docs/logbook/04_acceptance_criteria.md Logbook-only 章节命令对齐
+  C) 检查 docs/logbook/03_deploy_verify_troubleshoot.md 中的 up-logbook 描述与 Makefile 实现一致
+  D) 检查 README.md Logbook-only 分步验收命令使用 migrate-logbook-stepwise 与 verify-permissions-logbook
+  E) 检查 docs/logbook/04_acceptance_criteria.md Logbook-only 章节命令对齐
 
 用法:
   python scripts/verify_logbook_consistency.py [--json] [--verbose]
@@ -364,127 +363,11 @@ def check_b_acceptance_logbook_compose_dependency(
     )
 
 
-def check_c_verify_permissions_seekdb_enable(
+def check_c_docs_makefile_consistency(
     project_root: Path, verbose: bool = False
 ) -> CheckResult:
     """
-    检查 C: verify-permissions 是否按 SEEKDB_ENABLE 注入 seek.enabled
-    
-    验证策略：
-    1. 检查 verify-permissions 目标中是否有 SET seek.enabled 命令
-    2. 验证它根据 SEEKDB_ENABLE_EFFECTIVE 设置 true/false
-    """
-    makefile = project_root / "Makefile"
-    details = []
-    
-    if not makefile.exists():
-        return CheckResult(
-            check_id="C",
-            check_name="verify_permissions_seekdb_enable",
-            passed=False,
-            message="Makefile 文件不存在",
-            severity="error",
-        )
-    
-    content = makefile.read_text()
-    
-    # 找到 verify-permissions 目标的实现
-    verify_pattern = re.compile(
-        r'^verify-permissions:.*?(?=^[a-zA-Z_-]+:|^\Z)',
-        re.MULTILINE | re.DOTALL
-    )
-    
-    match = verify_pattern.search(content)
-    if not match:
-        return CheckResult(
-            check_id="C",
-            check_name="verify_permissions_seekdb_enable",
-            passed=False,
-            message="未找到 verify-permissions 目标",
-            severity="error",
-        )
-    
-    target_content = match.group(0)
-    
-    # 检查 1: 是否有 SET seek.enabled 命令
-    has_seek_enabled_set = 'seek.enabled' in target_content
-    
-    if not has_seek_enabled_set:
-        return CheckResult(
-            check_id="C",
-            check_name="verify_permissions_seekdb_enable",
-            passed=False,
-            message="verify-permissions 未设置 seek.enabled 配置",
-            severity="error",
-            details=["未找到 SET seek.enabled 命令"],
-        )
-    
-    # 检查 2: 是否根据 SEEKDB_ENABLE_EFFECTIVE 条件设置
-    # 预期模式: SET seek.enabled = '$(if $(filter 1,$(SEEKDB_ENABLE_EFFECTIVE)),true,false)'
-    conditional_pattern = re.search(
-        r"seek\.enabled\s*=\s*'\$\(if\s+\$\(filter\s+1,\s*\$\(SEEKDB_ENABLE_EFFECTIVE\)\),\s*true,\s*false\)'",
-        target_content
-    )
-    
-    if conditional_pattern:
-        details.append("verify-permissions 正确根据 SEEKDB_ENABLE_EFFECTIVE 设置 seek.enabled")
-        details.append("  - SEEKDB_ENABLE=1 → seek.enabled='true'")
-        details.append("  - SEEKDB_ENABLE=0 → seek.enabled='false'")
-    else:
-        # 检查是否有其他形式的条件设置
-        if 'SEEKDB_ENABLE' in target_content and 'seek.enabled' in target_content:
-            details.append("发现 SEEKDB_ENABLE 和 seek.enabled，但模式不完全匹配预期")
-            details.append("预期模式: $(if $(filter 1,$(SEEKDB_ENABLE_EFFECTIVE)),true,false)")
-        else:
-            return CheckResult(
-                check_id="C",
-                check_name="verify_permissions_seekdb_enable",
-                passed=False,
-                message="verify-permissions 未按 SEEKDB_ENABLE 条件注入 seek.enabled",
-                severity="error",
-                details=details,
-            )
-    
-    # 检查 3: 验证 SEEKDB_ENABLE_EFFECTIVE 的定义
-    effective_def = re.search(
-        r'SEEKDB_ENABLE_EFFECTIVE\s*:?=\s*\$\(or\s+\$\(SEEKDB_ENABLE\)',
-        content
-    )
-    
-    if effective_def:
-        details.append("SEEKDB_ENABLE_EFFECTIVE 定义正确（支持 SEEK_ENABLE 别名）")
-    else:
-        details.append("警告: 未找到 SEEKDB_ENABLE_EFFECTIVE 的标准定义")
-    
-    # 检查 4: 同时检查 verify-permissions-logbook 目标
-    verify_logbook_pattern = re.compile(
-        r'^verify-permissions-logbook:.*?(?=^[a-zA-Z_-]+:|^\Z)',
-        re.MULTILINE | re.DOTALL
-    )
-    
-    logbook_match = verify_logbook_pattern.search(content)
-    if logbook_match:
-        logbook_content = logbook_match.group(0)
-        if "seek.enabled = 'false'" in logbook_content:
-            details.append("verify-permissions-logbook 正确硬编码 seek.enabled='false'")
-        else:
-            details.append("警告: verify-permissions-logbook 可能未正确设置 seek.enabled")
-    
-    return CheckResult(
-        check_id="C",
-        check_name="verify_permissions_seekdb_enable",
-        passed=True,
-        message="verify-permissions 正确按 SEEKDB_ENABLE 注入 seek.enabled",
-        severity="info",
-        details=details if verbose else [],
-    )
-
-
-def check_d_docs_makefile_consistency(
-    project_root: Path, verbose: bool = False
-) -> CheckResult:
-    """
-    检查 D: docs/logbook/03_deploy_verify_troubleshoot.md 中的 up-logbook 描述与 Makefile 实现一致
+    检查 C: docs/logbook/03_deploy_verify_troubleshoot.md 中的 up-logbook 描述与 Makefile 实现一致
     
     验证策略：
     1. 从文档中提取 up-logbook 的描述
@@ -497,7 +380,7 @@ def check_d_docs_makefile_consistency(
     
     if not docs_file.exists():
         return CheckResult(
-            check_id="D",
+            check_id="C",
             check_name="docs_makefile_consistency",
             passed=False,
             message="docs/logbook/03_deploy_verify_troubleshoot.md 文件不存在",
@@ -506,7 +389,7 @@ def check_d_docs_makefile_consistency(
     
     if not makefile.exists():
         return CheckResult(
-            check_id="D",
+            check_id="C",
             check_name="docs_makefile_consistency",
             passed=False,
             message="Makefile 文件不存在",
@@ -598,7 +481,7 @@ def check_d_docs_makefile_consistency(
     if inconsistencies:
         details.extend(inconsistencies)
         return CheckResult(
-            check_id="D",
+            check_id="C",
             check_name="docs_makefile_consistency",
             passed=False,
             message="docs up-logbook 描述与 Makefile 实现不一致",
@@ -618,7 +501,7 @@ def check_d_docs_makefile_consistency(
                 details.append("文档正确描述了成功输出")
     
     return CheckResult(
-        check_id="D",
+        check_id="C",
         check_name="docs_makefile_consistency",
         passed=True,
         message="docs up-logbook 描述与 Makefile 实现一致",
@@ -627,11 +510,11 @@ def check_d_docs_makefile_consistency(
     )
 
 
-def check_e_readme_logbook_only_stepwise_commands(
+def check_d_readme_logbook_only_stepwise_commands(
     project_root: Path, verbose: bool = False
 ) -> CheckResult:
     """
-    检查 E: README.md Logbook-only 分步验收命令使用 migrate-logbook-stepwise 与 verify-permissions-logbook
+    检查 D: README.md Logbook-only 分步验收命令使用 migrate-logbook-stepwise 与 verify-permissions-logbook
     
     验证策略：
     1. 定位 README.md 中的 "Logbook-only" 分步验收章节
@@ -643,7 +526,7 @@ def check_e_readme_logbook_only_stepwise_commands(
     
     if not readme_file.exists():
         return CheckResult(
-            check_id="E",
+            check_id="D",
             check_name="readme_logbook_only_stepwise_commands",
             passed=False,
             message="README.md 文件不存在",
@@ -662,7 +545,7 @@ def check_e_readme_logbook_only_stepwise_commands(
     match = logbook_only_section_pattern.search(content)
     if not match:
         return CheckResult(
-            check_id="E",
+            check_id="D",
             check_name="readme_logbook_only_stepwise_commands",
             passed=False,
             message="README.md 中未找到 Logbook-only 分步验收章节",
@@ -958,16 +841,13 @@ def run_checks(project_root: Path, verbose: bool = False) -> ConsistencyReport:
     # 检查 B: acceptance-logbook-only compose 依赖
     report.checks.append(check_b_acceptance_logbook_compose_dependency(project_root, verbose))
     
-    # 检查 C: verify-permissions SEEKDB_ENABLE 注入
-    report.checks.append(check_c_verify_permissions_seekdb_enable(project_root, verbose))
+    # 检查 C: docs/logbook/03_deploy_verify_troubleshoot.md 与 Makefile 一致性
+    report.checks.append(check_c_docs_makefile_consistency(project_root, verbose))
     
-    # 检查 D: docs/logbook/03_deploy_verify_troubleshoot.md 与 Makefile 一致性
-    report.checks.append(check_d_docs_makefile_consistency(project_root, verbose))
+    # 检查 D: README.md Logbook-only 分步验收命令
+    report.checks.append(check_d_readme_logbook_only_stepwise_commands(project_root, verbose))
     
-    # 检查 E: README.md Logbook-only 分步验收命令
-    report.checks.append(check_e_readme_logbook_only_stepwise_commands(project_root, verbose))
-    
-    # 检查 F: 04_acceptance_criteria.md Logbook-only 章节命令对齐
+    # 检查 E: 04_acceptance_criteria.md Logbook-only 章节命令对齐
     report.checks.append(check_f_acceptance_criteria_logbook_only_alignment(project_root, verbose))
     
     return report
@@ -982,10 +862,9 @@ def main() -> int:
 检查项:
   A) compose/logbook.yml 的 initdb 是否会在缺省 .env 下致命失败
   B) Makefile 的 acceptance-logbook-only 是否只依赖 stepwise compose
-  C) verify-permissions 是否按 SEEKDB_ENABLE 注入 seek.enabled
-  D) docs/logbook/03_deploy_verify_troubleshoot.md 与 Makefile 一致性
-  E) README.md Logbook-only 分步验收命令使用 migrate-logbook-stepwise 与 verify-permissions-logbook
-  F) docs/logbook/04_acceptance_criteria.md Logbook-only 章节命令对齐
+  C) docs/logbook/03_deploy_verify_troubleshoot.md 与 Makefile 一致性
+  D) README.md Logbook-only 分步验收命令使用 migrate-logbook-stepwise 与 verify-permissions-logbook
+  E) docs/logbook/04_acceptance_criteria.md Logbook-only 章节命令对齐
 
 示例:
   python scripts/verify_logbook_consistency.py

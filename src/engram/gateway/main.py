@@ -53,7 +53,7 @@ except ImportError:
         "Gateway 依赖 engram_logbook 模块（统一错误码等），请先安装：\n"
         "\n"
         "  # 在 monorepo 根目录执行\n"
-        "  pip install -e apps/logbook_postgres/scripts\n"
+        "  pip install -e \".[full]\"\n"
         "\n"
         "  # 或 Docker 环境（已自动安装）\n"
         "  docker compose -f docker-compose.unified.yml up gateway\n"
@@ -1226,19 +1226,11 @@ async def health_check():
     - ok: 服务是否健康
     - status: 状态字符串 (保持向后兼容)
     - service: 服务名称 (保持向后兼容)
-    - seekdb: SeekDB 状态 ("enabled" / "disabled")
     """
-    import os
-    
-    # 读取 SEEKDB_ENABLE 环境变量（默认启用）
-    seekdb_enable = os.environ.get("SEEKDB_ENABLE", "1")
-    seekdb_status = "enabled" if seekdb_enable == "1" else "disabled"
-    
     return {
         "ok": True,
         "status": "ok",
         "service": "memory-gateway",
-        "seekdb": seekdb_status,
     }
 
 
@@ -1673,17 +1665,17 @@ def _format_db_repair_commands(error_code: str = None, missing_items = None) -> 
         "",
         "# 方案 1: 完整初始化（首次部署或重建）",
         "# 先初始化角色权限，再执行迁移",
-        "python apps/logbook_postgres/scripts/db_bootstrap.py",
-        "python apps/logbook_postgres/scripts/db_migrate.py --apply-roles --apply-openmemory-grants",
+        "python logbook_postgres/scripts/db_bootstrap.py",
+        "python logbook_postgres/scripts/db_migrate.py --apply-roles --apply-openmemory-grants",
         "",
         "# 方案 2: 仅执行迁移（角色已存在）",
-        "python apps/logbook_postgres/scripts/db_migrate.py",
+        "python logbook_postgres/scripts/db_migrate.py",
         "",
         "# 方案 3: Docker 环境",
         "docker compose -f docker-compose.unified.yml up bootstrap_roles logbook_migrate openmemory_migrate",
         "",
         "# 验证修复结果",
-        "python apps/logbook_postgres/scripts/db_migrate.py --verify",
+        "python logbook_postgres/scripts/db_migrate.py --verify",
         "",
     ]
     

@@ -27,11 +27,11 @@
 
 | 类型 | 文件路径 |
 |------|----------|
-| **SQL 迁移** | `apps/logbook_postgres/scripts/engram_logbook/migrate.py` |
-| **CLI 实现** | `apps/logbook_postgres/scripts/logbook_cli.py` |
+| **SQL 迁移** | `src/engram/logbook/migrate.py` |
+| **CLI 实现** | `logbook_postgres/scripts/logbook_cli.py` |
 | **契约文档** | `docs/contracts/*.md` |
-| **单元测试** | `apps/logbook_postgres/scripts/tests/test_*.py` |
-| **集成测试** | `apps/openmemory_gateway/gateway/tests/test_*_integration.py` |
+| **单元测试** | `tests/logbook/test_*.py` |
+| **集成测试** | `tests/gateway/test_*_integration.py` |
 | **Makefile** | `Makefile` |
 | **用户文档** | `docs/logbook/*.md`, `docs/gateway/*.md` |
 | **验收矩阵** | `docs/logbook/04_acceptance_criteria.md`, `docs/acceptance/00_acceptance_matrix.md` |
@@ -57,8 +57,8 @@
 #### 1. 新增迁移脚本
 
 ```
-apps/logbook_postgres/scripts/engram_logbook/migrations/
-└── YYYYMMDD_HHMMSS_<migration_name>.sql
+sql/
+└── NN_<migration_name>.sql
 ```
 
 迁移脚本必须：
@@ -72,8 +72,8 @@ apps/logbook_postgres/scripts/engram_logbook/migrations/
 
 | 工具类型 | 路径 | 用途 |
 |----------|------|------|
-| Backfill 脚本 | `apps/logbook_postgres/scripts/backfill_<feature>.py` | 填充新字段默认值 |
-| Repair 脚本 | `apps/logbook_postgres/scripts/repair_<issue>.py` | 修复损坏数据 |
+| Backfill 脚本 | `backfill_<feature>.py`（放在 `logbook_postgres/scripts/`） | 填充新字段默认值 |
+| Repair 脚本 | `repair_<issue>.py`（放在 `logbook_postgres/scripts/`） | 修复损坏数据 |
 | CLI 子命令 | `logbook repair <subcommand>` | 用户可执行的修复操作 |
 
 **Backfill 脚本要求**：
@@ -117,10 +117,10 @@ apps/logbook_postgres/scripts/engram_logbook/migrations/
 
 | 边界变更类型 | 必须更新的文件 |
 |-------------|---------------|
-| **initdb 行为** | `compose/logbook.yml`<br>`apps/logbook_postgres/sql/01_logbook_schema.sql`<br>`apps/logbook_postgres/sql/04_roles_and_grants.sql`<br>`docs/logbook/03_deploy_verify_troubleshoot.md` |
-| **服务账号策略** | `apps/logbook_postgres/sql/00_init_service_accounts.sh`<br>`apps/logbook_postgres/sql/04_roles_and_grants.sql`<br>`apps/logbook_postgres/sql/99_verify_permissions.sql`<br>`docs/logbook/04_acceptance_criteria.md` |
-| **验收命令链** | `Makefile`<br>`apps/logbook_postgres/scripts/logbook_cli.py`<br>`docs/logbook/04_acceptance_criteria.md`<br>`.github/workflows/ci.yml` |
-| **verify-permissions 门禁** | `apps/logbook_postgres/sql/99_verify_permissions.sql`<br>`Makefile` (`verify-permissions-logbook` target)<br>`docs/logbook/04_acceptance_criteria.md` |
+| **initdb 行为** | `compose/logbook.yml`<br>`sql/01_logbook_schema.sql`<br>`sql/04_roles_and_grants.sql`<br>`docs/logbook/03_deploy_verify_troubleshoot.md` |
+| **服务账号策略** | `logbook_postgres/scripts/db_bootstrap.py`<br>`sql/04_roles_and_grants.sql`<br>`sql/99_verify_permissions.sql`<br>`docs/logbook/04_acceptance_criteria.md` |
+| **验收命令链** | `Makefile`<br>`logbook_postgres/scripts/logbook_cli.py`<br>`docs/logbook/04_acceptance_criteria.md`<br>`.github/workflows/ci.yml` |
+| **verify-permissions 门禁** | `sql/99_verify_permissions.sql`<br>`Makefile` (`verify-permissions-logbook` target)<br>`docs/logbook/04_acceptance_criteria.md` |
 | **最小复制清单** | `docs/guides/manifests/logbook_only_import_v1.json`<br>`docs/guides/integrate_existing_project.md`<br>`docs/logbook/04_acceptance_criteria.md` |
 
 ### 文件路径详细清单
@@ -128,17 +128,17 @@ apps/logbook_postgres/scripts/engram_logbook/migrations/
 | 类型 | 文件路径 | 说明 |
 |------|----------|------|
 | **Compose 配置** | `compose/logbook.yml` | Logbook-only 部署配置 |
-| **SQL 初始化** | `apps/logbook_postgres/sql/00_init_service_accounts.sh` | 服务账号初始化 |
-| **SQL 初始化** | `apps/logbook_postgres/sql/01_logbook_schema.sql` | 核心 schema 定义 |
-| **SQL 初始化** | `apps/logbook_postgres/sql/04_roles_and_grants.sql` | 角色与权限定义 |
-| **SQL 初始化** | `apps/logbook_postgres/sql/99_verify_permissions.sql` | 权限验证脚本 |
+| **SQL 初始化** | `logbook_postgres/scripts/db_bootstrap.py` | 服务账号初始化 |
+| **SQL 初始化** | `sql/01_logbook_schema.sql` | 核心 schema 定义 |
+| **SQL 初始化** | `sql/04_roles_and_grants.sql` | 角色与权限定义 |
+| **SQL 初始化** | `sql/99_verify_permissions.sql` | 权限验证脚本 |
 | **Makefile** | `Makefile` | 构建与验收 targets |
 | **文档** | `docs/logbook/03_deploy_verify_troubleshoot.md` | 部署验证与排错 |
 | **文档** | `docs/logbook/04_acceptance_criteria.md` | 验收标准与矩阵 |
 | **集成指南** | `docs/guides/integrate_existing_project.md` | 项目集成指南 |
 | **Manifest** | `docs/guides/manifests/logbook_only_import_v1.json` | 最小复制清单定义 |
 | **CI 脚本** | `.github/workflows/ci.yml` | CI 检查流程 |
-| **CI 脚本** | `apps/logbook_postgres/scripts/ci/run_tests.sh` | 测试运行脚本 |
+| **CI 脚本** | `Makefile` | 测试运行入口 |
 
 ### PR 自检命令集合
 
@@ -173,7 +173,7 @@ make -n acceptance-logbook-only  # dry-run 检查
 make logbook-smoke
 
 # verify-permissions 门禁变更 - 验证 Seek 禁用场景
-psql -d $POSTGRES_DB -c "SET seek.enabled = 'false';" -f apps/logbook_postgres/sql/99_verify_permissions.sql
+psql -d $POSTGRES_DB -c "SET seek.enabled = 'false';" -f sql/99_verify_permissions.sql
 
 # 最小复制清单变更 - 验证 manifest 完整性
 python -c "import json; m = json.load(open('docs/guides/manifests/logbook_only_import_v1.json')); print('OK:', len(m['files']['required']), 'required,', len(m['files']['optional']), 'optional')"
@@ -282,7 +282,7 @@ python scripts/check_no_legacy_stage_aliases.py --fail
 make test-logbook-unit
 
 # 3. 验证 DB 迁移（如有 schema 变更）
-python apps/logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --verify
+python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --verify
 
 # 4. 运行冒烟测试
 make logbook-smoke

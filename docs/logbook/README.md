@@ -38,10 +38,10 @@
 
 ## 开发者入口
 
-- **模块路径**: `apps/logbook_postgres/`
+- **模块路径**: `logbook_postgres/`
 - **Python 包**: `engram_logbook`
 - **CLI 命令**: `logbook` / `engram-logbook`
-- **开发者指南**: [`apps/logbook_postgres/README.md`](../../apps/logbook_postgres/README.md)
+- **开发者指南**: [`logbook_postgres/README.md`](../../logbook_postgres/README.md)
 
 ---
 

@@ -5,7 +5,9 @@ db_bootstrap - 数据库 bootstrap 预检与角色创建（简化版）
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from typing import Dict, List, Optional
 from urllib.parse import urlparse, urlunparse
 
@@ -60,7 +62,7 @@ def check_om_schema_not_public(om_schema: str) -> Dict[str, object]:
 
 def check_admin_privileges(conn) -> Dict[str, object]:
     with conn.cursor() as cur:
-        cur.execute("SELECT usesuper, rolcreaterole FROM pg_roles WHERE rolname = current_user")
+        cur.execute("SELECT rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user")
         row = cur.fetchone()
     is_superuser = bool(row[0]) if row else False
     can_create_role = bool(row[1]) if row else False
@@ -98,11 +100,11 @@ def run_precheck(
                 admin_check = check_admin_privileges(conn)
             finally:
                 conn.close()
-        except Exception:
+        except Exception as exc:
             admin_check = {
                 "ok": False,
                 "code": BootstrapErrorCode.PRECHECK_NO_CREATEROLE,
-                "message": "无法连接数据库或权限不足",
+                "message": f"无法连接数据库或权限不足: {exc}",
             }
         checks["admin_privileges"] = admin_check
         if not admin_check.get("ok"):
@@ -123,6 +125,8 @@ def create_or_update_login_role(
     inherit_role: Optional[str] = None,
     quiet: bool = False,
 ) -> Dict[str, object]:
+    from psycopg import sql
+
     if not password:
         return {
             "ok": False,
@@ -135,16 +139,25 @@ def create_or_update_login_role(
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
             exists = cur.fetchone() is not None
             if not exists:
-                cur.execute(f"CREATE ROLE {role_name} LOGIN PASSWORD %s", (password,))
+                cur.execute(
+                    sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}")
+                    .format(sql.Identifier(role_name), sql.Literal(password))
+                )
                 created = True
                 updated = False
             else:
-                cur.execute(f"ALTER ROLE {role_name} PASSWORD %s", (password,))
+                cur.execute(
+                    sql.SQL("ALTER ROLE {} PASSWORD {}")
+                    .format(sql.Identifier(role_name), sql.Literal(password))
+                )
                 created = False
                 updated = True
             if inherit_role:
                 try:
-                    cur.execute(f"GRANT {inherit_role} TO {role_name}")
+                    cur.execute(
+                        sql.SQL("GRANT {} TO {}")
+                        .format(sql.Identifier(inherit_role), sql.Identifier(role_name))
+                    )
                 except Exception:
                     pass
         return {
@@ -202,3 +215,85 @@ def mask_password_in_dsn(dsn: str) -> str:
         netloc = parsed.netloc.replace(parsed.password, "******")
         return urlunparse(parsed._replace(netloc=netloc))
     return dsn
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Engram DB bootstrap：创建服务账号并做预检",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--dsn",
+        dest="admin_dsn",
+        default=None,
+        help="管理员 DSN（优先级高于环境变量 ENGRAM_PG_ADMIN_DSN/POSTGRES_DSN）",
+    )
+    parser.add_argument(
+        "--om-schema",
+        default=os.environ.get("OM_PG_SCHEMA", DEFAULT_OM_SCHEMA),
+        help="OpenMemory schema 名（禁止为 public）",
+    )
+    parser.add_argument(
+        "--skip-db-check",
+        action="store_true",
+        default=False,
+        help="跳过数据库连通性/权限预检（仅做 schema 校验）",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        default=False,
+        help="静默模式（仅输出关键结果）",
+    )
+    args = parser.parse_args()
+
+    admin_dsn = (
+        args.admin_dsn
+        or os.environ.get("ENGRAM_PG_ADMIN_DSN")
+        or os.environ.get("POSTGRES_DSN")
+    )
+    if not admin_dsn:
+        print("[ERROR] 缺少管理员 DSN，请设置 --dsn 或 ENGRAM_PG_ADMIN_DSN", file=sys.stderr)
+        sys.exit(1)
+
+    precheck = run_precheck(
+        admin_dsn=admin_dsn,
+        om_schema=args.om_schema,
+        quiet=args.quiet,
+        skip_db_check=args.skip_db_check,
+    )
+    if not precheck.get("ok"):
+        print("[ERROR] 预检失败", file=sys.stderr)
+        if not args.quiet:
+            print(precheck, file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        import psycopg
+    except Exception as exc:
+        print(f"[ERROR] 缺少 psycopg 依赖: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        conn = psycopg.connect(admin_dsn, autocommit=True)
+        try:
+            result = create_all_login_roles(conn, passwords={}, quiet=args.quiet)
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[ERROR] 连接数据库失败: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not result.get("ok"):
+        print("[ERROR] 服务账号创建失败", file=sys.stderr)
+        if not args.quiet:
+            print(result, file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        masked = mask_password_in_dsn(admin_dsn)
+        print(f"[OK] 服务账号已就绪 (dsn={masked})")
+
+
+if __name__ == "__main__":
+    main()

@@ -120,8 +120,8 @@ invariant: reliability_report.success_rate == audit.count(action=allow) / audit.
 **SQL 查询契约**：`evidence_refs_json->>'outbox_id'` 必须能定位审计记录（outbox_id 需在顶层）。
 
 **测试互证**：上述不变量由集成测试验证，参见：
-- [`apps/openmemory_gateway/gateway/tests/test_reconcile_outbox.py::TestAuditOutboxInvariants`](../../apps/openmemory_gateway/gateway/tests/test_reconcile_outbox.py) - 完整闭环测试
-- [`apps/openmemory_gateway/gateway/tests/test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../apps/openmemory_gateway/gateway/tests/test_audit_event_contract.py) - evidence_refs_json 顶层字段契约测试
+- [`tests/gateway/test_reconcile_outbox.py::TestAuditOutboxInvariants`](../../tests/gateway/test_reconcile_outbox.py) - 完整闭环测试
+- [`tests/gateway/test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../tests/gateway/test_audit_event_contract.py) - evidence_refs_json 顶层字段契约测试
 
 ### 异常处理
 

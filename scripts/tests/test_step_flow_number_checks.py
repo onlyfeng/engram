@@ -433,9 +433,9 @@ class TestAllowedPaths:
         """非白名单路径"""
         assert is_allowed_path("src/main.py") is False
         assert is_allowed_path("scripts/other.py") is False
-        assert is_allowed_path("docs/guide.md") is False
+        assert is_allowed_path("docs/README.md") is False
         # docs/architecture/ 下其他文件不在白名单中
-        assert is_allowed_path("docs/architecture/other.md") is False
+        assert is_allowed_path("docs/architecture/README.md") is False
 
     def test_allowed_paths_matches_source_definition(self):
         """验证测试覆盖了 ALLOWED_PATHS 中的所有路径"""

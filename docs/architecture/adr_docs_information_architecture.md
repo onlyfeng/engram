@@ -77,14 +77,14 @@ apps/*/docs/ (可选)
 ```markdown
 # [文档标题]
 
-> **Canonical 文档**: [docs/path/to/canonical.md](相对路径)
+> **Canonical 文档**: [docs/README.md](../README.md)
 >
 > 本文件为 stub，请参阅上述 canonical 文档获取最新内容。
 
 ## 快速链接
 
-- [主要内容](相对路径#章节锚点)
-- [相关章节](相对路径#章节锚点)
+- [主要内容](../README.md#文档导航)
+- [相关章节](../README.md#文档中心)
 ```
 
 ### 5. 内容分类指南
@@ -132,7 +132,7 @@ apps/*/docs/ (可选)
 
 ### apps/*/docs/ 迁移清单
 
-对于 `apps/logbook_postgres/docs/` 等目录中的文档：
+对于 `docs/logbook/` 等目录中的文档：
 
 | 文档 | 处理 | 说明 |
 |------|------|------|

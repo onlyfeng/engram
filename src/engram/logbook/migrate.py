@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
+from psycopg import sql
+
 from .config import get_config, Config
 from .db import get_connection, execute_sql_file
 from .schema_context import SchemaContext, SCHEMA_SUFFIXES
@@ -71,10 +73,10 @@ DEFAULT_SCHEMA_SUFFIXES = ["identity", "logbook", "scm", "analysis", "governance
 # 01: 基础 schema 定义
 # 02: scm 迁移
 # 03: patch_blobs/pgvector 扩展
-# 06: scm_sync_runs/seek_roles
+# 06: scm_sync_runs
 # 07: scm_sync_locks/security_events
 # 08: database_hardening/scm_sync_jobs
-# 09: seek_index
+# 09: sync_jobs_dimension_columns
 # 10: evidence_uri_column
 # 11: sync_jobs_dimension_columns
 # 12: governance_artifact_ops_audit
@@ -202,10 +204,10 @@ def get_repair_commands_hint(error_code: str = None, target_db: str = None) -> d
     db_suffix = f" (数据库: {target_db})" if target_db else ""
     
     base_commands = {
-        "bootstrap": "python apps/logbook_postgres/scripts/db_bootstrap.py",
-        "migrate": "python apps/logbook_postgres/scripts/db_migrate.py",
-        "migrate_with_roles": "python apps/logbook_postgres/scripts/db_migrate.py --apply-roles --apply-openmemory-grants",
-        "verify": "python apps/logbook_postgres/scripts/db_migrate.py --verify",
+        "bootstrap": "python logbook_postgres/scripts/db_bootstrap.py",
+        "migrate": "python logbook_postgres/scripts/db_migrate.py",
+        "migrate_with_roles": "python logbook_postgres/scripts/db_migrate.py --apply-roles --apply-openmemory-grants",
+        "verify": "python logbook_postgres/scripts/db_migrate.py --verify",
         "docker_bootstrap": "docker compose -f docker-compose.unified.yml up bootstrap_roles",
         "docker_migrate": "docker compose -f docker-compose.unified.yml up logbook_migrate openmemory_migrate",
     }
@@ -232,7 +234,7 @@ def get_repair_commands_hint(error_code: str = None, target_db: str = None) -> d
             "repair_hint": f"OpenMemory schema 未创建{db_suffix}",
             "recommended_commands": [
                 "# 执行 OpenMemory 权限脚本",
-                "python apps/logbook_postgres/scripts/db_migrate.py --apply-openmemory-grants",
+                "python logbook_postgres/scripts/db_migrate.py --apply-openmemory-grants",
                 "",
                 "# 或完整初始化",
                 base_commands["bootstrap"],
@@ -249,7 +251,7 @@ def get_repair_commands_hint(error_code: str = None, target_db: str = None) -> d
                 "export OM_PG_SCHEMA=openmemory  # 不能是 public",
                 "",
                 "# 重新运行预检",
-                "python apps/logbook_postgres/scripts/db_migrate.py --precheck-only",
+                "python logbook_postgres/scripts/db_migrate.py --precheck-only",
             ],
         }
     elif error_code == "INSUFFICIENT_PRIVILEGE":
@@ -407,16 +409,24 @@ def classify_sql_files(
     execute_files = []
     
     for prefix, path in sql_files:
+        is_openmemory_script = "openmemory" in path.name.lower()
+        
         if prefix in DDL_SCRIPT_PREFIXES:
             ddl_files.append(path)
             execute_files.append(path)
         elif prefix in PERMISSION_SCRIPT_PREFIXES:
-            permission_files.append(path)
-            # 根据开关决定是否执行
-            if prefix == "04" and apply_roles:
+            # 05 前缀需要区分：只有包含 "openmemory" 的才是 OpenMemory 脚本
+            if prefix == "05" and not is_openmemory_script:
+                # 非 OpenMemory 的 05 文件当作 DDL 处理
+                ddl_files.append(path)
                 execute_files.append(path)
-            elif prefix == "05" and apply_openmemory_grants:
-                execute_files.append(path)
+            else:
+                permission_files.append(path)
+                # 根据开关决定是否执行
+                if prefix == "04" and apply_roles:
+                    execute_files.append(path)
+                elif prefix == "05" and is_openmemory_script and apply_openmemory_grants:
+                    execute_files.append(path)
         elif prefix in VERIFY_SCRIPT_PREFIXES:
             verify_files.append(path)
             # 仅当 verify=True 时执行
@@ -1337,16 +1347,17 @@ def run_migrate(
                 # 按顺序执行 SQL 文件
                 for sql_file in execute_sql_files:
                     prefix = sql_file.name[:2]
+                    is_openmemory_script = "openmemory" in sql_file.name.lower()
                     
-                    # 05 OpenMemory 权限脚本需要特殊处理
-                    if prefix == "05" and should_apply_openmemory:
+                    # 05_openmemory_* 权限脚本需要特殊处理
+                    if prefix == "05" and is_openmemory_script and should_apply_openmemory:
                         openmemory_target_schema = get_openmemory_schema()
                         log_info(f"执行 OpenMemory 脚本: {sql_file.name}，目标 schema: {openmemory_target_schema}...", quiet=quiet)
                         
                         with conn.cursor() as cur:
                             cur.execute(
-                                "SET om.target_schema = %s",
-                                (openmemory_target_schema,)
+                                sql.SQL("SET om.target_schema = {}")
+                                .format(sql.Literal(openmemory_target_schema))
                             )
                         
                         execute_sql_file(conn, sql_file, schema_context=schema_context)
@@ -1358,8 +1369,8 @@ def run_migrate(
                             openmemory_target_schema = get_openmemory_schema()
                             with conn.cursor() as cur:
                                 cur.execute(
-                                    "SET om.target_schema = %s",
-                                    (openmemory_target_schema,)
+                                    sql.SQL("SET om.target_schema = {}")
+                                    .format(sql.Literal(openmemory_target_schema))
                                 )
                         execute_sql_file(conn, sql_file, schema_context=schema_context)
                         executed_files.append(str(sql_file))

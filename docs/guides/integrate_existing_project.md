@@ -2,6 +2,8 @@
 
 本文档说明如何将 Engram 集成到已有项目中，提供两种部署模式的完整复制清单。
 
+> 更新说明：统一栈已切换为 `docker/engram.Dockerfile` + `OPENMEMORY_IMAGE` 方案，本文档以当前结构为准。
+
 ---
 
 ## Manifest 与版本策略
@@ -113,8 +115,8 @@ mkdir -p compose
 cp "$ENGRAM_SRC/compose/logbook.yml" compose/
 
 # 1.2 Logbook SQL 初始化脚本
-mkdir -p apps/logbook_postgres
-cp -r "$ENGRAM_SRC/apps/logbook_postgres/sql" apps/logbook_postgres/
+mkdir -p sql
+cp -r "$ENGRAM_SRC/sql" ./
 
 # ============================================================
 # 可选文件（按需选择）
@@ -123,7 +125,8 @@ cp -r "$ENGRAM_SRC/apps/logbook_postgres/sql" apps/logbook_postgres/
 # [可选] Logbook CLI & 迁移脚本
 # 用途: db_migrate.py、logbook_cli_main.py 等 CLI 工具
 # 如需运行 Logbook CLI 或数据库迁移脚本，请复制：
-# cp -r "$ENGRAM_SRC/apps/logbook_postgres/scripts" apps/logbook_postgres/
+# mkdir -p logbook_postgres
+# cp -r "$ENGRAM_SRC/logbook_postgres/scripts" logbook_postgres/
 ```
 
 </details>
@@ -135,16 +138,15 @@ your-project/
 ├── .env                           # 环境变量配置
 ├── compose/
 │   └── logbook.yml                # Logbook Compose 配置
-└── apps/logbook_postgres/
-    ├── sql/                       # [必需] Logbook SQL 初始化脚本
-    │   ├── 00_init_service_accounts.sh
-    │   ├── 01_logbook_schema.sql
-    │   ├── 02_logbook_indexes.sql
-    │   └── ...
+├── sql/                           # [必需] Logbook SQL 初始化脚本
+│   ├── 01_logbook_schema.sql
+│   ├── 02_scm_migration.sql
+│   └── ...
+└── logbook_postgres/
     └── scripts/                   # [可选] Logbook CLI & 迁移脚本
         ├── logbook_cli_main.py
         ├── db_migrate.py
-        └── engram_logbook/
+        └── ...
 ```
 
 ### 3. 最小 .env
@@ -304,7 +306,7 @@ docker compose -f compose/logbook.yml exec postgres \
   pg_isready -U postgres -d ${POSTGRES_DB:-myproject}
 
 # [可选] 如已安装 Logbook CLI
-cd apps/logbook_postgres/scripts && pip install -e .
+cd logbook_postgres/scripts && pip install -e .
 POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-changeme}@localhost:5432/${POSTGRES_DB:-myproject}" \
   logbook health
 ```
@@ -340,8 +342,6 @@ Logbook-only 支持两种验收级别，按需选择：
 {"ok": true, "checks": {"connection": {"status": "ok"}, "schemas": {"status": "ok"}, ...}}
 ```
 
-> **SeekDB 非阻塞**：Logbook-only 模式下 SeekDB 必须不阻塞。详见 [SeekDB 非阻塞约束](../logbook/03_deploy_verify_troubleshoot.md#seekdb-非阻塞约束)。
-
 ---
 
 ## Unified stack（统一栈）
@@ -353,8 +353,6 @@ Logbook-only 支持两种验收级别，按需选择：
 | 源文件 | 目标文件 | 角色 | 说明 |
 |--------|----------|------|------|
 | `docker-compose.unified.yml` | `docker-compose.engram.yml` | **主入口** | 完整统一栈部署 |
-| `compose/openmemory.yml` | `compose/openmemory.yml` | 分步调试 | OpenMemory 独立调试（SQLite/PostgreSQL） |
-| `compose/gateway.yml` | `compose/gateway.yml` | 分步调试 | Gateway 独立调试（需外部 PG/OM） |
 | `compose/logbook.yml` | `compose/logbook.yml` | Logbook-only | Logbook 独立部署 |
 
 > **验证入口**：`make verify-unified` 调用 `verify_unified_stack.sh`，参数约定见 [统一栈验证入口](#7-成功标准)。
@@ -383,7 +381,7 @@ python "$ENGRAM_SRC/scripts/import_copy.py" \
   --dst "$TARGET_PROJECT" \
   --mode unified
 
-# 包含可选文件（SeekDB、Gateway 模板等）
+# 包含可选文件（Gateway 模板等）
 python "$ENGRAM_SRC/scripts/import_copy.py" \
   --src "$ENGRAM_SRC" \
   --dst "$TARGET_PROJECT" \
@@ -436,46 +434,27 @@ cd "$TARGET_PROJECT"
 # 1.1 统一栈 Compose 配置
 cp "$ENGRAM_SRC/docker-compose.unified.yml" docker-compose.engram.yml
 
-# 1.2 分步部署 Compose 配置
-mkdir -p compose
-cp "$ENGRAM_SRC/compose/logbook.yml" compose/
-cp "$ENGRAM_SRC/compose/openmemory.yml" compose/
-cp "$ENGRAM_SRC/compose/gateway.yml" compose/
+# 1.2 Dockerfile（Gateway/Worker/OpenMemory）
+cp -r "$ENGRAM_SRC/docker" docker/
 
-# 1.3 Logbook SQL 初始化脚本
-mkdir -p apps/logbook_postgres
-cp -r "$ENGRAM_SRC/apps/logbook_postgres/sql" apps/logbook_postgres/
-
-# 1.4 Logbook 迁移脚本（统一栈必需）
-cp -r "$ENGRAM_SRC/apps/logbook_postgres/scripts" apps/logbook_postgres/
-
-# 1.5 Gateway 服务代码
-mkdir -p apps/openmemory_gateway
-cp -r "$ENGRAM_SRC/apps/openmemory_gateway/gateway" apps/openmemory_gateway/
-
-# 1.6 OpenMemory 源码
-mkdir -p libs
-cp -r "$ENGRAM_SRC/libs/OpenMemory" libs/
-
-# 1.7 SeekDB SQL 初始化脚本（可选）
-# 仅当需要启用 SeekDB 功能时才需要复制
-# SeekDB 现已通过 override compose 文件（docker-compose.unified.seekdb.yml）管理
-# 如需启用 SeekDB:
-mkdir -p apps/seekdb_rag_hybrid/sql
-cp "$ENGRAM_SRC/apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql" apps/seekdb_rag_hybrid/sql/
-cp "$ENGRAM_SRC/apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql" apps/seekdb_rag_hybrid/sql/
-cp "$ENGRAM_SRC/docker-compose.unified.seekdb.yml" ./
+# 1.3 核心源码与迁移脚本
+cp -r "$ENGRAM_SRC/src" src/
+cp -r "$ENGRAM_SRC/sql" sql/
+cp -r "$ENGRAM_SRC/logbook_postgres" logbook_postgres/
+cp -r "$ENGRAM_SRC/engram_logbook" engram_logbook/
+cp "$ENGRAM_SRC/db_bootstrap.py" ./
+cp "$ENGRAM_SRC/pyproject.toml" ./
+cp "$ENGRAM_SRC/requirements.txt" ./
+cp "$ENGRAM_SRC/README.md" ./
 
 # ============================================================
 # 可选文件（按需选择）
 # ============================================================
 
-# [可选] Gateway 模板文件（.mcp.json 示例、环境变量示例）
-cp -r "$ENGRAM_SRC/apps/openmemory_gateway/templates" apps/openmemory_gateway/
-
-# [可选] Dashboard（OpenMemory Web UI）
-# 需先从上游同步源码到 libs/OpenMemory/dashboard/
-# 启用方式: docker compose --profile dashboard up -d
+# [可选] .env 示例与 MCP 配置模板
+cp "$ENGRAM_SRC/.env.example" ./
+mkdir -p configs/mcp
+cp "$ENGRAM_SRC/configs/mcp/.mcp.json.example" configs/mcp/
 ```
 
 </details>
@@ -484,25 +463,21 @@ cp -r "$ENGRAM_SRC/apps/openmemory_gateway/templates" apps/openmemory_gateway/
 
 ```
 your-project/
-├── .env                           # 环境变量配置
-├── docker-compose.engram.yml      # 统一栈主配置
-├── docker-compose.engram.seekdb.yml  # [可选] SeekDB override compose
-├── compose/                       # 分步部署配置
-│   ├── logbook.yml
-│   ├── openmemory.yml
-│   └── gateway.yml
-├── apps/
-│   ├── logbook_postgres/
-│   │   ├── sql/                   # [必需] Logbook SQL 初始化脚本
-│   │   └── scripts/               # [必需] Logbook 迁移脚本
-│   │       └── engram_logbook/
-│   ├── openmemory_gateway/
-│   │   ├── gateway/               # [必需] Gateway 服务代码
-│   │   └── templates/             # [可选] 模板文件
-│   └── seekdb_rag_hybrid/         # [可选] 仅启用 SeekDB 时需要
-│       └── sql/                   #   禁用 SeekDB 时无需复制
-└── libs/
-    └── OpenMemory/                # [必需] OpenMemory 源码
+├── .env                              # 环境变量配置
+├── .env.example                      # [可选] 环境变量模板
+├── docker-compose.engram.yml         # 统一栈主配置
+├── docker/                           # Dockerfile（Gateway/Worker/OpenMemory 透传）
+├── src/                              # Engram 核心源码
+├── sql/                              # Logbook SQL 迁移脚本
+├── logbook_postgres/                 # 迁移与工具脚本
+├── engram_logbook/                   # 兼容包
+├── db_bootstrap.py                   # 服务账号初始化
+├── pyproject.toml
+├── requirements.txt
+├── README.md
+└── configs/
+    └── mcp/
+        └── .mcp.json.example         # [可选] MCP 配置模板
 ```
 
 ### 3. 最小 .env
@@ -532,19 +507,6 @@ OPENMEMORY_SVC_PASSWORD=changeme4
 # POSTGRES_PORT=5432
 # OM_PORT=8080
 # GATEWAY_PORT=8787
-
-# ============================================================
-# SeekDB 配置
-# ============================================================
-# 推荐变量名: SEEKDB_ENABLE（规范前缀）
-# ⚠️ 废弃变量: SEEK_ENABLE 将于 2026-Q3 移除
-# 详见: docs/reference/environment_variables.md#seekdb-组件可选层
-#
-# SeekDB 通过 override compose 文件启用:
-# 启用: docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d
-# 禁用: docker compose -f docker-compose.engram.yml up -d
-#
-# SEEKDB_ENABLE=1
 
 # ============================================================
 # API 密钥配置
@@ -579,9 +541,9 @@ python "$ENGRAM_SRC/scripts/import_preflight.py" . --verbose
 # 验证 Dockerfile 和 Compose 配置是否正确
 bash "$ENGRAM_SRC/scripts/verify_build_boundaries.sh" --dry-run
 
-# HTTP 验证（verify_unified_stack.sh）
+# HTTP 验证（统一栈验证）
 # 验证服务是否正常响应（需要先启动服务）
-bash "$ENGRAM_SRC/apps/openmemory_gateway/scripts/verify_unified_stack.sh" --mode stepwise
+make verify-unified
 ```
 
 **一键验证脚本**（推荐）：
@@ -591,12 +553,11 @@ bash "$ENGRAM_SRC/apps/openmemory_gateway/scripts/verify_unified_stack.sh" --mod
 mkdir -p scripts
 cp "$ENGRAM_SRC/scripts/import_preflight.py" scripts/
 cp "$ENGRAM_SRC/scripts/verify_build_boundaries.sh" scripts/
-cp "$ENGRAM_SRC/apps/openmemory_gateway/scripts/verify_unified_stack.sh" scripts/
 
 # 串联执行三阶段验证（预检→构建→服务）
 python scripts/import_preflight.py . --verbose && \
 bash scripts/verify_build_boundaries.sh --dry-run && \
-echo "[INFO] 启动服务后运行: bash scripts/verify_unified_stack.sh --mode stepwise"
+echo "[INFO] 启动服务后运行: make verify-unified"
 ```
 
 **各步骤说明**：
@@ -605,31 +566,25 @@ echo "[INFO] 启动服务后运行: bash scripts/verify_unified_stack.sh --mode 
 |------|------|----------|------|
 | 预检 | `import_preflight.py` | Compose 文件、build context、volume 路径 | Python |
 | 构建边界检查 | `verify_build_boundaries.sh --dry-run` | Dockerfile 模式、.dockerignore、context 配置 | Bash |
-| HTTP 验证 | `verify_unified_stack.sh --mode stepwise` | HTTP 健康检查、MCP 工具调用 | `jq`, `curl` |
+| HTTP 验证 | `make verify-unified` | HTTP 健康检查、MCP 工具调用 | `jq`, `curl` |
 
 **验证入口参数约定**：
 
-Makefile 的 `verify-unified` 与 `verify_unified_stack.sh` 参数保持一致：
-
-| Makefile 调用 | 脚本参数 | 环境变量 | 说明 |
-|---------------|----------|----------|------|
-| `make verify-unified` | `--mode default` | `VERIFY_MODE` | 默认模式（依赖 Docker） |
-| `VERIFY_FULL=1 make verify-unified` | `--full` | `VERIFY_FULL` | 完整验证（含降级测试） |
-| `VERIFY_JSON_OUT=path make verify-unified` | `--json-out path` | `JSON_OUT_PATH` | JSON 输出路径 |
+| Makefile 调用 | 环境变量 | 说明 |
+|---------------|----------|------|
+| `make verify-unified` | `VERIFY_MODE` | 默认模式（依赖 Docker） |
+| `VERIFY_FULL=1 make verify-unified` | `VERIFY_FULL` | 完整验证（含降级测试） |
+| `VERIFY_JSON_OUT=path make verify-unified` | `JSON_OUT_PATH` | JSON 输出路径 |
 
 ```bash
-# 直接调用脚本（自定义参数）
-./apps/openmemory_gateway/scripts/verify_unified_stack.sh --mode stepwise --json-out .artifacts/verify.json
-
-# 通过 Makefile 调用（推荐）
 make verify-unified
 VERIFY_FULL=1 VERIFY_JSON_OUT=.artifacts/verify.json make verify-unified
 ```
 
 **预检内容**：
 - 检查 docker-compose.*.yml 文件（包括 docker-compose.engram.yml）
-- 验证所有 `build.context` 目录存在（libs/OpenMemory/packages/openmemory-js 等）
-- 验证所有 volume bind mount 路径存在（apps/logbook_postgres/sql 等）
+- 验证所有 `build.context` 目录存在（`docker/`、`src/`、`sql/` 等）
+- 验证所有 volume bind mount 路径存在
 - 检查 Dockerfile 模式和 .dockerignore 配置
 
 **构建边界检查**：
@@ -641,12 +596,9 @@ VERIFY_FULL=1 VERIFY_JSON_OUT=.artifacts/verify.json make verify-unified
 
 | 错误 | 原因 | 修复 |
 |------|------|------|
-| `build context 不存在: libs/OpenMemory/...` | OpenMemory 未复制 | `cp -r "$ENGRAM_SRC/libs/OpenMemory" libs/` |
-| `volume 源路径不存在: apps/logbook_postgres/sql` | SQL 脚本未复制 | `cp -r "$ENGRAM_SRC/apps/logbook_postgres/sql" apps/logbook_postgres/` |
-| `volume 源路径不存在: apps/seekdb_rag_hybrid/sql/...` | SeekDB SQL 未复制 | 见下方 SeekDB 说明或禁用 SeekDB |
+| `build context 不存在: src` | 核心源码未复制 | `cp -r "$ENGRAM_SRC/src" src/` |
+| `volume 源路径不存在: sql` | SQL 脚本未复制 | `cp -r "$ENGRAM_SRC/sql" sql/` |
 | `jq: command not found` | 缺少 jq 工具 | `brew install jq` / `apt install jq` |
-
-**SeekDB 路径说明**：启用 SeekDB 时需要额外复制 SQL 文件。详见 [路径修正指南](#seekdb-sql-文件路径要求)。
 
 ### 5. 启动
 
@@ -654,19 +606,9 @@ VERIFY_FULL=1 VERIFY_JSON_OUT=.artifacts/verify.json make verify-unified
 cd "$TARGET_PROJECT"
 
 # ============================================================
-# 方式 A: 不使用 SeekDB（默认，无需额外文件）
+# 启动统一栈
 # ============================================================
-# 仅 Logbook + OpenMemory，不需要复制 seekdb/sql 目录
 docker compose -f docker-compose.engram.yml up -d
-
-# ============================================================
-# 方式 B: 启用 SeekDB（需要先复制 SeekDB 相关文件）
-# ============================================================
-# 需要先复制:
-#   - apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql
-#   - apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql
-#   - docker-compose.unified.seekdb.yml（重命名为 docker-compose.engram.seekdb.yml）
-docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d
 
 # ============================================================
 # 使用 project name 隔离（多项目部署）
@@ -678,7 +620,7 @@ COMPOSE_PROJECT_NAME=${PROJECT_KEY:-myproject} \
 # 可选 Profile 启动
 # ============================================================
 
-# 启用 Dashboard（需先同步上游 dashboard 源码）
+# 启用 Dashboard（metabase/pgadmin）
 docker compose -f docker-compose.engram.yml --profile dashboard up -d
 
 # 启用 MinIO（对象存储，开发/CI 使用）
@@ -687,8 +629,8 @@ docker compose -f docker-compose.engram.yml --profile minio up -d
 # 启用 SCM 同步
 docker compose -f docker-compose.engram.yml --profile scm_sync up -d
 
-# 组合多个 profile（含 SeekDB）
-docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml \
+# 组合多个 profile
+docker compose -f docker-compose.engram.yml \
   --profile minio --profile dashboard up -d
 ```
 
@@ -711,7 +653,7 @@ curl -sf http://localhost:${OM_PORT:-8080}/health && echo "OpenMemory: OK"
 curl -sf http://localhost:${GATEWAY_PORT:-8787}/health && echo "Gateway: OK"
 
 # Logbook CLI 健康检查（可选）
-cd apps/logbook_postgres/scripts && pip install -e .
+pip install -e .
 POSTGRES_DSN="postgresql://logbook_svc:${LOGBOOK_SVC_PASSWORD}@localhost:5432/${POSTGRES_DB:-myproject}" \
   logbook health
 ```
@@ -741,99 +683,26 @@ echo "✓ Unified stack 部署成功"
 
 | 组件 | 用途 | 启用方式 | 必需文件 |
 |------|------|----------|----------|
-| **Logbook CLI** | 数据库迁移、健康检查、调试 | `pip install -e apps/logbook_postgres/scripts` | `apps/logbook_postgres/scripts/` |
-| **SeekDB** | RAG 分块索引、混合检索 | `-f docker-compose.engram.seekdb.yml` 叠加 | `apps/seekdb_rag_hybrid/sql/`、`docker-compose.unified.seekdb.yml` |
-| **Dashboard** | OpenMemory Web UI | `--profile dashboard` | 需从上游同步 `libs/OpenMemory/dashboard/` |
-| **MinIO** | 对象存储（开发/CI） | `--profile minio` | `apps/logbook_postgres/scripts/ops/`、`apps/logbook_postgres/templates/` |
-| **SCM Sync** | SCM 增量同步 | `--profile scm_sync` | `apps/logbook_postgres/scripts/`（已包含在核心依赖） |
-
-> **SeekDB 禁用说明**：SeekDB 通过 `docker-compose.unified.seekdb.yml` override compose 文件启用。**禁用 SeekDB 时，无需复制任何 SeekDB 相关文件**（`apps/seekdb_rag_hybrid/` 目录和 `docker-compose.unified.seekdb.yml`）。主 compose 文件 `docker-compose.unified.yml` 不引用任何 SeekDB 路径，因此可直接运行：
->
-> ```bash
-> # 禁用 SeekDB（默认部署，无需 SeekDB 文件）
-> docker compose -f docker-compose.engram.yml up -d
->
-> # 启用 SeekDB（需要先复制 SeekDB 相关文件）
-> docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d
-> ```
+| **Logbook CLI** | 数据库迁移、健康检查、调试 | `pip install -e .` | `logbook_postgres/` |
+| **Dashboard** | metabase/pgadmin | `--profile dashboard` | 无额外文件 |
+| **MinIO** | 对象存储（开发/CI） | `--profile minio` | 无额外文件 |
+| **SCM Sync** | SCM 增量同步 | `--profile scm_sync` | `logbook_postgres/scripts/`（已包含在核心依赖） |
 
 ---
 
 ## 复制档位
 
-根据目标项目对 OpenMemory 的维护深度，可选择不同的复制档位。
+统一栈不再 vendoring OpenMemory，默认通过 `OPENMEMORY_IMAGE` 直接使用上游镜像。
 
-### 档位定义
+### 版本锁定建议
 
-| 档位 | 适用场景 | 复制范围 | 维护成本 |
-|------|----------|----------|----------|
-| **L1 最小部署** | 仅使用 OpenMemory 功能，不关心上游同步 | 核心服务代码 | 低 |
-| **L2 版本锁定** | 需要追踪上游版本，但不维护补丁 | L1 + lock 文件 | 低 |
-| **L3 完整维护** | 长期维护统一栈，需要上游同步与补丁管理 | L2 + vendoring 工具链 | 中 |
-
-### L1 最小部署（默认）
-
-前述 [Unified Stack 复制清单](#unified-stack-模式) 即为 L1 档位，包含运行所需的全部文件，无需额外复制。
-
-### L2 版本锁定
-
-在 L1 基础上复制 vendoring 元数据文件，用于追踪上游版本：
+在 `.env` 中指定具体 tag 或 digest 以锁定版本：
 
 ```bash
-# 在 L1 基础上额外复制
-cp "$ENGRAM_SRC/OpenMemory.upstream.lock.json" ./
+OPENMEMORY_IMAGE=ghcr.io/caviraoss/openmemory:v1.2.3
+# 或
+OPENMEMORY_IMAGE=ghcr.io/caviraoss/openmemory@sha256:...
 ```
-
-**作用**：
-- `OpenMemory.upstream.lock.json`：记录当前 vendored 的上游版本（ref、commit SHA、校验和），便于在 CI 或文档中追溯 OpenMemory 版本
-
-> **参考**：详见 [`docs/openmemory/00_vendoring_and_patches.md`](../openmemory/00_vendoring_and_patches.md) 中"关键文件"章节对 lock 文件的说明。
-
-### L3 完整维护（推荐用于长期维护项目）
-
-若目标项目需要长期维护统一栈，建议复制完整的 vendoring 工具链：
-
-```bash
-# 在 L2 基础上额外复制
-cp "$ENGRAM_SRC/openmemory_patches.json" ./
-cp -r "$ENGRAM_SRC/patches/openmemory" patches/
-mkdir -p scripts
-cp "$ENGRAM_SRC/scripts/openmemory_sync.py" scripts/
-cp "$ENGRAM_SRC/scripts/generate_om_patches.sh" scripts/
-```
-
-**各文件作用**：
-
-| 文件 | 必需性 | 作用 |
-|------|--------|------|
-| `OpenMemory.upstream.lock.json` | **必需** | 上游版本锁定，包含 ref、commit SHA、archive SHA256、补丁文件校验和 |
-| `openmemory_patches.json` | **必需** | 补丁清单，记录每个修改点的位置、分类（A/B/C）、原因、上游化潜力 |
-| `patches/openmemory/` | 可选 | 生成的 `.patch` 文件，用于审计和重建；非严格模式下可为空 |
-| `scripts/openmemory_sync.py` | 可选 | 核心同步工具，支持 fetch/sync/verify/schema-validate 等命令 |
-| `scripts/generate_om_patches.sh` | 可选 | Bash 补丁生成脚本，支持 generate/apply/verify/backfill 等操作 |
-
-**为何可选**：
-
-- **`patches/openmemory/`**：Engram 默认采用 Non-Strict 模式（见 [vendoring 文档](../openmemory/00_vendoring_and_patches.md#82-non-strict-模式验收标准)），patch 文件仅在 `upstream_ref` 变更或 release 准备时强制要求。日常开发无需 patch 文件存在。
-- **`scripts/openmemory_sync.py`** 和 **`scripts/generate_om_patches.sh`**：仅在需要执行上游同步或补丁生成时使用。若仅需追踪版本而不执行同步，可不复制。
-
-**L3 档位的价值**：
-
-1. **上游升级能力**：通过 `openmemory_sync.py` 可执行三阶段升级流程（preview → sync → promote）
-2. **补丁审计**：`openmemory_patches.json` 详细记录了 20 个修改点的分类与原因
-3. **CI 门禁**：可启用 `make openmemory-sync-check` 等 CI 检查
-4. **回滚支持**：lock 文件中的 `rollback_procedure` 和 `checksums` 支持版本回滚
-
-> **参考**：完整的 vendoring 流程、CI 门禁要求、冲突分级策略详见 [`docs/openmemory/00_vendoring_and_patches.md`](../openmemory/00_vendoring_and_patches.md)。
-
-### 档位选择建议
-
-| 场景 | 推荐档位 | 理由 |
-|------|----------|------|
-| PoC / 原型验证 | L1 | 快速部署，无需关心版本管理 |
-| 中小型项目 | L2 | 追踪版本以便排查问题 |
-| 企业级长期维护 | L3 | 完整的版本控制与补丁管理能力 |
-| 计划贡献上游 | L3 | 需要 patch 文件用于 PR 提交 |
 
 ---
 
@@ -848,38 +717,31 @@ cp "$ENGRAM_SRC/scripts/generate_om_patches.sh" scripts/
 ```yaml
 # 确认以下路径相对于 docker-compose.engram.yml 正确
 volumes:
-  - ./apps/logbook_postgres/sql:/docker-entrypoint-initdb.d:ro
-  - ./apps/logbook_postgres:/app:ro
-  - ./libs/OpenMemory/packages/openmemory-js:/app:ro
+  - ./sql:/docker-entrypoint-initdb.d:ro
 
 build:
-  context: ./libs/OpenMemory/packages/openmemory-js
-  context: .  # Gateway 构建需要项目根目录
+  context: .  # Gateway/Worker 构建需要项目根目录
+  dockerfile: docker/engram.Dockerfile
 ```
 
 ### Gateway build.context 约束（重要）
 
 **Gateway 的 `build.context` 必须指向目标项目根目录**。这是由 Dockerfile 中的 COPY 指令决定的硬性约束。
 
-**Dockerfile COPY 依赖**（参见 `apps/openmemory_gateway/gateway/Dockerfile`）：
+**Dockerfile COPY 依赖**（参见 `docker/engram.Dockerfile`）：
 
 ```dockerfile
-# Layer 1: 第三方依赖
-COPY apps/openmemory_gateway/gateway/requirements.runtime.txt /app/requirements.runtime.txt
-
-# Layer 2: Logbook 本地包（跨目录依赖）
-COPY apps/logbook_postgres/scripts /logbook_scripts
-
-# Layer 3: Gateway 应用代码
-COPY apps/openmemory_gateway/gateway/pyproject.toml /app/
-COPY apps/openmemory_gateway/gateway/README.md /app/
-COPY apps/openmemory_gateway/gateway/gateway/ /app/gateway/
-COPY apps/openmemory_gateway/gateway/tests/ /app/tests/
+COPY pyproject.toml requirements.txt README.md ./
+COPY src ./src
+COPY sql ./sql
+COPY logbook_postgres ./logbook_postgres
+COPY engram_logbook ./engram_logbook
+COPY db_bootstrap.py ./
 ```
 
 **关键约束**：
 - 所有 COPY 路径都是相对于 `build.context` 的
-- `apps/logbook_postgres/scripts` 是 Gateway 构建的**跨目录依赖**
+- `logbook_postgres/scripts` 是 Gateway 构建的**跨目录依赖**
 - 如果 `build.context` 不是项目根目录，Dockerfile 将无法找到这些路径
 
 **Compose 配置要求**：
@@ -887,15 +749,13 @@ COPY apps/openmemory_gateway/gateway/tests/ /app/tests/
 | Compose 文件 | build.context | 说明 |
 |--------------|---------------|------|
 | `docker-compose.engram.yml` | `.` | 项目根目录 |
-| `compose/gateway.yml` | `..` | 相对于 compose/ 的项目根目录 |
 
 **允许的重构方式**：
 
 如需改变目录结构（例如重命名 `apps/` 或移动 `logbook_postgres/`），**必须同步修改以下文件**：
 
-1. `apps/openmemory_gateway/gateway/Dockerfile` - 更新所有 COPY 路径
-2. `docker-compose.unified.yml` - 更新 gateway/worker 服务的 build 配置
-3. `compose/gateway.yml` - 更新 gateway/worker 服务的 build 配置
+1. `docker/engram.Dockerfile` - 更新所有 COPY 路径
+2. `docker-compose.unified.yml` - 更新 `gateway` 与 `worker` 服务的 build 配置
 
 **风险警告**：
 
@@ -905,62 +765,12 @@ COPY apps/openmemory_gateway/gateway/tests/ /app/tests/
 | build.context 设置错误 | 构建失败或镜像缺少依赖 | 使用预检脚本验证路径 |
 | Dockerfile 路径与实际结构不一致 | CI/CD 构建失败 | 在 PR 中包含 Dockerfile 修改的完整测试 |
 
-### docker-compose.engram.seekdb.yml（SeekDB override，可选）
-
-```yaml
-# 仅在启用 SeekDB 时需要
-# 用法: docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d
-volumes:
-  - ./apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql:/sql/06_seekdb_roles_and_grants.sql:ro
-  - ./apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql:/sql/09_seekdb_index.sql:ro
-```
-
-### SeekDB 启用方式（Override Compose）
-
-SeekDB 相关的 volume bind 已移至独立的 override compose 文件 `docker-compose.unified.seekdb.yml`。
-
-**新的架构**：
-
-| 文件 | 内容 | 场景 |
-|------|------|------|
-| `docker-compose.unified.yml` | 核心服务（Logbook + OpenMemory + Gateway） | 默认部署 |
-| `docker-compose.unified.seekdb.yml` | SeekDB SQL 脚本 volume bind | 启用 SeekDB 时叠加 |
-
-**启用 SeekDB**：
-
-```bash
-# 需要先复制 SeekDB 相关文件
-mkdir -p apps/seekdb_rag_hybrid/sql
-cp "$ENGRAM_SRC/apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql" apps/seekdb_rag_hybrid/sql/
-cp "$ENGRAM_SRC/apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql" apps/seekdb_rag_hybrid/sql/
-cp "$ENGRAM_SRC/docker-compose.unified.seekdb.yml" docker-compose.engram.seekdb.yml
-
-# 启动时叠加 override compose
-docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d
-```
-
-**禁用 SeekDB（默认）**：
-
-```bash
-# 不需要复制 seekdb/sql 目录，也不需要 override compose 文件
-docker compose -f docker-compose.engram.yml up -d
-```
-
-- **优点**：
-  - 禁用 SeekDB 时无需复制任何 SeekDB 相关文件
-  - `docker compose up` 不会因缺少文件而报错
-  - 后续启用 SeekDB 只需添加 override compose 叠加
-- **与旧版本的差异**：
-  - 旧版本要求即使 `SEEKDB_ENABLE=0` 也必须复制 SQL 文件
-  - 新版本完全解耦，禁用时无需任何 SeekDB 文件
-
 ### compose/logbook.yml（Logbook-only）
 
 ```yaml
 # 确认以下路径相对于 compose/logbook.yml 正确
 volumes:
-  - ../apps/logbook_postgres/sql:/docker-entrypoint-initdb.d:ro
-  - ../apps/logbook_postgres:/app:ro
+  - ../sql:/docker-entrypoint-initdb.d:ro
 ```
 
 ---
@@ -993,30 +803,27 @@ docker compose -p proj_b ps
 
 ```bash
 # 验证文件存在
-ls -la apps/logbook_postgres/sql/
-ls -la libs/OpenMemory/packages/openmemory-js/
+ls -la sql/
+ls -la src/
+ls -la docker/engram.Dockerfile
 ```
 
 ### Q: 如何只复制最小必需文件？
 
 **Logbook-only**:
 - `compose/logbook.yml`
-- `apps/logbook_postgres/sql/`
+- `sql/`
 
-**Unified stack（不含 SeekDB）**:
+**Unified stack**:
 - `docker-compose.unified.yml`
-- `apps/logbook_postgres/sql/`
-- `apps/logbook_postgres/scripts/`
-- `apps/openmemory_gateway/gateway/`
-- `libs/OpenMemory/`
-
-**Unified stack（含 SeekDB）**:
-- 上述所有文件，加上：
-- `docker-compose.unified.seekdb.yml`
-- `apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql`
-- `apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql`
-
-**说明**：SeekDB 相关文件现在是可选的。禁用 SeekDB 时无需复制这些文件。详见 [路径修正指南 - SeekDB 启用方式](#seekdb-启用方式override-compose)。
+- `docker/`
+- `src/`
+- `sql/`
+- `logbook_postgres/`
+- `engram_logbook/`
+- `db_bootstrap.py`
+- `pyproject.toml`
+- `requirements.txt`
 
 ### Q: 服务账号密码是什么？
 
@@ -1026,7 +833,7 @@ ls -la libs/OpenMemory/packages/openmemory-js/
 - `openmemory_migrator_login`: OpenMemory DDL 迁移账号
 - `openmemory_svc`: OpenMemory 运行时 DML 账号
 
-这些角色在 PostgreSQL 首次启动时由 `00_init_service_accounts.sh` 自动创建。
+这些角色可通过 `logbook_postgres/scripts/db_bootstrap.py` 自动创建。
 
 ### Q: API Key 应该使用哪个变量名？
 
@@ -1044,24 +851,6 @@ OPENMEMORY_API_KEY=your-api-key
 
 详见 [环境变量参考 - Gateway 组件](../reference/environment_variables.md#gateway-组件) 和 [API Key 优先级](../reference/environment_variables.md#api-key-优先级)。
 
-### Q: 如何禁用 SeekDB？
-
-```bash
-# 禁用 SeekDB（默认，不需要复制 seekdb/sql 目录）
-docker compose -f docker-compose.engram.yml up -d
-
-# 启用 SeekDB（需要先复制 seekdb/sql 目录和 override compose）
-docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d
-```
-
-**变量命名说明**：
-
-- **推荐变量名**: `SEEKDB_ENABLE`（规范前缀 `SEEKDB_*`）
-- **废弃变量**: `SEEK_ENABLE` 将于 **2026-Q3 移除**
-- 详细的变量列表和废弃说明请参考 [环境变量参考 - SeekDB 组件](../reference/environment_variables.md#seekdb-组件可选层) 和 [废弃变量](../reference/environment_variables.md#废弃变量)
-
-说明：SeekDB 现在通过 compose 文件叠加控制。禁用 SeekDB 时无需复制任何 SeekDB 相关文件。
-
 ---
 
 ## 依赖路径完整映射
@@ -1076,38 +865,18 @@ docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml 
 
 | 服务 | 源路径 | 容器目标 | 必需性 |
 |------|--------|----------|--------|
-| postgres | `./apps/logbook_postgres/sql` | `/docker-entrypoint-initdb.d:ro` | **必需** |
-| bootstrap_roles | `./apps/logbook_postgres/sql/03_pgvector_extension.sql` | `/sql/03_pgvector_extension.sql:ro` | **必需** |
-| bootstrap_roles | `./apps/logbook_postgres/sql/04_roles_and_grants.sql` | `/sql/04_roles_and_grants.sql:ro` | **必需** |
-| bootstrap_roles | `./apps/logbook_postgres/sql/05_openmemory_roles_and_grants.sql` | `/sql/05_openmemory_roles_and_grants.sql:ro` | **必需** |
-| bootstrap_roles | `./apps/logbook_postgres/sql/99_verify_permissions.sql` | `/sql/99_verify_permissions.sql:ro` | **必需** |
-
-**docker-compose.unified.seekdb.yml（SeekDB override，可选）**:
-
-| 服务 | 源路径 | 容器目标 | 必需性 |
-|------|--------|----------|--------|
-| postgres | `./apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql` | `/sql/06_seekdb_roles_and_grants.sql:ro` | SeekDB 启用时必需 |
-| postgres | `./apps/seekdb_rag_hybrid/sql/02_seekdb_index.sql` | `/sql/09_seekdb_index.sql:ro` | SeekDB 启用时必需 |
-| bootstrap_roles | `./apps/seekdb_rag_hybrid/sql/01_seekdb_roles_and_grants.sql` | `/sql/06_seekdb_roles_and_grants.sql:ro` | SeekDB 启用时必需 |
-| logbook_migrate | `./apps/logbook_postgres` | `/app:ro` | **必需** |
-| permissions_verify | `./apps/logbook_postgres/sql/99_verify_permissions.sql` | `/verify.sql:ro` | **必需** |
-| logbook_tools | `./apps/logbook_postgres/scripts` | `/app/scripts:ro` | tools profile 启用时必需 |
-| scm_scheduler | `./apps/logbook_postgres/scripts` | `/app/scripts:ro` | scm_sync profile 启用时必需 |
-| scm_worker | `./apps/logbook_postgres/scripts` | `/app/scripts:ro` | scm_sync profile 启用时必需 |
-| scm_reaper | `./apps/logbook_postgres/scripts` | `/app/scripts:ro` | scm_sync profile 启用时必需 |
-| logbook_test | `./apps/logbook_postgres` | `/app:ro` | test profile 启用时必需 |
-| minio_init | `./apps/logbook_postgres/scripts/ops` | `/ops:ro` | minio profile 启用时必需 |
-| minio_init | `./apps/logbook_postgres/templates` | `/templates:ro` | minio profile 启用时必需 |
+| postgres | `./sql` | `/docker-entrypoint-initdb.d:ro` | **必需** |
+| 其余服务 | （无 volume bind） | — | — |
 
 #### Build Contexts
 
 | 服务 | Context | Dockerfile | 必需性 |
 |------|---------|------------|--------|
-| openmemory_migrate | `./libs/OpenMemory/packages/openmemory-js` | Dockerfile | **必需** |
-| openmemory | `./libs/OpenMemory/packages/openmemory-js` | Dockerfile | **必需** |
-| gateway | `.` (项目根) | `apps/openmemory_gateway/gateway/Dockerfile` | **必需** |
-| worker | `.` (项目根) | `apps/openmemory_gateway/gateway/Dockerfile` | **必需** |
-| dashboard | `./libs/OpenMemory/dashboard` | Dockerfile | dashboard profile 启用时必需 |
+| openmemory_migrate | `.` (项目根) | `docker/openmemory.Dockerfile` | **必需** |
+| openmemory | `.` (项目根) | `docker/openmemory.Dockerfile` | **必需** |
+| gateway | `.` (项目根) | `docker/engram.Dockerfile` | **必需** |
+| worker | `.` (项目根) | `docker/engram.Dockerfile` | **必需** |
+| dashboard | （image 方式） | — | dashboard profile 启用时可选 |
 
 ### Gateway Dockerfile COPY 依赖
 
@@ -1115,36 +884,18 @@ Gateway 和 Worker 服务的 Dockerfile 从项目根目录 COPY 以下路径：
 
 | 源路径 | 容器目标 | 用途 |
 |--------|----------|------|
-| `apps/openmemory_gateway/gateway/requirements.runtime.txt` | `/app/requirements.runtime.txt` | Python 运行时依赖 |
-| `apps/logbook_postgres/scripts` | `/logbook_scripts` | engram_logbook 包 |
-| `apps/openmemory_gateway/gateway/pyproject.toml` | `/app/` | 包配置 |
-| `apps/openmemory_gateway/gateway/README.md` | `/app/` | 包元数据 |
-| `apps/openmemory_gateway/gateway/gateway/` | `/app/gateway/` | Gateway 核心代码 |
-| `apps/openmemory_gateway/gateway/tests/` | `/app/tests/` | 测试代码（可选） |
+| `pyproject.toml` | `/app/` | 包配置 |
+| `requirements.txt` | `/app/` | 依赖清单 |
+| `README.md` | `/app/` | 包元数据 |
+| `src/` | `/app/src/` | Gateway/Logbook 核心代码 |
+| `sql/` | `/app/sql/` | 迁移脚本 |
+| `logbook_postgres/` | `/app/logbook_postgres/` | 迁移与工具脚本 |
+| `engram_logbook/` | `/app/engram_logbook/` | 兼容包 |
+| `db_bootstrap.py` | `/app/db_bootstrap.py` | 服务账号初始化 |
 
 ### 分步部署 Compose 文件依赖
 
-#### compose/logbook.yml
-
-| 源路径 | 容器目标 |
-|--------|----------|
-| `../apps/logbook_postgres/sql` | `/docker-entrypoint-initdb.d:ro` |
-| `../apps/logbook_postgres` | `/app:ro` |
-
-#### compose/openmemory.yml
-
-| 服务 | Build Context |
-|------|---------------|
-| openmemory | `../libs/OpenMemory/packages/openmemory-js` |
-| openmemory_migrate | `../libs/OpenMemory/packages/openmemory-js` |
-| dashboard | `../libs/OpenMemory/dashboard` |
-
-#### compose/gateway.yml
-
-| 服务 | Build Context | Dockerfile |
-|------|---------------|------------|
-| gateway | `..` (项目根) | `apps/openmemory_gateway/gateway/Dockerfile` |
-| worker | `..` (项目根) | `apps/openmemory_gateway/gateway/Dockerfile` |
+分步 compose 仅提供 Logbook-only（`compose/logbook.yml`），其余组件统一使用 `docker-compose.engram.yml`。
 
 ---
 
@@ -1169,7 +920,7 @@ python "$ENGRAM_SRC/scripts/import_copy.py" --src "$ENGRAM_SRC" --dst "$TARGET_P
 # Unified Stack（显式指定模式）
 python "$ENGRAM_SRC/scripts/import_copy.py" --src "$ENGRAM_SRC" --dst "$TARGET_PROJECT" --mode unified
 
-# Unified Stack（含可选文件，如 SeekDB、Gateway 模板）
+# Unified Stack（含可选文件，如 Gateway 模板）
 python "$ENGRAM_SRC/scripts/import_copy.py" --src "$ENGRAM_SRC" --dst "$TARGET_PROJECT" --include-optional
 
 # 干运行预览
@@ -1193,15 +944,16 @@ mkdir -p compose
 cp "$ENGRAM_SRC/compose/logbook.yml" compose/
 
 # 2. Logbook SQL 初始化脚本（整个目录）
-mkdir -p apps/logbook_postgres
-cp -r "$ENGRAM_SRC/apps/logbook_postgres/sql" apps/logbook_postgres/
+mkdir -p sql
+cp -r "$ENGRAM_SRC/sql" ./
 
 # ============================================================
 # 可选文件
 # ============================================================
 
 # [可选] Logbook CLI & 迁移脚本
-# cp -r "$ENGRAM_SRC/apps/logbook_postgres/scripts" apps/logbook_postgres/
+# mkdir -p logbook_postgres
+# cp -r "$ENGRAM_SRC/logbook_postgres/scripts" logbook_postgres/
 ```
 
 </details>
@@ -1221,44 +973,27 @@ cd "$TARGET_PROJECT"
 # 1. 统一栈 Compose 配置
 cp "$ENGRAM_SRC/docker-compose.unified.yml" docker-compose.engram.yml
 
-# 2. Logbook SQL 初始化脚本
-mkdir -p apps/logbook_postgres
-cp -r "$ENGRAM_SRC/apps/logbook_postgres/sql" apps/logbook_postgres/
+# 2. Dockerfile（Gateway/Worker/OpenMemory）
+cp -r "$ENGRAM_SRC/docker" docker/
 
-# 3. Logbook 迁移脚本（含 engram_logbook 包，Gateway 构建依赖）
-cp -r "$ENGRAM_SRC/apps/logbook_postgres/scripts" apps/logbook_postgres/
-
-# 4. Gateway 服务代码（整个 gateway 目录）
-mkdir -p apps/openmemory_gateway
-cp -r "$ENGRAM_SRC/apps/openmemory_gateway/gateway" apps/openmemory_gateway/
-
-# 5. OpenMemory 源码
-mkdir -p libs
-cp -r "$ENGRAM_SRC/libs/OpenMemory" libs/
+# 3. 核心源码与迁移脚本
+cp -r "$ENGRAM_SRC/src" src/
+cp -r "$ENGRAM_SRC/sql" sql/
+cp -r "$ENGRAM_SRC/logbook_postgres" logbook_postgres/
+cp -r "$ENGRAM_SRC/engram_logbook" engram_logbook/
+cp "$ENGRAM_SRC/db_bootstrap.py" ./
+cp "$ENGRAM_SRC/pyproject.toml" ./
+cp "$ENGRAM_SRC/requirements.txt" ./
+cp "$ENGRAM_SRC/README.md" ./
 
 # ============================================================
 # 可选文件（按 Profile 需求）
 # ============================================================
 
-# [可选] 分步部署 Compose 配置
-mkdir -p compose
-cp "$ENGRAM_SRC/compose/logbook.yml" compose/
-cp "$ENGRAM_SRC/compose/openmemory.yml" compose/
-cp "$ENGRAM_SRC/compose/gateway.yml" compose/
-
-# [可选] SeekDB RAG 索引（仅启用 SeekDB 时需要）
-# 启用 SeekDB: docker compose -f docker-compose.engram.yml -f docker-compose.engram.seekdb.yml up -d
-mkdir -p apps/seekdb_rag_hybrid
-cp -r "$ENGRAM_SRC/apps/seekdb_rag_hybrid/sql" apps/seekdb_rag_hybrid/
-cp "$ENGRAM_SRC/docker-compose.unified.seekdb.yml" docker-compose.engram.seekdb.yml
-
-# [可选] MinIO profile 依赖
-# 如需启用 --profile minio，以下文件必需：
-cp -r "$ENGRAM_SRC/apps/logbook_postgres/templates" apps/logbook_postgres/
-# 注：scripts/ops/ 已包含在 scripts 目录中
-
-# [可选] Gateway 模板文件（.mcp.json 示例）
-cp -r "$ENGRAM_SRC/apps/openmemory_gateway/templates" apps/openmemory_gateway/
+# [可选] .env 示例与 MCP 配置模板
+cp "$ENGRAM_SRC/.env.example" ./
+mkdir -p configs/mcp
+cp "$ENGRAM_SRC/configs/mcp/.mcp.json.example" configs/mcp/
 ```
 
 </details>
@@ -1269,10 +1004,9 @@ cp -r "$ENGRAM_SRC/apps/openmemory_gateway/templates" apps/openmemory_gateway/
 
 | 风险类型 | 描述 | 缓解措施 |
 |----------|------|----------|
-| **Gateway 构建失败** | Dockerfile COPY 需要项目根目录作为 context | 确保 `apps/logbook_postgres/scripts` 和 `apps/openmemory_gateway/gateway` 完整复制 |
-| **SeekDB 迁移失败** | 启用 SeekDB 但缺少 SQL 文件或 override compose | 复制 `apps/seekdb_rag_hybrid/sql/` 和 `docker-compose.unified.seekdb.yml`，或禁用 SeekDB |
-| **MinIO 初始化失败** | minio profile 需要 ops 脚本和 templates | 启用 minio profile 前确保复制 `scripts/ops/` 和 `templates/` |
-| **权限验证失败** | 缺少 `99_verify_permissions.sql` | 确保完整复制 `apps/logbook_postgres/sql/` 目录 |
+| **Gateway 构建失败** | Dockerfile COPY 需要项目根目录作为 context | 确保 `docker/`、`src/`、`sql/`、`logbook_postgres/` 已完整复制 |
+| **MinIO 初始化失败** | minio profile 依赖环境变量配置 | 检查 `.env` 中 `MINIO_*` 变量 |
+| **权限验证失败** | 缺少 `99_verify_permissions.sql` | 确保完整复制 `sql/` 目录 |
 | **路径不匹配** | 复制后相对路径可能失效 | 参考"路径修正指南"调整 Compose 文件 |
 
 ---
@@ -1289,4 +1023,3 @@ cp -r "$ENGRAM_SRC/apps/openmemory_gateway/templates" apps/openmemory_gateway/
 | [环境变量参考](../reference/environment_variables.md) | 完整的环境变量列表 |
 | [Logbook 概述](../logbook/00_overview.md) | Logbook 架构与设计 |
 | [Gateway 概述](../gateway/00_overview.md) | Gateway MCP 集成 |
-| [SeekDB 概述](../seekdb/00_overview.md) | SeekDB RAG 索引 |

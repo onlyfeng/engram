@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-engram}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ../sql:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-engram}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [logbook_net]
+
+  logbook_migrate:
+    build:
+      context: ..
+      dockerfile: docker/engram.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-engram}
+      LOGBOOK_MIGRATOR_PASSWORD: ${LOGBOOK_MIGRATOR_PASSWORD:-}
+      LOGBOOK_SVC_PASSWORD: ${LOGBOOK_SVC_PASSWORD:-}
+      OPENMEMORY_MIGRATOR_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:-}
+      OPENMEMORY_SVC_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:-}
+      OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
+    command: >
+      sh -c 'python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
+    networks: [logbook_net]
+
+networks:
+  logbook_net:
+
+volumes:
+  pgdata:

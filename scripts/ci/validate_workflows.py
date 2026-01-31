@@ -901,8 +901,7 @@ class WorkflowContractValidator:
             # 排除元数据字段
             meta_keys = {"$schema", "version", "description", "last_updated", 
                         "make", "frozen_step_text", "step_name_aliases",
-                        "_changelog_v1.3.0", "_changelog_v1.4.0",
-                        "seekdb_policy_markers"}
+                        "_changelog_v1.3.0", "_changelog_v1.4.0"}
             for key, value in self.contract.items():
                 if key not in meta_keys and isinstance(value, dict) and "file" in value:
                     workflows[key] = value

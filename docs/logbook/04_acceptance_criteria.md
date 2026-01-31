@@ -44,7 +44,7 @@ Logbook 是 URI Grammar 的**唯一规范 owner**，定义三类 URI 格式：
 | **Physical URI** | `file://`、`s3://`、`https://` | 特例输入（需谨慎） | `s3://bucket/engram/proj_a/scm/1/r100.diff` |
 | **Evidence URI** | `memory://patch_blobs/...`<br>`memory://attachments/...` | 证据引用（analysis/governance） | `memory://patch_blobs/svn/1:100/abc123` |
 
-**规范实现**：`engram_logbook/uri.py`
+**规范实现**：`src/engram/logbook/uri.py`
 
 **关键函数**：
 
@@ -109,7 +109,7 @@ pending ────────────────────────
 
 | 约束 | 说明 |
 |------|------|
-| 规范文档 | `engram_logbook/uri.py` 模块文档 |
+| 规范文档 | `src/engram/logbook/uri.py` 模块文档 |
 | 解析实现 | `parse_uri()`、`parse_evidence_uri()` 为唯一权威解析器 |
 | Gateway 职责 | 仅调用 Logbook URI 模块，不自行定义 URI 格式 |
 
@@ -303,11 +303,11 @@ FULL profile 下 `db_invariants` 步骤为**必需步骤**，缺少前置条件�
 |--------|----------|------|
 | `CAP_POSTGRES_DSN_MISSING` | `export POSTGRES_DSN="postgresql://user:pass@host:port/dbname"` | 设置数据库连接字符串 |
 | `CAP_NO_DB_ACCESS` | `pip install psycopg2-binary` 或 `brew install postgresql` | 安装数据库访问工具 |
-| `LOGBOOK_DB_SCHEMA_MISSING` | `python apps/logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
-| `LOGBOOK_DB_TABLE_MISSING` | `python apps/logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
-| `LOGBOOK_DB_INDEX_MISSING` | `python apps/logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
-| `LOGBOOK_DB_MATVIEW_MISSING` | `python apps/logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
-| `LOGBOOK_DB_STRUCTURE_INCOMPLETE` | `python apps/logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
+| `LOGBOOK_DB_SCHEMA_MISSING` | `python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
+| `LOGBOOK_DB_TABLE_MISSING` | `python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
+| `LOGBOOK_DB_INDEX_MISSING` | `python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
+| `LOGBOOK_DB_MATVIEW_MISSING` | `python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
+| `LOGBOOK_DB_STRUCTURE_INCOMPLETE` | `python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"` | 执行数据库迁移 |
 | `LOGBOOK_DB_MIGRATE_FAILED` | 检查数据库权限和连接，重试迁移 | 迁移脚本执行失败 |
 | `LOGBOOK_DB_CONNECTION_FAILED` | 检查 DSN 格式和网络连接 | 数据库连接失败 |
 
@@ -315,7 +315,7 @@ FULL profile 下 `db_invariants` 步骤为**必需步骤**，缺少前置条件�
 
 ```bash
 # 单独验证 DB 不变量（使用 db_migrate.py --verify）
-python apps/logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --verify --json
+python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --verify --json
 
 # 通过 Gateway logbook_adapter 验证
 python -c "
@@ -390,7 +390,7 @@ FULL profile 下 `degradation` 步骤为**必需步骤**，但可通过以下方
 在 Logbook-only 部署模式下，以下 SQL 文件为**必需**：
 
 ```
-apps/logbook_postgres/sql/
+sql/
 ├── 01_logbook_schema.sql     # 必需：核心 schema 和表定义
 └── 04_roles_and_grants.sql   # 必需：核心角色和权限
 ```
@@ -637,7 +637,7 @@ python logbook_cli.py create_item --item-type task --title "Test" --json-out res
 
 | 错误码 | 场景 | 修复建议 |
 |--------|------|----------|
-| `INSTALL_FAILED` | engram_logbook 安装失败 | `pip install -e apps/logbook_postgres/scripts` |
+| `INSTALL_FAILED` | engram_logbook 安装失败 | `pip install -e logbook_postgres/scripts` |
 | `SERVICE_NOT_RUNNING` | PostgreSQL 服务未运行 | `make deploy` |
 | `HEALTH_CHECK_FAILED` | 数据库健康检查失败 | 检查 DSN 配置和数据库连接 |
 | `CONNECTION_ERROR` | 数据库连接失败 | 检查 `POSTGRES_DSN` 环境变量 |
@@ -679,7 +679,7 @@ python logbook_cli.py create_item --item-type task --title "Test" --json-out res
 | `LOGBOOK_DB_INDEX_MISSING` | 必需索引不存在 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
 | `LOGBOOK_DB_MATVIEW_MISSING` | 必需物化视图不存在 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
 | `LOGBOOK_DB_STRUCTURE_INCOMPLETE` | DB 结构不完整 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
-| `LOGBOOK_DB_MIGRATE_NOT_AVAILABLE` | 迁移模块不可用 | `pip install -e apps/logbook_postgres/scripts` |
+| `LOGBOOK_DB_MIGRATE_NOT_AVAILABLE` | 迁移模块不可用 | `pip install -e logbook_postgres/scripts` |
 | `LOGBOOK_DB_MIGRATE_FAILED` | 迁移执行失败 | 检查数据库权限和连接 |
 | `LOGBOOK_DB_MIGRATE_PARTIAL` | 迁移部分完成 | 检查迁移日志，手动修复 |
 | `LOGBOOK_DB_CONNECTION_FAILED` | 数据库连接失败 | 检查 DSN 格式和网络 |

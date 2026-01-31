@@ -2,7 +2,7 @@
 
 > 版本: v1.0  
 > 生效日期: 2026-01-30  
-> 适用于: `apps/openmemory_gateway/gateway/`
+> 适用于: `src/engram/gateway/`
 
 ## 概述
 
@@ -200,7 +200,7 @@ interface ErrorData {
 
 契约由以下模块实现：
 
-- `gateway/mcp_rpc.py` - 错误模型定义与转换
+- `src/engram/gateway/mcp_rpc.py` - 错误模型定义与转换
   - `ErrorCategory` - 错误分类常量
   - `ErrorReason` - 错误原因码常量
   - `ErrorData` - 结构化错误数据模型
@@ -211,7 +211,7 @@ interface ErrorData {
 
 契约测试位于：
 
-- `gateway/tests/test_mcp_jsonrpc_contract.py`
+- `tests/gateway/test_mcp_jsonrpc_contract.py`
   - `TestErrorDataStructure` - ErrorData 结构验证
   - `TestErrorDataFields` - 必需字段完整性
   - `TestCorrelationIdTracking` - correlation_id 追踪

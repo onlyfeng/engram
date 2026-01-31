@@ -22,8 +22,8 @@
       {
         "id": "logbook_sql",
         "description": "Logbook SQL 初始化脚本（Schema、索引、权限）",
-        "source_path": "apps/logbook_postgres/sql",
-        "target_path": "apps/logbook_postgres/sql",
+        "source_path": "sql",
+        "target_path": "sql",
         "type": "directory"
       }
     ],
@@ -31,8 +31,8 @@
       {
         "id": "logbook_scripts",
         "description": "Logbook CLI & 迁移脚本（含 engram_logbook 包）",
-        "source_path": "apps/logbook_postgres/scripts",
-        "target_path": "apps/logbook_postgres/scripts",
+        "source_path": "logbook_postgres/scripts",
+        "target_path": "logbook_postgres/scripts",
         "type": "directory",
         "use_case": "需要 logbook health、logbook-smoke、数据库迁移或完整验收时使用"
       }
@@ -43,7 +43,7 @@
       "id": "compose_relative_paths",
       "description": "Compose 文件中的相对路径基于 compose/ 目录",
       "applies_to": ["compose_logbook"],
-      "rationale": "compose/logbook.yml 中的 volume bind 使用 ../apps/logbook_postgres/sql"
+      "rationale": "compose/logbook.yml 中的 volume bind 使用 ../sql"
     },
     {
       "id": "sql_directory_complete",
@@ -97,7 +97,7 @@
       "command": "logbook health",
       "success_indicator": "{\"ok\": true}",
       "requires": ["logbook_scripts"],
-      "note": "需要安装 engram_logbook 包：pip install -e apps/logbook_postgres/scripts"
+      "note": "需要安装 engram_logbook 包：pip install -e logbook_postgres/scripts"
     }
   },
   "acceptance_levels": {

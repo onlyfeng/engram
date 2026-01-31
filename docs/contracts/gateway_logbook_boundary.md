@@ -20,7 +20,7 @@
 
 > **规范所有权**：**URI Grammar 的唯一规范由 Logbook 层定义和维护**。
 >
-> - **规范文档**：[`engram_logbook/uri.py`](../../apps/logbook_postgres/scripts/engram_logbook/uri.py) 模块文档
+> - **规范文档**：[`src/engram/logbook/uri.py`](../../src/engram/logbook/uri.py) 模块文档
 > - **格式定义**：Evidence URI、Artifact Key、Physical URI 的语法规则均由 `engram_logbook.uri` 模块定义
 > - **解析实现**：`parse_uri()`、`parse_evidence_uri()`、`parse_attachment_evidence_uri()` 等函数为唯一权威解析器
 > - **Gateway 职责**：Gateway 仅调用 Logbook URI 模块进行解析与构建，不自行定义 URI 格式
@@ -33,13 +33,13 @@
 
 | 契约项 | 定义位置 | 实现模块 | 测试归属 | 兼容策略 | 破坏性变更判定 |
 |--------|----------|----------|----------|----------|----------------|
-| **URI 规范** | [docs/logbook/01_architecture.md](../logbook/01_architecture.md) URI 双轨规范 | `engram_logbook.uri` | `tests/test_uri.py` | 新增 scheme 可向后兼容；修改现有 scheme 解析规则需迁移 | 改变 `memory://` 路径结构、`parse_*` 返回字段 |
-| **Evidence URI 格式** | [docs/gateway/03_memory_contract.md](../gateway/03_memory_contract.md) Evidence 字段 | `engram_logbook.uri` | `tests/test_uri.py`, `tests/test_evidence_resolver.py` | 新增字段可向后兼容 | 移除必需字段、改变 artifact_uri 格式 |
-| **Outbox 状态机** | [engram_logbook/outbox.py](../../apps/logbook_postgres/scripts/engram_logbook/outbox.py) 模块文档 | `engram_logbook.outbox` | `tests/test_outbox.py` | 新增状态需文档说明 | 改变 `pending→sent`/`pending→dead` 转换条件 |
-| **Outbox Lease 协议** | [engram_logbook/outbox.py](../../apps/logbook_postgres/scripts/engram_logbook/outbox.py) Lease 协议函数 | `engram_logbook.outbox` | `tests/test_outbox.py` | Worker 实现需遵循协议 | 改变 `locked_by` 验证逻辑、lease 过期判定 |
-| **Governance 设置** | [docs/gateway/04_governance_switch.md](../gateway/04_governance_switch.md) | `engram_logbook.governance` | `tests/test_governance.py` | 新增 policy 字段可向后兼容 | 改变 `team_write_enabled` 默认值或语义 |
-| **Write Audit 结构** | [engram_logbook/governance.py](../../apps/logbook_postgres/scripts/engram_logbook/governance.py) evidence_refs_json 规范 | `engram_logbook.governance` | `tests/test_governance.py` | 新增字段可向后兼容 | 移除 `evidence_refs_json` 必需字段 |
-| **Write Audit 原子性** | [ADR: Gateway 审计原子性](../architecture/adr_gateway_audit_atomicity.md) | `engram_logbook.governance` | `tests/test_governance.py` | 见 ADR | 改变 status 状态机语义 |
+| **URI 规范** | [docs/logbook/01_architecture.md](../logbook/01_architecture.md) URI 双轨规范 | `engram_logbook.uri` | `tests/logbook/test_uri_boundary_contract.py` | 新增 scheme 可向后兼容；修改现有 scheme 解析规则需迁移 | 改变 `memory://` 路径结构、`parse_*` 返回字段 |
+| **Evidence URI 格式** | [docs/gateway/03_memory_contract.md](../gateway/03_memory_contract.md) Evidence 字段 | `engram_logbook.uri` | `tests/logbook/test_uri_resolution.py` | 新增字段可向后兼容 | 移除必需字段、改变 artifact_uri 格式 |
+| **Outbox 状态机** | [src/engram/logbook/outbox.py](../../src/engram/logbook/outbox.py) 模块文档 | `engram_logbook.outbox` | `tests/logbook/test_outbox_lease.py` | 新增状态需文档说明 | 改变 `pending→sent`/`pending→dead` 转换条件 |
+| **Outbox Lease 协议** | [src/engram/logbook/outbox.py](../../src/engram/logbook/outbox.py) Lease 协议函数 | `engram_logbook.outbox` | `tests/logbook/test_outbox_lease.py` | Worker 实现需遵循协议 | 改变 `locked_by` 验证逻辑、lease 过期判定 |
+| **Governance 设置** | [docs/gateway/04_governance_switch.md](../gateway/04_governance_switch.md) | `engram_logbook.governance` | `tests/gateway/test_audit_event_contract.py` | 新增 policy 字段可向后兼容 | 改变 `team_write_enabled` 默认值或语义 |
+| **Write Audit 结构** | [src/engram/logbook/governance.py](../../src/engram/logbook/governance.py) evidence_refs_json 规范 | `engram_logbook.governance` | `tests/gateway/test_audit_event_contract.py` | 新增字段可向后兼容 | 移除 `evidence_refs_json` 必需字段 |
+| **Write Audit 原子性** | [ADR: Gateway 审计原子性](../architecture/adr_gateway_audit_atomicity.md) | `engram_logbook.governance` | `tests/gateway/test_audit_event.py` | 见 ADR | 改变 status 状态机语义 |
 | **Degradation 策略** | [docs/gateway/05_failure_degradation.md](../gateway/05_failure_degradation.md) | Gateway 实现 | Gateway 测试 | 新增降级模式需文档说明 | 改变 FULL 模式失败语义 |
 
 ---
@@ -327,7 +327,7 @@ reconcile 禁止操作:
   └── 删除 outbox_memory 或 write_audit 记录
 ```
 
-→ 实现参考：[gateway/reconcile_outbox.py](../../apps/openmemory_gateway/gateway/gateway/reconcile_outbox.py)
+→ 实现参考：[src/engram/gateway/reconcile_outbox.py](../../src/engram/gateway/reconcile_outbox.py)
 
 ---
 
@@ -337,9 +337,9 @@ reconcile 禁止操作:
 
 | 测试文件 | 归属层 | 测试职责 | 不测试的内容 |
 |----------|--------|----------|--------------|
-| `logbook_postgres/scripts/tests/test_outbox_lease.py` | Logbook | `engram_logbook.outbox` 原语契约：SQL 行为、锁机制、状态转换、Lease 过期判定 | Worker 流程语义、退避计算、OpenMemory 调用形态 |
-| `gateway/tests/test_outbox_worker.py` | Gateway | Worker 流程语义：claim/ack/fail 调用形态、退避计算、space 参数传递、审计日志字段 | SQL 实现细节、锁竞争、Lease 过期边界 |
-| `gateway/tests/test_outbox_worker_integration.py` | Gateway | 端到端流程验证：真实 DB + mock OpenMemory，状态流转完整性 | SQL 实现细节、锁竞争、Lease 过期边界 |
+| `tests/logbook/test_outbox_lease.py` | Logbook | `engram_logbook.outbox` 原语契约：SQL 行为、锁机制、状态转换、Lease 过期判定 | Worker 流程语义、退避计算、OpenMemory 调用形态 |
+| `tests/gateway/test_outbox_worker.py` | Gateway | Worker 流程语义：claim/ack/fail 调用形态、退避计算、space 参数传递、审计日志字段 | SQL 实现细节、锁竞争、Lease 过期边界 |
+| `tests/gateway/test_outbox_worker_integration.py` | Gateway | 端到端流程验证：真实 DB + mock OpenMemory，状态流转完整性 | SQL 实现细节、锁竞争、Lease 过期边界 |
 
 **设计原则**：
 - **Logbook 测试**：验证原语契约的正确性，确保 SQL 行为和锁机制符合预期

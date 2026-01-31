@@ -23,17 +23,13 @@
 
 ## 验收记录
 
-## SeekDB 兼容说明
-
-- 当 `SEEKDB_ENABLE=0` 时，SeekDB 相关步骤应标记为 `SKIP` 并记录原因。
-
 ### 迭代 YYYY-MM-DD（模板示例）
 
 | 字段 | 内容 |
 |------|------|
 | **日期** | YYYY-MM-DD |
 | **Commit** | `abc1234...` |
-| **环境** | macOS 14.x / Docker 24.x / PostgreSQL 16.x |
+| **环境** | macOS 14.x / Docker 24.x / PostgreSQL 18.x |
 | **执行命令** | 见下方 |
 | **结果** | PASS / PARTIAL / FAIL |
 
@@ -51,7 +47,6 @@ make logbook-smoke
 
 # 4. 单元测试
 make test-logbook-unit
-make test-seek-unit
 
 # 5. 集成测试
 make test-gateway-integration
@@ -60,7 +55,6 @@ make test-gateway-integration
 **已知限制**:
 
 - [示例] SCM 同步仅支持 GitLab，GitHub 支持待开发
-- [示例] SeekDB 索引重建需手动触发
 
 **未覆盖范围**:
 
@@ -111,7 +105,6 @@ python scripts/verify_logbook_consistency.py --verbose
 #    验证步骤: up-logbook → migrate-logbook-stepwise → verify-permissions-logbook → logbook-smoke → test-logbook-unit
 
 # 3. compose/logbook.yml 最小 .env 兼容性检查
-# 4. verify-permissions SEEKDB_ENABLE 注入检查
 ```
 
 **验证结果摘要**:
@@ -120,8 +113,7 @@ python scripts/verify_logbook_consistency.py --verbose
 |--------|------|------|
 | A) initdb 默认环境 | PASS | compose/logbook.yml 在缺省 .env 下不会致命失败 |
 | B) acceptance compose 依赖 | PASS | 子目标正确使用 LOGBOOK_COMPOSE（logbook-smoke 支持双检测） |
-| C) verify-permissions SEEKDB_ENABLE | PASS | 正确按 SEEKDB_ENABLE 注入 seek.enabled |
-| D) docs/Makefile 一致性 | PASS | up-logbook 描述与实现一致 |
+| C) Makefile 一致性 | PASS | up-logbook 描述与实现一致 |
 
 **已知限制**:
 
@@ -187,10 +179,7 @@ HTTP_ONLY_MODE=1 make verify-unified
 # 3. Logbook 单元测试
 make test-logbook-unit
 
-# 4. Seek 单元测试（纯单元，不受 SEEKDB_ENABLE 影响）
-make test-seek-unit
-
-# 5. Gateway 集成测试（HTTP_ONLY_MODE=1）
+# 4. Gateway 集成测试（HTTP_ONLY_MODE=1）
 HTTP_ONLY_MODE=1 make test-gateway-integration
 ```
 
@@ -200,9 +189,8 @@ HTTP_ONLY_MODE=1 make test-gateway-integration
 
 | 检查项 | 结果 | 说明 |
 |--------|------|------|
-| Makefile 目标定义 | PASS | `acceptance-unified-min` 正确定义 5 步序列 |
+| Makefile 目标定义 | PASS | `acceptance-unified-min` 正确定义步骤序列 |
 | HTTP_ONLY_MODE 传递 | PASS | verify-unified 和 test-gateway-integration 正确接收 HTTP_ONLY_MODE=1 |
-| SEEKDB_ENABLE 传递 | PASS | verify-unified 正确传递 SEEKDB_ENABLE_EFFECTIVE |
 | 产出目录 | PASS | `.artifacts/acceptance-unified-min/` 和 `.artifacts/verify-results.json` |
 | 文档一致性 | PASS | README.md 和 integrate_existing_project.md 参数映射一致 |
 
@@ -216,7 +204,6 @@ HTTP_ONLY_MODE=1 make test-gateway-integration
 | **HTTP_ONLY_MODE** | **1**（显式设置） | **0**（显式设置，允许 Docker 操作） |
 | **SKIP_DEGRADATION_TEST** | **1**（显式设置） | **0**（显式设置，执行降级测试） |
 | **GATE_PROFILE** | http_only | **full** |
-| **SEEKDB_ENABLE** | `$(SEEKDB_ENABLE_EFFECTIVE)` | `$(SEEKDB_ENABLE_EFFECTIVE)` |
 | **降级测试** | 跳过 | 执行 |
 | **logbook-smoke** | 跳过 | 执行 |
 | **Gateway 集成测试** | test-gateway-integration | **test-gateway-integration-full** |
@@ -250,7 +237,7 @@ HTTP_ONLY_MODE=1 make test-gateway-integration
 
 ### 测试文件
 
-主要测试文件：`apps/openmemory_gateway/gateway/tests/test_unified_stack_integration.py`
+主要测试文件：`tests/gateway/test_unified_stack_integration.py`
 
 ### 覆盖点明细表
 
@@ -310,7 +297,6 @@ HTTP_ONLY_MODE=1 make test-gateway-integration
 | 对象存储审计闭环 | 生产环境 S3/MinIO 审计事件端到端验证 | 需要真实对象存储配置与审计 Webhook | 高 |
 | SCM 同步测试 | GitLab/SVN 实际同步 | 需要外部 SCM 服务与凭据配置 | 中 |
 | 性能测试 | 大规模数据压测 | 当前迭代不涉及性能变更 | 低 |
-| SeekDB 测试 | 索引构建与检索 | SeekDB 为可选组件 | 低 |
 
 **风险评估**:
 
@@ -323,7 +309,7 @@ HTTP_ONLY_MODE=1 make test-gateway-integration
 
 1. CI 添加 MinIO sidecar 支持 `test_object_store_minio_integration.py`
 2. 建立 SCM 同步 mock 测试覆盖 GitLab/SVN 核心路径
-3. 设计对象存储审计端到端验证脚本（`ops/verify_bucket_governance.py`）
+3. 设计对象存储审计端到端验证脚本（`scripts/ops/verify_bucket_governance.py`）
 
 ---
 
@@ -358,7 +344,7 @@ make acceptance-logbook-only
 make acceptance-unified-min
 ```
 
-包含: 部署 → verify-unified → test-logbook-unit → test-seek-unit → test-gateway-integration
+包含: 部署 → verify-unified → test-logbook-unit → test-gateway-integration
 
 **环境语义（固定）**:
 - `HTTP_ONLY_MODE=1`
@@ -373,7 +359,7 @@ make acceptance-unified-min
 make acceptance-unified-full
 ```
 
-包含: 部署 → logbook-smoke → verify-unified（VERIFY_FULL=1）→ test-logbook-unit → test-seek-unit → test-gateway-integration-full
+包含: 部署 → logbook-smoke → verify-unified（VERIFY_FULL=1）→ test-logbook-unit → test-gateway-integration-full
 
 **FULL 语义（固定）**:
 
@@ -424,8 +410,7 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
 | deploy | ✅ | Step 1: deploy | 启动统一栈 |
 | verify-unified | ✅ (HTTP_ONLY_MODE=1) | Step 2: verify-unified | 跳过 MCP JSON-RPC |
 | test-logbook-unit | ✅ | Step 3: test-logbook-unit | Logbook 单元测试 |
-| test-seek-unit | ✅ | Step 4: test-seek-unit | Seek 分块测试 |
-| test-gateway-integration | ✅ (HTTP_ONLY_MODE=1) | Step 5: test-gateway-integration | 跳过降级测试 |
+| test-gateway-integration | ✅ (HTTP_ONLY_MODE=1) | Step 4: test-gateway-integration | 跳过降级测试 |
 | record_acceptance_run.py | ✅ | 记录步骤 | 记录验收运行（含 CI metadata） |
 
 #### Nightly 工作流覆盖（nightly.yml）
@@ -436,7 +421,7 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
 
 > **架构说明（v1.11.0+）**: Nightly 工作流 **直接调用** `make acceptance-unified-full`（非组合式覆盖）。
 > 核心验证链（verify-unified + gateway-integration）已收敛到 `acceptance-unified-full` 内部执行，
-> nightly.yml 不再独立运行这些步骤。Seek/MinIO/Build 测试保持为额外测试。
+> nightly.yml 不再独立运行这些步骤。MinIO/Build 测试保持为额外测试。
 
 **Nightly 完整覆盖步骤**（由 `make acceptance-unified-full` 内部执行）：
 
@@ -446,8 +431,7 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
 | logbook-smoke | Step 2 | Logbook 冒烟测试 |
 | verify-unified | Step 3 (VERIFY_FULL=1, HTTP_ONLY_MODE=0) | 完整验证（含降级测试） |
 | test-logbook-unit | Step 4 | Logbook 单元测试 |
-| test-seek-unit | Step 5 | Seek 分块测试 |
-| test-gateway-integration-full | Step 6 | 完整集成测试（含真实降级测试） |
+| test-gateway-integration-full | Step 5 | 完整集成测试（含真实降级测试） |
 | record_acceptance_run.py | 自动调用 | 记录验收运行（失败时仍执行） |
 
 **Nightly 额外测试**（独立于 acceptance-unified-full）：
@@ -466,10 +450,10 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
 
 #### CI/Nightly 与 Profile 映射
 
-| Workflow | Profile | HTTP_ONLY_MODE | SKIP_DEGRADATION_TEST | VERIFY_FULL | GATE_PROFILE | SEEKDB_ENABLE |
-|----------|---------|----------------|----------------------|-------------|--------------|---------------|
-| ci.yml (PR) | http_only | **1** | **1** | *(不设置)* | http_only | `$(SEEKDB_ENABLE_EFFECTIVE)` |
-| nightly.yml | full | **0** | **0** | **1** | full | `$(SEEKDB_ENABLE_EFFECTIVE)` |
+| Workflow | Profile | HTTP_ONLY_MODE | SKIP_DEGRADATION_TEST | VERIFY_FULL | GATE_PROFILE |
+|----------|---------|----------------|----------------------|-------------|--------------|
+| ci.yml (PR) | http_only | **1** | **1** | *(不设置)* | http_only |
+| nightly.yml | full | **0** | **0** | **1** | full |
 
 > **重要**: CI/Nightly workflow 中的环境变量设置必须与 Makefile acceptance targets 的显式设置保持一致。
 > 静态检查脚本 `scripts/ci/check_env_consistency.py` 会自动校验这些值的一致性。
@@ -509,8 +493,7 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
   "environment": {
     "HTTP_ONLY_MODE": "1",
     "SKIP_DEGRADATION_TEST": "1",
-    "GATE_PROFILE": "http_only",
-    "SEEKDB_ENABLE": "1"
+    "GATE_PROFILE": "http_only"
   }
 }
 ```
@@ -528,7 +511,6 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
 [OK] deploy - 统一栈部署完成
 [OK] verify-unified - 统一栈验证通过
 [OK] test-logbook-unit - Logbook 单元测试通过
-[OK] test-seek-unit - Seek 单元测试通过
 [OK] test-gateway-integration - Gateway 集成测试通过
 
 # Run ended at 2026-01-30T14:33:45Z
@@ -544,7 +526,6 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
 | `acceptance-logbook-only` | Logbook 独立验证 | PostgreSQL + Logbook | `.artifacts/acceptance-logbook-only/` | summary.json, steps.log, health.json, test-results-index.json, diagnostics/ |
 | `acceptance-unified-min` | CI PR 快速验证 | 统一栈（HTTP 模式） | `.artifacts/acceptance-unified-min/` | summary.json, steps.log, verify-results.json, test-results-index.json, diagnostics/ |
 | `acceptance-unified-full` | Nightly/发布前 | 完整统一栈 | `.artifacts/acceptance-unified-full/` | summary.json, steps.log, verify-results.json, test-results-index.json, diagnostics/ |
-| `SEEKDB_ENABLE=0 acceptance-*` | SeekDB 禁用验收 | Logbook/统一栈（无 SeekDB） | 同上 | 同上 |
 
 ### 产出目录结构说明
 
@@ -578,7 +559,6 @@ CI 工作流中的 `unified-standard` job 采用 **组合式覆盖** 策略：
   "result": "PASS",
   "test_results": [
     ".artifacts/test-results/logbook-unit.xml",
-    ".artifacts/test-results/seek-unit.xml",
     ".artifacts/test-results/gateway.xml"
   ]
 }
@@ -595,8 +575,7 @@ make deploy                    # 1. 部署
 make verify-unified            # 2. 统一栈验证
 make logbook-smoke             # 3. Logbook 冒烟测试
 make test-logbook-unit         # 4. Logbook 单元测试
-make test-seek-unit            # 5. Seek 单元测试
-make test-gateway-integration  # 6. Gateway 集成测试
+make test-gateway-integration  # 5. Gateway 集成测试
 ```
 
 ### 分步验收（Logbook-only）
@@ -608,74 +587,6 @@ make verify-permissions-logbook    # 3. 权限验证
 make logbook-smoke                 # 4. 冒烟测试
 make test-logbook-unit             # 5. 单元测试
 ```
-
----
-
-## SeekDB 禁用模式验收（SEEKDB_ENABLE=0）
-
-当 SeekDB 不需要时，可通过 `SEEKDB_ENABLE=0` 禁用 SeekDB 相关组件。
-
-### 禁用开关说明
-
-| 环境变量 | 默认值 | 说明 |
-|----------|--------|------|
-| `SEEKDB_ENABLE` | `1` | SeekDB 启用开关（`0`=禁用，`1`=启用） |
-| `SEEK_ENABLE` | - | 已废弃别名（计划于 2026-Q3 移除） |
-
-### 验收期望
-
-| 栈类型 | SEEKDB_ENABLE=0 时的期望 |
-|--------|--------------------------|
-| **Logbook-only** | 正常通过，不涉及 SeekDB |
-| **Unified stack** | 正常通过，SeekDB 迁移/测试被跳过 |
-| **SeekDB 测试** | 跳过，输出 `[SKIP] SeekDB disabled` |
-
-### 验收命令示例
-
-```bash
-# Logbook-only 验收（默认不涉及 SeekDB）
-make acceptance-logbook-only
-
-# 统一栈验收，显式禁用 SeekDB
-SEEKDB_ENABLE=0 make acceptance-unified-min
-
-# 统一栈完整验收，禁用 SeekDB
-SEEKDB_ENABLE=0 make acceptance-unified-full
-
-# 仅 Logbook 迁移（跳过 SeekDB schema）
-SEEKDB_ENABLE=0 make migrate
-```
-
-### 测试跳过可见性
-
-禁用 SeekDB 时，相关测试应在报告中明确标记为跳过：
-
-```
-# pytest 输出示例
-tests/test_seek_chunking.py::test_chunk_diff SKIPPED (SeekDB disabled)
-tests/test_seek_indexing.py::test_build_index SKIPPED (SeekDB disabled)
-
-# JUnit XML 报告
-<testcase name="test_chunk_diff" classname="tests.test_seek_chunking">
-  <skipped message="SeekDB disabled (SEEKDB_ENABLE=0)"/>
-</testcase>
-```
-
-### 覆盖点明细
-
-| 覆盖点 | SEEKDB_ENABLE=1 | SEEKDB_ENABLE=0 |
-|--------|-----------------|-----------------|
-| Logbook 迁移 | 正常执行 | 正常执行 |
-| SeekDB 迁移 | 正常执行 | 跳过 |
-| Logbook 单元测试 | 正常执行 | 正常执行 |
-| SeekDB 单元测试 | 正常执行 | 跳过 |
-| Gateway 集成测试 | 正常执行 | 正常执行 |
-| SeekDB PGVector 测试 | 正常执行 | 跳过 |
-
-### 契约参考
-
-- [Logbook ↔ SeekDB 边界契约](../contracts/logbook_seekdb_boundary.md) — 禁用开关完整规范
-- [Evidence Packet 规范](../contracts/evidence_packet.md) — SeekDB 依赖章节
 
 ---
 
@@ -691,34 +602,6 @@ tests/test_seek_indexing.py::test_build_index SKIPPED (SeekDB disabled)
 | **WARN** | 警告 | 0 | 可能存在问题但不阻塞 |
 | **FAIL** | 失败 | 1 | 必须修复的问题 |
 
-### 禁用场景（SEEKDB_ENABLE=0）
-
-当 SeekDB 被禁用时，以下组件的期望输出：
-
-| 组件 | 期望输出 | 说明 |
-|------|----------|------|
-| Makefile `_migrate-seekdb-conditional` | `[SKIP] SeekDB 迁移已跳过 (SEEKDB_ENABLE != 1)` | 跳过 SeekDB schema 迁移 |
-| Makefile `test-seek-unit` | `[SKIP] SeekDB 测试已跳过` | 跳过 SeekDB 单元测试 |
-| Makefile `verify-permissions` | `[INFO] Seek 未启用 (seek.enabled=false)` | 自动注入 `SET seek.enabled = 'false'`，跳过 Seek 权限检查 |
-| docker-compose `bootstrap_roles` | `[SKIP] SeekDB 未启用 (SEEKDB_ENABLE != 1)` | 跳过 06_seekdb_roles_and_grants.sql |
-| docker-compose `permissions_verify` | `[SKIP] Seek 未启用` | 99_verify_permissions.sql 跳过 Seek 检查 |
-| SeekDB CLI 工具 | `{"status": "skipped", "reason": "seekdb_disabled"}` | JSON 输出标准格式 |
-| pytest 报告 | `SKIPPED (SeekDB disabled)` | 测试跳过标记 |
-
-**verify-permissions 与 SEEKDB_ENABLE 的关系**：
-
-`make verify-permissions` 会根据 `SEEKDB_ENABLE_EFFECTIVE` 的值自动设置 `seek.enabled` 配置变量：
-
-```bash
-# SEEKDB_ENABLE=1 (默认) → SET seek.enabled = 'true'
-make verify-permissions
-
-# SEEKDB_ENABLE=0 → SET seek.enabled = 'false'
-SEEKDB_ENABLE=0 make verify-permissions
-```
-
-这确保 Logbook-only 部署在执行权限验证时不会因缺少 SeekDB 组件（schema、角色等）而报 FAIL。
-
 ### 失败场景
 
 | 失败场景 | 期望输出 | 修复指导 |
@@ -726,7 +609,6 @@ SEEKDB_ENABLE=0 make verify-permissions
 | OM_PG_SCHEMA=public | `[FAIL] OM_PG_SCHEMA=public 是禁止的配置！` | 改为 `openmemory` 或其他非 public schema |
 | 缺少服务账号密码 | `[FAIL] *_PASSWORD 未设置` | 设置对应的 PASSWORD 环境变量 |
 | 权限验证失败 | `FAIL: 角色 xxx 不存在` | 执行 `make bootstrap-roles` 修复权限 |
-| SeekDB SQL 未挂载 | `[ERROR] SeekDB SQL 脚本未挂载` | 使用 `-f docker-compose.unified.seekdb.yml` |
 
 ### 降级场景
 
@@ -756,37 +638,6 @@ SKIPPED (原因)
 # 失败场景
 [FAIL] 组件名称 失败
 [ERROR] 错误消息
-```
-
-### pytest 标记契约
-
-SeekDB 相关测试应使用以下 skipif 标记：
-
-```python
-@pytest.mark.skipif(
-    os.environ.get("SEEKDB_ENABLE", "1") == "0",
-    reason="SeekDB disabled (SEEKDB_ENABLE=0)"
-)
-def test_seekdb_feature():
-    ...
-```
-
-### JSON 输出契约（CLI 工具）
-
-禁用模式下 CLI 工具的 JSON 输出格式：
-
-```json
-{
-  "status": "skipped",
-  "reason": "seekdb_disabled",
-  "message": "工具名 跳过执行: SeekDB 已禁用",
-  "seekdb_enabled": false,
-  "allow_override": true,
-  "how_to_enable": "设置 SEEKDB_ENABLE=1 或 SEEKDB_ALLOW_WHEN_DISABLED=1",
-  "env_detected": {
-    "SEEKDB_ENABLE": "0"
-  }
-}
 ```
 
 ---
@@ -1076,7 +927,7 @@ python3 scripts/acceptance/render_acceptance_matrix.py \
 | 日期 | Commit | 结果 | 记录文件 | 备注 |
 |------|--------|------|----------|------|
 | 2026-01-30 | `4d5d607` | **PASS** | [`.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json`](.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json) | acceptance-logbook-only 通过；执行步骤：`up-logbook` → `migrate-logbook-stepwise` → `verify-permissions-logbook` → `logbook-smoke` → `test-logbook-unit` |
-| 2026-01-30 | `4d5d607` | **PASS** | [`.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json`](.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json) | acceptance-unified-min 通过；执行步骤：`deploy` → `verify-unified (HTTP_ONLY_MODE)` → `test-logbook-unit` → `test-seek-unit` → `test-gateway-integration (HTTP_ONLY_MODE)` |
+| 2026-01-30 | `4d5d607` | **PASS** | [`.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json`](.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json) | acceptance-unified-min 通过；执行步骤：`deploy` → `verify-unified (HTTP_ONLY_MODE)` → `test-logbook-unit` → `test-gateway-integration (HTTP_ONLY_MODE)` |
 | 2026-01-30 | - | PASS | [iteration10_step_tokens.txt](.artifacts/naming-audit/iteration10_step_tokens.txt), [iteration10_legacy_alias_scan.json](.artifacts/naming-audit/iteration10_legacy_alias_scan.json) | **迭代 10 命名治理审计**：step token 扫描 95 处（均为合规的 `Step N` 流程编号格式）；legacy alias 检测 0 处违规（570 文件扫描通过） |
 
 ### 未覆盖范围（2026-01-30）

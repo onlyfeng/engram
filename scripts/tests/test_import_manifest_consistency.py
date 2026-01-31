@@ -40,9 +40,7 @@ PROJECT_ROOT = find_project_root()
 # Files to check
 MANIFEST_PATH = PROJECT_ROOT / "docs/guides/manifests/unified_stack_import_v1.json"
 COMPOSE_PATH = PROJECT_ROOT / "docker-compose.unified.yml"
-GATEWAY_DOCKERFILE_PATH = (
-    PROJECT_ROOT / "apps/openmemory_gateway/gateway/Dockerfile"
-)
+GATEWAY_DOCKERFILE_PATH = PROJECT_ROOT / "docker/engram.Dockerfile"
 
 
 def load_manifest() -> dict[str, Any]:

@@ -39,7 +39,7 @@ except ImportError as e:
     raise ImportError(
         f"evidence_store 需要 engram_logbook 模块: {e}\n"
         "请先安装:\n"
-        "  pip install -e apps/logbook_postgres/scripts"
+        "  pip install -e \".[full]\""
     )
 
 logger = logging.getLogger("gateway.evidence_store")

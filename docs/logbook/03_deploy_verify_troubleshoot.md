@@ -46,7 +46,7 @@ docker compose -f compose/logbook.yml up -d
 
 ```bash
 # 安装 Logbook CLI
-cd apps/logbook_postgres/scripts && pip install -e .
+cd logbook_postgres/scripts && pip install -e .
 
 # 设置 DSN
 export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}"
@@ -58,7 +58,7 @@ export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localh
 |----------|------|------|
 | 健康检查 | `logbook health` | 验证连接、Schema、表、索引 |
 | 数据库迁移 | `make migrate-logbook-stepwise` | Logbook-only 模式迁移（使用 --profile migrate） |
-| 权限验证 | `make verify-permissions-logbook` | Logbook-only 模式权限验证（跳过 OM/SeekDB） |
+| 权限验证 | `make verify-permissions-logbook` | Logbook-only 模式权限验证（跳过 OM） |
 | 冒烟测试 | `make logbook-smoke` | CRUD + 视图渲染全流程 |
 | 完整验收 | `make acceptance-logbook-only` | 一键完整验收（启动→迁移→验证→测试） |
 
@@ -70,30 +70,6 @@ export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localh
 | `logbook health` | B (Acceptance) | CLI 健康检查 |
 | `make logbook-smoke` | B (Acceptance) | 冒烟测试 |
 | `make acceptance-logbook-only` | B (Acceptance) | 完整验收套件 |
-
-### SeekDB 非阻塞约束
-
-> **关键约束**：SeekDB 在 Logbook-only 模式下**必须不阻塞**。
-
-| 场景 | 预期行为 | 验证方式 |
-|------|----------|----------|
-| SeekDB 未部署 | Logbook 服务正常启动、验收通过 | `make acceptance-logbook-only` |
-| SeekDB 禁用 (`SEEKDB_ENABLE=0`) | 权限验证跳过 SeekDB 检查 | `make verify-permissions` 输出无 SeekDB FAIL |
-| SeekDB 组件不存在 | 无错误、无警告阻塞 | 日志无 SeekDB 相关错误 |
-
-**实现机制**：
-
-1. **SQL 脚本分离**：SeekDB SQL 位于独立的 override compose 文件 (`docker-compose.unified.seekdb.yml`)
-2. **权限验证条件跳过**：`99_verify_permissions.sql` 根据 `seek.enabled` 参数跳过 SeekDB 检查
-3. **Volume bind 隔离**：禁用 SeekDB 时无需复制任何 SeekDB 相关文件
-
-```bash
-# Logbook-only 部署（不受 SeekDB 影响）
-docker compose -f compose/logbook.yml up -d
-
-# 验证 SeekDB 未阻塞
-SEEKDB_ENABLE=0 make verify-permissions  # 应无 SeekDB FAIL 输出
-```
 
 ---
 
@@ -123,7 +99,7 @@ POSTGRES_PASSWORD=changeme
 | `POSTGRES_DB` | 数据库名（应与 PROJECT_KEY 一致） | `myproject` |
 | `POSTGRES_PASSWORD` | PostgreSQL 密码 | `changeme` |
 
-> **服务账号策略**：Logbook-only 部署时，**不要设置** `*_PASSWORD` 环境变量（如 `LOGBOOK_MIGRATOR_PASSWORD`）。脚本检测到无密码变量时自动进入 SKIP 模式，使用 postgres 超级用户。若设置了任意一个密码变量，则进入统一栈模式，要求 4 个密码变量全部设置，否则容器初始化失败。详见 `apps/logbook_postgres/sql/00_init_service_accounts.sh`。
+> **服务账号策略**：Logbook-only 部署时，**不要设置** `*_PASSWORD` 环境变量（如 `LOGBOOK_MIGRATOR_PASSWORD`）。脚本检测到无密码变量时自动进入 SKIP 模式，使用 postgres 超级用户。若设置了任意一个密码变量，则进入统一栈模式，要求 4 个密码变量全部设置，否则容器初始化失败。详见 `logbook_postgres/scripts/db_bootstrap.py` 与 `sql/04_roles_and_grants.sql`。
 
 ### 2. 启动服务
 
@@ -177,7 +153,7 @@ docker compose -p ${PROJECT_KEY:-engram}-logbook -f compose/logbook.yml ps
 
 ```bash
 # 安装 Logbook CLI
-cd apps/logbook_postgres/scripts && pip install -e .
+cd logbook_postgres/scripts && pip install -e .
 
 # 设置 DSN 并检查健康状态
 export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}"
@@ -247,7 +223,7 @@ Logbook 冒烟测试完成！
 
 | 失败码 | 说明 | 修复建议 |
 |--------|------|----------|
-| `INSTALL_FAILED` | `engram_logbook` 安装失败 | `cd apps/logbook_postgres/scripts && pip install -e .` |
+| `INSTALL_FAILED` | `engram_logbook` 安装失败 | `cd logbook_postgres/scripts && pip install -e .` |
 | `SERVICE_NOT_RUNNING` | PostgreSQL 服务未运行 | `make deploy` 或设置 `POSTGRES_DSN` 环境变量 |
 | `HEALTH_CHECK_FAILED` | 健康检查失败 | 检查 DSN 配置或运行 `make migrate-logbook-stepwise`（Logbook-only）或 `make migrate-logbook`（统一栈） |
 | `CREATE_ITEM_FAILED` | 创建 item 失败 | 检查数据库连接和 schema 是否存在 |
@@ -257,35 +233,25 @@ Logbook 冒烟测试完成！
 
 ### 权限验证（db_migrate.py --verify）
 
-权限验证脚本用于验证角色和权限配置是否正确，对应 `apps/logbook_postgres/sql/99_verify_permissions.sql`。
+权限验证脚本用于验证角色和权限配置是否正确，对应 `sql/99_verify_permissions.sql`。
 
 **执行方式**：
 
 ```bash
 # 方式 1: 通过 db_migrate.py（推荐）
-python apps/logbook_postgres/scripts/db_migrate.py --verify
+python logbook_postgres/scripts/db_migrate.py --verify
 
-# 方式 2: 通过 Makefile（推荐，自动根据 SEEKDB_ENABLE 设置）
+# 方式 2: 通过 Makefile（推荐）
 make verify-permissions
 
 # 方式 3: 通过 psql 直接执行（需要指定 schema）
-psql -d <your_db> -f apps/logbook_postgres/sql/99_verify_permissions.sql
+psql -d <your_db> -f sql/99_verify_permissions.sql
 
-# 方式 4: 通过 psql 指定 OpenMemory schema 和 SeekDB 开关
+# 方式 4: 通过 psql 指定 OpenMemory schema
 psql -d <your_db> \
      -c "SET om.target_schema = 'openmemory'" \
-     -c "SET seek.enabled = 'false'" \
-     -f apps/logbook_postgres/sql/99_verify_permissions.sql
+     -f sql/99_verify_permissions.sql
 ```
-
-**SeekDB 禁用模式**：
-
-当 `SEEKDB_ENABLE=0` 时，`make verify-permissions` 会自动注入 `SET seek.enabled = 'false'`，跳过所有 SeekDB 相关的权限检查（包括 seekdb/seek schema、seekdb_*/seek_* 角色、logbook.kv 访问权限等）。这确保 Logbook-only 部署不会因缺少 SeekDB 组件而报错。
-
-| 环境变量 | seek.enabled 值 | SeekDB 检查 |
-|----------|-----------------|-------------|
-| `SEEKDB_ENABLE=1`（默认） | `true` | 执行 |
-| `SEEKDB_ENABLE=0` | `false` | 跳过 |
 
 **所需权限**：
 
@@ -302,7 +268,7 @@ psql -d <your_db> \
 
 | 验证项 | 说明 |
 |--------|------|
-| NOLOGIN 角色存在性 | `engram_*`、`openmemory_*`、`seekdb_*` 角色 |
+| NOLOGIN 角色存在性 | `engram_*`、`openmemory_*` 角色 |
 | LOGIN 角色 membership | 登录角色是否正确继承 NOLOGIN 角色 |
 | public schema 权限 | 所有应用角色不应有 `CREATE` 权限 |
 | 目标 schema owner | OM schema owner 应为 `openmemory_migrator` |
@@ -400,7 +366,7 @@ docker compose -p ${PROJECT_KEY:-engram}-logbook -f compose/logbook.yml ps
 ### 步骤 3：CLI 健康检查
 
 ```bash
-cd apps/logbook_postgres/scripts && pip install -e .
+cd logbook_postgres/scripts && pip install -e .
 export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}"
 logbook health
 ```
@@ -461,7 +427,7 @@ Logbook 冒烟测试完成！
 # 完整的最小验收序列（可直接复制执行）
 make up-logbook && \
 make ps-logbook && \
-cd apps/logbook_postgres/scripts && pip install -e . && \
+cd logbook_postgres/scripts && pip install -e . && \
 POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}" logbook health && \
 cd - && \
 make logbook-smoke
@@ -579,7 +545,7 @@ ModuleNotFoundError: No module named 'engram_logbook'
 **解决方案**：
 
 ```bash
-cd apps/logbook_postgres/scripts
+cd logbook_postgres/scripts
 pip install -e .
 ```
 

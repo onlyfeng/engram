@@ -16,17 +16,15 @@
 
 ## OpenMemory 依赖面
 
-### 引用路径（docker-compose.unified.yml）
+### 引用方式（docker-compose.unified.yml）
 
-| 服务 | Context 路径 | Profile |
-|------|-------------|---------|
-| `openmemory` | `./libs/OpenMemory/packages/openmemory-js` | 默认 |
-| `openmemory_migrate` | `./libs/OpenMemory/packages/openmemory-js` | 默认 |
-| `dashboard` | `./libs/OpenMemory/dashboard` | `dashboard`（可选） |
+| 服务 | 构建方式 | 说明 |
+|------|----------|------|
+| `openmemory` | 上游镜像 `OPENMEMORY_IMAGE`（`docker/openmemory.Dockerfile` 透传） | 默认 |
+| `openmemory_migrate` | 同上（占位迁移容器） | 默认 |
 
-> **注意**: Dashboard 为可选组件（profile: dashboard），默认不启动。
-> `libs/OpenMemory/dashboard/` 目前只有 Dockerfile 占位，完整源码需从上游同步后才能构建。
-> 启用方式: `docker compose --profile dashboard up -d`
+> **注意**: 当前默认走上游镜像，不再依赖 vendoring。  
+> Dashboard/看板为可选 profile（`dashboard`），默认不启动。
 
 ### 关键环境变量
 
@@ -90,7 +88,6 @@ payload_sha        →  metadata.payload_sha
 | 入口 | 命令 | 说明 |
 |------|------|------|
 | **主入口** | `make verify-unified` | 推荐使用，自动配置环境变量 |
-| **脚本入口** | `apps/openmemory_gateway/scripts/verify_unified_stack.sh` | 备用入口，用于调试或自定义参数 |
 
 **Makefile 目标**
 
@@ -99,14 +96,6 @@ make verify-unified                    # 基础验证（推荐）
 VERIFY_FULL=1 make verify-unified      # 完整验证（含降级测试）
 make test-gateway-integration          # Gateway 集成测试
 make openmemory-upgrade-check          # OpenMemory 升级验证
-```
-
-**脚本直接调用（备用）**
-
-```bash
-./apps/openmemory_gateway/scripts/verify_unified_stack.sh           # 基础验证
-./apps/openmemory_gateway/scripts/verify_unified_stack.sh --full    # 完整验证
-./apps/openmemory_gateway/scripts/verify_unified_stack.sh --help    # 查看所有选项
 ```
 
 **环境变量**
@@ -118,45 +107,10 @@ make openmemory-upgrade-check          # OpenMemory 升级验证
 | `POSTGRES_DSN` | — | 降级测试必需 |
 | `COMPOSE_PROJECT_NAME` | — | 多项目隔离 |
 
-## OpenMemory Vendoring 与补丁管理（精简摘要）
+## OpenMemory 上游镜像说明
 
-> **完整文档**: [docs/openmemory/00_vendoring_and_patches.md](../openmemory/00_vendoring_and_patches.md)
-
-### 集成方式
-
-Engram 采用 **Vendored 模式** 集成 OpenMemory（`libs/OpenMemory/`），通过 `OpenMemory.upstream.lock.json` 锁定上游版本，`openmemory_patches.json` 管理补丁清单。
-
-### 补丁分类
-
-| 类别 | 数量 | 处理策略 |
-|------|------|----------|
-| A (必保留) | 14 | 始终在本地维护，不上游 |
-| B (可上游) | 5 | 短期本地维护，长期提交 PR |
-| C (可移除) | 1 | 重构后删除 |
-
-### 关键 Makefile Targets
-
-```bash
-# 日常检查
-make openmemory-vendor-check               # 结构检查（CI required）
-make openmemory-sync-verify                # 补丁落地校验
-
-# Schema 校验
-make openmemory-schema-validate SCHEMA_STRICT=1   # 严格模式（CI 门禁）
-
-# 升级流程
-make openmemory-upgrade-check              # 完整升级验证（upstream_ref 变更后必跑）
-```
-
-### upstream_ref 变更门槛
-
-当 `upstream_ref` 发生变更时，CI 必须执行 5 项门禁检查：
-
-1. `make openmemory-sync-check` — 一致性检查
-2. `make openmemory-sync-verify` — 补丁落地校验
-3. `make openmemory-test-multi-schema` — 多 Schema 隔离测试
-4. `make openmemory-schema-validate SCHEMA_STRICT=1` — JSON Schema 严格校验
-5. `make openmemory-vendor-check` — Vendor 结构检查
+统一栈默认使用上游镜像（`OPENMEMORY_IMAGE`），无需 vendoring。  
+如需锁定版本或内部定制，请维护你自己的镜像仓库并在 `.env` 中替换 `OPENMEMORY_IMAGE`。
 
 详细的冲突分级（L0-L3）、Freeze 机制、回滚流程请参阅 [docs/openmemory/00_vendoring_and_patches.md](../openmemory/00_vendoring_and_patches.md)。
 

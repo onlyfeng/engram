@@ -116,6 +116,10 @@ BUILTIN_IGNORE_PATTERNS = [
     "memory_reader.py",
     "migrate.ts",
     "test_multi_schema.ts",
+    # 运行时/产物路径（不在仓库内）
+    ".artifacts/",
+    ".agentx/",
+    "smoke_test/",
 ]
 
 # Markdown 链接正则：匹配 [text](path) 和 ![alt](path)

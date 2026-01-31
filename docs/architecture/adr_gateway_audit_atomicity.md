@@ -473,14 +473,14 @@ SELECT correlation_id FROM write_audit
 
 #### Phase 1: Schema 迁移 + API 扩展
 
-- [ ] 创建迁移 SQL 文件 `migrations/016_write_audit_status.sql`
+- [ ] 在 `sql/` 目录新增迁移脚本（write_audit_status 相关）
 - [ ] 实现 `update_write_audit(correlation_id, status, reason_suffix)` 函数
 - [ ] 修改 `insert_write_audit` 支持 `correlation_id` 和 `status` 参数
 - [ ] 编写单元测试
 
 #### Phase 2: Gateway 写入流程改造
 
-- [ ] 修改 `gateway/main.py` 中的 `memory_store_impl`
+- [ ] 修改 `src/engram/gateway/main.py` 中的 `memory_store_impl`
 - [ ] 新增 `correlation_id` 生成逻辑
 - [ ] 调用 `update_write_audit` 更新最终状态
 - [ ] 修改 Outbox 入队逻辑，传递 `correlation_id`
@@ -520,7 +520,7 @@ SELECT correlation_id FROM write_audit
 - [Gateway Logbook 边界契约](../contracts/gateway_logbook_boundary.md)
 - [Gateway 设计](../gateway/06_gateway_design.md)
 - [失败降级与补偿](../gateway/05_failure_degradation.md)
-- [governance.py 实现](../../apps/logbook_postgres/scripts/engram_logbook/governance.py)
+- [governance.py 实现](../../src/engram/logbook/governance.py)
 
 ---
 

@@ -28,14 +28,14 @@ pip install -e ".[full]"
 
 ### 配置 PostgreSQL
 
-1. 安装 PostgreSQL 15+ 和 pgvector 扩展：
+1. 安装 PostgreSQL 18+ 和 pgvector 扩展（Homebrew 默认版本较旧，建议显式指定）：
 
 ```bash
 # macOS
-brew install postgresql@15 pgvector
+brew install postgresql@18 pgvector
 
 # Ubuntu
-sudo apt install postgresql-15 postgresql-15-pgvector
+sudo apt install postgresql-18 postgresql-18-pgvector
 ```
 
 2. 创建数据库：
@@ -45,16 +45,20 @@ createdb engram
 psql -d engram -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-3. 执行迁移：
+3. 初始化角色与迁移：
 
 ```bash
-export POSTGRES_DSN="postgresql://postgres:password@localhost:5432/engram"
+export LOGBOOK_MIGRATOR_PASSWORD=changeme1
+export LOGBOOK_SVC_PASSWORD=changeme2
+export OPENMEMORY_MIGRATOR_PASSWORD=changeme3
+export OPENMEMORY_SVC_PASSWORD=changeme4
 
-# 使用 make
-make migrate
+python logbook_postgres/scripts/db_bootstrap.py \
+  --dsn "postgresql://$USER@localhost:5432/postgres"
 
-# 或手动执行
-for f in sql/*.sql; do psql "$POSTGRES_DSN" -f "$f"; done
+python logbook_postgres/scripts/db_migrate.py \
+  --dsn "postgresql://$USER@localhost:5432/engram" \
+  --apply-roles --apply-openmemory-grants
 ```
 
 ### 基本使用
@@ -85,7 +89,7 @@ value = db.get_kv("my_key")
 
 ```bash
 # 设置环境变量
-export POSTGRES_DSN="postgresql://postgres:password@localhost:5432/engram"
+export POSTGRES_DSN="postgresql://logbook_svc:password@localhost:5432/engram"
 export OPENMEMORY_BASE_URL="http://localhost:8080"  # OpenMemory 服务地址
 
 # 启动 Gateway
@@ -145,17 +149,14 @@ engram-gateway
 
 ## MCP 集成（Cursor IDE）
 
-在 Cursor 的 MCP 配置中添加：
+在 Cursor 的 MCP 配置中添加（或直接参考 `configs/mcp/.mcp.json.example`）：
 
 ```json
 {
   "mcpServers": {
     "engram": {
-      "command": "engram-gateway",
-      "env": {
-        "POSTGRES_DSN": "postgresql://user:pass@localhost:5432/engram",
-        "OPENMEMORY_BASE_URL": "http://localhost:8080"
-      }
+      "type": "http",
+      "url": "http://localhost:8787/mcp"
     }
   }
 }

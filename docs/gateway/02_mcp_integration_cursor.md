@@ -13,7 +13,7 @@
 - 可逐步扩展更多工具（promotion、reinforce 合并等）
 
 ## Cursor 配置模板
-见 templates/.mcp.json（把 url 指向 Gateway 的 /mcp）
+见 `configs/mcp/.mcp.json.example`（把 url 指向 Gateway 的 /mcp）
 
 ---
 
@@ -101,7 +101,6 @@ Gateway 服务端需要以下环境变量：
 | `GATEWAY_PORT` | `8787` | Gateway HTTP 端口 |
 | `GATEWAY_HOST` | `0.0.0.0` | 绑定地址 |
 | `GATEWAY_MODE` | `FULL` | 运行模式：`FULL` / `DEGRADED` |
-| `GATEWAY_SKIP_SEEK` | `0` | 跳过 SeekDB 能力（`1` 跳过） |
 | `GATEWAY_SKIP_RECONCILE` | `0` | 跳过 Reconcile 能力（`1` 跳过） |
 | `GATEWAY_LOG_LEVEL` | `INFO` | 日志级别 |
 
@@ -122,7 +121,7 @@ Gateway 服务端需要以下环境变量：
 curl -sf http://localhost:8787/health && echo "Gateway OK"
 
 # 预期响应
-{"status":"ok","mode":"FULL","capabilities":{"openmemory":true,"logbook":true,"seek":true}}
+{"status":"ok","mode":"FULL","capabilities":{"openmemory":true,"logbook":true}}
 ```
 
 **依赖服务检查**：
@@ -425,7 +424,7 @@ Gateway `/mcp` 端点支持两种协议格式，通过请求体字段自动识�
 | **标准 MCP JSON-RPC** | 包含 `jsonrpc: "2.0"` 和 `method` 字段 | Cursor、标准 MCP 客户端（推荐） |
 | **简化模式** | 包含 `tool` 和 `arguments` 字段 | 脚本验证、内部调用 |
 
-详细协议规范见 `gateway/README.md`。
+详细协议规范见 `README.md`。
 
 ### HTTP 端点行为参考
 
@@ -435,4 +434,4 @@ Gateway `/mcp` 端点支持两种协议格式，通过请求体字段自动识�
 - `OPTIONS /mcp`：CORS 预检，返回 204 + CORS 头
 - `GET/PUT/DELETE /mcp`：返回 405，错误码 `-32600`
 
-详细错误码映射见 `gateway/README.md`。
+详细错误码映射见 `README.md`。

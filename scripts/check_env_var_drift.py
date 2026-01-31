@@ -41,69 +41,26 @@ from typing import Dict, List, Optional, Pattern, Set, Tuple
 # ============================================================================
 
 # 已废弃的环境变量名 -> canonical 名称映射
-# 注意: canonical 名称统一使用 SEEKDB_ 前缀（2026-Q1 规范化）
+# Add deprecated environment variables here as they are identified
 DEPRECATED_ENV_VARS: dict[str, str] = {
-    # ========== SEEK_ -> SEEKDB_ 迁移（2026-Q1 规范化）==========
-    # PG Schema 配置
-    "SEEK_PG_SCHEMA": "SEEKDB_PG_SCHEMA",
-    "PG_SCHEMA": "SEEKDB_PG_SCHEMA",  # 遗留别名
-    "SEEK_SCHEMA": "SEEKDB_PG_SCHEMA",  # 更早的遗留别名
-    # PGVector DSN 配置
-    "SEEK_PGVECTOR_DSN": "SEEKDB_PGVECTOR_DSN",
-    "PGVECTOR_DSN": "SEEKDB_PGVECTOR_DSN",  # 遗留别名
-    # PGVector Collection Strategy
-    "SEEK_PGVECTOR_COLLECTION_STRATEGY": "SEEKDB_PGVECTOR_COLLECTION_STRATEGY",
-    # PG 连接配置
-    "SEEK_PG_HOST": "SEEKDB_PG_HOST (或 PGHOST)",
-    "PG_HOST": "SEEKDB_PG_HOST (或 PGHOST)",
-    "POSTGRES_HOST": "SEEKDB_PG_HOST (或 PGHOST)",
-    # PG Table 配置
-    "SEEK_PG_TABLE": "SEEKDB_PG_TABLE",
-    "SEEK_TABLE": "SEEKDB_PG_TABLE",  # 遗留别名
-    # PG Auto Init
-    "SEEK_PG_AUTO_INIT": "SEEKDB_PG_AUTO_INIT",
-    "SEEK_AUTO_INIT": "SEEKDB_PG_AUTO_INIT",  # 遗留别名
-    # ========== SeekDB Dual Write ==========
-    "DUAL_WRITE_ENABLED": "SEEKDB_DUAL_WRITE",
-    "SEEK_DUAL_WRITE": "SEEKDB_DUAL_WRITE",  # 中间版本别名
+    # Example:
+    # "OLD_VAR_NAME": "NEW_VAR_NAME",
 }
 
 # 允许出现 deprecated 变量的文件/目录模式（相对于项目根目录）
 # 严格限制在：兼容层、测试、文档
-# 注意: 新代码不应引入旧变量，应使用 SEEKDB_* canonical 名称
 ALLOWED_PATHS: list[str] = [
-    # ========== 兼容层模块（必须处理旧变量以保持兼容性）==========
-    "apps/seekdb_rag_hybrid/env_compat.py",
-    "apps/seekdb_rag_hybrid/seekdb_env_compat.py",  # 新规范兼容层
-    # ========== 测试文件 ==========
-    "apps/seekdb_rag_hybrid/tests/test_env_compat.py",
-    "apps/seekdb_rag_hybrid/tests/test_seekdb_env_compat.py",
-    # Logbook CI 测试脚本（使用标准 PG_* 变量）
-    "apps/logbook_postgres/scripts/ci/",
-    # PGVector 集成测试（测试兼容层行为）
-    "apps/seekdb_rag_hybrid/tests/test_pgvector_backend_integration.py",
     # ========== 文档目录（说明废弃别名和迁移指南）==========
-    "docs/seekdb/",
     "docs/reference/",
     "docs/legacy/",
     # ========== 本脚本（定义废弃变量列表）==========
     "scripts/check_env_var_drift.py",
-    # ========== CI 诊断脚本（实现优先级回退用于调试）==========
-    "scripts/ci/collect_seek_diagnostics.sh",
 ]
 
 # 文档和兼容层路径（strict 模式下仍然允许）
 # 这些路径在 --strict 模式下也不会 fail
-# 注意: 文档路径使用精确匹配，确保 strict/fail-on-new 语义与新文档结构一致
 DOC_AND_COMPAT_PATHS: list[str] = [
-    # 兼容层模块
-    "apps/seekdb_rag_hybrid/env_compat.py",
-    "apps/seekdb_rag_hybrid/seekdb_env_compat.py",
-    # 兼容层测试
-    "apps/seekdb_rag_hybrid/tests/test_env_compat.py",
-    "apps/seekdb_rag_hybrid/tests/test_seekdb_env_compat.py",
-    # 文档目录（canonical 位置 - 新文档结构）
-    "docs/seekdb/",
+    # 文档目录
     "docs/reference/",
     "docs/legacy/",
     # 本脚本

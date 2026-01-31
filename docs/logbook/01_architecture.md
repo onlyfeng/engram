@@ -116,17 +116,17 @@ Logbook 区分两类 URI，用于不同场景：
 | 主题 | 规范文档 | 说明 |
 |------|----------|------|
 | **URI 双轨规范** | 本节（上文） | Artifact Key vs Physical URI vs Evidence URI 的分类与使用场景 |
-| **URI 语法与解析** | [`engram_logbook/uri.py`](../../apps/logbook_postgres/scripts/engram_logbook/uri.py) | 唯一权威的 URI 解析实现，含模块级文档 |
+| **URI 语法与解析** | [`src/engram/logbook/uri.py`](../../src/engram/logbook/uri.py) | 唯一权威的 URI 解析实现，含模块级文档 |
 | **Evidence Packet 结构** | [docs/contracts/evidence_packet.md](../contracts/evidence_packet.md) | evidence_refs_json 的结构规范、回溯流程 |
 | **Evidence URI 构建** | `engram_logbook.uri.build_evidence_uri()` | patch_blobs 的 canonical URI 构建 |
 | **Attachment URI 构建** | `engram_logbook.uri.build_attachment_evidence_uri()` | attachments 的 canonical URI 构建 |
-| **Evidence Resolver** | [`engram_logbook/evidence_resolver.py`](../../apps/logbook_postgres/scripts/engram_logbook/evidence_resolver.py) | URI → 物理内容的解析与回溯实现 |
+| **Evidence Resolver** | [`src/engram/logbook/evidence_resolver.py`](../../src/engram/logbook/evidence_resolver.py) | URI → 物理内容的解析与回溯实现 |
 | **Gateway ↔ Logbook 边界** | [docs/contracts/gateway_logbook_boundary.md](../contracts/gateway_logbook_boundary.md#uri-grammar-归属声明) | URI 归属声明、接口契约 |
 
 **读者指引**：
-- 如需了解 URI 格式定义 → 阅读 `engram_logbook/uri.py` 模块文档
+- 如需了解 URI 格式定义 → 阅读 `src/engram/logbook/uri.py` 模块文档
 - 如需了解 evidence 结构 → 阅读 `docs/contracts/evidence_packet.md`
-- 如需了解 URI 回溯实现 → 阅读 `engram_logbook/evidence_resolver.py`
+- 如需了解 URI 回溯实现 → 阅读 `src/engram/logbook/evidence_resolver.py`
 
 #### scm.mrs（Merge Request 记录）
 | DB 字段 | GitLab REST API 字段 | 说明 |

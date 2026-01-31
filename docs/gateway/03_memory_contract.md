@@ -20,7 +20,7 @@
   - **降级策略**：team/private 空间不存储原文内容，仅存储指针（uri）+ hash；需查看原文时回跳 Logbook 或源仓库
   - **URI 格式规范**：
     - **patch_blobs / attachment URI 格式详见**：[Evidence Packet 规范](../contracts/evidence_packet.md#memory-uri-格式规范)
-    - **URI 语法与解析规则详见**：[`engram_logbook.uri`](../../apps/logbook_postgres/scripts/engram_logbook/uri.py) 模块（Logbook 为 URI grammar 的唯一规范 owner）
+    - **URI 语法与解析规则详见**：[`src/engram/logbook/uri.py`](../../src/engram/logbook/uri.py) 模块（Logbook 为 URI grammar 的唯一规范 owner）
 - Confidence：high/mid/low
 - Visibility：team/private/org
 - TTL：long/mid/short（bulk 变更默认 short）
@@ -36,7 +36,7 @@ Evidence URI 格式由 Logbook 层统一定义，Gateway 仅作为调用方使�
 
 **规范文档索引**：
 - **Evidence Packet 结构**：[docs/contracts/evidence_packet.md](../contracts/evidence_packet.md)
-- **URI 语法规范**：[`engram_logbook.uri`](../../apps/logbook_postgres/scripts/engram_logbook/uri.py)（含 `build_evidence_uri()`、`parse_attachment_evidence_uri()` 等）
+- **URI 语法规范**：[`src/engram/logbook/uri.py`](../../src/engram/logbook/uri.py)（含 `build_evidence_uri()`、`parse_attachment_evidence_uri()` 等）
 - **Gateway ↔ Logbook 边界契约**：[docs/contracts/gateway_logbook_boundary.md](../contracts/gateway_logbook_boundary.md#uri-grammar-归属声明)
 
 ## 写入规则（默认）
@@ -55,7 +55,7 @@ Evidence URI 格式由 Logbook 层统一定义，Gateway 仅作为调用方使�
 ## Memory Card 生成器 (memory_card.py)
 
 ### 核心功能
-`../gateway/gateway/memory_card.py` 提供记忆卡片的标准化生成与裁剪：
+[`src/engram/gateway/memory_card.py`](../../src/engram/gateway/memory_card.py) 提供记忆卡片的标准化生成与裁剪：
 
 1. **Markdown 生成**：将结构化输入转换为符合模板规范的 Markdown
 2. **内容裁剪**：自动裁剪超长内容，保障存储效率
@@ -76,7 +76,7 @@ Evidence URI 格式由 Logbook 层统一定义，Gateway 仅作为调用方使�
 ### 使用示例
 
 ```python
-from gateway.memory_card import generate_memory_markdown, create_memory_card
+from engram.gateway.memory_card import generate_memory_markdown, create_memory_card
 
 # 方式一：直接生成 Markdown 和 SHA
 payload_md, payload_sha = generate_memory_markdown(

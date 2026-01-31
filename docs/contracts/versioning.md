@@ -60,8 +60,8 @@
 
 **任何 schema 变更都必须通过对应的契约测试。** 契约测试位于：
 
-- `apps/openmemory_gateway/gateway/tests/test_audit_event_contract.py`
-- `apps/openmemory_gateway/gateway/tests/test_reliability_report_contract.py`
+- `tests/gateway/test_audit_event_contract.py`
+- `tests/gateway/test_reliability_report_contract.py`
 
 这些测试使用 `jsonschema` 库（Draft 2020-12）验证：
 
@@ -120,7 +120,7 @@ audit_event_v1.schema.json  # 保留旧版本，标记 deprecated
 契约测试依赖 `jsonschema>=4.18.0`（支持 Draft 2020-12），已包含在 Gateway 的开发依赖中：
 
 ```toml
-# apps/openmemory_gateway/gateway/pyproject.toml
+# pyproject.toml
 [project.optional-dependencies]
 dev = [
     ...
@@ -136,11 +136,11 @@ dev = [
 
 ```bash
 # 安装开发依赖（包含 jsonschema）
-pip install -e "apps/openmemory_gateway/gateway[dev]"
+pip install -e ".[dev]"
 
 # 运行契约测试
-pytest apps/openmemory_gateway/gateway/tests/test_audit_event_contract.py
-pytest apps/openmemory_gateway/gateway/tests/test_reliability_report_contract.py
+pytest tests/gateway/test_audit_event_contract.py
+pytest tests/gateway/test_reliability_report_contract.py
 ```
 
 ---
@@ -202,7 +202,7 @@ pytest apps/openmemory_gateway/gateway/tests/test_reliability_report_contract.py
 
 #### 1. 迁移脚本
 
-在 `apps/logbook_postgres/scripts/engram_logbook/migrations/` 新增迁移脚本：
+在 `sql/` 目录新增迁移脚本：
 
 ```sql
 -- Migration: YYYYMMDD_HHMMSS_<migration_name>.sql
@@ -221,8 +221,8 @@ ALTER TABLE logbook.some_table DROP COLUMN new_field;
 
 | 工具类型 | 文件路径 | 要求 |
 |----------|----------|------|
-| Backfill 脚本 | `apps/logbook_postgres/scripts/backfill_<feature>.py` | 支持 `--dry-run`、`--batch-size`、断点续传 |
-| Repair 脚本 | `apps/logbook_postgres/scripts/repair_<issue>.py` | 支持 `--dry-run`、输出统计 |
+| Backfill 脚本 | `backfill_<feature>.py`（放在 `logbook_postgres/scripts/`） | 支持 `--dry-run`、`--batch-size`、断点续传 |
+| Repair 脚本 | `repair_<issue>.py`（放在 `logbook_postgres/scripts/`） | 支持 `--dry-run`、输出统计 |
 
 #### 3. 版本判定更新
 

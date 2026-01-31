@@ -5,7 +5,7 @@
 验证:
 1. 迁移多次执行具有幂等性
 2. 缺失项（schema/table/index/matview）能被正确定位
-3. 修复指令路径正确（使用 apps/logbook_postgres/scripts 完整路径）
+3. 修复指令路径正确（使用 logbook_postgres/scripts 完整路径）
 4. run_all_checks 返回完整的缺失项列表
 """
 
@@ -25,22 +25,22 @@ if str(scripts_dir) not in sys.path:
 class TestRepairCommandsPath:
     """测试修复指令路径正确性"""
 
-    def test_repair_hint_uses_apps_prefix_path(self):
-        """验证修复指令使用 apps/logbook_postgres/scripts 完整路径"""
+    def test_repair_hint_uses_logbook_postgres_path(self):
+        """验证修复指令使用 logbook_postgres/scripts 完整路径"""
         from engram.logbook.migrate import get_repair_commands_hint
         
         hint = get_repair_commands_hint("SCHEMA_MISSING")
         
         # 验证使用完整路径
         hint_str = str(hint)
-        assert "apps/logbook_postgres/scripts/db_bootstrap.py" in hint_str
-        assert "apps/logbook_postgres/scripts/db_migrate.py" in hint_str
+        assert "logbook_postgres/scripts/db_bootstrap.py" in hint_str
+        assert "logbook_postgres/scripts/db_migrate.py" in hint_str
         
         # 验证所有 python 命令都使用 apps/ 前缀
         # 提取所有 python 开头的命令检查
         for cmd in hint.get("recommended_commands", []):
             if cmd.startswith("python ") and "logbook_postgres" in cmd:
-                assert cmd.startswith("python apps/"), f"命令应使用 apps/ 前缀: {cmd}"
+                assert cmd.startswith("python logbook_postgres/"), f"命令路径应包含 logbook_postgres/: {cmd}"
 
     def test_repair_hint_contains_docker_commands(self):
         """验证修复指令包含 Docker 命令"""
@@ -304,15 +304,13 @@ class TestLogbookAdapterRepairPath:
     def test_logbook_adapter_repair_hint_path(self):
         """验证 LogbookAdapter 的 ensure_db_ready 使用正确路径"""
         # 读取源代码验证路径
-        adapter_path = Path(__file__).parent.parent.parent.parent / "openmemory_gateway/gateway/gateway/logbook_adapter.py"
+        adapter_path = Path(__file__).parent.parent.parent.parent / "src/engram/gateway/logbook_adapter.py"
         
         if adapter_path.exists():
             content = adapter_path.read_text()
             
-            # 确保使用了完整的 apps/ 前缀路径
-            assert "cd apps/logbook_postgres/scripts" in content
-            # 确保不是旧的短路径
-            assert "cd logbook_postgres/scripts\n" not in content
+            # 确保使用了新的路径
+            assert "cd logbook_postgres/scripts" in content
 
 
 class TestSQLScriptPrefixOrdering:

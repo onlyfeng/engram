@@ -14,9 +14,9 @@ Engram 项目早期采用数字阶段命名（`Step1`/`Step2`/`Step3`）表示�
 
 | 历史编号 | 阶段含义 | 现官方名称 | 模块路径 |
 |----------|----------|------------|----------|
-| Step1 | 事实账本（日志存储与追踪） | **Logbook** | `apps/logbook_postgres/` |
-| Step2 | 记忆网关（MCP 协议、策略校验） | **Gateway** | `apps/openmemory_gateway/` |
-| Step3 | 检索索引（RAG、向量搜索） | **SeekDB** | `apps/seekdb_rag_hybrid/` |
+| Step1 | 事实账本（日志存储与追踪） | **Logbook** | `src/engram/logbook/` |
+| Step2 | 记忆网关（MCP 协议、策略校验） | **Gateway** | `src/engram/gateway/` |
+| Step3 | 检索索引（RAG、向量搜索） | **SeekDB** | `docs/seekdb/` |
 
 ### 1.2 存在的问题
 
@@ -122,7 +122,8 @@ Engram 项目早期采用数字阶段命名（`Step1`/`Step2`/`Step3`）表示�
 |------|------|----------|
 | `docs/` | 项目文档 | **强制** |
 | `scripts/` | 脚本和工具 | **强制** |
-| `apps/` | 应用代码 | **强制**（排除 vendored 子目录） |
+| `src/` | 应用代码 | **强制** |
+| `logbook_postgres/` | 迁移与工具脚本 | **强制** |
 | `.github/` | CI/CD 配置 | **强制** |
 
 #### 4.1.2 排除目录（OUT OF SCOPE）
@@ -131,32 +132,16 @@ Engram 项目早期采用数字阶段命名（`Step1`/`Step2`/`Step3`）表示�
 
 | 排除目录 | 排除原因 | 同步策略 |
 |----------|----------|----------|
-| `libs/OpenMemory/` | 上游依赖快照，由 `OpenMemory.upstream.lock.json` 锁定 | 见 §4.1.3 |
-| `patches/` | 补丁文件，需保持与上游对应的原始上下文 | 见 §4.1.3 |
-| `archives/` | 上游快照存档 | 不治理 |
 | `vendor/`, `third_party/` | 第三方 vendored 代码 | 不治理 |
 | `node_modules/`, `.venv/` | 依赖安装目录 | 不治理 |
 
 **设计原则**：
-- 上游代码（`libs/OpenMemory/`）保持原样，便于追踪上游变更
-- 补丁文件（`patches/`）需要保留原始上下文，否则无法正确应用
-- 本项目的定制逻辑通过 patch 机制实现，而非直接修改 vendored 代码
+- 第三方依赖保持原样，避免引入额外治理成本
+- 治理范围仅覆盖自研代码与文档
 
-#### 4.1.3 Vendored 代码同步策略
+#### 4.1.3 上游镜像说明
 
-若上游代码（如 `libs/OpenMemory/`）包含被禁止的命名模式，**不**对其进行治理，原因如下：
-
-1. **可追溯性**：保持与上游的 1:1 对应，便于 diff 和升级
-2. **补丁完整性**：`patches/` 目录中的 patch 文件需要匹配原始上下文
-3. **升级安全性**：上游更新时，可通过 `git diff` 快速识别变更
-
-**同步流程**：
-
-```
-上游更新 → libs/OpenMemory/ 快照更新 → 重新生成/调整 patches/ → 应用验证
-```
-
-**版本锁定**：上游版本通过 `OpenMemory.upstream.lock.json` 锁定，确保可重现性。
+OpenMemory 通过 `OPENMEMORY_IMAGE` 引入，不在仓库内，因此不参与目录治理。
 
 ### 4.2 受影响的文件类型
 
@@ -175,13 +160,10 @@ Engram 项目早期采用数字阶段命名（`Step1`/`Step2`/`Step3`）表示�
 
 ```bash
 # 检查禁止词（匹配无空格的 stepN 组件旧名，N=1,2,3）
-# 注意：排除 libs/、patches/、archives/ 等上游/vendored 目录（见 §4.1.2）
+# 注意：排除 vendored/依赖目录（见 §4.1.2）
 rg -iP '(?i)step[1-3](?!\s)' \
   --type-add 'code:*.{py,js,ts,go,rs,yml,yaml,toml,json,md,sh,sql}' \
   -t code \
-  --glob '!libs/**' \
-  --glob '!patches/**' \
-  --glob '!archives/**' \
   --glob '!vendor/**' \
   --glob '!third_party/**' \
   --glob '!node_modules/**'
@@ -205,9 +187,9 @@ rg -iP '(?i)step[1-3](?!\s)' \
 
 | 旧路径形式（已弃用） | 新路径（官方） |
 |---------------------|----------------|
-| 数字阶段 1 旧目录（`apps/step{N}_*/`） | `apps/logbook_postgres/` |
-| 数字阶段 2 旧目录（`apps/step{N}_*/`） | `apps/openmemory_gateway/` |
-| 数字阶段 3 旧目录（`apps/step{N}_*/`） | `apps/seekdb_rag_hybrid/` |
+| 数字阶段 1 旧目录（`apps/step{N}_*/`） | `src/engram/logbook/` |
+| 数字阶段 2 旧目录（`apps/step{N}_*/`） | `src/engram/gateway/` |
+| 数字阶段 3 旧目录（`apps/step{N}_*/`） | `docs/seekdb/` |
 | 数字阶段 1 旧模块（`engram_step{N}`） | `engram_logbook` |
 
 ### 5.3 环境变量替代表
@@ -302,11 +284,8 @@ sed -i '' -E 's/([Ss])tep3$/SeekDB/g' **/*.md
 | **历史引用说明** | "原 Step1 现更名为 Logbook" | 迁移文档需说明历史 |
 | **治理文档本身** | `legacy_naming_governance.md`、本 ADR | 定义禁止词需引用 |
 | **测试用例** | 测试禁止词检测功能的代码 | 验证 CI 检查有效性 |
-| **上游依赖快照** | `libs/OpenMemory/` | 见 §4.1.2 边界定义 |
-| **补丁目录** | `patches/` | 需保持原始上下文（见 §4.1.3） |
 | **vendored 目录** | `vendor/`、`third_party/` | 第三方代码不可修改 |
 | **patch 文件** | `*.patch`、`*.diff` | 历史补丁保留原貌 |
-| **上游存档** | `archives/` | 历史快照存档 |
 
 ### 7.2 豁免配置
 
@@ -316,10 +295,6 @@ sed -i '' -E 's/([Ss])tep3$/SeekDB/g' **/*.md
 rg -iP '(?i)step[1-3](?!\s)' \
   --type-add 'code:*.{py,js,ts,go,rs,yml,yaml,toml,json,md,sh,sql}' \
   -t code \
-  # === 上游依赖和快照（§4.1.2 OUT OF SCOPE）===
-  --glob '!libs/**' \
-  --glob '!patches/**' \
-  --glob '!archives/**' \
   # === 第三方 vendored 代码 ===
   --glob '!vendor/**' \
   --glob '!third_party/**' \
@@ -414,4 +389,4 @@ rg -iP '(?i)step[1-3](?!\s)' \
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
 | 2026-01-30 | v1.0 | 初始版本：定义组件旧命名禁止规则、流程编号区分、迁移策略、例外策略 |
-| 2026-01-30 | v1.1 | 新增 §4.1 治理范围边界：明确 libs/OpenMemory/、patches/、archives/ 等上游/vendored 目录不受治理，定义同步策略 |
+| 2026-01-30 | v1.1 | 新增 §4.1 治理范围边界：明确 vendor/third_party 等第三方目录不受治理 |

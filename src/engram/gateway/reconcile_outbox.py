@@ -40,7 +40,7 @@ except ImportError:
         "=" * 60 + "\n"
         "\n"
         "请先安装:\n"
-        "  pip install -e apps/logbook_postgres/scripts\n"
+        "  pip install -e \".[full]\"\n"
         "\n"
         "=" * 60 + "\n"
     )

@@ -109,7 +109,7 @@ memory://attachments/{attachment_id}/{sha256}
 
 ## SeekDB Chunk 输出与 Logbook Evidence URI 对应关系
 
-SeekDB 分块模块（`seek_chunking.py`）的输出字段遵循 Logbook URI 规范（`engram_logbook/uri.py`），确保 chunk 结果可直接用于 evidence 引用。
+SeekDB 分块模块（`seek_chunking.py`）的输出字段遵循 Logbook URI 规范（`src/engram/logbook/uri.py`），确保 chunk 结果可直接用于 evidence 引用。
 
 ### ChunkResult 字段映射
 

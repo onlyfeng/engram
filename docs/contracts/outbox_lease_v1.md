@@ -4,9 +4,9 @@
 
 ## 实现与测试链接
 
-- **核心实现**: [`apps/logbook_postgres/scripts/engram_logbook/outbox.py`](../../apps/logbook_postgres/scripts/engram_logbook/outbox.py)
-- **单元测试**: [`apps/logbook_postgres/scripts/tests/test_outbox_lease.py`](../../apps/logbook_postgres/scripts/tests/test_outbox_lease.py)
-- **Gateway Worker**: [`apps/openmemory_gateway/gateway/gateway/outbox_worker.py`](../../apps/openmemory_gateway/gateway/gateway/outbox_worker.py)
+- **核心实现**: [`src/engram/logbook/outbox.py`](../../src/engram/logbook/outbox.py)
+- **单元测试**: [`tests/logbook/test_outbox_lease.py`](../../tests/logbook/test_outbox_lease.py)
+- **Gateway Worker**: [`src/engram/gateway/outbox_worker.py`](../../src/engram/gateway/outbox_worker.py)
 
 ---
 

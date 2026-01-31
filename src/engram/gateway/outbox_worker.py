@@ -43,7 +43,7 @@ except ImportError:
         "\n"
         "Outbox Worker 依赖 engram_logbook 模块（统一错误码等），请先安装：\n"
         "\n"
-        "  pip install -e apps/logbook_postgres/scripts\n"
+        "  pip install -e \".[full]\"\n"
         "\n"
         "  # 或 Docker 环境（已自动安装）\n"
         "  docker compose -f docker-compose.unified.yml up outbox_worker\n"

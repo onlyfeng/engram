@@ -34,16 +34,15 @@
 |------|----------|------|
 | Logbook | [docs/logbook/](../logbook/) | Gateway 审计事件落库到 Logbook |
 | OpenMemory | [docs/openmemory/](../openmemory/) | Gateway 作为 OpenMemory 的 MCP 代理层 |
-| SeekDB | [docs/seekdb/](../seekdb/) | Gateway 可组合 SeekDB 实现"先策略后证据" |
 
 ---
 
 ## 开发者入口
 
-- **模块路径**: `apps/openmemory_gateway/`
-- **Python 包**: `gateway`
+- **模块路径**: `src/engram/gateway/`
+- **Python 包**: `engram.gateway`
 - **服务端口**: `8787`（默认）
-- **开发者指南**: [`apps/openmemory_gateway/README.md`](../../apps/openmemory_gateway/README.md)
+- **开发者指南**: [docs/gateway/06_gateway_design.md](06_gateway_design.md)
 
 ---
 
@@ -69,11 +68,7 @@ make verify-unified                    # 基础验证
 VERIFY_FULL=1 make verify-unified      # 完整验证（含降级测试）
 ```
 
-**备用**：直接调用脚本（调试或自定义参数）：
-
-```bash
-./apps/openmemory_gateway/scripts/verify_unified_stack.sh --help
-```
+**备用**：若无脚本入口，直接使用 `make verify-unified`。
 
 详细说明参见 [根 README §统一栈验证入口](../../README.md#统一栈验证入口)。
 
