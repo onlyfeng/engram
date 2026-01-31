@@ -6,4 +6,4 @@
 --             openmemory_migrator, openmemory_app
 --
 
-\i ../../../sql/99_verify_permissions.sql
+\i ../../../sql/verify/99_verify_permissions.sql

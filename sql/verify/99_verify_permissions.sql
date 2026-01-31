@@ -8,6 +8,30 @@
 --   通过 PostgreSQL 自定义配置变量 'om.target_schema' 传入目标 schema 名称
 --   若未设置，默认为 'openmemory'
 --
+-- Schema 前缀支持（测试模式）：
+--   通过 PostgreSQL 自定义配置变量 'engram.schema_prefix' 传入 schema 前缀
+--   若未设置或为空，使用默认 schema 名（identity, logbook, scm, analysis, governance）
+--   若设置为 'test'，则验证 test_identity, test_logbook 等带前缀的 schema
+--
+--   启用方式：
+--     方式1 - CLI 参数（需要测试模式）：
+--       ENGRAM_TESTING=1 python -m engram.logbook.cli.db_migrate --schema-prefix test --verify
+--     方式2 - psql 直接设置：
+--       psql -d <your_db> -c "SET engram.schema_prefix = 'test'" -f 99_verify_permissions.sql
+--
+-- Strict 模式：
+--   通过 PostgreSQL 自定义配置变量 'engram.verify_strict' 启用
+--   当设置为 '1' 时，如果有任何 FAIL 或 WARN 项，脚本最终会 RAISE EXCEPTION
+--   用于 CI/CD 流水线门禁，确保权限配置完全正确
+--
+--   启用方式：
+--     方式1 - CLI 参数：
+--       python -m engram.logbook.cli.db_migrate --verify --verify-strict
+--     方式2 - 环境变量：
+--       ENGRAM_VERIFY_STRICT=1 python -m engram.logbook.cli.db_migrate --verify
+--     方式3 - psql 直接设置：
+--       psql -d <your_db> -c "SET engram.verify_strict = '1'" -f 99_verify_permissions.sql
+--
 -- 执行方式：
 --   方式1 - psql 直接执行（使用默认 schema）：
 --     psql -d <your_db> -f 99_verify_permissions.sql
@@ -44,6 +68,51 @@
   SET om.target_schema = :target_schema;
 \endif
 
+-- 创建临时表存储各段的 fail_count（用于最终汇总）
+CREATE TEMP TABLE IF NOT EXISTS _verify_fail_counts (
+    section_id INT PRIMARY KEY,
+    section_name TEXT NOT NULL,
+    fail_count INT NOT NULL DEFAULT 0,
+    warn_count INT NOT NULL DEFAULT 0
+);
+-- SAFE: 清空会话内临时表，支持重复执行验证
+TRUNCATE _verify_fail_counts;
+
+-- 辅助函数：获取带前缀的 engram schema 名称数组
+-- 根据 engram.schema_prefix 配置变量动态构造 schema 名称
+CREATE OR REPLACE FUNCTION _get_engram_schemas()
+RETURNS TEXT[] AS $$
+DECLARE
+    v_prefix TEXT;
+    base_schemas TEXT[] := ARRAY['identity', 'logbook', 'scm', 'analysis', 'governance'];
+    result TEXT[];
+    s TEXT;
+BEGIN
+    -- 尝试读取 schema_prefix 配置变量
+    v_prefix := NULLIF(current_setting('engram.schema_prefix', true), '');
+    
+    IF v_prefix IS NULL OR v_prefix = '' THEN
+        -- 无前缀，返回默认 schema 名
+        RETURN base_schemas;
+    ELSE
+        -- 有前缀，构造带前缀的 schema 名
+        result := ARRAY[]::TEXT[];
+        FOREACH s IN ARRAY base_schemas LOOP
+            result := array_append(result, v_prefix || '_' || s);
+        END LOOP;
+        RETURN result;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 辅助函数：获取 schema_prefix（用于日志输出）
+CREATE OR REPLACE FUNCTION _get_schema_prefix()
+RETURNS TEXT AS $$
+BEGIN
+    RETURN NULLIF(current_setting('engram.schema_prefix', true), '');
+END;
+$$ LANGUAGE plpgsql;
+
 -- 1. 验证角色是否存在
 DO $$
 DECLARE
@@ -79,6 +148,10 @@ BEGIN
     ELSE
         RAISE NOTICE 'NOLOGIN 角色验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (1, 'NOLOGIN 角色验证', v_fail_count, 0);
 END $$;
 
 -- 2. 验证 LOGIN 角色存在性及 membership
@@ -122,7 +195,7 @@ BEGIN
         IF NOT v_login_exists THEN
             -- LOGIN 角色不存在，可能尚未创建
             RAISE WARNING 'WARN: LOGIN 角色 % 不存在（%）', v_login_role, v_desc;
-            RAISE NOTICE '  remedy: 执行 00_init_service_accounts.sh 创建 LOGIN 角色';
+            RAISE NOTICE '  remedy: 执行 python logbook_postgres/scripts/db_bootstrap.py 创建 LOGIN 角色';
             v_warn_count := v_warn_count + 1;
             CONTINUE;
         END IF;
@@ -161,6 +234,10 @@ BEGIN
     ELSE
         RAISE NOTICE 'LOGIN 角色验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (2, 'LOGIN 角色验证', v_fail_count, v_warn_count);
 END $$;
 
 -- 3. 验证 public schema 的 CREATE 权限
@@ -222,6 +299,10 @@ BEGIN
     ELSE
         RAISE NOTICE 'public schema 验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (3, 'public schema 验证', v_fail_count, 0);
 END $$;
 
 -- 4. 验证目标 openmemory schema 存在性、owner 和权限
@@ -306,6 +387,10 @@ BEGIN
     ELSE
         RAISE NOTICE '目标 OM schema 验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (4, '目标 OM schema 验证', v_fail_count, 0);
 END $$;
 
 -- 5. 验证 pg_default_acl 默认权限配置
@@ -320,11 +405,17 @@ DECLARE
     v_grantor_oid OID;
     v_grantee_oid OID;
     v_schema_oid OID;
-    engram_schemas TEXT[] := ARRAY['identity', 'logbook', 'scm', 'analysis', 'governance'];
+    engram_schemas TEXT[] := _get_engram_schemas();  -- 使用辅助函数获取（支持 schema_prefix）
     v_engram_schema TEXT;
+    v_schema_prefix TEXT := _get_schema_prefix();
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '=== 5. pg_default_acl 默认权限验证 ===';
+    
+    -- 输出 schema_prefix 信息（如有）
+    IF v_schema_prefix IS NOT NULL THEN
+        RAISE NOTICE '使用 schema_prefix: %，验证 schema 列表: %', v_schema_prefix, engram_schemas;
+    END IF;
     
     -- 获取目标 schema
     v_schema := COALESCE(
@@ -479,9 +570,13 @@ BEGIN
     ELSE
         RAISE NOTICE 'pg_default_acl 验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (5, 'pg_default_acl 验证', v_fail_count, v_warn_count);
 END $$;
 
--- 6. 验证数据库级权限硬化（08_database_hardening.sql）
+-- 6. 验证数据库级权限硬化（04_roles_and_grants.sql section 1.7）
 -- 首先验证 PUBLIC 的权限被正确撤销
 DO $$
 DECLARE
@@ -522,7 +617,7 @@ DECLARE
     v_role_exists BOOLEAN;
 BEGIN
     RAISE NOTICE '';
-    RAISE NOTICE '=== 6. 数据库级权限硬化验证（08_database_hardening.sql） ===';
+    RAISE NOTICE '=== 6. 数据库级权限硬化验证（04_roles_and_grants.sql） ===';
     
     v_db := current_database();
     RAISE NOTICE '当前数据库: %', v_db;
@@ -541,7 +636,8 @@ BEGIN
     END;
     IF v_has_create THEN
         RAISE WARNING 'FAIL: PUBLIC 有数据库 CREATE 权限（硬化未生效）';
-        RAISE NOTICE '  remedy: REVOKE CREATE ON DATABASE % FROM PUBLIC;', v_db;
+        RAISE NOTICE '  remedy: 执行 04_roles_and_grants.sql 或手动执行:';
+        RAISE NOTICE '          REVOKE CREATE ON DATABASE % FROM PUBLIC;', v_db;
         v_fail_count := v_fail_count + 1;
     ELSE
         RAISE NOTICE 'OK: PUBLIC 无数据库 CREATE 权限';
@@ -555,7 +651,8 @@ BEGIN
     END;
     IF v_has_temp THEN
         RAISE WARNING 'FAIL: PUBLIC 有数据库 TEMP 权限（硬化未生效）';
-        RAISE NOTICE '  remedy: REVOKE TEMP ON DATABASE % FROM PUBLIC;', v_db;
+        RAISE NOTICE '  remedy: 执行 04_roles_and_grants.sql 或手动执行:';
+        RAISE NOTICE '          REVOKE TEMP ON DATABASE % FROM PUBLIC;', v_db;
         v_fail_count := v_fail_count + 1;
     ELSE
         RAISE NOTICE 'OK: PUBLIC 无数据库 TEMP 权限';
@@ -641,6 +738,10 @@ BEGIN
     ELSE
         RAISE NOTICE '数据库权限硬化验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (6, '数据库权限硬化验证', v_fail_count, v_warn_count);
 END $$;
 
 -- 7. 验证 Engram schema 权限
@@ -649,11 +750,17 @@ DECLARE
     v_schema_name TEXT;
     can_create BOOLEAN;
     can_usage BOOLEAN;
-    engram_schemas TEXT[] := ARRAY['identity', 'logbook', 'scm', 'analysis', 'governance'];
+    engram_schemas TEXT[] := _get_engram_schemas();  -- 使用辅助函数获取（支持 schema_prefix）
     v_fail_count INT := 0;
+    v_schema_prefix TEXT := _get_schema_prefix();
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '=== 7. Engram schema 权限验证 ===';
+    
+    -- 输出 schema_prefix 信息（如有）
+    IF v_schema_prefix IS NOT NULL THEN
+        RAISE NOTICE '使用 schema_prefix: %，验证 schema 列表: %', v_schema_prefix, engram_schemas;
+    END IF;
     
     FOREACH v_schema_name IN ARRAY engram_schemas LOOP
         -- 检查 schema 是否存在
@@ -697,6 +804,10 @@ BEGIN
     ELSE
         RAISE NOTICE 'Engram schema 验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (7, 'Engram schema 验证', v_fail_count, 0);
 END $$;
 
 -- 8. 验证 logbook_migrator 默认权限配置
@@ -705,16 +816,22 @@ DECLARE
     v_schema TEXT;
     v_defacl_count INT;
     v_fail_count INT := 0;
-    engram_schemas TEXT[] := ARRAY['identity', 'logbook', 'scm', 'analysis', 'governance'];
+    engram_schemas TEXT[] := _get_engram_schemas();  -- 使用辅助函数获取（支持 schema_prefix）
     v_grantor_exists BOOLEAN;
+    v_schema_prefix TEXT := _get_schema_prefix();
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '=== 8. logbook_migrator 默认权限验证 ===';
     
+    -- 输出 schema_prefix 信息（如有）
+    IF v_schema_prefix IS NOT NULL THEN
+        RAISE NOTICE '使用 schema_prefix: %，验证 schema 列表: %', v_schema_prefix, engram_schemas;
+    END IF;
+    
     -- 检查 logbook_migrator 角色是否存在
     SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'logbook_migrator') INTO v_grantor_exists;
     IF NOT v_grantor_exists THEN
-        RAISE NOTICE 'SKIP: logbook_migrator 角色不存在（可能未执行 00_init_service_accounts.sh）';
+        RAISE NOTICE 'SKIP: logbook_migrator 角色不存在（可能未执行 python logbook_postgres/scripts/db_bootstrap.py）';
         RETURN;
     END IF;
     
@@ -746,11 +863,16 @@ BEGIN
     END LOOP;
     
     -- 汇总
+    -- 注意：这里的 v_fail_count 实际上是 WARN 计数（logbook_migrator 无默认权限是正常的）
     IF v_fail_count > 0 THEN
         RAISE NOTICE 'logbook_migrator 默认权限验证: % 个 schema 无配置（正常，使用 engram_migrator 设置）', v_fail_count;
     ELSE
         RAISE NOTICE 'logbook_migrator 默认权限验证: 全部通过';
     END IF;
+    
+    -- 记录到汇总表（这些不是真正的 FAIL，而是 WARN/INFO）
+    INSERT INTO _verify_fail_counts (section_id, section_name, fail_count, warn_count)
+    VALUES (8, 'logbook_migrator 默认权限验证', 0, v_fail_count);
 END $$;
 
 -- 9. 验证默认权限详情（TABLES/SEQUENCES/FUNCTIONS）
@@ -759,9 +881,16 @@ DECLARE
     v_rec RECORD;
     v_grantor_exists BOOLEAN;
     v_om_schema TEXT;
+    v_engram_schemas TEXT[] := _get_engram_schemas();  -- 使用辅助函数获取（支持 schema_prefix）
+    v_schema_prefix TEXT := _get_schema_prefix();
 BEGIN
     RAISE NOTICE '';
     RAISE NOTICE '=== 9. 默认权限详情 ===';
+    
+    -- 输出 schema_prefix 信息（如有）
+    IF v_schema_prefix IS NOT NULL THEN
+        RAISE NOTICE '使用 schema_prefix: %，查询 schema 列表: %', v_schema_prefix, v_engram_schemas;
+    END IF;
     
     -- 获取目标 schema
     v_om_schema := COALESCE(
@@ -798,7 +927,7 @@ BEGIN
             JOIN pg_roles r ON r.oid = da.defaclrole
             CROSS JOIN LATERAL aclexplode(da.defaclacl) AS a
             WHERE r.rolname = 'engram_migrator'
-              AND n.nspname IN ('identity', 'logbook', 'scm', 'analysis', 'governance')
+              AND n.nspname = ANY(v_engram_schemas)  -- 使用动态 schema 列表
             GROUP BY n.nspname, da.defaclobjtype
             ORDER BY n.nspname, da.defaclobjtype
         LOOP
@@ -853,6 +982,8 @@ DECLARE
     v_schema_owner TEXT;
     v_migrator_exists BOOLEAN;
     v_db TEXT;
+    v_schema_prefix TEXT := _get_schema_prefix();
+    v_engram_schemas TEXT[] := _get_engram_schemas();
 BEGIN
     -- 获取目标 schema 名称
     v_schema := COALESCE(
@@ -885,6 +1016,10 @@ BEGIN
     RAISE NOTICE '当前配置：';
     RAISE NOTICE '  - 数据库 = %', v_db;
     RAISE NOTICE '  - om.target_schema = %', v_schema;
+    IF v_schema_prefix IS NOT NULL THEN
+        RAISE NOTICE '  - engram.schema_prefix = %', v_schema_prefix;
+        RAISE NOTICE '  - 验证的 engram schema 列表 = %', v_engram_schemas;
+    END IF;
     RAISE NOTICE '  - logbook_migrator 存在 = %', v_migrator_exists;
     IF v_schema_exists THEN
         RAISE NOTICE '  - % schema owner = %', v_schema, v_schema_owner;
@@ -919,7 +1054,7 @@ BEGIN
     IF v_migrator_exists THEN
         RAISE NOTICE '状态: logbook_migrator 已创建，默认权限应已配置';
     ELSE
-        RAISE NOTICE '状态: logbook_migrator 未创建，请先执行 00_init_service_accounts.sh';
+        RAISE NOTICE '状态: logbook_migrator 未创建，请先执行 python logbook_postgres/scripts/db_bootstrap.py';
     END IF;
     
     RAISE NOTICE '';
@@ -929,3 +1064,89 @@ BEGIN
     RAISE NOTICE '  OK   - 检查通过';
     RAISE NOTICE '  SKIP - 条件不满足，跳过检查';
 END $$;
+
+-- 11. Strict 模式汇总与异常处理
+-- 当 engram.verify_strict = '1' 时，如果有任何 FAIL 则抛出异常
+DO $$
+DECLARE
+    v_total_fail INT;
+    v_total_warn INT;
+    v_is_strict BOOLEAN;
+    v_strict_setting TEXT;
+    v_rec RECORD;
+    v_failed_sections TEXT := '';
+BEGIN
+    -- 检查是否启用 strict 模式
+    v_strict_setting := COALESCE(
+        NULLIF(current_setting('engram.verify_strict', true), ''),
+        '0'
+    );
+    v_is_strict := (v_strict_setting = '1');
+    
+    -- 汇总所有 fail_count
+    SELECT COALESCE(SUM(fail_count), 0), COALESCE(SUM(warn_count), 0)
+    INTO v_total_fail, v_total_warn
+    FROM _verify_fail_counts;
+    
+    RAISE NOTICE '';
+    RAISE NOTICE '============================================================';
+    RAISE NOTICE '=== 验证汇总 ===';
+    RAISE NOTICE '============================================================';
+    RAISE NOTICE '';
+    RAISE NOTICE 'Strict 模式: %', CASE WHEN v_is_strict THEN '启用' ELSE '禁用' END;
+    RAISE NOTICE '总计 FAIL: %', v_total_fail;
+    RAISE NOTICE '总计 WARN: %', v_total_warn;
+    RAISE NOTICE '';
+    
+    -- 列出有 FAIL 的 section
+    IF v_total_fail > 0 THEN
+        RAISE NOTICE '有 FAIL 的验证项：';
+        FOR v_rec IN 
+            SELECT section_name, fail_count 
+            FROM _verify_fail_counts 
+            WHERE fail_count > 0 
+            ORDER BY section_id
+        LOOP
+            RAISE NOTICE '  - %: % 项 FAIL', v_rec.section_name, v_rec.fail_count;
+            v_failed_sections := v_failed_sections || v_rec.section_name || ' (' || v_rec.fail_count || '), ';
+        END LOOP;
+        RAISE NOTICE '';
+    END IF;
+    
+    -- 列出有 WARN 的 section
+    IF v_total_warn > 0 THEN
+        RAISE NOTICE '有 WARN 的验证项：';
+        FOR v_rec IN 
+            SELECT section_name, warn_count 
+            FROM _verify_fail_counts 
+            WHERE warn_count > 0 
+            ORDER BY section_id
+        LOOP
+            RAISE NOTICE '  - %: % 项 WARN', v_rec.section_name, v_rec.warn_count;
+        END LOOP;
+        RAISE NOTICE '';
+    END IF;
+    
+    -- Strict 模式下，有 FAIL 或 WARN 则抛出异常（用于 CI 门禁）
+    IF v_is_strict AND (v_total_fail > 0 OR v_total_warn > 0) THEN
+        -- 移除末尾的 ", "
+        v_failed_sections := rtrim(v_failed_sections, ', ');
+        
+        RAISE EXCEPTION 'VERIFY_STRICT_FAILED: 权限验证失败，共 % 项 FAIL，% 项 WARN。失败的验证项: [%]。请修复上述问题后重试。', 
+            v_total_fail, v_total_warn, v_failed_sections;
+    END IF;
+    
+    -- 非 strict 模式，输出结论
+    IF v_total_fail > 0 THEN
+        RAISE WARNING '权限验证完成，但存在 % 项 FAIL，请检查并修复', v_total_fail;
+    ELSIF v_total_warn > 0 THEN
+        RAISE NOTICE '权限验证完成，存在 % 项 WARN（可选修复）', v_total_warn;
+    ELSE
+        RAISE NOTICE '权限验证完成，全部通过';
+    END IF;
+END $$;
+
+-- SAFE: 清理会话内创建的临时表和辅助函数
+DROP TABLE IF EXISTS _verify_fail_counts;
+DROP FUNCTION IF EXISTS _get_engram_schemas();
+DROP FUNCTION IF EXISTS _get_schema_prefix();

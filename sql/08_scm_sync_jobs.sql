@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS scm.sync_jobs (
                                     -- gitlab_reviews: GitLab Review 事件同步
                                     -- svn: SVN 提交记录同步
                                     -- 注意：logical_job_type (commits/mrs/reviews) 在 scheduler 层转换为 physical
-    mode            text NOT NULL DEFAULT 'incremental',  -- 'incremental' | 'backfill'
+    mode            text NOT NULL DEFAULT 'incremental',  -- 'incremental' | 'backfill' | 'probe'
     
     -- 优先级（数值越小优先级越高，默认 100）
     priority        integer NOT NULL DEFAULT 100,
@@ -74,7 +74,7 @@ COMMENT ON TABLE scm.sync_jobs IS '同步任务队列表，支持 claim/ack/fail
 COMMENT ON COLUMN scm.sync_jobs.job_id IS '任务唯一标识（UUID）';
 COMMENT ON COLUMN scm.sync_jobs.repo_id IS '关联的仓库 ID';
 COMMENT ON COLUMN scm.sync_jobs.job_type IS 'physical_job_type（物理任务类型）: gitlab_commits（GitLab提交）, gitlab_mrs（GitLab MR）, gitlab_reviews（GitLab Review）, svn（SVN提交）。scheduler 入队时将 logical_job_type 转换为 physical_job_type';
-COMMENT ON COLUMN scm.sync_jobs.mode IS '同步模式: incremental（增量）, backfill（回填）';
+COMMENT ON COLUMN scm.sync_jobs.mode IS '同步模式: incremental（增量）, backfill（回填）, probe（熔断器探测）';
 COMMENT ON COLUMN scm.sync_jobs.priority IS '优先级（数值越小优先级越高），默认 100';
 COMMENT ON COLUMN scm.sync_jobs.payload_json IS '任务参数（JSON 格式），如回填时间窗口';
 COMMENT ON COLUMN scm.sync_jobs.status IS '任务状态: pending, running, completed, failed, dead';
@@ -129,6 +129,76 @@ CREATE INDEX IF NOT EXISTS idx_sync_jobs_running_lease
 -- 按 repo + job_type 查询最新任务
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_repo_job_latest
     ON scm.sync_jobs(repo_id, job_type, created_at DESC);
+
+-- 延迟执行任务查询（not_before 尚未到达的任务）
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_not_before
+    ON scm.sync_jobs(not_before)
+    WHERE status = 'pending' OR status = 'failed';
+
+-- dead 任务查询（用于清理或重置）
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_dead
+    ON scm.sync_jobs(repo_id, created_at DESC)
+    WHERE status = 'dead';
+
+-- ============================================================
+-- 索引升级：处理旧版本索引定义差异
+-- 如果存在与预期不同的旧索引定义，先删除再重建
+-- ============================================================
+
+-- 检查并升级 idx_sync_jobs_running_lease 索引
+-- 旧版本（07）: (locked_at) WHERE status = 'running'
+-- 新版本（08）: (locked_at, lease_seconds) WHERE status = 'running'
+DO $$
+DECLARE
+    v_indexdef text;
+    v_expected_columns text := 'locked_at, lease_seconds';
+BEGIN
+    -- 获取当前索引定义
+    SELECT pg_get_indexdef(i.indexrelid)
+    INTO v_indexdef
+    FROM pg_index i
+    JOIN pg_class c ON i.indexrelid = c.oid
+    JOIN pg_namespace n ON c.relnamespace = n.oid
+    WHERE n.nspname = 'scm'
+      AND c.relname = 'idx_sync_jobs_running_lease';
+    
+    -- 如果索引存在但列定义不包含 lease_seconds，需要重建
+    IF v_indexdef IS NOT NULL AND v_indexdef NOT LIKE '%lease_seconds%' THEN
+        RAISE NOTICE 'Upgrading idx_sync_jobs_running_lease: old definition detected';
+        DROP INDEX IF EXISTS scm.idx_sync_jobs_running_lease;
+        CREATE INDEX idx_sync_jobs_running_lease
+            ON scm.sync_jobs(locked_at, lease_seconds)
+            WHERE status = 'running';
+        RAISE NOTICE 'idx_sync_jobs_running_lease upgraded successfully';
+    END IF;
+END $$;
+
+-- 检查并升级 idx_sync_jobs_unique_active 索引
+-- 旧版本可能: (repo_id, job_type) WHERE status IN ('pending', 'running')
+-- 新版本: (repo_id, job_type, mode) WHERE status IN ('pending', 'running')
+DO $$
+DECLARE
+    v_indexdef text;
+BEGIN
+    -- 获取当前索引定义
+    SELECT pg_get_indexdef(i.indexrelid)
+    INTO v_indexdef
+    FROM pg_index i
+    JOIN pg_class c ON i.indexrelid = c.oid
+    JOIN pg_namespace n ON c.relnamespace = n.oid
+    WHERE n.nspname = 'scm'
+      AND c.relname = 'idx_sync_jobs_unique_active';
+    
+    -- 如果索引存在但列定义不包含 mode，需要重建
+    IF v_indexdef IS NOT NULL AND v_indexdef NOT LIKE '%mode%' THEN
+        RAISE NOTICE 'Upgrading idx_sync_jobs_unique_active: old definition without mode detected';
+        DROP INDEX IF EXISTS scm.idx_sync_jobs_unique_active;
+        CREATE UNIQUE INDEX idx_sync_jobs_unique_active
+            ON scm.sync_jobs(repo_id, job_type, mode)
+            WHERE status IN ('pending', 'running');
+        RAISE NOTICE 'idx_sync_jobs_unique_active upgraded successfully';
+    END IF;
+END $$;
 
 COMMIT;
 

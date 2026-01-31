@@ -8,6 +8,70 @@
 BEGIN;
 
 -- ============================================================
+-- scm.repos 兼容字段迁移
+-- 添加 vcs_type/remote_url 作为 repo_type/url 的别名（弃用字段）
+-- ============================================================
+
+-- 1. 添加兼容字段（如果不存在）
+ALTER TABLE scm.repos ADD COLUMN IF NOT EXISTS vcs_type text;
+ALTER TABLE scm.repos ADD COLUMN IF NOT EXISTS remote_url text;
+
+-- 2. 回填兼容字段（从主字段同步）
+-- SAFE: 仅填充 NULL 值，不覆盖已有数据，幂等迁移
+UPDATE scm.repos SET vcs_type = repo_type WHERE vcs_type IS NULL AND repo_type IS NOT NULL;
+-- SAFE: 仅填充 NULL 值，不覆盖已有数据，幂等迁移
+UPDATE scm.repos SET remote_url = url WHERE remote_url IS NULL AND url IS NOT NULL;
+
+-- 3. 创建/替换字段同步触发器
+CREATE OR REPLACE FUNCTION scm.sync_repos_compat_fields() RETURNS trigger AS $$
+BEGIN
+  -- INSERT/UPDATE 时同步字段
+  -- 优先级：如果新字段为空但旧字段有值，使用旧字段值；否则同步到旧字段
+  
+  -- repo_type <-> vcs_type 同步
+  IF NEW.repo_type IS NULL AND NEW.vcs_type IS NOT NULL THEN
+    NEW.repo_type := NEW.vcs_type;
+  END IF;
+  NEW.vcs_type := NEW.repo_type;
+  
+  -- url <-> remote_url 同步
+  IF NEW.url IS NULL AND NEW.remote_url IS NOT NULL THEN
+    NEW.url := NEW.remote_url;
+  END IF;
+  NEW.remote_url := NEW.url;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_repos_compat_sync ON scm.repos;
+CREATE TRIGGER trg_repos_compat_sync
+  BEFORE INSERT OR UPDATE ON scm.repos
+  FOR EACH ROW EXECUTE FUNCTION scm.sync_repos_compat_fields();
+
+-- 4. 创建兼容唯一索引（用于 ON CONFLICT 语句）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_vcs_type_remote_url
+  ON scm.repos(vcs_type, remote_url)
+  WHERE vcs_type IS NOT NULL AND remote_url IS NOT NULL;
+
+-- 5. 移除 project_key 的 NOT NULL 约束（如果存在）
+-- 兼容旧代码：允许不指定 project_key
+DO $$
+BEGIN
+    -- 检查 project_key 列是否有 NOT NULL 约束
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'scm' 
+          AND table_name = 'repos' 
+          AND column_name = 'project_key'
+          AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE scm.repos ALTER COLUMN project_key DROP NOT NULL;
+        RAISE NOTICE 'Dropped NOT NULL constraint from scm.repos.project_key';
+    END IF;
+END $$;
+
+-- ============================================================
 -- scm.svn_revisions 迁移
 -- 原结构：rev_id bigint PRIMARY KEY
 -- 新结构：svn_rev_id bigserial PRIMARY KEY + rev_num + UNIQUE(repo_id, rev_num)
@@ -319,6 +383,7 @@ CREATE INDEX IF NOT EXISTS idx_review_events_mr_source
 -- ============================================================
 
 -- 删除旧视图（如存在），重新创建以确保结构更新
+-- SAFE: 幂等重建视图，无数据丢失风险（视图不存储数据）
 DROP MATERIALIZED VIEW IF EXISTS scm.v_facts;
 
 CREATE MATERIALIZED VIEW scm.v_facts AS

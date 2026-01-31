@@ -2,7 +2,7 @@
 -- 用途：为 scm.patch_blobs 添加独立的 evidence_uri 列，并从 meta_json 回填
 -- 设计原则：向后兼容，支持 COALESCE(evidence_uri, meta_json->>'evidence_uri') 查询模式
 --
--- 执行方式：psql -d <your_db> -f 10_evidence_uri_column.sql
+-- 执行方式：psql -d <your_db> -f 09_evidence_uri_column.sql
 -- 或在 pgAdmin/DBeaver 中直接执行
 --
 -- evidence_uri 格式（Canonical Evidence URI）：

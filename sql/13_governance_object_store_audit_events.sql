@@ -78,6 +78,10 @@ CREATE INDEX IF NOT EXISTS idx_object_store_audit_bucket_key_ts
     ON governance.object_store_audit_events(bucket, object_key, event_ts DESC)
     WHERE object_key IS NOT NULL;
 
+-- 按 bucket + event_ts 查询（用于查询整个存储桶的操作）
+CREATE INDEX IF NOT EXISTS idx_object_store_audit_bucket_ts
+    ON governance.object_store_audit_events(bucket, event_ts DESC);
+
 -- 按操作类型查询（用于统计特定 API 操作）
 CREATE INDEX IF NOT EXISTS idx_object_store_audit_operation
     ON governance.object_store_audit_events(operation, event_ts DESC);
@@ -86,10 +90,23 @@ CREATE INDEX IF NOT EXISTS idx_object_store_audit_operation
 CREATE INDEX IF NOT EXISTS idx_object_store_audit_provider
     ON governance.object_store_audit_events(provider, event_ts DESC);
 
--- 按 request_id 查询（用于追踪单次请求）
+-- 按 request_id 查询（用于去重和关联追踪）
 CREATE INDEX IF NOT EXISTS idx_object_store_audit_request_id
     ON governance.object_store_audit_events(request_id)
     WHERE request_id IS NOT NULL;
+
+-- 按 event_ts 查询（用于时间范围扫描和归档）
+CREATE INDEX IF NOT EXISTS idx_object_store_audit_event_ts
+    ON governance.object_store_audit_events(event_ts DESC);
+
+-- 按 principal 查询（用于审计特定用户的操作）
+CREATE INDEX IF NOT EXISTS idx_object_store_audit_principal
+    ON governance.object_store_audit_events(principal, event_ts DESC)
+    WHERE principal IS NOT NULL;
+
+-- 按入库时间查询（用于增量同步和故障恢复）
+CREATE INDEX IF NOT EXISTS idx_object_store_audit_ingested_at
+    ON governance.object_store_audit_events(ingested_at DESC);
 
 COMMIT;
 

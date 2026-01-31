@@ -177,11 +177,59 @@ CREATE TABLE IF NOT EXISTS scm.repos (
   repo_id            bigserial PRIMARY KEY,
   repo_type          text NOT NULL CHECK (repo_type IN ('svn','git')),
   url                text NOT NULL,
-  project_key        text NOT NULL,
+  project_key        text,                                -- 可空，兼容旧代码
   default_branch     text,
+  -- ============ 弃用字段（兼容旧代码）============
+  -- 以下字段已弃用，请使用 repo_type 和 url
+  -- 这些字段将在后续版本移除
+  vcs_type           text,                                -- 弃用，请使用 repo_type
+  remote_url         text,                                -- 弃用，请使用 url
+  -- ============================================
   created_at         timestamptz NOT NULL DEFAULT now(),
   UNIQUE(repo_type, url)
 );
+
+-- scm.repos 兼容字段说明：
+-- vcs_type/remote_url 是 repo_type/url 的别名（已弃用）
+-- 触发器会自动同步这两组字段
+-- 新代码应使用 repo_type 和 url
+
+-- scm.repos: 添加兼容字段（如果不存在）
+ALTER TABLE scm.repos ADD COLUMN IF NOT EXISTS vcs_type text;
+ALTER TABLE scm.repos ADD COLUMN IF NOT EXISTS remote_url text;
+
+-- scm.repos: 字段同步触发器（repo_type <-> vcs_type, url <-> remote_url）
+CREATE OR REPLACE FUNCTION scm.sync_repos_compat_fields() RETURNS trigger AS $$
+BEGIN
+  -- INSERT/UPDATE 时同步字段
+  -- 优先级：如果新字段为空但旧字段有值，使用旧字段值；否则同步到旧字段
+  
+  -- repo_type <-> vcs_type 同步
+  IF NEW.repo_type IS NULL AND NEW.vcs_type IS NOT NULL THEN
+    NEW.repo_type := NEW.vcs_type;
+  END IF;
+  NEW.vcs_type := NEW.repo_type;
+  
+  -- url <-> remote_url 同步
+  IF NEW.url IS NULL AND NEW.remote_url IS NOT NULL THEN
+    NEW.url := NEW.remote_url;
+  END IF;
+  NEW.remote_url := NEW.url;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_repos_compat_sync ON scm.repos;
+CREATE TRIGGER trg_repos_compat_sync
+  BEFORE INSERT OR UPDATE ON scm.repos
+  FOR EACH ROW EXECUTE FUNCTION scm.sync_repos_compat_fields();
+
+-- scm.repos: 兼容唯一索引（vcs_type, remote_url）
+-- 用于支持旧代码的 ON CONFLICT (vcs_type, remote_url) 语句
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_vcs_type_remote_url
+  ON scm.repos(vcs_type, remote_url)
+  WHERE vcs_type IS NOT NULL AND remote_url IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS scm.svn_revisions (
   svn_rev_id         bigserial PRIMARY KEY,           -- 代理主键（向后兼容：新增）

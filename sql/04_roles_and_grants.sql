@@ -169,6 +169,80 @@ END $$;
 DO $$ BEGIN RAISE NOTICE 'Service account memberships configured'; END $$;
 
 -- ============================================================
+-- 1.7 数据库级权限硬化（Database-level Hardening）
+-- ============================================================
+-- 撤销 PUBLIC 在当前数据库的 CREATE/TEMP 权限，防止未授权角色创建 schema 或临时表。
+-- 
+-- 安全策略：
+--   - PUBLIC: CONNECT=N (需显式授权), CREATE=N, TEMP=N
+--   - migrator 角色: CONNECT=Y, CREATE=Y, TEMP=Y（需要创建 schema）
+--   - app 角色: CONNECT=Y, CREATE=N, TEMP=N（仅 DML）
+--   - admin 角色: CONNECT=Y, CREATE=Y, TEMP=Y（完整权限）
+--
+-- 使用 EXECUTE 动态执行以获取 current_database() 值
+
+-- 1.7.1 撤销 PUBLIC 的数据库权限（核心硬化）
+DO $$
+DECLARE
+    v_db TEXT;
+BEGIN
+    v_db := current_database();
+    
+    -- 撤销 PUBLIC 的 CREATE 权限（防止创建 schema）
+    EXECUTE format('REVOKE CREATE ON DATABASE %I FROM PUBLIC', v_db);
+    RAISE NOTICE 'Revoked CREATE on database % from PUBLIC', v_db;
+    
+    -- 撤销 PUBLIC 的 TEMP 权限（防止创建临时表）
+    EXECUTE format('REVOKE TEMP ON DATABASE %I FROM PUBLIC', v_db);
+    RAISE NOTICE 'Revoked TEMP on database % from PUBLIC', v_db;
+END $$;
+
+-- 1.7.2 授予 Engram 角色数据库权限
+DO $$
+DECLARE
+    v_db TEXT;
+BEGIN
+    v_db := current_database();
+    
+    -- engram_admin: 完整权限
+    EXECUTE format('GRANT CONNECT, CREATE, TEMP ON DATABASE %I TO engram_admin', v_db);
+    RAISE NOTICE 'Granted CONNECT, CREATE, TEMP on database % to engram_admin', v_db;
+    
+    -- engram_migrator: 迁移需要 CREATE（创建 schema）和 TEMP
+    EXECUTE format('GRANT CONNECT, CREATE, TEMP ON DATABASE %I TO engram_migrator', v_db);
+    RAISE NOTICE 'Granted CONNECT, CREATE, TEMP on database % to engram_migrator', v_db;
+    
+    -- engram_app_readwrite: 仅 CONNECT（无 CREATE/TEMP）
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO engram_app_readwrite', v_db);
+    EXECUTE format('REVOKE CREATE, TEMP ON DATABASE %I FROM engram_app_readwrite', v_db);
+    RAISE NOTICE 'Granted CONNECT (no CREATE/TEMP) on database % to engram_app_readwrite', v_db;
+    
+    -- engram_app_readonly: 仅 CONNECT
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO engram_app_readonly', v_db);
+    EXECUTE format('REVOKE CREATE, TEMP ON DATABASE %I FROM engram_app_readonly', v_db);
+    RAISE NOTICE 'Granted CONNECT (no CREATE/TEMP) on database % to engram_app_readonly', v_db;
+END $$;
+
+-- 1.7.3 授予 OpenMemory 角色数据库权限
+DO $$
+DECLARE
+    v_db TEXT;
+BEGIN
+    v_db := current_database();
+    
+    -- openmemory_migrator: 迁移需要 CREATE 和 TEMP
+    EXECUTE format('GRANT CONNECT, CREATE, TEMP ON DATABASE %I TO openmemory_migrator', v_db);
+    RAISE NOTICE 'Granted CONNECT, CREATE, TEMP on database % to openmemory_migrator', v_db;
+    
+    -- openmemory_app: 仅 CONNECT（无 CREATE/TEMP）
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO openmemory_app', v_db);
+    EXECUTE format('REVOKE CREATE, TEMP ON DATABASE %I FROM openmemory_app', v_db);
+    RAISE NOTICE 'Granted CONNECT (no CREATE/TEMP) on database % to openmemory_app', v_db;
+END $$;
+
+DO $$ BEGIN RAISE NOTICE 'Database-level hardening completed for database: %', current_database(); END $$;
+
+-- ============================================================
 -- 2. 约束 public schema（strict 策略）
 -- ============================================================
 -- 禁用 public schema 的 CREATE 权限，防止对象被误创建到 public
