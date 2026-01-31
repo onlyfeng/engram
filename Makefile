@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov lint format typecheck migrate migrate-ddl apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov lint format typecheck migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -168,7 +168,7 @@ check-schemas:  ## 校验 JSON Schema 和 fixtures
 
 check-migration-sanity:  ## 检查 SQL 迁移文件存在性
 	@echo "检查 SQL 迁移文件..."
-	@required_files="sql/01_logbook_schema.sql sql/02_scm_migration.sql sql/04_roles_and_grants.sql sql/05_openmemory_roles_and_grants.sql"; \
+	@required_files="sql/01_logbook_schema.sql sql/02_scm_migration.sql sql/04_roles_and_grants.sql sql/05_openmemory_roles_and_grants.sql sql/06_scm_sync_runs.sql sql/07_scm_sync_locks.sql sql/08_scm_sync_jobs.sql sql/11_sync_jobs_dimension_columns.sql"; \
 	missing=0; \
 	for f in $$required_files; do \
 		if [ ! -f "$$f" ]; then \
@@ -184,7 +184,12 @@ check-migration-sanity:  ## 检查 SQL 迁移文件存在性
 	fi
 	@echo "SQL 迁移文件检查通过"
 
-ci: lint format-check typecheck check-schemas check-env-consistency check-logbook-consistency check-migration-sanity  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
+check-scm-sync-consistency:  ## 检查 SCM Sync 一致性（文档/代码/配置对齐）
+	@echo "检查 SCM Sync 一致性..."
+	$(PYTHON) scripts/verify_scm_sync_consistency.py --verbose
+	@echo "SCM Sync 一致性检查通过"
+
+ci: lint format-check typecheck check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
 	@echo ""
 	@echo "=========================================="
 	@echo "[OK] 所有 CI 检查通过"
@@ -206,6 +211,21 @@ regression: ci  ## 运行回归测试（CI 检查 + 回归 Runbook 提示）
 	@echo "  make test"
 
 ## ==================== 数据库 ====================
+
+migrate-plan:  ## 查看迁移计划（不连接数据库）
+	@echo "查看迁移计划..."
+	$(PYTHON) -m engram.logbook.cli.db_migrate --plan --pretty
+
+migrate-plan-full:  ## 查看完整迁移计划（DDL + 权限 + 验证）
+	@echo "查看完整迁移计划..."
+	$(PYTHON) -m engram.logbook.cli.db_migrate --plan --apply-roles --apply-openmemory-grants --verify --pretty
+
+migrate-precheck:  ## 仅执行预检（验证配置和数据库连接，不执行迁移）
+	@echo "执行预检..."
+	$(PYTHON) -m engram.logbook.cli.db_migrate \
+		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)" \
+		--precheck-only
+	@echo "预检完成"
 
 migrate-ddl:  ## 仅执行 DDL 迁移（Schema/表/索引）
 	@echo "执行 DDL 迁移..."

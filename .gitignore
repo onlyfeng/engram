@@ -151,6 +151,11 @@ temp/
 .artifacts/
 
 # ------------------------------------------------------------------------------
+# Local Tool Outputs (agent/AI tool outputs, not for version control)
+# ------------------------------------------------------------------------------
+.agentx/
+
+# ------------------------------------------------------------------------------
 # Local Development Tools (IDE/Editor-specific, not for version control)
 # ------------------------------------------------------------------------------
 # Cursor IDE indexing configuration

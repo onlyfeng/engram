@@ -63,12 +63,16 @@ jobs:
           POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram_test
           ENGRAM_TESTING: "1"
         run: |
+          # 执行 DDL 迁移 + 角色权限应用
+          # 使用 tee 同时输出到终端和日志文件，便于调试
+          # 2>&1: 合并 stderr 到 stdout，确保错误信息也被记录
           python -m engram.logbook.cli.db_migrate \
             --dsn "$POSTGRES_DSN" \
             --apply-roles \
             --apply-openmemory-grants \
             2>&1 | tee migration-output-${{ matrix.python-version }}.log
-          # 检查 Python 脚本的退出码（tee 会返回成功，需要用 PIPESTATUS）
+          # PIPESTATUS[0] 获取管道中第一个命令（Python 脚本）的退出码
+          # 这是必要的，因为 tee 始终返回 0，会掩盖 Python 脚本的失败
           exit ${PIPESTATUS[0]}
 
       - name: Verify database migrations (strict mode)
@@ -76,11 +80,16 @@ jobs:
           POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram_test
           ENGRAM_TESTING: "1"
         run: |
+          # 严格模式验证：仅 FAIL 会导致非零退出码，阻断 CI（默认 fail_only 策略）
+          # --verify-strict: 启用门禁检查，FAIL 项存在时返回非零退出码
+          # 注意：WARN 不会导致失败，如需 WARN 也触发，需设置 gate_policy=fail_and_warn
+          # 日志留存用于失败时的问题诊断
           python -m engram.logbook.cli.db_migrate \
             --dsn "$POSTGRES_DSN" \
             --verify \
             --verify-strict \
             2>&1 | tee verify-output-${{ matrix.python-version }}.log
+          # 同样使用 PIPESTATUS[0] 传递正确的退出码
           exit ${PIPESTATUS[0]}
 
       - name: Run unit and integration tests
@@ -321,3 +330,52 @@ jobs:
           python -m pytest tests/logbook/test_sql_migrations_safety.py -v --tb=short
           echo ""
           echo "SQL 迁移安全性检查通过"
+
+  # ============================================================================
+  # Gateway DI 边界检查
+  # ============================================================================
+  gateway-di-boundaries:
+    name: Gateway DI Boundaries Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Gateway DI boundaries
+        run: |
+          python scripts/ci/check_gateway_di_boundaries.py --verbose
+          echo "Gateway DI boundaries check passed"
+
+  # ============================================================================
+  # SCM Sync 一致性检查
+  # ============================================================================
+  scm-sync-consistency:
+    name: SCM Sync Consistency Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check SCM Sync consistency
+        run: |
+          python scripts/verify_scm_sync_consistency.py --verbose
+          echo "SCM Sync consistency check passed"

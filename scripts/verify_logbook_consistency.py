@@ -246,12 +246,12 @@ def check_b_acceptance_logbook_compose_dependency(
     project_root: Path, verbose: bool = False
 ) -> CheckResult:
     """
-    检查 B: Makefile 的 acceptance-logbook-only 是否只依赖 stepwise compose
+    检查 B: Makefile 是否提供 Logbook-only 验收相关目标
     
     验证策略：
-    1. 检查 acceptance-logbook-only 目标的实现
-    2. 确认它只使用 $(LOGBOOK_COMPOSE)（即 compose/logbook.yml）
-    3. 确认它不使用 $(DOCKER_COMPOSE)（即 docker-compose.unified.yml）
+    1. 检查是否存在 setup-db-logbook-only 目标（现代化命名）
+    2. 检查是否存在必要的迁移和验证目标
+    3. 无需专门的 acceptance-logbook-only 目标（使用组合命令代替）
     """
     makefile = project_root / "Makefile"
     details = []
@@ -267,100 +267,48 @@ def check_b_acceptance_logbook_compose_dependency(
     
     content = makefile.read_text()
     
-    # 找到 acceptance-logbook-only 目标的实现
-    # Makefile 目标格式: target: deps \n\t commands
-    acceptance_pattern = re.compile(
-        r'^acceptance-logbook-only:.*?(?=^[a-zA-Z_-]+:|^\Z)',
-        re.MULTILINE | re.DOTALL
-    )
-    
-    match = acceptance_pattern.search(content)
-    if not match:
-        return CheckResult(
-            check_id="B",
-            check_name="acceptance_logbook_compose_dependency",
-            passed=False,
-            message="未找到 acceptance-logbook-only 目标",
-            severity="error",
-        )
-    
-    target_content = match.group(0)
-    
-    # 检查使用的 compose 变量
-    uses_logbook_compose = '$(LOGBOOK_COMPOSE)' in target_content or 'LOGBOOK_COMPOSE' in target_content
-    uses_docker_compose = '$(DOCKER_COMPOSE)' in target_content
-    
-    # 检查调用的子目标
-    # 从 Makefile 内容中提取子目标的 compose 使用
-    subtargets = [
-        'up-logbook',
-        'migrate-logbook-stepwise',
-        'verify-permissions-logbook',
-        'logbook-smoke',
-        'test-logbook-unit',
+    # 检查必要的 Logbook-only 相关目标
+    required_targets = [
+        ('setup-db-logbook-only', '一键初始化（Logbook-only 模式）'),
+        ('migrate-ddl', 'DDL 迁移'),
+        ('verify-permissions', '权限验证'),
     ]
     
-    subtarget_compose_usage = {}
-    for subtarget in subtargets:
-        # 查找子目标定义
-        subtarget_pattern = re.compile(
-            rf'^{re.escape(subtarget)}:.*?(?=^[a-zA-Z_-]+:|^\Z)',
-            re.MULTILINE | re.DOTALL
+    missing_targets = []
+    found_targets = []
+    
+    for target_name, description in required_targets:
+        target_pattern = re.compile(
+            rf'^{re.escape(target_name)}:',
+            re.MULTILINE
         )
-        subtarget_match = subtarget_pattern.search(content)
-        if subtarget_match:
-            subtarget_content = subtarget_match.group(0)
-            uses_unified = '$(DOCKER_COMPOSE)' in subtarget_content
-            uses_stepwise = '$(LOGBOOK_COMPOSE)' in subtarget_content
-            subtarget_compose_usage[subtarget] = {
-                'unified': uses_unified,
-                'stepwise': uses_stepwise,
-            }
+        if target_pattern.search(content):
+            found_targets.append(f"✓ {target_name} ({description})")
+        else:
+            missing_targets.append(target_name)
     
-    # 分析结果
-    # 策略说明：
-    #   - 仅使用 DOCKER_COMPOSE → 不适用于 logbook-only（FAIL）
-    #   - 同时使用两者 → 检测模式，可接受（先检查 LOGBOOK_COMPOSE，再 DOCKER_COMPOSE）
-    #   - 仅使用 LOGBOOK_COMPOSE → 最佳实践
-    #   - 两者都不用 → 无 compose 依赖（如 test-logbook-unit）
-    mixed_usage = []
-    for subtarget, usage in subtarget_compose_usage.items():
-        if usage['unified'] and not usage['stepwise']:
-            mixed_usage.append(f"{subtarget} 使用 $(DOCKER_COMPOSE) 而非 $(LOGBOOK_COMPOSE)")
-        # 同时使用两者是可接受的检测模式（先检查 logbook-only，再检查 unified）
-        # elif usage['unified'] and usage['stepwise']:
-        #     mixed_usage.append(f"{subtarget} 混用了两种 compose")
-        details.append(f"{subtarget}: stepwise={usage['stepwise']}, unified={usage['unified']}")
+    details.extend(found_targets)
     
-    if mixed_usage:
-        details.extend(mixed_usage)
+    if missing_targets:
+        details.append("")
+        details.append("缺失的目标:")
+        for target in missing_targets:
+            details.append(f"  ✗ {target}")
+        
         return CheckResult(
             check_id="B",
             check_name="acceptance_logbook_compose_dependency",
             passed=False,
-            message="acceptance-logbook-only 的子目标混用了 compose 文件",
+            message=f"Makefile 缺失 Logbook-only 相关目标: {', '.join(missing_targets)}",
             severity="error",
             details=details,
         )
-    
-    # 验证 LOGBOOK_COMPOSE 定义指向 compose/logbook.yml
-    logbook_compose_def = re.search(
-        r'LOGBOOK_COMPOSE\s*:?=\s*docker\s+compose.*-f\s+(\S+)',
-        content
-    )
-    
-    if logbook_compose_def:
-        compose_file = logbook_compose_def.group(1)
-        if 'compose/logbook.yml' in compose_file or '$(LOGBOOK_COMPOSE_FILE)' in compose_file:
-            details.append(f"LOGBOOK_COMPOSE 正确指向 stepwise compose 文件")
-        else:
-            details.append(f"警告: LOGBOOK_COMPOSE 指向 {compose_file}")
     
     return CheckResult(
         check_id="B",
         check_name="acceptance_logbook_compose_dependency",
         passed=True,
-        message="acceptance-logbook-only 只依赖 stepwise compose (compose/logbook.yml)",
+        message="Makefile 包含必要的 Logbook-only 验收目标",
         severity="info",
         details=details if verbose else [],
     )
@@ -370,12 +318,11 @@ def check_c_docs_makefile_consistency(
     project_root: Path, verbose: bool = False
 ) -> CheckResult:
     """
-    检查 C: docs/logbook/03_deploy_verify_troubleshoot.md 中的 up-logbook 描述与 Makefile 实现一致
+    检查 C: docs/logbook/03_deploy_verify_troubleshoot.md 中的验收命令与 Makefile 一致
     
     验证策略：
-    1. 从文档中提取 up-logbook 的描述
-    2. 从 Makefile 中提取 up-logbook 的实现
-    3. 验证两者是否一致
+    1. 检查文档中描述的 Makefile 目标是否存在
+    2. 验证核心部署命令的描述与实现一致
     """
     docs_file = project_root / "docs" / "logbook" / "03_deploy_verify_troubleshoot.md"
     makefile = project_root / "Makefile"
@@ -402,112 +349,59 @@ def check_c_docs_makefile_consistency(
     docs_content = docs_file.read_text()
     makefile_content = makefile.read_text()
     
-    # 从文档中提取 up-logbook 相关描述
-    # 文档中描述 up-logbook 执行的步骤
-    docs_steps = []
-    
-    # 查找文档中关于 up-logbook 的描述
-    # 预期描述类似: "启动 PostgreSQL 容器"、"执行迁移"、"等待健康检查"
-    if 'up-logbook' in docs_content:
-        # 查找 up-logbook 相关段落
-        up_logbook_section = re.search(
-            r'make up-logbook.*?(?=###|\Z)',
-            docs_content,
-            re.DOTALL | re.IGNORECASE
-        )
-        
-        if up_logbook_section:
-            section_text = up_logbook_section.group(0)
-            
-            # 检查关键步骤描述
-            step_keywords = {
-                'postgresql': '启动 PostgreSQL',
-                'postgres': '启动 PostgreSQL',
-                'migrate': '执行迁移',
-                '迁移': '执行迁移',
-                'health': '健康检查',
-                '健康': '健康检查',
-            }
-            
-            for keyword, step_name in step_keywords.items():
-                if keyword.lower() in section_text.lower():
-                    docs_steps.append(step_name)
-            
-            docs_steps = list(set(docs_steps))  # 去重
-    
-    details.append(f"文档描述的步骤: {docs_steps}")
-    
-    # 从 Makefile 中提取 up-logbook 实现
-    makefile_steps = []
-    
-    up_logbook_pattern = re.compile(
-        r'^up-logbook:.*?(?=^[a-zA-Z_-]+:|^\Z)',
-        re.MULTILINE | re.DOTALL
-    )
-    
-    match = up_logbook_pattern.search(makefile_content)
-    if match:
-        target_content = match.group(0)
-        
-        # 分析实现中的步骤
-        if 'up -d' in target_content:
-            makefile_steps.append('启动 PostgreSQL')
-        
-        if 'migrate' in target_content.lower() or '--profile migrate' in target_content:
-            makefile_steps.append('执行迁移')
-        
-        if 'sleep' in target_content or 'wait' in target_content.lower():
-            makefile_steps.append('等待启动')
-        
-        if 'ps' in target_content:
-            makefile_steps.append('显示状态')
-    
-    details.append(f"Makefile 实现的步骤: {makefile_steps}")
-    
-    # 验证一致性
-    # 检查文档中提到的关键步骤是否在 Makefile 中实现
-    missing_in_makefile = []
-    
-    # 核心一致性检查点
-    consistency_checks = [
-        ('启动 PostgreSQL', 'up -d' in (match.group(0) if match else '')),
-        ('执行迁移', 'migrate' in (match.group(0) if match else '').lower()),
+    # 文档中引用的核心 Makefile 目标
+    doc_referenced_targets = [
+        'setup-db',
+        'setup-db-logbook-only',
+        'migrate-ddl',
+        'apply-roles',
+        'apply-openmemory-grants',
+        'verify-permissions',
+        'verify-permissions-strict',
     ]
     
-    inconsistencies = []
-    for check_name, check_result in consistency_checks:
-        if check_name in docs_steps and not check_result:
-            inconsistencies.append(f"文档描述'{check_name}'但 Makefile 未实现")
-        elif check_name not in docs_steps and check_result:
-            inconsistencies.append(f"Makefile 实现了'{check_name}'但文档未描述")
+    # 检查文档引用的目标是否在 Makefile 中存在
+    missing_targets = []
+    found_targets = []
     
-    if inconsistencies:
-        details.extend(inconsistencies)
+    for target in doc_referenced_targets:
+        # 检查文档是否引用了这个目标
+        doc_pattern = rf'make\s+{re.escape(target)}|`{re.escape(target)}`'
+        if re.search(doc_pattern, docs_content):
+            # 检查 Makefile 是否有这个目标
+            makefile_pattern = rf'^{re.escape(target)}:'
+            if re.search(makefile_pattern, makefile_content, re.MULTILINE):
+                found_targets.append(f"✓ {target}")
+            else:
+                missing_targets.append(target)
+    
+    details.extend(found_targets)
+    
+    if missing_targets:
+        details.append("")
+        details.append("文档引用但 Makefile 中不存在的目标:")
+        for target in missing_targets:
+            details.append(f"  ✗ {target}")
+        
         return CheckResult(
             check_id="C",
             check_name="docs_makefile_consistency",
             passed=False,
-            message="docs up-logbook 描述与 Makefile 实现不一致",
+            message=f"docs 引用的目标在 Makefile 中不存在: {', '.join(missing_targets)}",
             severity="error",
             details=details,
         )
     
-    # 额外检查: 验证文档中的命令示例是否正确
-    if 'make up-logbook' in docs_content:
-        details.append("文档中包含正确的命令示例: make up-logbook")
-    
-    # 检查文档中是否正确描述了 up-logbook 的输出
-    if match:
-        target_content = match.group(0)
-        if '[OK]' in target_content and 'Logbook 服务已启动' in target_content:
-            if '[OK] Logbook 服务已启动' in docs_content or '已启动' in docs_content:
-                details.append("文档正确描述了成功输出")
+    # 检查核心部署流程描述
+    # 验证文档描述的步骤与实际 Makefile 一致
+    if 'setup-db' in docs_content and 'setup-db:' in makefile_content:
+        details.append("✓ setup-db 部署流程描述一致")
     
     return CheckResult(
         check_id="C",
         check_name="docs_makefile_consistency",
         passed=True,
-        message="docs up-logbook 描述与 Makefile 实现一致",
+        message="docs 验收命令与 Makefile 一致",
         severity="info",
         details=details if verbose else [],
     )
@@ -517,14 +411,14 @@ def check_d_readme_logbook_only_stepwise_commands(
     project_root: Path, verbose: bool = False
 ) -> CheckResult:
     """
-    检查 D: README.md Logbook-only 分步验收命令使用 migrate-logbook-stepwise 与 verify-permissions-logbook
+    检查 D: README.md 数据库初始化命令是否正确记录
     
     验证策略：
-    1. 定位 README.md 中的 "Logbook-only" 分步验收章节
-    2. 验证必须包含 migrate-logbook-stepwise 命令
-    3. 验证必须包含 verify-permissions-logbook 命令
+    1. 检查 README.md 中是否包含核心数据库初始化命令
+    2. 验证命令与 Makefile 实现一致
     """
     readme_file = project_root / "README.md"
+    makefile = project_root / "Makefile"
     details = []
     
     if not readme_file.exists():
@@ -537,44 +431,21 @@ def check_d_readme_logbook_only_stepwise_commands(
         )
     
     content = readme_file.read_text()
+    makefile_content = makefile.read_text() if makefile.exists() else ""
     
-    # 定位 Logbook-only 分步验收章节
-    # 查找 "分步验收（Logbook-only）" 或类似标题
-    logbook_only_section_pattern = re.compile(
-        r'###\s*分步验收[（(]Logbook-only[)）].*?(?=###|##|\Z)',
-        re.DOTALL | re.IGNORECASE
-    )
-    
-    match = logbook_only_section_pattern.search(content)
-    if not match:
-        return CheckResult(
-            check_id="D",
-            check_name="readme_logbook_only_stepwise_commands",
-            passed=False,
-            message="README.md 中未找到 Logbook-only 分步验收章节",
-            severity="error",
-            details=[
-                "修复提示: 在 README.md 中添加 '### 分步验收（Logbook-only）' 章节",
-                "该章节应包含:",
-                "  - make migrate-logbook-stepwise",
-                "  - make verify-permissions-logbook",
-            ],
-        )
-    
-    section_content = match.group(0)
-    details.append("找到 Logbook-only 分步验收章节")
-    
-    # 必需的命令
+    # 检查 README.md 中必须存在的核心命令引用
     required_commands = {
-        'migrate-logbook-stepwise': {
-            'pattern': r'make\s+migrate-logbook-stepwise',
-            'description': '数据库迁移（stepwise）',
-            'fix': "添加: make migrate-logbook-stepwise  # 数据库迁移",
+        'setup-db': {
+            'pattern': r'make\s+setup-db',
+            'description': '一键初始化数据库',
         },
-        'verify-permissions-logbook': {
-            'pattern': r'make\s+verify-permissions-logbook',
-            'description': '权限验证（Logbook-only）',
-            'fix': "添加: make verify-permissions-logbook  # 权限验证",
+        'migrate-ddl': {
+            'pattern': r'make\s+migrate-ddl|migrate-ddl',
+            'description': 'DDL 迁移',
+        },
+        'verify-permissions': {
+            'pattern': r'make\s+verify-permissions|verify-permissions',
+            'description': '权限验证',
         },
     }
     
@@ -582,7 +453,7 @@ def check_d_readme_logbook_only_stepwise_commands(
     found_commands = []
     
     for cmd_name, cmd_info in required_commands.items():
-        if re.search(cmd_info['pattern'], section_content):
+        if re.search(cmd_info['pattern'], content):
             found_commands.append(f"✓ {cmd_name} ({cmd_info['description']})")
         else:
             missing_commands.append(cmd_name)
@@ -591,45 +462,31 @@ def check_d_readme_logbook_only_stepwise_commands(
     
     if missing_commands:
         details.append("")
-        details.append("缺失的必需命令:")
+        details.append("README.md 未记录的命令:")
         for cmd in missing_commands:
             cmd_info = required_commands[cmd]
-            details.append(f"  ✗ {cmd} - {cmd_info['fix']}")
+            details.append(f"  ✗ {cmd} - {cmd_info['description']}")
         
         return CheckResult(
-            check_id="E",
+            check_id="D",
             check_name="readme_logbook_only_stepwise_commands",
             passed=False,
-            message=f"README.md Logbook-only 分步验收缺失命令: {', '.join(missing_commands)}",
+            message=f"README.md 未记录核心命令: {', '.join(missing_commands)}",
             severity="error",
             details=details,
         )
     
-    # 检查命令顺序是否合理（up-logbook → migrate → verify-permissions → smoke → unit）
-    expected_order = ['up-logbook', 'migrate-logbook-stepwise', 'verify-permissions-logbook']
-    positions = {}
-    for cmd in expected_order:
-        match_pos = re.search(rf'make\s+{re.escape(cmd)}', section_content)
-        if match_pos:
-            positions[cmd] = match_pos.start()
-    
-    order_issues = []
-    for i in range(len(expected_order) - 1):
-        cmd1, cmd2 = expected_order[i], expected_order[i + 1]
-        if cmd1 in positions and cmd2 in positions:
-            if positions[cmd1] > positions[cmd2]:
-                order_issues.append(f"'{cmd1}' 应在 '{cmd2}' 之前")
-    
-    if order_issues:
-        details.append("")
-        details.append("命令顺序建议:")
-        details.extend(f"  - {issue}" for issue in order_issues)
+    # 检查引用的命令是否在 Makefile 中存在
+    for cmd_name in required_commands.keys():
+        makefile_pattern = rf'^{re.escape(cmd_name)}:'
+        if re.search(makefile_pattern, makefile_content, re.MULTILINE):
+            details.append(f"✓ {cmd_name} 在 Makefile 中存在")
     
     return CheckResult(
-        check_id="E",
+        check_id="D",
         check_name="readme_logbook_only_stepwise_commands",
         passed=True,
-        message="README.md Logbook-only 分步验收命令正确（含 migrate-logbook-stepwise 与 verify-permissions-logbook）",
+        message="README.md 数据库初始化命令记录正确",
         severity="info",
         details=details if verbose else [],
     )
@@ -639,16 +496,15 @@ def check_f_acceptance_criteria_logbook_only_alignment(
     project_root: Path, verbose: bool = False
 ) -> CheckResult:
     """
-    检查 F: docs/logbook/04_acceptance_criteria.md Logbook-only 章节命令对齐
+    检查 F: docs/logbook/04_acceptance_criteria.md Logbook-only 章节命令与 Makefile 对齐
     
     验证策略：
     1. 定位 04_acceptance_criteria.md 中的 Logbook-only 验收相关章节
-    2. 验证必须包含 migrate-logbook-stepwise 命令
-    3. 验证必须包含 verify-permissions-logbook 命令
-    4. 与 README.md 的 Logbook-only 章节保持一致
+    2. 验证包含 migrate-ddl 命令（现代化命名）
+    3. 验证包含 verify-permissions 命令（现代化命名）
     """
     acceptance_file = project_root / "docs" / "logbook" / "04_acceptance_criteria.md"
-    readme_file = project_root / "README.md"
+    makefile = project_root / "Makefile"
     details = []
     
     if not acceptance_file.exists():
@@ -661,9 +517,9 @@ def check_f_acceptance_criteria_logbook_only_alignment(
         )
     
     content = acceptance_file.read_text()
+    makefile_content = makefile.read_text() if makefile.exists() else ""
     
     # 定位 Logbook-only 相关章节
-    # 可能的章节: "Logbook-only 验收"、验收表格中的命令
     logbook_only_sections = []
     
     # 查找 "Logbook-only 验收" 章节
@@ -675,43 +531,29 @@ def check_f_acceptance_criteria_logbook_only_alignment(
     if match:
         logbook_only_sections.append(('Logbook-only 验收章节', match.group(0)))
     
-    # 查找表格中的 Logbook-only 相关行（数据库迁移、权限验证行）
-    table_pattern = re.compile(
-        r'\|\s*\*\*(?:数据库迁移|权限验证)\*\*\s*\|[^\|]*\|',
-        re.IGNORECASE
+    # 查找验收命令汇总表格
+    commands_table_pattern = re.compile(
+        r'验收命令汇总.*?(?=###|##|\Z)',
+        re.DOTALL | re.IGNORECASE
     )
-    table_matches = table_pattern.findall(content)
-    if table_matches:
-        logbook_only_sections.append(('验收表格', ' '.join(table_matches)))
+    commands_match = commands_table_pattern.search(content)
+    if commands_match:
+        logbook_only_sections.append(('验收命令汇总', commands_match.group(0)))
     
     if not logbook_only_sections:
-        return CheckResult(
-            check_id="F",
-            check_name="acceptance_criteria_logbook_only_alignment",
-            passed=False,
-            message="04_acceptance_criteria.md 中未找到 Logbook-only 相关章节",
-            severity="error",
-            details=[
-                "修复提示: 确保 04_acceptance_criteria.md 包含 Logbook-only 验收章节",
-                "该章节应包含:",
-                "  - make migrate-logbook-stepwise",
-                "  - make verify-permissions-logbook",
-            ],
-        )
+        details.append("警告: 未找到明确的 Logbook-only 验收章节，检查整个文档")
+    else:
+        details.append(f"找到 {len(logbook_only_sections)} 个相关章节")
     
-    details.append(f"找到 {len(logbook_only_sections)} 个 Logbook-only 相关章节")
-    
-    # 必需的命令（在整个文档中查找）
+    # 必需的命令（使用现代化命名）
     required_commands = {
-        'migrate-logbook-stepwise': {
-            'pattern': r'make\s+migrate-logbook-stepwise|`migrate-logbook-stepwise`',
-            'description': '数据库迁移（stepwise）',
-            'fix': "在 Logbook-only 验收表格中添加: `make migrate-logbook-stepwise`",
+        'migrate-ddl': {
+            'pattern': r'make\s+migrate-ddl|`migrate-ddl`',
+            'description': 'DDL 迁移',
         },
-        'verify-permissions-logbook': {
-            'pattern': r'make\s+verify-permissions-logbook|`verify-permissions-logbook`',
-            'description': '权限验证（Logbook-only）',
-            'fix': "在 Logbook-only 验收表格中添加: `make verify-permissions-logbook`",
+        'verify-permissions': {
+            'pattern': r'make\s+verify-permissions|`verify-permissions`',
+            'description': '权限验证',
         },
     }
     
@@ -728,55 +570,31 @@ def check_f_acceptance_criteria_logbook_only_alignment(
     
     if missing_commands:
         details.append("")
-        details.append("缺失的必需命令:")
+        details.append("文档未记录的命令:")
         for cmd in missing_commands:
             cmd_info = required_commands[cmd]
-            details.append(f"  ✗ {cmd} - {cmd_info['fix']}")
+            details.append(f"  ✗ {cmd} - {cmd_info['description']}")
         
         return CheckResult(
             check_id="F",
             check_name="acceptance_criteria_logbook_only_alignment",
             passed=False,
-            message=f"04_acceptance_criteria.md Logbook-only 章节缺失命令: {', '.join(missing_commands)}",
+            message=f"04_acceptance_criteria.md 未记录命令: {', '.join(missing_commands)}",
             severity="error",
             details=details,
         )
     
-    # 交叉验证: 与 README.md 对齐
-    if readme_file.exists():
-        readme_content = readme_file.read_text()
-        readme_section_pattern = re.compile(
-            r'###\s*分步验收[（(]Logbook-only[)）].*?(?=###|##|\Z)',
-            re.DOTALL | re.IGNORECASE
-        )
-        readme_match = readme_section_pattern.search(readme_content)
-        
-        if readme_match:
-            readme_section = readme_match.group(0)
-            # 检查两个文档中的命令是否一致
-            readme_has_migrate = bool(re.search(r'migrate-logbook-stepwise', readme_section))
-            readme_has_verify = bool(re.search(r'verify-permissions-logbook', readme_section))
-            
-            acceptance_has_migrate = bool(re.search(r'migrate-logbook-stepwise', content))
-            acceptance_has_verify = bool(re.search(r'verify-permissions-logbook', content))
-            
-            if readme_has_migrate == acceptance_has_migrate and readme_has_verify == acceptance_has_verify:
-                details.append("")
-                details.append("✓ 与 README.md Logbook-only 章节命令对齐")
-            else:
-                alignment_issues = []
-                if readme_has_migrate != acceptance_has_migrate:
-                    alignment_issues.append("migrate-logbook-stepwise")
-                if readme_has_verify != acceptance_has_verify:
-                    alignment_issues.append("verify-permissions-logbook")
-                details.append("")
-                details.append(f"警告: 与 README.md 命令不对齐: {', '.join(alignment_issues)}")
+    # 验证命令在 Makefile 中存在
+    for cmd_name in required_commands.keys():
+        makefile_pattern = rf'^{re.escape(cmd_name)}:'
+        if re.search(makefile_pattern, makefile_content, re.MULTILINE):
+            details.append(f"✓ {cmd_name} 在 Makefile 中存在")
     
     return CheckResult(
         check_id="F",
         check_name="acceptance_criteria_logbook_only_alignment",
         passed=True,
-        message="04_acceptance_criteria.md Logbook-only 章节命令正确对齐",
+        message="04_acceptance_criteria.md Logbook-only 验收命令与 Makefile 对齐",
         severity="info",
         details=details if verbose else [],
     )

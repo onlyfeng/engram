@@ -70,6 +70,17 @@ ENV_EXAMPLE_ONLY_VARS: Set[str] = {
     "OM_PG_AUTO_DDL",
     # Gateway 运行时配置（文档中 Gateway 组件章节已描述，表格可能未列出）
     "GATEWAY_LOG_LEVEL",
+    "GATEWAY_PORT",
+    # SCM 组件运行时配置（docker-compose / 独立脚本使用，不在 config.py 中读取）
+    "SCM_REAPER_INTERVAL_SECONDS",
+    "SCM_REAPER_JOB_GRACE_SECONDS",
+    "SCM_REAPER_LOCK_GRACE_SECONDS",
+    "SCM_SCHEDULER_MAX_RUNNING",
+    "SCM_SCHEDULER_GLOBAL_CONCURRENCY",
+    "SCM_SCHEDULER_SCAN_INTERVAL_SECONDS",
+    "SCM_WORKER_LEASE_SECONDS",
+    "SCM_WORKER_POLL_INTERVAL",
+    "SCM_WORKER_PARALLELISM",
 }
 
 # 允许只在文档中存在的变量（高级配置/上游组件/历史兼容）
@@ -135,7 +146,7 @@ DOC_ONLY_VARS: Set[str] = {
     "DASHBOARD_PORT",
     "NEXT_PUBLIC_API_URL",
     "NEXT_PUBLIC_API_KEY",
-    # SCM 配置（高级）
+    # SCM 凭证配置（敏感，不在 .env.example 中提供默认值）
     "GITLAB_PRIVATE_TOKEN",
     "GITLAB_TOKEN",
     "GITLAB_URL",
@@ -155,6 +166,70 @@ DOC_ONLY_VARS: Set[str] = {
     # Artifacts S3 凭证（敏感信息，不在 .env.example 中）
     "ENGRAM_S3_ACCESS_KEY",
     "ENGRAM_S3_SECRET_KEY",
+    # Gateway 高级配置（有合理默认值，不需要在 .env.example 中设置）
+    "DEFAULT_TEAM_SPACE",
+    "PRIVATE_SPACE_PREFIX",
+    "OPENMEMORY_API_KEY",
+    "OPENMEMORY_BASE_URL",
+    "MINIO_AUDIT_WEBHOOK_AUTH_TOKEN",
+    "MINIO_AUDIT_MAX_PAYLOAD_SIZE",
+    # Gateway 启动与治理配置（有合理默认值）
+    "AUTO_MIGRATE_ON_STARTUP",
+    "LOGBOOK_CHECK_ON_STARTUP",
+    "GOVERNANCE_ADMIN_KEY",
+    "UNKNOWN_ACTOR_POLICY",
+    # Gateway Evidence Refs 校验配置（有合理默认值）
+    "VALIDATE_EVIDENCE_REFS",
+    "STRICT_MODE_ENFORCE_VALIDATE_REFS",
+    # SCM Claim 配置（有合理默认值）
+    "SCM_CLAIM_ENABLE_TENANT_FAIR_CLAIM",
+    "SCM_CLAIM_MAX_CONSECUTIVE_SAME_TENANT",
+    "SCM_CLAIM_MAX_TENANTS_PER_ROUND",
+    # Outbox Worker 配置（高级配置，有合理默认值）
+    "WORKER_POLL_INTERVAL",
+    "WORKER_BATCH_SIZE",
+    "WORKER_LEASE_TIMEOUT",
+    # SCM 熔断器配置（高级配置，有合理默认值）
+    "SCM_CB_BACKFILL_INTERVAL_SECONDS",
+    "SCM_CB_BACKFILL_ONLY_MODE",
+    "SCM_CB_DEGRADED_BATCH_SIZE",
+    "SCM_CB_DEGRADED_FORWARD_WINDOW_SECONDS",
+    "SCM_CB_ENABLE_SMOOTHING",
+    "SCM_CB_FAILURE_RATE_THRESHOLD",
+    "SCM_CB_HALF_OPEN_MAX_REQUESTS",
+    "SCM_CB_MIN_SAMPLES",
+    "SCM_CB_OPEN_DURATION_SECONDS",
+    "SCM_CB_PROBE_BUDGET_PER_INTERVAL",
+    "SCM_CB_PROBE_JOB_TYPES_ALLOWLIST",
+    "SCM_CB_RATE_LIMIT_THRESHOLD",
+    "SCM_CB_RECOVERY_SUCCESS_COUNT",
+    "SCM_CB_SMOOTHING_ALPHA",
+    "SCM_CB_TIMEOUT_RATE_THRESHOLD",
+    "SCM_CB_WINDOW_COUNT",
+    "SCM_CB_WINDOW_MINUTES",
+    # SCM Scheduler 高级配置（环境变量覆盖，有合理默认值）
+    "SCM_SCHEDULER_BACKFILL_REPAIR_WINDOW_HOURS",
+    "SCM_SCHEDULER_CURSOR_AGE_THRESHOLD_SECONDS",
+    "SCM_SCHEDULER_ENABLE_TENANT_FAIRNESS",
+    "SCM_SCHEDULER_ERROR_BUDGET_THRESHOLD",
+    "SCM_SCHEDULER_LOG_LEVEL",
+    "SCM_SCHEDULER_MAX_BACKFILL_WINDOW_HOURS",
+    "SCM_SCHEDULER_MAX_ENQUEUE_PER_SCAN",
+    "SCM_SCHEDULER_MVP_JOB_TYPE_ALLOWLIST",
+    "SCM_SCHEDULER_MVP_MODE_ENABLED",
+    "SCM_SCHEDULER_PAUSE_DURATION_SECONDS",
+    "SCM_SCHEDULER_PER_INSTANCE_CONCURRENCY",
+    "SCM_SCHEDULER_PER_TENANT_CONCURRENCY",
+    "SCM_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND",
+    # SCM Worker 高级配置（环境变量覆盖，有合理默认值）
+    "SCM_WORKER_BATCH_SIZE",
+    "SCM_WORKER_LOCK_TIMEOUT",
+    "SCM_WORKER_LOG_LEVEL",
+    "SCM_WORKER_MAX_RENEW_FAILURES",
+    "SCM_WORKER_RENEW_INTERVAL_SECONDS",
+    # SCM Reaper 高级配置（环境变量覆盖，有合理默认值）
+    "SCM_REAPER_LOG_LEVEL",
+    "SCM_REAPER_RUN_MAX_SECONDS",
 }
 
 # 允许只在代码中存在的变量（内部配置/测试用/兼容别名）
@@ -243,6 +318,11 @@ def parse_config_py_files(config_dir: Path) -> Set[str]:
             r'os\.getenv\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
             # 匹配常量定义：ENV_XXX = "VAR_NAME"
             r'ENV_[A-Z_]+\s*=\s*["\']([A-Z][A-Z0-9_]+)["\']',
+            # 匹配辅助函数调用：_get_optional_env("VAR"), _get_required_env("VAR")
+            r'_get_(?:optional|required)_env\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
+            # 匹配带环境变量名的函数调用（通用模式）
+            r'_get_env_or_config\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
+            r'_get_env_or_config_bool\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
         ]
 
         for pattern in patterns:
