@@ -3,6 +3,11 @@
 目的：让 Cursor Agent/脚本统一以“工具调用”写入事实层，而不是编辑文件。
 
 ## 建议的最小 CLI/SDK 接口
+
+> **推荐入口**: 所有 CLI 命令建议通过 `engram-*` console_scripts 调用（需 `pip install -e .`）。
+>
+> **弃用说明**: `python xxx_cli.py` 形式的直接脚本调用已弃用，将在 v1.0 移除。旧命令在 v0.x 版本期间仍可使用，但会输出弃用警告。
+
 > 具体实现建议用 Python（psycopg 或 SQLAlchemy 2.x），此处先定义契约。
 
 ### 1) 身份同步
@@ -41,7 +46,7 @@ python identity_sync.py [--config PATH] [--repo-root PATH] [--verbose] [--quiet]
 
 **CLI 命令**
 ```bash
-python logbook_cli.py create_item --item-type <type> --title <title> [--status <status>] [--owner <user_id>]
+engram-logbook create_item --item-type <type> --title <title> [--status <status>] [--owner <user_id>]
 ```
 
 **必填字段**
@@ -77,7 +82,7 @@ python logbook_cli.py create_item --item-type <type> --title <title> [--status <
 
 **CLI 命令**
 ```bash
-python logbook_cli.py add_event --item-id <id> --event-type <type> [--status-from <s>] [--status-to <s>]
+engram-logbook add_event --item-id <id> --event-type <type> [--status-from <s>] [--status-to <s>]
 ```
 
 **必填字段**
@@ -116,7 +121,7 @@ python logbook_cli.py add_event --item-id <id> --event-type <type> [--status-fro
 
 **CLI 命令**
 ```bash
-python logbook_cli.py attach --item-id <id> --kind <kind> --uri <uri> [--sha256 <hash>]
+engram-logbook attach --item-id <id> --kind <kind> --uri <uri> [--sha256 <hash>]
 ```
 
 **必填字段**
@@ -156,7 +161,7 @@ python logbook_cli.py attach --item-id <id> --kind <kind> --uri <uri> [--sha256 
 
 **CLI 命令**
 ```bash
-python logbook_cli.py set_kv --namespace <ns> --key <key> --value <json>
+engram-logbook set_kv --namespace <ns> --key <key> --value <json>
 ```
 
 **必填字段**
@@ -185,8 +190,7 @@ python logbook_cli.py set_kv --namespace <ns> --key <key> --value <json>
 
 **CLI 命令**
 ```bash
-python logbook_cli.py render_views [--out-dir <path>] [--limit <n>] [--item-type <type>] [--status <s>]
-python render_views.py [--out-dir <path>] [--limit <n>] [--log-event] [--item-id <id>]
+engram-logbook render_views [--out-dir <path>] [--limit <n>] [--item-type <type>] [--status <s>]
 ```
 
 **可选字段**
@@ -451,12 +455,12 @@ python render_views.py [--out-dir <path>] [--limit <n>] [--log-event] [--item-id
 
 **CLI 命令**
 ```bash
-python scm_materialize_patch_blob.py [OPTIONS]
+engram-scm materialize [OPTIONS]
 
 # 示例
-python scm_materialize_patch_blob.py --source-type svn --batch-size 50
-python scm_materialize_patch_blob.py --blob-id 123
-python scm_materialize_patch_blob.py --retry-failed --json
+engram-scm materialize --source-type svn --batch-size 50
+engram-scm materialize --blob-id 123
+engram-scm materialize --retry-failed --json
 ```
 
 **CLI 参数**
@@ -725,8 +729,8 @@ return {"synced": n, "errors": errors, "mode": "best_effort"}
 
 **CLI 参数**
 ```bash
-python scm_sync_svn.py --mode strict    # 严格模式（默认）
-python scm_sync_svn.py --mode best_effort --error-log /path/to/errors.json
+engram-scm run svn --mode strict    # 严格模式（默认）
+engram-scm run svn --mode best_effort --error-log /path/to/errors.json
 ```
 
 **返回统计扩展**
@@ -760,13 +764,13 @@ python scm_sync_svn.py --mode best_effort --error-log /path/to/errors.json
 **CLI 参数**
 ```bash
 # 忽略 watermark，从指定位置开始
-python scm_sync_svn.py --backfill --start-rev 1000 --end-rev 2000
+engram-scm run backfill --start-rev 1000 --end-rev 2000
 
 # 全量回填（危险操作，需确认）
-python scm_sync_svn.py --backfill --full --force
+engram-scm run backfill --full --force
 
 # Git 回填：指定时间范围
-python scm_sync_gitlab.py --backfill --since 2023-01-01 --until 2024-01-01
+engram-scm run backfill --since 2023-01-01 --until 2024-01-01
 ```
 
 **回填模式标志**
@@ -809,14 +813,14 @@ python scm_sync_gitlab.py --backfill --since 2023-01-01 --until 2024-01-01
 
 ```bash
 # 默认行为：回填后不更新 watermark
-python scm_sync_svn.py --backfill --start-rev 1000 --end-rev 2000
+engram-scm run backfill --start-rev 1000 --end-rev 2000
 # watermark 仍停留在原位置
 
 # 显式更新：回填后将 watermark 推进到 2000
-python scm_sync_svn.py --backfill --start-rev 1000 --end-rev 2000 --update-watermark
+engram-scm run backfill --start-rev 1000 --end-rev 2000 --update-watermark
 
 # 或手动更新
-python logbook_cli.py set_kv --namespace scm.sync --key svn_cursor:1 --value '{"last_rev": 2000}'
+engram-logbook set_kv --namespace scm.sync --key svn_cursor:1 --value '{"last_rev": 2000}'
 ```
 
 **注意事项**
@@ -902,9 +906,9 @@ ArtifactStore 提供统一的制品存储接口，支持 local/file/object 三�
 
 **CLI 命令**
 ```bash
-python artifact_cli.py write --path <relative_path> --file <local_file>
-python artifact_cli.py write --path <relative_path> --stdin
-python artifact_cli.py write --path <relative_path> --content <text>
+engram-artifacts write --path <relative_path> --file <local_file>
+engram-artifacts write --path <relative_path> --stdin
+engram-artifacts write --path <relative_path> --content <text>
 ```
 
 **必填字段**
@@ -961,9 +965,9 @@ python artifact_cli.py write --path <relative_path> --content <text>
 
 **CLI 命令**
 ```bash
-python artifact_cli.py read --path <relative_path>
-python artifact_cli.py read --uri <full_uri>
-python artifact_cli.py read --path <path> --output <local_file>
+engram-artifacts read --path <relative_path>
+engram-artifacts read --uri <full_uri>
+engram-artifacts read --path <path> --output <local_file>
 ```
 
 **输入（二选一）**
@@ -1004,8 +1008,8 @@ python artifact_cli.py read --path <path> --output <local_file>
 
 **CLI 命令**
 ```bash
-python artifact_cli.py exists --path <relative_path>
-python artifact_cli.py exists --uri <full_uri>
+engram-artifacts exists --path <relative_path>
+engram-artifacts exists --uri <full_uri>
 ```
 
 **返回统计**
@@ -1026,8 +1030,8 @@ python artifact_cli.py exists --uri <full_uri>
 
 **CLI 命令**
 ```bash
-python artifact_cli.py delete --path <relative_path>
-python artifact_cli.py delete --uri <full_uri> --force
+engram-artifacts delete --path <relative_path>
+engram-artifacts delete --uri <full_uri> --force
 ```
 
 **可选字段**
@@ -1052,9 +1056,9 @@ python artifact_cli.py delete --uri <full_uri> --force
 
 **CLI 命令**
 ```bash
-python artifact_cli.py verify --paths <path1,path2,...>
-python artifact_cli.py verify --db-table scm.patch_blobs --limit 100
-python artifact_cli.py verify --prefix scm/1/ --recursive
+engram-artifacts verify --paths <path1,path2,...>
+engram-artifacts verify --db-table scm.patch_blobs --limit 100
+engram-artifacts verify --prefix scm/1/ --recursive
 ```
 
 **输入（三选一）**
@@ -1106,9 +1110,9 @@ python artifact_cli.py verify --prefix scm/1/ --recursive
 
 **CLI 命令**
 ```bash
-python artifact_cli.py gc --dry-run
-python artifact_cli.py gc --orphan-days 90 --delete
-python artifact_cli.py gc --tmp-days 7 --delete
+engram-artifacts gc --dry-run
+engram-artifacts gc --orphan-days 90 --delete
+engram-artifacts gc --tmp-days 7 --delete
 ```
 
 **可选字段**
@@ -1153,12 +1157,12 @@ python artifact_cli.py gc --tmp-days 7 --delete
 
 **CLI 命令**
 ```bash
-python artifact_cli.py migrate \
+engram-artifacts migrate \
   --source-backend local --source-root ./.agentx/artifacts \
   --target-backend object \
   --dry-run
 
-python artifact_cli.py migrate \
+engram-artifacts migrate \
   --source-backend file --source-uri file:///mnt/nfs/artifacts \
   --target-backend object \
   --update-db --verify

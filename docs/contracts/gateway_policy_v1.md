@@ -92,9 +92,26 @@
 是否强制要求证据链引用。
 
 **行为说明**:
-- `true`: 写入请求必须包含非空的 `evidence_refs` 或 `evidence`
+- `true`: 写入请求必须包含非空的 `evidence_refs`（v1）或 `evidence`（v2）
 - `false`: 允许无证据链的写入
 - 证据缺失会触发 `missing_evidence` 原因的重定向
+
+**v2 Evidence 支持**（自 2024-01 起）:
+
+策略引擎的 `decide()` 方法支持 `evidence_present` 参数，用于基于**规范化后的 evidence** 判断证据存在性：
+
+| 场景 | evidence_refs | evidence (v2) | evidence_present | 结果 |
+|------|---------------|---------------|------------------|------|
+| v1 仅有 | `["uri"]` | `null` | `true`（自动计算） | 通过 |
+| v2 仅有 | `null` | `[{...}]` | `true`（自动计算） | 通过 |
+| 两者皆有 | `["uri"]` | `[{...}]` | `true`（v2 优先） | 通过 |
+| 两者皆无 | `null` | `null` | `false` | 触发 missing_evidence |
+
+**实现细节**:
+- `memory_store_impl` 会先调用 `normalize_evidence()` 将 v1/v2 格式统一
+- 然后计算 `evidence_present = len(normalized_evidence) > 0`
+- 将 `evidence_present` 传递给 `PolicyEngine.decide()` 进行判断
+- 这确保了 v2 evidence + evidence_refs=None 时**不会**误触发 `missing_evidence`
 
 **注意**: 此字段仅检查证据是否存在，不校验证据内容的有效性。证据内容校验由 `evidence_mode` 控制。
 
@@ -124,9 +141,19 @@
 
 **strict 模式行为**:
 - 仅接受 v2 格式 (`evidence`)
-- 要求每个 evidence 对象必须包含有效的 `sha256` 字段
-- sha256 缺失触发 `evidence_sha256_missing` 校验失败
+- 要求每个 evidence 对象必须包含有效的 `sha256` 字段（64 位十六进制）
+- **阻断语义**: sha256 缺失或格式无效时，**直接返回 reject 响应**，不继续策略决策
 - 受 `STRICT_MODE_ENFORCE_VALIDATE_REFS` 环境变量控制
+- 阻断时写入审计记录，包含完整的 `validation` 子结构用于可观测
+
+**strict 模式阻断规则**:
+
+| 校验项 | 错误码 | 行为 |
+|--------|--------|------|
+| 缺少 uri | `EVIDENCE_MISSING_URI` | 阻断 + reject |
+| 缺少 sha256 | `EVIDENCE_MISSING_SHA256` | 阻断 + reject |
+| sha256 格式无效 | `EVIDENCE_INVALID_SHA256` | 阻断 + reject |
+| legacy 来源无 sha256 | `EVIDENCE_LEGACY_NO_SHA256` | 仅警告（compat_warnings） |
 
 **与环境变量的关系**:
 
@@ -229,10 +256,31 @@ DEFAULT_POLICY = {
 
 在 `evidence_mode=strict` 时可能出现的额外 reason 码：
 
-| reason | 含义 | 触发条件 |
-|--------|------|----------|
-| `evidence_sha256_missing` | 缺少 SHA256 | strict 模式下 evidence.sha256 为空 |
-| `evidence_format_invalid` | 格式无效 | evidence 对象结构不符合规范 |
+| reason | 含义 | 触发条件 | 行为 |
+|--------|------|----------|------|
+| `EVIDENCE_VALIDATION_FAILED:EVIDENCE_MISSING_URI` | 缺少 URI | evidence 对象缺少 uri 字段 | 阻断 |
+| `EVIDENCE_VALIDATION_FAILED:EVIDENCE_MISSING_SHA256` | 缺少 SHA256 | strict 模式下 evidence.sha256 为空 | 阻断 |
+| `EVIDENCE_VALIDATION_FAILED:EVIDENCE_INVALID_SHA256` | SHA256 格式无效 | sha256 非 64 位十六进制 | 阻断 |
+
+**审计记录结构** (strict 模式阻断时):
+
+```json
+{
+  "gateway_event": {
+    "decision": {"action": "reject", "reason": "EVIDENCE_VALIDATION_FAILED:EVIDENCE_MISSING_SHA256"},
+    "policy_mode": "strict",
+    "validation": {
+      "validate_refs_effective": true,
+      "validate_refs_reason": "strict_enforced",
+      "evidence_validation": {
+        "is_valid": false,
+        "error_codes": ["EVIDENCE_MISSING_SHA256:evidence[0]:memory://attachments/123/..."],
+        "compat_warnings": []
+      }
+    }
+  }
+}
+```
 
 ## 向后兼容策略
 

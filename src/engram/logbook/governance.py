@@ -29,7 +29,6 @@ from .config import Config
 from .db import get_connection
 from .errors import DatabaseError, ValidationError
 from .uri import (
-    build_evidence_ref_for_patch_blob,
     build_evidence_refs_json,
     validate_evidence_ref,
 )
@@ -440,6 +439,7 @@ def _validate_evidence_refs_json(evidence_refs: Dict) -> None:
                 {"actual_type": type(attachments).__name__},
             )
         from .uri import parse_attachment_evidence_uri_strict
+
         for i, ref in enumerate(attachments):
             if not isinstance(ref, dict):
                 raise ValidationError(
@@ -566,7 +566,14 @@ def insert_write_audit(
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING audit_id
                 """,
-                (actor_user_id, target_space, action, reason, payload_sha, json.dumps(evidence_refs)),
+                (
+                    actor_user_id,
+                    target_space,
+                    action,
+                    reason,
+                    payload_sha,
+                    json.dumps(evidence_refs),
+                ),
             )
             result = cur.fetchone()
             conn.commit()

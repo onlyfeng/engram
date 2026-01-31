@@ -22,6 +22,7 @@
 - [ ] 文档已更新（如适用）
 - [ ] 文档流程编号格式正确（详见 [流程编号格式规范](docs/architecture/naming.md#24-流程编号格式规范)）
 - [ ] 未修改 CI baseline 文件（除非是清理专项 PR）
+- [ ] **大型变更按主题拆分为独立提交**（详见 [提交拆分策略](docs/architecture/iteration_3_plan.md)）
 
 ### Logbook 相关变更（如适用）
 

@@ -74,13 +74,13 @@
     "mode": {
       "type": "string",
       "description": "同步模式",
-      "enum": ["incremental", "backfill"],
+      "enum": ["incremental", "backfill", "probe"],
       "default": "incremental"
     },
     "diff_mode": {
       "type": "string",
-      "description": "Diff 获取模式",
-      "enum": ["always", "best_effort", "none"],
+      "description": "Diff 获取模式: always=总是获取完整diff, best_effort=尽力获取, minimal=仅获取ministat, none=不获取diff",
+      "enum": ["always", "best_effort", "minimal", "none"],
       "default": "best_effort"
     },
     "strict": {
@@ -169,8 +169,8 @@
     },
     "suggested_diff_mode": {
       "type": ["string", "null"],
-      "description": "熔断降级建议的 diff 获取模式（scheduler 注入）",
-      "enum": ["always", "best_effort", "none", null]
+      "description": "熔断降级建议的 diff 获取模式（scheduler 注入）: always=总是获取, best_effort=尽力获取, minimal=仅ministat, none=不获取",
+      "enum": ["always", "best_effort", "minimal", "none", null]
     },
     
     "is_backfill_only": {

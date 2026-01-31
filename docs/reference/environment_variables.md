@@ -360,6 +360,22 @@ POSTGRES_PASSWORD=postgres
 
 SCM 增量同步服务（可选，启用 scm_sync profile）。
 
+### 数据库连接（SCM CLI）
+
+SCM CLI 工具（`engram-scm`）使用以下优先级获取数据库连接：
+
+1. `--dsn` 命令行参数（最高优先级）
+2. `--config` 指定的配置文件中的 `[postgres].dsn`
+3. `POSTGRES_DSN` 环境变量
+4. `ENGRAM_LOGBOOK_CONFIG` 指定的配置文件
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `POSTGRES_DSN` | PostgreSQL 连接字符串 | - |
+| `ENGRAM_LOGBOOK_CONFIG` | 配置文件路径（TOML 格式） | `.agentx/config.toml` |
+
+> **注意**: 如果未提供任何 DSN，CLI 将返回退出码 3 并输出清晰的错误提示。
+
 ### 凭证配置（敏感信息）
 
 | 变量 | 说明 | 默认值 |
@@ -372,15 +388,25 @@ SCM 增量同步服务（可选，启用 scm_sync profile）。
 
 ### Scheduler 配置
 
+> **详细说明**: 参见 [SCM Sync 子系统文档](../logbook/06_scm_sync_subsystem.md#scheduler-配置)
+
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `SCM_SCHEDULER_GLOBAL_CONCURRENCY` | 全局并发数 | `10` |
+| `SCM_SCHEDULER_MAX_RUNNING` | 全局最大运行任务数 | `5` |
+| `SCM_SCHEDULER_GLOBAL_CONCURRENCY` | 全局最大队列深度 | `10` |
 | `SCM_SCHEDULER_PER_INSTANCE_CONCURRENCY` | 单实例并发数 | `3` |
 | `SCM_SCHEDULER_PER_TENANT_CONCURRENCY` | 单租户并发数 | `5` |
 | `SCM_SCHEDULER_SCAN_INTERVAL_SECONDS` | 扫描间隔（秒） | `60` |
 | `SCM_SCHEDULER_MAX_ENQUEUE_PER_SCAN` | 单次入队最大数 | `100` |
 | `SCM_SCHEDULER_ERROR_BUDGET_THRESHOLD` | 错误预算阈值 | `0.3` |
 | `SCM_SCHEDULER_PAUSE_DURATION_SECONDS` | 暂停持续时间（秒） | `300` |
+| `SCM_SCHEDULER_CURSOR_AGE_THRESHOLD_SECONDS` | 游标年龄阈值（秒） | `3600` |
+| `SCM_SCHEDULER_BACKFILL_REPAIR_WINDOW_HOURS` | 回填修复窗口（小时） | `24` |
+| `SCM_SCHEDULER_MAX_BACKFILL_WINDOW_HOURS` | 最大回填窗口（小时） | `168` |
+| `SCM_SCHEDULER_ENABLE_TENANT_FAIRNESS` | 启用 Tenant 公平调度 | `false` |
+| `SCM_SCHEDULER_TENANT_FAIRNESS_MAX_PER_ROUND` | 每轮每 tenant 最大入队数 | `1` |
+| `SCM_SCHEDULER_MVP_MODE_ENABLED` | 启用 MVP 模式 | `false` |
+| `SCM_SCHEDULER_MVP_JOB_TYPE_ALLOWLIST` | MVP 允许的任务类型（逗号分隔） | `commits` |
 | `SCM_SCHEDULER_LOG_LEVEL` | 日志级别 | `INFO` |
 
 ### Worker 配置
@@ -408,14 +434,111 @@ SCM 增量同步服务（可选，启用 scm_sync profile）。
 
 ### 熔断器配置
 
+> **详细说明**: 参见 [SCM Sync 子系统文档](../logbook/06_scm_sync_subsystem.md#熔断器配置)
+
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `SCM_CB_FAILURE_RATE_THRESHOLD` | 失败率阈值 | `0.3` |
-| `SCM_CB_RATE_LIMIT_THRESHOLD` | 限流阈值 | `0.2` |
+| `SCM_CB_RATE_LIMIT_THRESHOLD` | 429 命中率阈值 | `0.2` |
 | `SCM_CB_TIMEOUT_RATE_THRESHOLD` | 超时率阈值 | `0.2` |
-| `SCM_CB_OPEN_DURATION_SECONDS` | 断开持续时间（秒） | `300` |
-| `SCM_CB_HALF_OPEN_MAX_REQUESTS` | 半开状态最大请求数 | `3` |
-| `SCM_CB_RECOVERY_SUCCESS_COUNT` | 恢复所需成功数 | `2` |
+| `SCM_CB_MIN_SAMPLES` | 最小样本数（小样本保护） | `5` |
+| `SCM_CB_ENABLE_SMOOTHING` | 启用 EMA 平滑 | `true` |
+| `SCM_CB_SMOOTHING_ALPHA` | EMA 平滑系数 | `0.5` |
+| `SCM_CB_WINDOW_COUNT` | 统计窗口（运行次数） | `20` |
+| `SCM_CB_WINDOW_MINUTES` | 统计窗口（分钟） | `30` |
+| `SCM_CB_OPEN_DURATION_SECONDS` | 熔断持续时间（秒） | `300` |
+| `SCM_CB_HALF_OPEN_MAX_REQUESTS` | 半开状态最大探测数 | `3` |
+| `SCM_CB_RECOVERY_SUCCESS_COUNT` | 恢复所需连续成功数 | `2` |
+| `SCM_CB_DEGRADED_BATCH_SIZE` | 熔断时的 batch_size | `10` |
+| `SCM_CB_DEGRADED_FORWARD_WINDOW_SECONDS` | 熔断时的前向窗口 | `300` |
+| `SCM_CB_BACKFILL_ONLY_MODE` | 熔断时仅执行 backfill | `true` |
+| `SCM_CB_BACKFILL_INTERVAL_SECONDS` | backfill 间隔（秒） | `600` |
+| `SCM_CB_PROBE_BUDGET_PER_INTERVAL` | 探测预算 | `2` |
+| `SCM_CB_PROBE_JOB_TYPES_ALLOWLIST` | 探测允许的任务类型（逗号分隔） | `commits` |
+
+### SCM CLI 工具运行方式
+
+SCM 同步子系统提供以下 CLI 工具，核心实现位于 `src/engram/logbook/`：
+
+| 工具 | 推荐命令 | 说明 |
+|------|---------|------|
+| **调度器** | `engram-scm-scheduler` | 扫描仓库并入队同步任务 |
+| **Worker** | `engram-scm-worker` | 从队列处理同步任务 |
+| **Reaper** | `engram-scm-reaper` | 回收过期的任务/runs/locks |
+| **状态查看** | `engram-scm-status` | 查看同步健康状态与指标 |
+| **运行器** | `engram-scm run` | 手动执行增量/回填同步 |
+
+> **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已弃用，将在 v1.0 移除。请迁移至 `engram-scm-*` 命令。
+
+#### 调度器使用示例
+
+```bash
+# 执行一次调度
+engram-scm-scheduler --once
+
+# 干运行（不实际入队）
+engram-scm-scheduler --once --dry-run --json
+
+# 指定配置文件
+engram-scm-scheduler --once --config /path/to/config.toml
+```
+
+#### Worker 使用示例
+
+```bash
+# 启动 worker
+engram-scm-worker --worker-id worker-1
+
+# 只处理一个任务
+engram-scm-worker --worker-id worker-1 --once
+
+# 限制任务类型
+engram-scm-worker --worker-id worker-1 --job-types commits,mrs
+
+# 自定义参数
+engram-scm-worker --worker-id worker-1 \
+    --lease-seconds 600 \
+    --poll-interval 5
+```
+
+#### Reaper 使用示例
+
+```bash
+# 执行回收
+engram-scm-reaper
+
+# 模拟运行
+engram-scm-reaper --dry-run --verbose
+
+# 自定义参数
+engram-scm-reaper \
+    --grace-seconds 120 \
+    --max-duration-seconds 3600 \
+    --policy to_pending
+```
+
+#### 状态查看示例
+
+```bash
+# JSON 输出
+engram-scm-status --json
+
+# Prometheus 指标格式
+engram-scm-status --prometheus
+```
+
+#### 运行器使用示例
+
+```bash
+# 增量同步
+engram-scm run incremental --repo gitlab:123
+
+# 回填最近 24 小时
+engram-scm run backfill --repo gitlab:123 --last-hours 24
+
+# 查看配置
+engram-scm run config --show-backfill
+```
 
 ---
 
@@ -462,6 +585,54 @@ make help
 # 验证环境变量配置
 make precheck
 
+# 一键初始化数据库（bootstrap -> migrate -> verify）
+make setup-db
+
 # 统一栈验证
 make verify-unified
 ```
+
+---
+
+## 脚本与工具选择指南
+
+### 数据库初始化推荐流程
+
+```
+bootstrap_roles → migrate → verify
+```
+
+| 步骤 | 推荐命令 | Docker Compose 服务 | 说明 |
+|------|---------|-------------------|------|
+| 1. bootstrap_roles | `engram-bootstrap-roles` | `bootstrap_roles` | 创建服务账号 |
+| 2. migrate | `engram-migrate --apply-roles --apply-openmemory-grants` | `logbook_migrate` | 执行迁移 |
+| 3. verify | `engram-migrate --verify` | `permissions_verify` | 验证权限 |
+
+> **弃用说明**: `python scripts/db_bootstrap.py` 已弃用，将在 v1.0 移除。请使用 `engram-bootstrap-roles`。
+
+### 工具选择
+
+| 场景 | 推荐工具 | 说明 |
+|------|---------|------|
+| 本地开发 | `make setup-db` | 一键完成，无需记忆参数 |
+| CI/CD | `engram-migrate` | pip 安装后可用的 CLI |
+| Docker 部署 | docker-compose | 自动按依赖顺序执行 |
+| 仅迁移 | `engram-migrate --dsn ...` | 适用于已有服务账号 |
+
+### 废弃脚本
+
+以下脚本是**兼容入口，已弃用**，将在 v1.0 版本移除：
+
+| 废弃脚本 | 替代方案 |
+|---------|---------|
+| `logbook_postgres/scripts/db_bootstrap.py` | `engram-bootstrap-roles` |
+| `logbook_postgres/scripts/db_migrate.py` | `engram-migrate` |
+| `python scripts/db_bootstrap.py` | `engram-bootstrap-roles` |
+| `python scm_sync_scheduler.py` | `engram-scm-scheduler` |
+| `python scm_sync_worker.py` | `engram-scm-worker` |
+| `python scm_sync_reaper.py` | `engram-scm-reaper` |
+| `python scm_sync_status.py` | `engram-scm-status` |
+| `python scm_sync_runner.py` | `engram-scm run` |
+| `python artifact_cli.py` | `engram-artifacts` |
+
+> **迁移窗口**: 旧命令在 v0.x 版本期间仍可使用，但会输出弃用警告。建议尽快迁移到新入口。

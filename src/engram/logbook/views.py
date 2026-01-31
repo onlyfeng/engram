@@ -84,7 +84,7 @@ def generate_manifest_csv(items: List[Dict[str, Any]], out_path: Path) -> Dict[s
         f.write(f"# {AUTO_GENERATED_MARKER}\n")
         f.write(f"# {AUTO_GENERATED_MARKER_CN}\n")
         f.write(f"# Generated at: {_utc_now_iso_z()}\n")
-        
+
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
@@ -106,7 +106,9 @@ def generate_manifest_csv(items: List[Dict[str, Any]], out_path: Path) -> Dict[s
     return get_file_info(str(out_path))
 
 
-def generate_index_md(items: List[Dict[str, Any]], out_path: Path, limit: int = DEFAULT_LIMIT) -> Dict[str, Any]:
+def generate_index_md(
+    items: List[Dict[str, Any]], out_path: Path, limit: int = DEFAULT_LIMIT
+) -> Dict[str, Any]:
     """
     生成 index.md（最近 N 条 item 的导航）
 
@@ -149,11 +151,17 @@ def generate_index_md(items: List[Dict[str, Any]], out_path: Path, limit: int = 
         latest_event_ts = item.get("latest_event_ts")
 
         if latest_event_ts:
-            time_str = latest_event_ts.strftime("%Y-%m-%d %H:%M") if isinstance(latest_event_ts, datetime) else str(latest_event_ts)[:16]
+            time_str = (
+                latest_event_ts.strftime("%Y-%m-%d %H:%M")
+                if isinstance(latest_event_ts, datetime)
+                else str(latest_event_ts)[:16]
+            )
         else:
             time_str = "-"
 
-        lines.append(f"| {item_id} | {item_type} | {title} | {status} | {latest_event_type} | {time_str} |")
+        lines.append(
+            f"| {item_id} | {item_type} | {title} | {status} | {latest_event_type} | {time_str} |"
+        )
 
     lines.append("")
     lines.append("---")
@@ -224,7 +232,7 @@ def render_views(
     index_artifact_key: Optional[str] = None
 
     rendered_at = _utc_now_iso_z()
-    
+
     result = {
         "out_dir": str(out_path.resolve()),
         "items_count": len(items),
@@ -242,7 +250,7 @@ def render_views(
         },
         "rendered_at": rendered_at,
     }
-    
+
     # 生成元数据文件（用于 validate 验证）
     meta_path = out_path / ".views_meta.json"
     meta_data = {
@@ -261,10 +269,10 @@ def render_views(
             },
         },
     }
-    
+
     with open(meta_path, "w", encoding="utf-8") as f:
         _json.dump(meta_data, f, indent=2, ensure_ascii=False)
-    
+
     result["meta_path"] = str(meta_path.resolve())
     log_info(f"生成元数据: {meta_path}", quiet=quiet)
 

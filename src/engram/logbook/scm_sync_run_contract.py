@@ -25,16 +25,13 @@ scm_sync_run_contract.py - sync_runs 记录构建器模块
 
 from __future__ import annotations
 
-import json
 import traceback
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from engram.logbook.scm_sync_errors import ErrorCategory, resolve_backoff, BackoffSource
+from engram.logbook.scm_sync_errors import ErrorCategory, resolve_backoff
 from engram.logbook.sync_run_counts import validate_counts_schema
-
 
 __all__ = [
     # 状态枚举
@@ -68,10 +65,10 @@ __all__ = [
 class RunPayloadValidationError(Exception):
     """
     Run finish payload 校验失败的结构化错误
-    
+
     当 payload 不符合契约时抛出，包含详细的错误信息。
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -91,11 +88,11 @@ class RunPayloadValidationError(Exception):
         self.errors = errors
         self.warnings = warnings or []
         self.payload = payload
-    
+
     def to_error_summary(self) -> "ErrorSummary":
         """
         转换为 ErrorSummary 对象
-        
+
         用于写入 sync_runs 的 error_summary_json 字段。
         """
         return ErrorSummary(
@@ -106,7 +103,7 @@ class RunPayloadValidationError(Exception):
                 "validation_warnings": self.warnings,
             },
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -122,6 +119,7 @@ class RunPayloadValidationError(Exception):
 
 class RunStatus(str, Enum):
     """sync_runs 状态枚举"""
+
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -135,57 +133,57 @@ class RunStatus(str, Enum):
 class RunCounts:
     """
     同步计数统计
-    
+
     与 sync_run_counts.py 中的 SyncRunCounts 保持一致，
     但提供更简洁的接口用于 worker 构建。
     """
+
     # 必需字段
     synced_count: int = 0
-    
+
     # Git/GitLab commits 相关
     diff_count: int = 0
     bulk_count: int = 0
     degraded_count: int = 0
     diff_none_count: int = 0
     skipped_count: int = 0
-    
+
     # GitLab MRs 相关
     scanned_count: int = 0
     inserted_count: int = 0
-    
+
     # GitLab Reviews 相关
     synced_mr_count: int = 0
     synced_event_count: int = 0
     skipped_event_count: int = 0
-    
+
     # SVN 相关
     patch_success: int = 0
     patch_failed: int = 0
     skipped_by_controller: int = 0
-    
+
     # Limiter 统计字段
     total_requests: int = 0
     total_429_hits: int = 0
     timeout_count: int = 0
     avg_wait_time_ms: int = 0
-    
+
     def to_dict(self, include_zero: bool = True) -> Dict[str, int]:
         """转换为字典"""
         result = asdict(self)
         if not include_zero:
             result = {k: v for k, v in result.items() if v != 0}
         return result
-    
+
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "RunCounts":
         """从字典构建"""
         if data is None:
             return cls()
-        
+
         # 只取已知字段
         known_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered = {k: int(v) if v is not None else 0 
-                   for k, v in data.items() if k in known_fields}
+        filtered = {k: int(v) if v is not None else 0 for k, v in data.items() if k in known_fields}
         return cls(**filtered)
 
 
@@ -193,34 +191,35 @@ class RunCounts:
 class ErrorSummary:
     """
     错误摘要结构
-    
+
     记录同步失败时的错误信息，支持结构化存储。
     """
+
     # 错误分类（使用 ErrorCategory 枚举值）
     error_category: str = ""
-    
+
     # 错误消息（已脱敏）
     error_message: str = ""
-    
+
     # 异常类型（如 TimeoutError, ConnectionError）
     exception_type: str = ""
-    
+
     # 堆栈跟踪（截断，可选）
     stack_trace: str = ""
-    
+
     # 重试信息
     attempts: int = 0
     max_attempts: int = 0
-    
+
     # Backoff 信息（记录最终采用的退避策略）
     # 优先级：retry_after > error_category backoff > default backoff
     backoff_seconds: int = 0
     backoff_source: str = ""  # retry_after | error_category | default
     retry_after: Optional[int] = None  # 原始 retry_after 值（如果有）
-    
+
     # 额外上下文
     context: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典，排除空值"""
         result = {}
@@ -246,7 +245,7 @@ class ErrorSummary:
         if self.context:
             result["context"] = self.context
         return result
-    
+
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "ErrorSummary":
         """从字典构建"""
@@ -270,26 +269,27 @@ class ErrorSummary:
 class DegradationSnapshot:
     """
     降级快照结构
-    
+
     记录同步过程中的降级情况（diff 获取失败、超时等）。
     """
+
     # 是否处于降级模式
     is_degraded: bool = False
-    
+
     # 降级原因统计 {reason: count}
     degraded_reasons: Dict[str, int] = field(default_factory=dict)
-    
+
     # 熔断状态
     circuit_state: str = ""
-    
+
     # 熔断相关参数
     is_backfill_only: bool = False
     suggested_batch_size: Optional[int] = None
     suggested_diff_mode: Optional[str] = None
-    
+
     # 时间戳
     degraded_at: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典，排除空值"""
         result = {}
@@ -308,7 +308,7 @@ class DegradationSnapshot:
         if self.degraded_at:
             result["degraded_at"] = self.degraded_at
         return result
-    
+
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "DegradationSnapshot":
         """从字典构建"""
@@ -329,44 +329,44 @@ class DegradationSnapshot:
 class RequestStats:
     """
     请求统计结构
-    
+
     记录 HTTP 客户端的请求统计信息。
     """
+
     # 总请求数
     total_requests: int = 0
-    
+
     # 成功/失败数
     success_count: int = 0
     failure_count: int = 0
-    
+
     # 429 限流统计
     total_429_hits: int = 0
-    
+
     # 超时统计
     timeout_count: int = 0
-    
+
     # 延时统计（毫秒）
     avg_latency_ms: int = 0
     max_latency_ms: int = 0
     min_latency_ms: int = 0
-    
+
     # 等待时间（限流退避）
     avg_wait_time_ms: int = 0
     total_wait_time_ms: int = 0
-    
+
     def to_dict(self) -> Dict[str, int]:
         """转换为字典"""
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "RequestStats":
         """从字典构建"""
         if data is None:
             return cls()
-        
+
         known_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered = {k: int(v) if v is not None else 0 
-                   for k, v in data.items() if k in known_fields}
+        filtered = {k: int(v) if v is not None else 0 for k, v in data.items() if k in known_fields}
         return cls(**filtered)
 
 
@@ -374,37 +374,38 @@ class RequestStats:
 class RunFinishPayload:
     """
     完整的 run finish payload
-    
+
     包含所有需要写入 sync_runs 的信息。
     """
+
     # 状态
     status: str = RunStatus.COMPLETED.value
-    
+
     # 统计
     counts: RunCounts = field(default_factory=RunCounts)
-    
+
     # 错误摘要（仅 status=failed 时有值）
     error_summary: Optional[ErrorSummary] = None
-    
+
     # 降级快照（可选）
     degradation: Optional[DegradationSnapshot] = None
-    
+
     # 请求统计（可选）
     request_stats: Optional[RequestStats] = None
-    
+
     # 游标（同步前后）
     # cursor_before: 同步开始前的游标位置（用于审计和断点续传）
     # cursor_after: 同步完成后的游标位置
     cursor_before: Optional[Dict[str, Any]] = None
     cursor_after: Optional[Dict[str, Any]] = None
-    
+
     # 关联的 logbook item ID
     logbook_item_id: Optional[int] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """
         转换为字典（用于数据库写入）
-        
+
         Returns:
             包含 status, counts, error_summary_json, degradation_json 等字段的字典
         """
@@ -412,25 +413,25 @@ class RunFinishPayload:
             "status": self.status,
             "counts": self.counts.to_dict() if self.counts else {},
         }
-        
+
         if self.error_summary:
             result["error_summary_json"] = self.error_summary.to_dict()
-        
+
         if self.degradation:
             result["degradation_json"] = self.degradation.to_dict()
-        
+
         if self.request_stats:
             result["request_stats"] = self.request_stats.to_dict()
-        
+
         if self.cursor_before:
             result["cursor_before"] = self.cursor_before
-        
+
         if self.cursor_after:
             result["cursor_after"] = self.cursor_after
-        
+
         if self.logbook_item_id is not None:
             result["logbook_item_id"] = self.logbook_item_id
-        
+
         return result
 
 
@@ -459,9 +460,9 @@ def build_run_finish_payload(
 ) -> RunFinishPayload:
     """
     构建 run finish payload
-    
+
     统一入口，确保所有字段都有正确的默认值。
-    
+
     Args:
         status: 运行状态 (completed, failed, no_data)
         counts: 同步计数（字典或 RunCounts 对象）
@@ -471,10 +472,10 @@ def build_run_finish_payload(
         cursor_before: 同步前的游标（用于审计和断点续传）
         cursor_after: 同步后的游标
         logbook_item_id: 关联的 logbook item ID
-    
+
     Returns:
         RunFinishPayload 对象
-    
+
     Example:
         >>> payload = build_run_finish_payload(
         ...     status="completed",
@@ -490,7 +491,7 @@ def build_run_finish_payload(
         counts_obj = counts
     else:
         counts_obj = RunCounts.from_dict(counts)
-    
+
     # 转换 error_summary
     error_obj = None
     if error_summary is not None:
@@ -498,7 +499,7 @@ def build_run_finish_payload(
             error_obj = error_summary
         else:
             error_obj = ErrorSummary.from_dict(error_summary)
-    
+
     # 转换 degradation
     degrade_obj = None
     if degradation is not None:
@@ -506,7 +507,7 @@ def build_run_finish_payload(
             degrade_obj = degradation
         else:
             degrade_obj = DegradationSnapshot.from_dict(degradation)
-    
+
     # 转换 request_stats
     stats_obj = None
     if request_stats is not None:
@@ -514,7 +515,7 @@ def build_run_finish_payload(
             stats_obj = request_stats
         else:
             stats_obj = RequestStats.from_dict(request_stats)
-    
+
     return RunFinishPayload(
         status=status,
         counts=counts_obj,
@@ -533,16 +534,16 @@ def build_run_finish_payload_from_result(
 ) -> RunFinishPayload:
     """
     从同步函数结果字典构建 run finish payload
-    
+
     自动从 result 中提取 counts、error、degradation 等信息。
-    
+
     Args:
         result: 同步函数返回的结果字典
         default_status: 默认状态（如果 result 中没有指定）
-    
+
     Returns:
         RunFinishPayload 对象
-    
+
     Example:
         >>> result = {
         ...     "success": True,
@@ -578,7 +579,7 @@ def build_run_finish_payload_from_result(
         status = RunStatus.COMPLETED.value
     else:
         status = default_status
-    
+
     # 提取 counts（从 result 顶层字段）
     counts_data = {
         "synced_count": result.get("synced_count", 0),
@@ -593,14 +594,14 @@ def build_run_finish_payload_from_result(
         "synced_event_count": result.get("synced_event_count", 0),
         "skipped_event_count": result.get("skipped_event_count", 0),
     }
-    
+
     # 从 patch_stats 提取 SVN 相关计数
     patch_stats = result.get("patch_stats", {})
     if patch_stats:
         counts_data["patch_success"] = patch_stats.get("success", 0)
         counts_data["patch_failed"] = patch_stats.get("failed", 0)
         counts_data["skipped_by_controller"] = patch_stats.get("skipped_by_controller", 0)
-    
+
     # 从 request_stats 提取 limiter 统计
     request_stats = result.get("request_stats", {})
     if request_stats:
@@ -608,23 +609,23 @@ def build_run_finish_payload_from_result(
         counts_data["total_429_hits"] = request_stats.get("total_429_hits", 0)
         counts_data["timeout_count"] = request_stats.get("timeout_count", 0)
         counts_data["avg_wait_time_ms"] = request_stats.get("avg_wait_time_ms", 0)
-    
+
     counts = RunCounts.from_dict(counts_data)
-    
+
     # 提取 error_summary
     error_summary = None
     if result.get("error") or result.get("error_category"):
         error_category = result.get("error_category", "")
         error_message = str(result.get("error", ""))
         retry_after_raw = result.get("retry_after")
-        
+
         # 计算最终 backoff（优先级：retry_after > error_category > default）
         backoff_seconds, backoff_source = resolve_backoff(
             retry_after=retry_after_raw,
             error_category=error_category,
             error_message=error_message,
         )
-        
+
         error_summary = ErrorSummary(
             error_category=error_category,
             error_message=error_message,
@@ -633,7 +634,7 @@ def build_run_finish_payload_from_result(
             backoff_source=backoff_source,
             retry_after=retry_after_raw,
         )
-    
+
     # 提取 degradation
     degradation = None
     degradation_data = result.get("degradation") or result.get("degradation_json")
@@ -647,12 +648,12 @@ def build_run_finish_payload_from_result(
             suggested_batch_size=result.get("suggested_batch_size"),
             suggested_diff_mode=result.get("suggested_diff_mode"),
         )
-    
+
     # 提取 request_stats
     stats_obj = None
     if request_stats:
         stats_obj = RequestStats.from_dict(request_stats)
-    
+
     return RunFinishPayload(
         status=status,
         counts=counts,
@@ -673,38 +674,38 @@ def build_error_summary_from_exception(
 ) -> ErrorSummary:
     """
     从异常对象构建 ErrorSummary
-    
+
     用于异常退出路径，自动提取异常信息并进行脱敏。
-    
+
     Args:
         exc: 异常对象
         error_category: 可选的错误分类（如果未指定则自动推断）
         max_trace_length: 堆栈跟踪最大长度
         context: 额外上下文信息
-    
+
     Returns:
         ErrorSummary 对象
     """
     # 获取异常类型
     exception_type = type(exc).__name__
-    
+
     # 获取错误消息（截断）
     error_message = str(exc)
     if len(error_message) > 1000:
         error_message = error_message[:997] + "..."
-    
+
     # 获取堆栈跟踪（截断）
     try:
         stack_trace = traceback.format_exc()
         if len(stack_trace) > max_trace_length:
-            stack_trace = stack_trace[:max_trace_length - 3] + "..."
+            stack_trace = stack_trace[: max_trace_length - 3] + "..."
     except Exception:
         stack_trace = ""
-    
+
     # 自动推断错误分类
     if error_category is None:
         error_category = _infer_error_category(exception_type, error_message)
-    
+
     return ErrorSummary(
         error_category=error_category,
         error_message=error_message,
@@ -717,41 +718,41 @@ def build_error_summary_from_exception(
 def _infer_error_category(exception_type: str, error_message: str) -> str:
     """
     根据异常类型和消息推断错误分类
-    
+
     Args:
         exception_type: 异常类型名
         error_message: 错误消息
-    
+
     Returns:
         错误分类字符串
     """
     error_lower = error_message.lower()
     type_lower = exception_type.lower()
-    
+
     # 超时
     if "timeout" in type_lower or "timeout" in error_lower or "timed out" in error_lower:
         return ErrorCategory.TIMEOUT.value
-    
+
     # 连接错误
     if "connection" in type_lower or "connection" in error_lower:
         return ErrorCategory.CONNECTION.value
-    
+
     # HTTP 状态码
     if "401" in error_lower or "unauthorized" in error_lower:
         return ErrorCategory.AUTH_ERROR.value
-    
+
     if "403" in error_lower or "forbidden" in error_lower:
         return ErrorCategory.PERMISSION_DENIED.value
-    
+
     if "404" in error_lower or "not found" in error_lower:
         return ErrorCategory.REPO_NOT_FOUND.value
-    
+
     if "429" in error_lower or "rate limit" in error_lower or "too many requests" in error_lower:
         return ErrorCategory.RATE_LIMIT.value
-    
+
     if "502" in error_lower or "503" in error_lower or "504" in error_lower:
         return ErrorCategory.SERVER_ERROR.value
-    
+
     # 默认
     return ErrorCategory.EXCEPTION.value
 
@@ -765,37 +766,37 @@ def validate_run_finish_payload(
 ) -> tuple:
     """
     验证 run finish payload 是否符合契约
-    
+
     检查:
     1. status 是否有效
     2. counts 是否包含必需字段且类型正确（集成 validate_counts_schema）
     3. error_summary 结构是否正确（如果有）
-    
+
     Args:
         payload: 待验证的 payload（字典或 RunFinishPayload 对象）
         raise_on_error: 是否在校验失败时抛出 RunPayloadValidationError
-    
+
     Returns:
         (is_valid, errors, warnings) 元组
-    
+
     Raises:
         RunPayloadValidationError: 当 raise_on_error=True 且校验失败时抛出
     """
     errors = []
     warnings = []
-    
+
     # 转换为字典
     if isinstance(payload, RunFinishPayload):
         data = payload.to_dict()
     else:
         data = payload
-    
+
     # 验证 status
     valid_statuses = {s.value for s in RunStatus}
     status = data.get("status", "")
     if status not in valid_statuses:
         errors.append(f"无效的 status: {status}，有效值: {valid_statuses}")
-    
+
     # 验证 counts - 使用 validate_counts_schema 进行完整校验
     counts = data.get("counts", {})
     if not isinstance(counts, dict):
@@ -806,7 +807,7 @@ def validate_run_finish_payload(
         if not counts_valid:
             errors.extend(counts_errors)
         warnings.extend(counts_warnings)
-    
+
     # 验证 error_summary（如果 status=failed）
     # 根据 schema 规定，failed 状态必须包含 error_summary_json
     if status == RunStatus.FAILED.value:
@@ -814,10 +815,12 @@ def validate_run_finish_payload(
         if error_summary is None:
             errors.append("status=failed 时必须提供 error_summary_json")
         elif not isinstance(error_summary, dict):
-            errors.append(f"error_summary_json 必须是字典类型，实际: {type(error_summary).__name__}")
-    
+            errors.append(
+                f"error_summary_json 必须是字典类型，实际: {type(error_summary).__name__}"
+            )
+
     is_valid = len(errors) == 0
-    
+
     # 如果需要抛出异常
     if raise_on_error and not is_valid:
         raise RunPayloadValidationError(
@@ -826,7 +829,7 @@ def validate_run_finish_payload(
             warnings=warnings,
             payload=data,
         )
-    
+
     return (is_valid, errors, warnings)
 
 
@@ -835,17 +838,17 @@ def validate_and_build_error_summary(
 ) -> Optional["ErrorSummary"]:
     """
     验证 payload 并在失败时返回 ErrorSummary
-    
+
     用于 worker 写入 sync_runs 时的校验：
     - 校验通过返回 None
     - 校验失败返回包含错误信息的 ErrorSummary
-    
+
     Args:
         payload: 待验证的 payload
-    
+
     Returns:
         校验通过返回 None，失败返回 ErrorSummary
-    
+
     Example:
         >>> payload = build_run_finish_payload(...)
         >>> error_summary = validate_and_build_error_summary(payload)
@@ -854,10 +857,10 @@ def validate_and_build_error_summary(
         ...     run.error_summary_json = error_summary.to_dict()
     """
     is_valid, errors, warnings = validate_run_finish_payload(payload)
-    
+
     if is_valid:
         return None
-    
+
     return ErrorSummary(
         error_category="validation_error",
         error_message=f"Payload 校验失败: {'; '.join(errors)}",
@@ -880,7 +883,7 @@ def build_payload_for_success(
 ) -> RunFinishPayload:
     """
     构建成功退出的 payload
-    
+
     快捷方法，等同于 build_run_finish_payload(status="completed", ...)
     """
     return build_run_finish_payload(
@@ -900,9 +903,9 @@ def build_payload_for_no_data(
 ) -> RunFinishPayload:
     """
     构建无数据退出的 payload
-    
+
     快捷方法，等同于 build_run_finish_payload(status="no_data", ...)
-    
+
     注意：no_data 状态下，cursor_after 通常为 None（游标不推进），
     但 cursor_before 应该记录同步起点用于审计。
     """
@@ -924,16 +927,16 @@ def build_payload_for_exception(
 ) -> RunFinishPayload:
     """
     构建异常退出的 payload
-    
+
     快捷方法，自动从异常对象构建 error_summary。
-    
+
     Args:
         exc: 异常对象
         error_category: 可选的错误分类
         counts: 同步计数（可能部分完成）
         context: 额外上下文
         cursor_before: 同步前的游标（用于审计）
-    
+
     Returns:
         RunFinishPayload 对象
     """
@@ -942,7 +945,7 @@ def build_payload_for_exception(
         error_category=error_category,
         context=context,
     )
-    
+
     return build_run_finish_payload(
         status=RunStatus.FAILED.value,
         counts=counts,
@@ -962,9 +965,9 @@ def build_payload_for_lease_lost(
 ) -> RunFinishPayload:
     """
     构建租约丢失退出的 payload
-    
+
     快捷方法，用于 HeartbeatManager.should_abort 时。
-    
+
     Args:
         job_id: 任务 ID
         worker_id: Worker ID
@@ -973,14 +976,14 @@ def build_payload_for_lease_lost(
         last_error: 最后一次续租失败的错误
         counts: 同步计数（可能部分完成）
         cursor_before: 同步前的游标（用于审计）
-    
+
     Returns:
         RunFinishPayload 对象
     """
     error_summary = ErrorSummary(
         error_category=ErrorCategory.LEASE_LOST.value,
         error_message=f"Lease lost after {failure_count} consecutive renewal failures. "
-                     f"Last error: {last_error or 'renew_lease returned False'}",
+        f"Last error: {last_error or 'renew_lease returned False'}",
         context={
             "job_id": job_id,
             "worker_id": worker_id,
@@ -988,7 +991,7 @@ def build_payload_for_lease_lost(
             "max_failures": max_failures,
         },
     )
-    
+
     return build_run_finish_payload(
         status=RunStatus.FAILED.value,
         counts=counts,
@@ -1007,9 +1010,9 @@ def build_payload_for_mark_dead(
 ) -> RunFinishPayload:
     """
     构建标记为死的 payload
-    
+
     快捷方法，用于永久性错误（auth_error, repo_not_found 等）。
-    
+
     Args:
         error: 错误消息
         error_category: 错误分类
@@ -1017,7 +1020,7 @@ def build_payload_for_mark_dead(
         max_attempts: 最大尝试次数
         counts: 同步计数（可能部分完成）
         cursor_before: 同步前的游标（用于审计）
-    
+
     Returns:
         RunFinishPayload 对象
     """
@@ -1027,7 +1030,7 @@ def build_payload_for_mark_dead(
         attempts=attempts,
         max_attempts=max_attempts,
     )
-    
+
     return build_run_finish_payload(
         status=RunStatus.FAILED.value,
         counts=counts,

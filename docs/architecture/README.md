@@ -15,6 +15,7 @@
 | 5 | [legacy_naming_governance.md](legacy_naming_governance.md) | 旧组件命名治理规范 |
 | 6 | [docs_legacy_retention_policy.md](docs_legacy_retention_policy.md) | 文档遗留资产保留策略 |
 | 7 | [seekdb_schema_role_naming_audit.md](seekdb_schema_role_naming_audit.md) | SeekDB 命名迁移审计记录 |
+| 8 | [iteration_2_plan.md](iteration_2_plan.md) | **Iteration 2 计划**：脚本收敛、SQL 整理、CI 硬化、Gateway 模块化、文档对齐 |
 
 ---
 
@@ -41,6 +42,12 @@
 | 文档 | 说明 |
 |------|------|
 | [seekdb_schema_role_naming_audit.md](seekdb_schema_role_naming_audit.md) | SeekDB 命名迁移审计 |
+
+### 迭代计划
+
+| 文档 | 说明 | 状态 |
+|------|------|------|
+| [iteration_2_plan.md](iteration_2_plan.md) | Iteration 2：代码质量与工程规范化 | 进行中 |
 
 ---
 
@@ -78,4 +85,4 @@
 
 ---
 
-更新时间：2026-01-30
+更新时间：2026-01-31

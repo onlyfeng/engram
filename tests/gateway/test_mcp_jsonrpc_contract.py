@@ -227,11 +227,13 @@ def mock_dependencies():
     # =================
     # 1. GatewayContainer 已设置为 test_container，但 handler 在调用时会传入 config，
     #    导致 GatewayDeps.create(config=config) 使用独立模式（不从容器获取依赖）
-    # 2. 独立模式下，GatewayDeps 直接构造 OpenMemoryClient，不调用 get_client()
-    # 3. 因此需要 patch openmemory_client.OpenMemoryClient 类本身（di.py 内部导入使用）
+    # 2. 独立模式下，GatewayDeps 直接构造 OpenMemoryClient 和 LogbookAdapter
+    # 3. 因此需要 patch 这两个类本身（di.py 内部导入使用）
     with (
         # OpenMemoryClient 类（di.py 内部 from .openmemory_client import OpenMemoryClient）
         patch(f"{CLIENT_MODULE}.OpenMemoryClient", return_value=mock_client),
+        # LogbookAdapter 类（di.py 内部 from .logbook_adapter import LogbookAdapter）
+        patch(f"{ADAPTER_MODULE}.LogbookAdapter", return_value=fake_adapter),
         # 全局依赖 getter（用于 HTTP 入口层和旧代码路径）
         patch(f"{CONFIG_MODULE}.get_config", return_value=fake_config),
         patch(f"{CLIENT_MODULE}.get_client", return_value=mock_client),

@@ -18,12 +18,12 @@ Schema 管理:
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Union, List
+from typing import Any, Dict, List, Optional, Union
 
 import psycopg
 
 from .config import Config, get_config
-from .errors import DbConnectionError, DatabaseError
+from .errors import DatabaseError, DbConnectionError
 from .schema_context import SchemaContext, get_schema_context
 
 
@@ -67,7 +67,9 @@ class Database:
         Raises:
             ConnectionError: 连接失败时抛出
         """
-        self._conn = get_connection(dsn=self._dsn_override, config=self._config, autocommit=autocommit)
+        self._conn = get_connection(
+            dsn=self._dsn_override, config=self._config, autocommit=autocommit
+        )
         return self._conn
 
     def disconnect(self) -> None:
@@ -163,6 +165,7 @@ class Database:
     def _mask_dsn(dsn: str) -> str:
         """隐藏 DSN 中的密码"""
         import re
+
         return re.sub(r":([^:@]+)@", ":***@", dsn)
 
 
@@ -212,78 +215,70 @@ def rewrite_sql_for_schema(
 ) -> str:
     """
     根据 SchemaContext 重写 SQL 中的 schema 名称。
-    
+
     ============================================================================
     [测试专用] 此函数仅用于测试环境的 schema 隔离。
     生产环境使用固定 schema 名，不需要重写。
     ============================================================================
-    
+
     处理以下模式：
     1. CREATE SCHEMA IF NOT EXISTS <schema> -> CREATE SCHEMA IF NOT EXISTS <prefix>_<schema>
     2. <schema>. 前缀 -> <prefix>_<schema>.
     3. table_schema = '<schema>' 检查 -> table_schema = '<prefix>_<schema>'
     4. schema_name = '<schema>' 检查 -> schema_name = '<prefix>_<schema>'
-    
+
     Args:
         sql_content: 原始 SQL 内容
         schema_context: SchemaContext 实例，为 None 或无 prefix 时不进行重写
-    
+
     Returns:
         重写后的 SQL 内容
     """
     import re
-    
+
     if schema_context is None or schema_context.schema_prefix is None:
         return sql_content
-    
+
     result = sql_content
     schema_map = schema_context.all_schemas  # {"identity": "prefix_identity", ...}
-    
+
     for old_name, new_name in schema_map.items():
         if old_name == new_name:
             continue
-            
+
         # 1. CREATE SCHEMA IF NOT EXISTS <schema>
         # 支持大小写不敏感匹配
         pattern = re.compile(
-            rf"(CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+){old_name}(\s*;|\s+)",
-            re.IGNORECASE
+            rf"(CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+){old_name}(\s*;|\s+)", re.IGNORECASE
         )
         result = pattern.sub(rf"\g<1>{new_name}\2", result)
-        
+
         # 2. <schema>. 前缀（表名引用）
         # 匹配 schema.table 模式，注意不要匹配已经替换过的
         # 使用词边界确保精确匹配
         pattern = re.compile(rf"\b{old_name}\.")
         result = pattern.sub(f"{new_name}.", result)
-        
+
         # 3. table_schema = '<schema>' 检查
         # 支持单引号和双引号
         for quote in ["'", '"']:
-            pattern = re.compile(
-                rf"(table_schema\s*=\s*){quote}{old_name}{quote}",
-                re.IGNORECASE
-            )
+            pattern = re.compile(rf"(table_schema\s*=\s*){quote}{old_name}{quote}", re.IGNORECASE)
             result = pattern.sub(rf"\g<1>{quote}{new_name}{quote}", result)
-        
+
         # 4. schema_name = '<schema>' 检查
         for quote in ["'", '"']:
-            pattern = re.compile(
-                rf"(schema_name\s*=\s*){quote}{old_name}{quote}",
-                re.IGNORECASE
-            )
+            pattern = re.compile(rf"(schema_name\s*=\s*){quote}{old_name}{quote}", re.IGNORECASE)
             result = pattern.sub(rf"\g<1>{quote}{new_name}{quote}", result)
-        
+
         # 5. AND table_name = 'xxx' 保持不变（表名不需要重写）
-        
+
         # 6. 处理 regclass 转换，如 'scm.patch_blobs'::regclass
         for quote in ["'", '"']:
             pattern = re.compile(
-                rf"{quote}{old_name}\.([^{quote}]+){quote}(::regclass)",
-                re.IGNORECASE
+                rf"{quote}{old_name}\.([^{quote}]+){quote}(::regclass)", re.IGNORECASE
             )
             result = pattern.sub(rf"{quote}{new_name}.\1{quote}\2", result)
-    
+
     return result
 
 
@@ -306,6 +301,7 @@ def get_dsn(config: Optional[Config] = None) -> str:
         ConfigError: 当 DSN 不存在时抛出
     """
     import os
+
     from .errors import ConfigError
 
     if config is None:
@@ -387,18 +383,18 @@ def get_connection(
 
     # 确定 search_path，按优先级选择
     schemas: Optional[List[str]] = None
-    
+
     # 优先级 1: 显式传入的 search_path
     if search_path is not None:
         if isinstance(search_path, list):
             schemas = search_path
         else:
             schemas = [s.strip() for s in str(search_path).split(",") if s.strip()]
-    
+
     # 优先级 2: schema_context
     elif schema_context is not None:
         schemas = schema_context.search_path
-    
+
     # 优先级 3: config 中的 postgres.search_path
     else:
         search_path_cfg = config.get("postgres.search_path")
@@ -415,7 +411,7 @@ def get_connection(
                     schemas = global_ctx.search_path
             except Exception:
                 pass
-            
+
             # 优先级 5: 使用默认 search_path（当所有来源都未提供时）
             if schemas is None:
                 schemas = DEFAULT_SEARCH_PATH.copy()
@@ -441,6 +437,7 @@ def get_connection(
     # 设置 statement_timeout（可选）
     # 优先级：显式参数 > 环境变量 ENGRAM_PG_STATEMENT_TIMEOUT_MS
     import os
+
     timeout_ms = statement_timeout_ms
     if timeout_ms is None:
         env_timeout = os.environ.get("ENGRAM_PG_STATEMENT_TIMEOUT_MS")
@@ -449,7 +446,7 @@ def get_connection(
                 timeout_ms = int(env_timeout)
             except ValueError:
                 pass  # 忽略无效值
-    
+
     if timeout_ms is not None and timeout_ms > 0:
         try:
             with conn.cursor() as cur:
@@ -489,24 +486,24 @@ def execute_sql_file(
         sql_content = sql_path.read_text(encoding="utf-8")
         # 过滤 psql 专用指令（\if/\endif 等），避免 psycopg 执行失败
         sql_lines = [
-            line for line in sql_content.splitlines()
-            if not line.lstrip().startswith("\\")
+            line for line in sql_content.splitlines() if not line.lstrip().startswith("\\")
         ]
         sql_content = "\n".join(sql_lines)
         if ":target_schema" in sql_content:
             import os
+
             target_schema = os.environ.get("OM_PG_SCHEMA", "openmemory")
             sql_content = sql_content.replace(":target_schema", f"'{target_schema}'")
-        
+
         # 如果提供了 schema_context，重写 SQL 中的 schema 名
         if schema_context is not None:
             sql_content = rewrite_sql_for_schema(sql_content, schema_context)
-        
+
         # 如果提供了占位符字典，进行替换
         if placeholders:
             for placeholder, value in placeholders.items():
                 sql_content = sql_content.replace(placeholder, value)
-        
+
         with conn.cursor() as cur:
             cur.execute(sql_content)
     except psycopg.Error as e:
@@ -619,7 +616,15 @@ def add_event(
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING event_id
                 """,
-                (item_id, event_type, status_from, status_to, json.dumps(payload), actor_user_id, source),
+                (
+                    item_id,
+                    event_type,
+                    status_from,
+                    status_to,
+                    json.dumps(payload),
+                    actor_user_id,
+                    source,
+                ),
             )
             result = cur.fetchone()
             event_id = result[0]
@@ -780,7 +785,7 @@ def get_kv(
         conn.close()
 
 
-from typing import List, Tuple
+from typing import List
 
 
 def get_items_with_latest_event(
@@ -847,19 +852,21 @@ def get_items_with_latest_event(
 
             results = []
             for row in rows:
-                results.append({
-                    "item_id": row[0],
-                    "item_type": row[1],
-                    "title": row[2],
-                    "scope_json": row[3],
-                    "status": row[4],
-                    "owner_user_id": row[5],
-                    "created_at": row[6],
-                    "updated_at": row[7],
-                    "latest_event_id": row[8],
-                    "latest_event_type": row[9],
-                    "latest_event_ts": row[10],
-                })
+                results.append(
+                    {
+                        "item_id": row[0],
+                        "item_type": row[1],
+                        "title": row[2],
+                        "scope_json": row[3],
+                        "status": row[4],
+                        "owner_user_id": row[5],
+                        "created_at": row[6],
+                        "updated_at": row[7],
+                        "latest_event_id": row[8],
+                        "latest_event_type": row[9],
+                        "latest_event_ts": row[10],
+                    }
+                )
 
             return results
 
@@ -934,18 +941,18 @@ def query_knowledge_candidates(
 ) -> List[Dict[str, Any]]:
     """
     从 analysis.knowledge_candidates 表按关键词查询知识候选项
-    
+
     使用 ILIKE 对 title 和 content_md 进行模糊匹配。
-    
+
     Args:
         keyword: 搜索关键词（将使用 ILIKE 匹配 title 和 content_md）
         top_k: 返回结果数量上限（默认 10）
         evidence_filter: 可选，按 evidence_refs_json 过滤（使用 JSON 包含匹配）
         space_filter: 可选，按 target_space 过滤（需要关联 write_audit 表）
         config: 配置实例
-        
+
     Returns:
-        知识候选项列表，每项包含 candidate_id, kind, title, content_md, 
+        知识候选项列表，每项包含 candidate_id, kind, title, content_md,
         confidence, evidence_refs_json, created_at 等字段
     """
     conn = get_connection(config=config)
@@ -953,7 +960,7 @@ def query_knowledge_candidates(
         with conn.cursor() as cur:
             # 构建基础查询
             query = """
-                SELECT 
+                SELECT
                     kc.candidate_id,
                     kc.run_id,
                     kc.kind,
@@ -965,20 +972,20 @@ def query_knowledge_candidates(
                     kc.created_at
                 FROM analysis.knowledge_candidates kc
                 WHERE (
-                    kc.title ILIKE %s 
+                    kc.title ILIKE %s
                     OR kc.content_md ILIKE %s
                 )
             """
             # 构建 ILIKE 模式
             like_pattern = f"%{keyword}%"
             params: List[Any] = [like_pattern, like_pattern]
-            
+
             # 添加 evidence_filter（如果提供）
             if evidence_filter:
                 # 使用 JSONB 包含操作符 @> 或文本匹配
                 query += " AND kc.evidence_refs_json::text ILIKE %s"
                 params.append(f"%{evidence_filter}%")
-            
+
             # 添加 space_filter（如果提供，需要关联 write_audit）
             # 注意：knowledge_candidates 本身没有 space 字段，
             # 但可以通过 evidence_refs_json 中的引用或其他关联方式过滤
@@ -986,30 +993,32 @@ def query_knowledge_candidates(
             if space_filter:
                 query += " AND kc.evidence_refs_json::text ILIKE %s"
                 params.append(f"%{space_filter}%")
-            
+
             # 按创建时间降序排列，并限制返回数量
             query += " ORDER BY kc.created_at DESC LIMIT %s"
             params.append(top_k)
-            
+
             cur.execute(query, params)
             rows = cur.fetchall()
-            
+
             results = []
             for row in rows:
-                results.append({
-                    "candidate_id": row[0],
-                    "run_id": row[1],
-                    "kind": row[2],
-                    "title": row[3],
-                    "content_md": row[4],
-                    "confidence": row[5],
-                    "evidence_refs_json": row[6],
-                    "promote_suggested": row[7],
-                    "created_at": row[8],
-                })
-            
+                results.append(
+                    {
+                        "candidate_id": row[0],
+                        "run_id": row[1],
+                        "kind": row[2],
+                        "title": row[3],
+                        "content_md": row[4],
+                        "confidence": row[5],
+                        "evidence_refs_json": row[6],
+                        "promote_suggested": row[7],
+                        "created_at": row[8],
+                    }
+                )
+
             return results
-            
+
     except psycopg.Error as e:
         raise DatabaseError(
             f"查询 knowledge_candidates 失败: {e}",

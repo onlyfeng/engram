@@ -118,9 +118,9 @@ sql/
 | 边界变更类型 | 必须更新的文件 |
 |-------------|---------------|
 | **initdb 行为** | `compose/logbook.yml`<br>`sql/01_logbook_schema.sql`<br>`sql/04_roles_and_grants.sql`<br>`docs/logbook/03_deploy_verify_troubleshoot.md` |
-| **服务账号策略** | `logbook_postgres/scripts/db_bootstrap.py`<br>`sql/04_roles_and_grants.sql`<br>`sql/99_verify_permissions.sql`<br>`docs/logbook/04_acceptance_criteria.md` |
+| **服务账号策略** | `logbook_postgres/scripts/db_bootstrap.py`<br>`sql/04_roles_and_grants.sql`<br>`sql/verify/99_verify_permissions.sql`<br>`docs/logbook/04_acceptance_criteria.md` |
 | **验收命令链** | `Makefile`<br>`logbook_postgres/scripts/logbook_cli.py`<br>`docs/logbook/04_acceptance_criteria.md`<br>`.github/workflows/ci.yml` |
-| **verify-permissions 门禁** | `sql/99_verify_permissions.sql`<br>`Makefile` (`verify-permissions-logbook` target)<br>`docs/logbook/04_acceptance_criteria.md` |
+| **verify-permissions 门禁** | `sql/verify/99_verify_permissions.sql`<br>`Makefile` (`verify-permissions` target)<br>`docs/logbook/04_acceptance_criteria.md` |
 | **最小复制清单** | `docs/guides/manifests/logbook_only_import_v1.json`<br>`docs/guides/integrate_existing_project.md`<br>`docs/logbook/04_acceptance_criteria.md` |
 
 ### 文件路径详细清单
@@ -131,7 +131,7 @@ sql/
 | **SQL 初始化** | `logbook_postgres/scripts/db_bootstrap.py` | 服务账号初始化 |
 | **SQL 初始化** | `sql/01_logbook_schema.sql` | 核心 schema 定义 |
 | **SQL 初始化** | `sql/04_roles_and_grants.sql` | 角色与权限定义 |
-| **SQL 初始化** | `sql/99_verify_permissions.sql` | 权限验证脚本 |
+| **SQL 初始化** | `sql/verify/99_verify_permissions.sql` | 权限验证脚本 |
 | **Makefile** | `Makefile` | 构建与验收 targets |
 | **文档** | `docs/logbook/03_deploy_verify_troubleshoot.md` | 部署验证与排错 |
 | **文档** | `docs/logbook/04_acceptance_criteria.md` | 验收标准与矩阵 |
@@ -151,7 +151,7 @@ sql/
 make acceptance-logbook-only
 
 # 2. 权限验证门禁
-make verify-permissions-logbook
+make verify-permissions
 
 # 3. 单元测试
 make test-logbook-unit
@@ -161,7 +161,7 @@ make test-logbook-unit
 
 ```bash
 # initdb 行为变更 - 验证 schema 迁移
-make up-logbook && make migrate-logbook-stepwise
+make up-logbook && make migrate-ddl
 docker compose -f compose/logbook.yml exec postgres psql -U postgres -d $POSTGRES_DB -c "\\dt logbook.*"
 
 # 服务账号策略变更 - 验证账号创建与权限
@@ -173,7 +173,7 @@ make -n acceptance-logbook-only  # dry-run 检查
 make logbook-smoke
 
 # verify-permissions 门禁变更 - 验证 Seek 禁用场景
-psql -d $POSTGRES_DB -c "SET seek.enabled = 'false';" -f sql/99_verify_permissions.sql
+psql -d $POSTGRES_DB -c "SET seek.enabled = 'false';" -f sql/verify/99_verify_permissions.sql
 
 # 最小复制清单变更 - 验证 manifest 完整性
 python -c "import json; m = json.load(open('docs/guides/manifests/logbook_only_import_v1.json')); print('OK:', len(m['files']['required']), 'required,', len(m['files']['optional']), 'optional')"
@@ -194,8 +194,8 @@ echo "[1/5] Running acceptance-logbook-only..."
 make acceptance-logbook-only
 
 # 步骤 2: 权限验证
-echo "[2/5] Running verify-permissions-logbook..."
-make verify-permissions-logbook
+echo "[2/5] Running verify-permissions..."
+make verify-permissions
 
 # 步骤 3: 单元测试
 echo "[3/5] Running test-logbook-unit..."

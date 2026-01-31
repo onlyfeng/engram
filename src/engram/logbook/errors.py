@@ -24,41 +24,43 @@ engram_logbook.errors - 错误定义模块
 
 from typing import Any, Dict, Optional
 
-
 # =============================================================================
 # 错误码常量（用于 audit.reason 字段归一化）
 # =============================================================================
 
+
 class ErrorCode:
     """
     统一错误码常量，用于 audit.reason 字段。
-    
+
     命名规范:
     - 前缀表示来源/领域: OPENMEMORY_, OUTBOX_, ACTOR_, DB_, POLICY_, GOVERNANCE_
     - 后缀表示详细错误类型
     - 使用冒号分隔领域和具体错误码
-    
+
     使用示例:
         reason = ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION
         # => "openmemory_write_failed:connection_error"
     """
-    
+
     # -------------------------------------------------------------------------
     # OpenMemory 相关错误码
     # -------------------------------------------------------------------------
     # OpenMemory 写入失败
     OPENMEMORY_WRITE_FAILED_CONNECTION = "openmemory_write_failed:connection_error"
-    OPENMEMORY_WRITE_FAILED_API = "openmemory_write_failed:api_error"  # 可追加状态码 :api_error_<code>
+    OPENMEMORY_WRITE_FAILED_API = (
+        "openmemory_write_failed:api_error"  # 可追加状态码 :api_error_<code>
+    )
     OPENMEMORY_WRITE_FAILED_GENERIC = "openmemory_write_failed:openmemory_error"
     OPENMEMORY_WRITE_FAILED_UNKNOWN = "openmemory_write_failed:unknown"
-    
+
     @staticmethod
-    def openmemory_api_error(status_code: int = None) -> str:
+    def openmemory_api_error(status_code: Optional[int] = None) -> str:
         """生成 OpenMemory API 错误码，含状态码"""
         if status_code:
             return f"openmemory_write_failed:api_error_{status_code}"
         return ErrorCode.OPENMEMORY_WRITE_FAILED_API
-    
+
     # -------------------------------------------------------------------------
     # Outbox Worker 相关错误码
     # -------------------------------------------------------------------------
@@ -68,14 +70,14 @@ class ErrorCode:
     OUTBOX_FLUSH_DEAD = "outbox_flush_dead"
     OUTBOX_FLUSH_CONFLICT = "outbox_flush_conflict"
     OUTBOX_FLUSH_DEDUP_HIT = "outbox_flush_dedup_hit"
-    
+
     # Outbox 数据库错误
     OUTBOX_FLUSH_DB_TIMEOUT = "outbox_flush_db_timeout"
     OUTBOX_FLUSH_DB_ERROR = "outbox_flush_db_error"
-    
+
     # Outbox 对账相关
     OUTBOX_STALE = "outbox_stale"
-    
+
     # -------------------------------------------------------------------------
     # Actor 用户相关错误码
     # -------------------------------------------------------------------------
@@ -83,12 +85,12 @@ class ErrorCode:
     ACTOR_UNKNOWN_DEGRADE = "actor_unknown:degrade"
     ACTOR_AUTOCREATED = "actor_autocreated"
     ACTOR_AUTOCREATE_FAILED = "actor_autocreate_failed"
-    
+
     # -------------------------------------------------------------------------
     # 去重相关错误码
     # -------------------------------------------------------------------------
     DEDUP_HIT = "dedup_hit"
-    
+
     # -------------------------------------------------------------------------
     # 策略相关错误码（前缀 policy:）
     # -------------------------------------------------------------------------
@@ -96,7 +98,7 @@ class ErrorCode:
     def policy_reason(reason: str) -> str:
         """生成策略决策 reason，格式: policy:<reason>"""
         return f"policy:{reason}"
-    
+
     # -------------------------------------------------------------------------
     # 治理相关错误码
     # -------------------------------------------------------------------------
@@ -107,7 +109,7 @@ class ErrorCode:
     GOVERNANCE_UPDATE_INTERNAL_ERROR = "governance_update:internal_error"
     GOVERNANCE_UPDATE_ADMIN_KEY = "governance_update:admin_key"
     GOVERNANCE_UPDATE_ALLOWLIST_USER = "governance_update:allowlist_user"
-    
+
     # -------------------------------------------------------------------------
     # 数据库相关错误码
     # -------------------------------------------------------------------------
@@ -121,8 +123,10 @@ class ErrorCode:
 # 退出码枚举
 # =============================================================================
 
+
 class ExitCode:
     """退出码常量"""
+
     SUCCESS = 0
     ENGRAM_ERROR = 1
     CONFIG_ERROR = 2
@@ -139,6 +143,7 @@ class ExitCode:
 # =============================================================================
 # 基础异常类
 # =============================================================================
+
 
 class EngramError(Exception):
     """engram_logbook 基础异常类"""
@@ -169,11 +174,16 @@ class EngramError(Exception):
 # 配置相关错误 (exit_code = 2)
 # =============================================================================
 
+
 class ConfigError(EngramError):
     """配置相关错误"""
 
     exit_code = ExitCode.CONFIG_ERROR
     error_type = "CONFIG_ERROR"
+
+
+# 别名，向后兼容
+EngramConfigError = ConfigError
 
 
 class ConfigNotFoundError(ConfigError):
@@ -198,11 +208,16 @@ class ConfigValueError(ConfigError):
 # 数据库相关错误 (exit_code = 3)
 # =============================================================================
 
+
 class DatabaseError(EngramError):
     """数据库相关错误"""
 
     exit_code = ExitCode.DATABASE_ERROR
     error_type = "DATABASE_ERROR"
+
+
+# 别名，向后兼容
+EngramDatabaseError = DatabaseError
 
 
 class DbConnectionError(DatabaseError):
@@ -233,6 +248,7 @@ class TransactionError(DatabaseError):
 # 哈希计算错误 (exit_code = 4)
 # =============================================================================
 
+
 class HashingError(EngramError):
     """哈希计算错误"""
 
@@ -249,6 +265,7 @@ class FileHashNotFoundError(HashingError):
 # =============================================================================
 # I/O 相关错误 (exit_code = 5)
 # =============================================================================
+
 
 class EngramIOError(EngramError):
     """I/O 相关错误"""
@@ -272,6 +289,7 @@ class FileWriteError(EngramIOError):
 # =============================================================================
 # 校验错误 (exit_code = 6)
 # =============================================================================
+
 
 class ValidationError(EngramError):
     """输入验证错误"""
@@ -314,6 +332,7 @@ class MemoryUriInvalidError(ValidationError):
 # 约束冲突错误 (exit_code = 7)
 # =============================================================================
 
+
 class ConstraintError(EngramError):
     """约束冲突错误"""
 
@@ -342,6 +361,7 @@ class ReferenceNotFoundError(ConstraintError):
 # =============================================================================
 # 物化错误 (exit_code = 12)
 # =============================================================================
+
 
 class MaterializeError(EngramError):
     """物化错误基类"""
@@ -378,6 +398,7 @@ class FetchError(MaterializeError):
 # 工具函数
 # =============================================================================
 
+
 def make_success_result(**kwargs) -> Dict[str, Any]:
     """
     构造成功结果
@@ -392,9 +413,7 @@ def make_success_result(**kwargs) -> Dict[str, Any]:
 
 
 def make_error_result(
-    code: str,
-    message: str,
-    detail: Optional[Dict[str, Any]] = None
+    code: str, message: str, detail: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     构造错误结果

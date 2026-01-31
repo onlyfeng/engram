@@ -1,3 +1,14 @@
+# Engram Unified Stack 部署 Compose 配置
+#
+# unified-stack 模式：必须创建服务账号
+# 使用前必须设置以下全部 4 个密码环境变量，否则 bootstrap_roles 容器将失败：
+#   export LOGBOOK_MIGRATOR_PASSWORD=xxx
+#   export LOGBOOK_SVC_PASSWORD=xxx
+#   export OPENMEMORY_MIGRATOR_PASSWORD=xxx
+#   export OPENMEMORY_SVC_PASSWORD=xxx
+#
+# 如需 logbook-only 模式（不创建服务账号），请使用 compose/logbook.yml
+
 version: "3.9"
 
 x-service-account-passwords: &service_account_passwords
@@ -55,6 +66,8 @@ services:
       retries: 20
     networks: [engram_net]
 
+  # unified-stack 模式：必须创建服务账号
+  # 使用 --require-roles 强制要求设置全部 4 个密码环境变量
   bootstrap_roles:
     build:
       context: .
@@ -66,7 +79,7 @@ services:
       <<: [*service_account_passwords, *postgres_admin_env]
       OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
     command: >
-      sh -c 'python logbook_postgres/scripts/db_bootstrap.py'
+      sh -c 'engram-bootstrap-roles --require-roles'
     networks: [engram_net]
 
   logbook_migrate:
@@ -83,7 +96,7 @@ services:
       OM_METADATA_BACKEND: ${OM_METADATA_BACKEND:-postgres}
       OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
     command: >
-      sh -c 'python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
+      sh -c 'engram-migrate --dsn "$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
     networks: [engram_net]
 
   permissions_verify:
@@ -98,7 +111,7 @@ services:
     environment:
       <<: *postgres_admin_env
     command: >
-      sh -c 'python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --verify'
+      sh -c 'engram-migrate --dsn "$POSTGRES_DSN" --verify'
     networks: [engram_net]
 
   openmemory_migrate:

@@ -7,7 +7,7 @@ engram_logbook.scm_integrity_check - Patch blob 完整性检查
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .artifact_store import get_default_store
 from .uri import parse_evidence_uri

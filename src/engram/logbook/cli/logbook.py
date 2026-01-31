@@ -5,25 +5,45 @@ engram_logbook.cli.logbook - Logbook CLI 主入口
 这是 `logbook` 命令行工具的入口点。
 
 使用方式:
-    logbook create_item --item-type task --title "My Task"
-    logbook add_event --item-id 1 --event-type comment
-    logbook health
-    logbook validate
-    logbook render_views
+    engram-logbook create_item --item-type task --title "My Task"
+    engram-logbook add_event --item-id 1 --event-type comment
+    engram-logbook health
+    engram-logbook validate
+    engram-logbook render_views
+    engram-logbook artifacts write --uri <uri> --content <content>
+    engram-logbook artifacts read --uri <uri>
 
 安装后可直接使用:
     pip install -e .
-    logbook --help
+    engram-logbook --help
 """
 
 import sys
+
+
+def _handle_artifacts_subcommand() -> int:
+    """处理 artifacts 子命令，转发到 typer app"""
+    from engram.logbook.cli.artifacts import app as artifacts_app
+
+    # 移除 'artifacts' 子命令，让 typer 处理剩余参数
+    sys.argv = [sys.argv[0]] + sys.argv[2:]
+    artifacts_app()
+    return 0
 
 
 def main() -> int:
     """
     Logbook CLI 主入口点
     """
+    # 检查是否为 artifacts 子命令，如果是则转发到 typer app
+    if len(sys.argv) > 1 and sys.argv[1] == "artifacts":
+        try:
+            return _handle_artifacts_subcommand()
+        except SystemExit as e:
+            return e.code if isinstance(e.code, int) else 0
+
     import argparse
+
     from engram.logbook.db import get_connection
     from engram.logbook.errors import EngramError, make_error_result
     from engram.logbook.io import add_output_arguments, get_output_options, output_json
@@ -37,6 +57,12 @@ def main() -> int:
     add_output_arguments(parser)
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
+
+    # artifacts 子命令（仅用于帮助显示，实际由 typer 处理）
+    subparsers.add_parser(
+        "artifacts",
+        help="Artifacts 管理命令（write/read/exists/delete/gc/migrate）",
+    )
 
     # health 子命令
     health_parser = subparsers.add_parser("health", help="检查数据库健康状态")
@@ -99,7 +125,9 @@ def main() -> int:
             dsn = args.dsn or None
             with get_connection(dsn=dsn) as conn:
                 result = run_all_checks(conn)
-            output_json(result, pretty=opts["pretty"], quiet=opts["quiet"], json_out=opts["json_out"])
+            output_json(
+                result, pretty=opts["pretty"], quiet=opts["quiet"], json_out=opts["json_out"]
+            )
             return 0 if result.get("ok") else 1
 
         if args.command == "create_item":
@@ -165,7 +193,9 @@ def main() -> int:
         )
         return 2
     except EngramError as e:
-        output_json(e.to_dict(), pretty=opts["pretty"], quiet=opts["quiet"], json_out=opts["json_out"])
+        output_json(
+            e.to_dict(), pretty=opts["pretty"], quiet=opts["quiet"], json_out=opts["json_out"]
+        )
         return e.exit_code
     except Exception as e:
         output_json(

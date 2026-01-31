@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Union
 from urllib.parse import urlparse
 
-from .errors import EngramIOError, ExitCode
+from .errors import EngramIOError
 
 # =============================================================================
 # 错误定义
@@ -52,81 +52,97 @@ from .errors import EngramIOError, ExitCode
 
 class ArtifactError(EngramIOError):
     """制品操作错误基类"""
+
     error_type = "ARTIFACT_ERROR"
 
 
 class ArtifactNotFoundError(ArtifactError):
     """制品不存在"""
+
     error_type = "ARTIFACT_NOT_FOUND"
 
 
 class ArtifactWriteDisabledError(ArtifactError):
     """制品写入被禁用（只读模式）"""
+
     error_type = "ARTIFACT_WRITE_DISABLED"
 
 
 class ArtifactWriteError(ArtifactError):
     """制品写入失败"""
+
     error_type = "ARTIFACT_WRITE_ERROR"
 
 
 class ArtifactReadError(ArtifactError):
     """制品读取失败"""
+
     error_type = "ARTIFACT_READ_ERROR"
 
 
 class PathTraversalError(ArtifactError):
     """路径穿越攻击检测"""
+
     error_type = "PATH_TRAVERSAL_ERROR"
 
 
 class ArtifactOverwriteDeniedError(ArtifactError):
     """覆盖被拒绝（overwrite_policy=deny 时文件已存在）"""
+
     error_type = "ARTIFACT_OVERWRITE_DENIED"
 
 
 class ArtifactHashMismatchError(ArtifactError):
     """哈希不匹配（overwrite_policy=allow_same_hash 时内容不同）"""
+
     error_type = "ARTIFACT_HASH_MISMATCH"
 
 
 class ObjectStoreError(ArtifactError):
     """对象存储操作错误"""
+
     error_type = "OBJECT_STORE_ERROR"
 
 
 class ObjectStoreNotConfiguredError(ObjectStoreError):
     """对象存储未配置"""
+
     error_type = "OBJECT_STORE_NOT_CONFIGURED"
 
 
 class ObjectStoreConnectionError(ObjectStoreError):
     """对象存储连接失败"""
+
     error_type = "OBJECT_STORE_CONNECTION_ERROR"
 
 
 class ObjectStoreUploadError(ObjectStoreError):
     """对象存储上传失败"""
+
     error_type = "OBJECT_STORE_UPLOAD_ERROR"
 
 
 class ObjectStoreDownloadError(ObjectStoreError):
     """对象存储下载失败"""
+
     error_type = "OBJECT_STORE_DOWNLOAD_ERROR"
 
 
 class ArtifactSizeLimitExceededError(ArtifactError):
     """制品大小超出限制"""
+
     error_type = "ARTIFACT_SIZE_LIMIT_EXCEEDED"
 
 
 class ObjectStoreTimeoutError(ObjectStoreError):
     """对象存储操作超时"""
+
     error_type = "OBJECT_STORE_TIMEOUT"
 
 
 class ObjectStoreThrottlingError(ObjectStoreError):
     """对象存储请求被限流"""
+
     error_type = "OBJECT_STORE_THROTTLING"
 
 
@@ -145,8 +161,8 @@ MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024
 
 # 默认对象存储超时配置
 DEFAULT_CONNECT_TIMEOUT = 10.0  # 连接超时秒数
-DEFAULT_READ_TIMEOUT = 60.0     # 读取超时秒数
-DEFAULT_MAX_RETRIES = 3         # 最大重试次数
+DEFAULT_READ_TIMEOUT = 60.0  # 读取超时秒数
+DEFAULT_MAX_RETRIES = 3  # 最大重试次数
 
 # 默认最大制品大小限制（0 = 无限制）
 DEFAULT_MAX_SIZE_BYTES = 0
@@ -163,7 +179,7 @@ ENV_S3_VERIFY_SSL = "ENGRAM_S3_VERIFY_SSL"
 ENV_S3_CA_BUNDLE = "ENGRAM_S3_CA_BUNDLE"
 
 # 凭证选择相关环境变量（与 docker-compose.unified.yml 对齐）
-ENV_S3_USE_OPS = "ENGRAM_S3_USE_OPS"           # 是否使用 ops 凭证（有 DeleteObject 权限）
+ENV_S3_USE_OPS = "ENGRAM_S3_USE_OPS"  # 是否使用 ops 凭证（有 DeleteObject 权限）
 ENV_S3_APP_ACCESS_KEY = "ENGRAM_S3_APP_ACCESS_KEY"  # App 用户访问密钥（默认，无 Delete 权限）
 ENV_S3_APP_SECRET_KEY = "ENGRAM_S3_APP_SECRET_KEY"  # App 用户密钥
 ENV_S3_OPS_ACCESS_KEY = "ENGRAM_S3_OPS_ACCESS_KEY"  # Ops 用户访问密钥（GC/迁移用，有 Delete 权限）
@@ -180,8 +196,8 @@ VALID_BACKENDS = {BACKEND_LOCAL, BACKEND_FILE, BACKEND_OBJECT}
 DEFAULT_ARTIFACTS_ROOT = "./.agentx/artifacts"
 
 # 覆盖策略
-OVERWRITE_ALLOW = "allow"           # 允许覆盖
-OVERWRITE_DENY = "deny"             # 禁止覆盖（文件存在则报错）
+OVERWRITE_ALLOW = "allow"  # 允许覆盖
+OVERWRITE_DENY = "deny"  # 禁止覆盖（文件存在则报错）
 OVERWRITE_ALLOW_SAME_HASH = "allow_same_hash"  # 仅允许相同哈希覆盖
 
 VALID_OVERWRITE_POLICIES = {OVERWRITE_ALLOW, OVERWRITE_DENY, OVERWRITE_ALLOW_SAME_HASH}
@@ -409,10 +425,10 @@ class LocalArtifactsStore(ArtifactStore):
             PathTraversalError: 检测到路径穿越尝试
         """
         # 路径长度检查
-        if len(uri.encode('utf-8')) > self.MAX_PATH_LENGTH:
+        if len(uri.encode("utf-8")) > self.MAX_PATH_LENGTH:
             raise PathTraversalError(
                 f"路径过长: 超过 {self.MAX_PATH_LENGTH} 字节",
-                {"uri": uri[:100] + "...", "length": len(uri.encode('utf-8'))},
+                {"uri": uri[:100] + "...", "length": len(uri.encode("utf-8"))},
             )
 
         # 安全检查 0: 禁止空路径或仅含空白
@@ -516,8 +532,10 @@ class LocalArtifactsStore(ArtifactStore):
             # 注意：文件可能不存在，所以只验证父目录路径
             # 对于不存在的路径，resolve() 会解析到最近的存在祖先
             # 因此需要检查路径字符串前缀
-            if not str(resolved_path).startswith(str(resolved_root) + os.sep) and \
-               resolved_path != resolved_root:
+            if (
+                not str(resolved_path).startswith(str(resolved_root) + os.sep)
+                and resolved_path != resolved_root
+            ):
                 raise PathTraversalError(
                     "检测到路径逃逸: 解析后的路径不在根目录下",
                     {
@@ -626,7 +644,7 @@ class LocalArtifactsStore(ArtifactStore):
         写入制品到本地文件系统（原子操作）
 
         使用临时文件 + rename 实现原子写入，避免半写入问题。
-        
+
         Raises:
             ArtifactWriteDisabledError: 只读模式下禁止写入
         """
@@ -640,7 +658,7 @@ class LocalArtifactsStore(ArtifactStore):
                     "read_only": True,
                 },
             )
-        
+
         normalized_uri = self._normalize_uri(uri)
         full_path = self._full_path(uri)
         temp_path = None
@@ -720,7 +738,7 @@ class LocalArtifactsStore(ArtifactStore):
                             "policy": self._overwrite_policy,
                         },
                     )
-                except OSError as link_err:
+                except OSError:
                     # 硬链接可能因跨文件系统等原因失败，回退到检查+replace
                     # 但这仍有竞态风险，只是作为兼容性回退
                     self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
@@ -860,6 +878,7 @@ class LocalArtifactsStore(ArtifactStore):
 
 class FileUriPathError(ArtifactError):
     """file:// URI 路径解析或访问错误"""
+
     error_type = "FILE_URI_PATH_ERROR"
 
 
@@ -989,7 +1008,7 @@ class FileUriStore(ArtifactStore):
             FileUriPathError: URI 格式无效或路径不允许
         """
         from urllib.parse import unquote
-        
+
         if not uri.startswith("file://"):
             raise FileUriPathError(
                 f"无效的 file:// URI: {uri}",
@@ -1001,10 +1020,10 @@ class FileUriStore(ArtifactStore):
         path = unquote(parsed.path)  # URL 解码路径
 
         # 路径长度检查
-        if len(path.encode('utf-8')) > self.MAX_PATH_LENGTH:
+        if len(path.encode("utf-8")) > self.MAX_PATH_LENGTH:
             raise FileUriPathError(
                 f"路径过长: 超过 {self.MAX_PATH_LENGTH} 字节",
-                {"uri": uri, "length": len(path.encode('utf-8'))},
+                {"uri": uri, "length": len(path.encode("utf-8"))},
             )
 
         if os.name == "nt":
@@ -1122,14 +1141,14 @@ class FileUriStore(ArtifactStore):
     def _ensure_file_uri(self, uri: str) -> str:
         """确保 URI 为 file:// 格式"""
         from urllib.parse import quote
-        
+
         if uri.startswith("file://"):
             return uri
-        
+
         # 将普通路径转换为 file:// URI
         path = Path(uri).absolute()
         path_str = str(path)
-        
+
         if os.name == "nt":
             # Windows 路径处理
             if path_str.startswith("\\\\"):
@@ -1242,7 +1261,7 @@ class FileUriStore(ArtifactStore):
         写入制品到 file:// 路径（原子操作）
 
         使用临时文件 + rename 实现原子写入，避免半写入问题。
-        
+
         Raises:
             ArtifactWriteDisabledError: 只读模式下禁止写入
         """
@@ -1256,7 +1275,7 @@ class FileUriStore(ArtifactStore):
                     "read_only": True,
                 },
             )
-        
+
         file_uri = self._ensure_file_uri(uri)
         file_path = self._parse_file_uri(file_uri)
         temp_path = None
@@ -1333,7 +1352,7 @@ class FileUriStore(ArtifactStore):
                                 "policy": self._overwrite_policy,
                             },
                         )
-                    except OSError as link_err:
+                    except OSError:
                         # 硬链接失败，回退到检查+replace（有竞态风险，仅兼容性回退）
                         self._check_overwrite_policy(file_path, new_sha256, file_uri)
                         try:
@@ -1569,7 +1588,7 @@ class ObjectStore(ArtifactStore):
             read_only: 只读模式，禁止所有写入操作
         """
         self.endpoint = endpoint or os.environ.get(ENV_S3_ENDPOINT)
-        
+
         # 凭证选择逻辑（与 docker-compose.unified.yml 对齐）
         # 优先级:
         #   1. 构造函数显式传入的 access_key/secret_key（最高）
@@ -1609,7 +1628,7 @@ class ObjectStore(ArtifactStore):
                     or os.environ.get(ENV_S3_SECRET_KEY)
                 )
                 self._using_ops_credentials = False
-        
+
         self.bucket = bucket or os.environ.get(ENV_S3_BUCKET)
         self.region = region or os.environ.get(ENV_S3_REGION, "us-east-1")
         self.prefix = prefix.strip("/")
@@ -1619,12 +1638,20 @@ class ObjectStore(ArtifactStore):
         self.sse = sse
         self.storage_class = storage_class
         self.acl = acl
-        self.connect_timeout = connect_timeout if connect_timeout is not None else DEFAULT_CONNECT_TIMEOUT
+        self.connect_timeout = (
+            connect_timeout if connect_timeout is not None else DEFAULT_CONNECT_TIMEOUT
+        )
         self.read_timeout = read_timeout if read_timeout is not None else DEFAULT_READ_TIMEOUT
         self.retries = retries if retries is not None else DEFAULT_MAX_RETRIES
-        self.max_size_bytes = max_size_bytes if max_size_bytes is not None else DEFAULT_MAX_SIZE_BYTES
-        self.multipart_threshold = multipart_threshold if multipart_threshold is not None else MULTIPART_THRESHOLD
-        self.multipart_chunk_size = multipart_chunk_size if multipart_chunk_size is not None else MULTIPART_CHUNK_SIZE
+        self.max_size_bytes = (
+            max_size_bytes if max_size_bytes is not None else DEFAULT_MAX_SIZE_BYTES
+        )
+        self.multipart_threshold = (
+            multipart_threshold if multipart_threshold is not None else MULTIPART_THRESHOLD
+        )
+        self.multipart_chunk_size = (
+            multipart_chunk_size if multipart_chunk_size is not None else MULTIPART_CHUNK_SIZE
+        )
 
         # SSL 验证配置
         # 优先级: 构造函数参数 > 环境变量 > 默认值 True
@@ -1636,7 +1663,7 @@ class ObjectStore(ArtifactStore):
                 self.verify_ssl = env_verify.lower() not in ("false", "0", "no", "off")
             else:
                 self.verify_ssl = True
-        
+
         # CA 证书路径: 构造函数参数 > 环境变量
         self.ca_bundle = ca_bundle or os.environ.get(ENV_S3_CA_BUNDLE)
 
@@ -1657,7 +1684,7 @@ class ObjectStore(ArtifactStore):
     def using_ops_credentials(self) -> Optional[bool]:
         """
         当前是否使用 ops 凭证（有 DeleteObject 权限）
-        
+
         Returns:
             True: 使用 ops 凭证
             False: 使用 app 凭证
@@ -1668,12 +1695,12 @@ class ObjectStore(ArtifactStore):
     def is_ops_credentials(self) -> bool:
         """
         检查当前凭证是否为 ops 凭证
-        
+
         用于 GC/迁移脚本在执行删除操作前验证凭证级别。
-        
+
         当凭证由构造函数显式传入时（using_ops_credentials=None），
         此方法检查 ENGRAM_S3_USE_OPS 环境变量作为判断依据。
-        
+
         Returns:
             True: 当前使用 ops 凭证或 ENGRAM_S3_USE_OPS=true
             False: 使用 app 凭证
@@ -1744,7 +1771,7 @@ class ObjectStore(ArtifactStore):
             return self._client
 
         self._check_configured()
-        
+
         # 安全检查: verify_ssl=True 时不允许使用 http:// 端点
         if self.verify_ssl and self.endpoint:
             parsed = urlparse(self.endpoint)
@@ -1782,7 +1809,7 @@ class ObjectStore(ArtifactStore):
                     "addressing_style": self.addressing_style,
                 },
             )
-            
+
             # 确定 verify 参数值
             # - ca_bundle 路径优先（即使 verify_ssl=False 也使用 ca_bundle）
             # - verify_ssl=True 时使用系统 CA
@@ -1826,7 +1853,12 @@ class ObjectStore(ArtifactStore):
         error_str = str(error)
 
         # 检查是否为 Not Found
-        if "NoSuchKey" in error_name or "NoSuchKey" in error_str or "404" in error_str or "Not Found" in error_str:
+        if (
+            "NoSuchKey" in error_name
+            or "NoSuchKey" in error_str
+            or "404" in error_str
+            or "Not Found" in error_str
+        ):
             return ArtifactNotFoundError(
                 f"制品不存在: {uri}",
                 {"uri": uri, "key": key, "bucket": self.bucket},
@@ -1855,14 +1887,14 @@ class ObjectStore(ArtifactStore):
     def _object_key(self, uri: str, validate: bool = True) -> str:
         """
         生成对象键并验证前缀
-        
+
         Args:
             uri: 制品 URI
             validate: 是否验证 allowed_prefixes（默认 True）
-        
+
         Returns:
             完整的对象 key
-        
+
         Raises:
             PathTraversalError: key 前缀不在允许列表中
         """
@@ -1871,11 +1903,11 @@ class ObjectStore(ArtifactStore):
             key = f"{self.prefix}/{normalized_uri}"
         else:
             key = normalized_uri
-        
+
         # 验证 key 是否在允许的前缀列表中
         if validate:
             self._validate_key_prefix(key, uri)
-        
+
         return key
 
     def _build_put_extra_args(self) -> Dict[str, Any]:
@@ -1936,7 +1968,7 @@ class ObjectStore(ArtifactStore):
                     "read_only": True,
                 },
             )
-        
+
         client = self._get_client()
         key = self._object_key(uri)
         extra_args = self._build_put_extra_args()
@@ -2126,8 +2158,10 @@ class ObjectStore(ArtifactStore):
             # 上传缓冲区中已有的数据（按 chunk_size 切片）
             offset = 0
             while offset < len(buffer):
-                chunk_data = bytes(buffer[offset:offset + self.multipart_chunk_size])
-                if len(chunk_data) < self.multipart_chunk_size and offset + len(chunk_data) < len(buffer):
+                chunk_data = bytes(buffer[offset : offset + self.multipart_chunk_size])
+                if len(chunk_data) < self.multipart_chunk_size and offset + len(chunk_data) < len(
+                    buffer
+                ):
                     # 还没到 buffer 末尾，继续累积
                     offset += len(chunk_data)
                     continue
@@ -2164,10 +2198,12 @@ class ObjectStore(ArtifactStore):
                         PartNumber=part_number,
                         Body=chunk_data,
                     )
-                    parts.append({
-                        "PartNumber": part_number,
-                        "ETag": response["ETag"],
-                    })
+                    parts.append(
+                        {
+                            "PartNumber": part_number,
+                            "ETag": response["ETag"],
+                        }
+                    )
                     part_number += 1
 
                 offset += self.multipart_chunk_size
@@ -2191,8 +2227,8 @@ class ObjectStore(ArtifactStore):
 
                 # 当累积够一个 chunk，上传
                 while len(pending_data) >= self.multipart_chunk_size:
-                    chunk_to_upload = bytes(pending_data[:self.multipart_chunk_size])
-                    pending_data = pending_data[self.multipart_chunk_size:]
+                    chunk_to_upload = bytes(pending_data[: self.multipart_chunk_size])
+                    pending_data = pending_data[self.multipart_chunk_size :]
 
                     response = client.upload_part(
                         Bucket=self.bucket,
@@ -2201,10 +2237,12 @@ class ObjectStore(ArtifactStore):
                         PartNumber=part_number,
                         Body=chunk_to_upload,
                     )
-                    parts.append({
-                        "PartNumber": part_number,
-                        "ETag": response["ETag"],
-                    })
+                    parts.append(
+                        {
+                            "PartNumber": part_number,
+                            "ETag": response["ETag"],
+                        }
+                    )
                     part_number += 1
 
             # 上传剩余数据（最后一个 part 可以小于 chunk_size）
@@ -2216,10 +2254,12 @@ class ObjectStore(ArtifactStore):
                     PartNumber=part_number,
                     Body=bytes(pending_data),
                 )
-                parts.append({
-                    "PartNumber": part_number,
-                    "ETag": response["ETag"],
-                })
+                parts.append(
+                    {
+                        "PartNumber": part_number,
+                        "ETag": response["ETag"],
+                    }
+                )
 
             # 完成 multipart upload，写入 sha256 到 metadata
             # 注意：complete_multipart_upload 不支持 Metadata，需要在 create 时设置
@@ -2314,7 +2354,7 @@ class ObjectStore(ArtifactStore):
             # 分片上传
             offset = 0
             while offset < len(data):
-                chunk = data[offset:offset + self.multipart_chunk_size]
+                chunk = data[offset : offset + self.multipart_chunk_size]
                 response = client.upload_part(
                     Bucket=self.bucket,
                     Key=key,
@@ -2322,10 +2362,12 @@ class ObjectStore(ArtifactStore):
                     PartNumber=part_number,
                     Body=chunk,
                 )
-                parts.append({
-                    "PartNumber": part_number,
-                    "ETag": response["ETag"],
-                })
+                parts.append(
+                    {
+                        "PartNumber": part_number,
+                        "ETag": response["ETag"],
+                    }
+                )
                 part_number += 1
                 offset += self.multipart_chunk_size
 
@@ -2386,7 +2428,10 @@ class ObjectStore(ArtifactStore):
         except Exception as e:
             classified = self._classify_error(e, uri, key)
             # 如果是已分类的错误（非通用 ObjectStoreError），直接抛出
-            if isinstance(classified, (ArtifactNotFoundError, ObjectStoreTimeoutError, ObjectStoreThrottlingError)):
+            if isinstance(
+                classified,
+                (ArtifactNotFoundError, ObjectStoreTimeoutError, ObjectStoreThrottlingError),
+            ):
                 raise classified
             # 否则抛出下载错误
             raise ObjectStoreDownloadError(
@@ -2439,7 +2484,10 @@ class ObjectStore(ArtifactStore):
         except Exception as e:
             classified = self._classify_error(e, uri, key)
             # 如果是已分类的错误（非通用 ObjectStoreError），直接抛出
-            if isinstance(classified, (ArtifactNotFoundError, ObjectStoreTimeoutError, ObjectStoreThrottlingError)):
+            if isinstance(
+                classified,
+                (ArtifactNotFoundError, ObjectStoreTimeoutError, ObjectStoreThrottlingError),
+            ):
                 raise classified
             raise ObjectStoreDownloadError(
                 f"流式下载制品失败: {uri}",
@@ -2585,7 +2633,7 @@ def get_artifact_store(
         store = get_artifact_store("file", allowed_roots=["/mnt/artifacts"])
 
         # local 后端带策略配置
-        store = get_artifact_store("local", 
+        store = get_artifact_store("local",
             root="/mnt/artifacts",
             overwrite_policy="deny",
             file_mode=0o644
@@ -2604,27 +2652,62 @@ def get_artifact_store(
     if backend == BACKEND_LOCAL:
         # 提取 local 后端支持的参数
         local_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in ("root", "allowed_prefixes", "file_mode", "dir_mode", "overwrite_policy", "read_only")
+            k: v
+            for k, v in kwargs.items()
+            if k
+            in (
+                "root",
+                "allowed_prefixes",
+                "file_mode",
+                "dir_mode",
+                "overwrite_policy",
+                "read_only",
+            )
         }
         return LocalArtifactsStore(**local_kwargs)
     elif backend == BACKEND_FILE:
         # 提取 file 后端支持的参数
         file_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in ("allowed_roots", "use_atomic_write", "file_mode", "dir_mode", "overwrite_policy", "read_only")
+            k: v
+            for k, v in kwargs.items()
+            if k
+            in (
+                "allowed_roots",
+                "use_atomic_write",
+                "file_mode",
+                "dir_mode",
+                "overwrite_policy",
+                "read_only",
+            )
         }
         return FileUriStore(**file_kwargs)
     elif backend == BACKEND_OBJECT:
         # 提取 object 后端支持的参数
         object_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in (
-                "endpoint", "access_key", "secret_key", "bucket", "region", "prefix",
+            k: v
+            for k, v in kwargs.items()
+            if k
+            in (
+                "endpoint",
+                "access_key",
+                "secret_key",
+                "bucket",
+                "region",
+                "prefix",
                 "allowed_prefixes",
-                "sse", "storage_class", "acl", "connect_timeout", "read_timeout", "retries",
-                "max_size_bytes", "multipart_threshold", "multipart_chunk_size",
-                "verify_ssl", "ca_bundle", "addressing_style", "read_only"
+                "sse",
+                "storage_class",
+                "acl",
+                "connect_timeout",
+                "read_timeout",
+                "retries",
+                "max_size_bytes",
+                "multipart_threshold",
+                "multipart_chunk_size",
+                "verify_ssl",
+                "ca_bundle",
+                "addressing_style",
+                "read_only",
             )
         }
         return ObjectStore(**object_kwargs)
@@ -2637,25 +2720,25 @@ def get_artifact_store(
 def get_artifact_store_from_config(config: Any) -> ArtifactStore:
     """
     从 ArtifactsConfig 对象创建 Store 实例
-    
+
     Args:
         config: ArtifactsConfig 对象（来自 config.py）
-    
+
     Returns:
         ArtifactStore 实例
-    
+
     示例:
         from engram.logbook.config import get_app_config
         from engram.logbook.artifact_store import get_artifact_store_from_config
-        
+
         app_config = get_app_config()
         store = get_artifact_store_from_config(app_config.artifacts)
     """
     backend = config.backend
-    
-    policy_cfg = config.policy if hasattr(config, 'policy') else None
+
+    policy_cfg = config.policy if hasattr(config, "policy") else None
     read_only = policy_cfg.read_only if policy_cfg else False
-    
+
     if backend == BACKEND_LOCAL:
         return LocalArtifactsStore(
             root=config.root,
@@ -2666,7 +2749,7 @@ def get_artifact_store_from_config(config: Any) -> ArtifactStore:
             read_only=read_only,
         )
     elif backend == BACKEND_FILE:
-        file_cfg = config.file if hasattr(config, 'file') else None
+        file_cfg = config.file if hasattr(config, "file") else None
         return FileUriStore(
             allowed_roots=file_cfg.allowed_roots if file_cfg else None,
             use_atomic_write=file_cfg.use_atomic_write if file_cfg else True,
@@ -2676,16 +2759,16 @@ def get_artifact_store_from_config(config: Any) -> ArtifactStore:
             read_only=read_only,
         )
     elif backend == BACKEND_OBJECT:
-        obj_cfg = config.object if hasattr(config, 'object') else None
-        
+        obj_cfg = config.object if hasattr(config, "object") else None
+
         # 获取 allowed_prefixes：优先使用 object 子配置，回退到顶层 allowed_prefixes
         object_allowed_prefixes = None
-        if obj_cfg and hasattr(obj_cfg, 'allowed_prefixes'):
+        if obj_cfg and hasattr(obj_cfg, "allowed_prefixes"):
             object_allowed_prefixes = obj_cfg.allowed_prefixes
-        if object_allowed_prefixes is None and hasattr(config, 'allowed_prefixes'):
+        if object_allowed_prefixes is None and hasattr(config, "allowed_prefixes"):
             # 回退使用顶层 allowed_prefixes（与 local 后端共用配置）
             object_allowed_prefixes = config.allowed_prefixes
-        
+
         # 优先使用新配置结构，回退到旧配置属性
         return ObjectStore(
             endpoint=config.object_endpoint,  # 仍从环境变量或旧属性获取
@@ -2699,9 +2782,15 @@ def get_artifact_store_from_config(config: Any) -> ArtifactStore:
             connect_timeout=obj_cfg.connect_timeout if obj_cfg else config.object_connect_timeout,
             read_timeout=obj_cfg.read_timeout if obj_cfg else config.object_read_timeout,
             retries=obj_cfg.retries if obj_cfg else config.object_retries,
-            max_size_bytes=policy_cfg.max_size_bytes if policy_cfg else config.object_max_size_bytes,
-            multipart_threshold=obj_cfg.multipart_threshold if obj_cfg else config.object_multipart_threshold,
-            multipart_chunk_size=obj_cfg.multipart_chunk_size if obj_cfg else config.object_multipart_chunk_size,
+            max_size_bytes=policy_cfg.max_size_bytes
+            if policy_cfg
+            else config.object_max_size_bytes,
+            multipart_threshold=obj_cfg.multipart_threshold
+            if obj_cfg
+            else config.object_multipart_threshold,
+            multipart_chunk_size=obj_cfg.multipart_chunk_size
+            if obj_cfg
+            else config.object_multipart_chunk_size,
             verify_ssl=obj_cfg.verify_ssl if obj_cfg else True,
             ca_bundle=obj_cfg.ca_bundle if obj_cfg else None,
             addressing_style=obj_cfg.addressing_style if obj_cfg else "auto",

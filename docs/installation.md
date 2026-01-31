@@ -55,6 +55,27 @@ sudo systemctl enable postgresql
 
 ## 2. 初始化数据库与角色（推荐）
 
+### 推荐流程
+
+数据库初始化遵循三步流程：**bootstrap_roles → migrate → verify**
+
+| 步骤 | 说明 | 需要权限 |
+|------|------|----------|
+| 1. bootstrap_roles | 创建服务账号（logbook_svc, openmemory_svc 等） | CREATEROLE 或 SUPERUSER |
+| 2. migrate | 执行 SQL 迁移脚本，创建 schema/表/权限 | SUPERUSER（apply-roles 需要） |
+| 3. verify | 验证所有权限配置正确 | 任意连接 |
+
+### 本地 vs Docker Compose 命令对照
+
+| 步骤 | 推荐命令 | Docker Compose 等价服务 |
+|------|---------|------------------------|
+| bootstrap_roles | `engram-bootstrap-roles --dsn ...` | `bootstrap_roles` service |
+| migrate | `engram-migrate --dsn ... --apply-roles --apply-openmemory-grants` | `logbook_migrate` service |
+| verify | `engram-migrate --dsn ... --verify` | `permissions_verify` service |
+| 一键完成 | `make setup-db` | `docker compose up -d` (自动按依赖顺序执行) |
+
+### 本地手动初始化
+
 ```bash
 # 创建数据库
 createdb engram
@@ -68,16 +89,50 @@ export LOGBOOK_SVC_PASSWORD=changeme2
 export OPENMEMORY_MIGRATOR_PASSWORD=changeme3
 export OPENMEMORY_SVC_PASSWORD=changeme4
 
-# 初始化服务账号（需要 admin 权限）
+# Step 1: 初始化服务账号（需要 admin 权限）
 # macOS 默认管理员通常是当前用户，Linux/Windows 常用 postgres
-python logbook_postgres/scripts/db_bootstrap.py \
+engram-bootstrap-roles \
   --dsn "postgresql://<admin_user>@localhost:5432/postgres"
 
-# 执行迁移与权限脚本（需要 admin 权限）
-python logbook_postgres/scripts/db_migrate.py \
+# Step 2: 执行迁移与权限脚本（需要 admin 权限）
+engram-migrate \
   --dsn "postgresql://<admin_user>@localhost:5432/engram" \
   --apply-roles --apply-openmemory-grants
+
+# Step 3: 验证权限配置
+engram-migrate \
+  --dsn "postgresql://<admin_user>@localhost:5432/engram" \
+  --verify
 ```
+
+### 使用 Makefile 一键初始化（推荐）
+
+```bash
+# 设置密码环境变量后，一键完成上述所有步骤
+make setup-db
+```
+
+### 脚本选择指南
+
+| 场景 | 推荐工具 | 说明 |
+|------|---------|------|
+| 本地开发 | `make setup-db` | 一键完成，无需记忆参数 |
+| CI/CD 部署 | `engram-migrate` | 已安装的 CLI，支持所有选项 |
+| Docker 部署 | docker-compose services | 自动按依赖顺序执行 |
+| 仅迁移（无角色） | `engram-migrate --dsn ...` | 适用于已有服务账号的场景 |
+
+> **入口策略说明**: 
+> - `pyproject.toml [project.scripts]` + `python -m engram.*` 为**权威入口**
+> - 根目录与 `logbook_postgres/scripts/` 的脚本均为**薄包装器，已弃用**
+>
+> 推荐使用:
+> - Bootstrap: `engram-bootstrap-roles`
+> - 迁移: `engram-migrate`
+> - Logbook CLI: `engram-logbook`
+> - SCM Sync: `engram-scm-scheduler`, `engram-scm-worker`, `engram-scm-reaper`, `engram-scm-status`, `engram-scm run`
+> - Artifacts: `engram-artifacts`
+>
+> **弃用说明**: `python scripts/db_bootstrap.py`、`python scm_sync_*.py`、`python artifact_cli.py` 等脚本已弃用，将在 v1.0 移除。
 
 ## 3. 安装 Engram
 
@@ -118,11 +173,14 @@ make install-dev   # 安装开发依赖（推荐）
 ## 4. 数据库迁移（手动或开发场景）
 
 ```bash
-# 使用 CLI（推荐）
+# 使用统一迁移入口 engram-migrate（推荐）
 export POSTGRES_DSN="postgresql://postgres@localhost:5432/engram"
-python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"
+engram-migrate --dsn "$POSTGRES_DSN"
 
-# 或使用 Makefile（开发场景）
+# 或使用 python -m 方式调用（无需 pip install）
+python -m engram.logbook.cli.db_migrate --dsn "$POSTGRES_DSN"
+
+# 或使用 Makefile（开发场景，内部调用 engram-migrate）
 POSTGRES_DSN="$POSTGRES_DSN" make migrate
 ```
 
@@ -130,6 +188,24 @@ POSTGRES_DSN="$POSTGRES_DSN" make migrate
 
 统一栈包含 Postgres + OpenMemory + Gateway + Worker，适合快速落地与联调。
 配置模板见 [`.env.example`](../.env.example)，编排入口见 [`docker-compose.unified.yml`](../docker-compose.unified.yml)。
+
+### Docker Compose 初始化流程
+
+Docker Compose 启动时自动按依赖顺序执行：
+
+```
+postgres (健康检查)
+    ↓
+bootstrap_roles (创建服务账号)
+    ↓
+logbook_migrate (执行迁移 + 权限)
+    ↓
+permissions_verify (验证权限)
+    ↓
+openmemory / gateway / worker (应用服务)
+```
+
+### 快速开始步骤
 
 1) 复制并编辑环境变量：
 ```bash
@@ -159,6 +235,16 @@ docker compose -f docker-compose.unified.yml --profile minio up -d
 ```bash
 make verify-unified
 ```
+
+### 本地 vs Docker Compose 命令对照
+
+| 步骤 | 本地 Makefile | Docker Compose 服务 |
+|------|--------------|-------------------|
+| 一键初始化 | `make setup-db` | `docker compose up -d` (自动执行) |
+| 仅 bootstrap | `make bootstrap-roles` | `bootstrap_roles` service |
+| 仅迁移 | `make migrate` | `logbook_migrate` service |
+| 仅验证 | `make verify` | `permissions_verify` service |
+| 启动 Gateway | `make gateway` | `gateway` service |
 
 5) 安全与备份建议：
 - 最小安全清单：[`docs/guides/security_minimal.md`](guides/security_minimal.md)
@@ -311,8 +397,11 @@ make help
 | `make lint` | 代码检查 (ruff) |
 | `make format` | 代码格式化 (ruff) |
 | `make typecheck` | 类型检查 (mypy) |
-| `make db-create` | 创建数据库 |
+| `make setup-db` | **一键初始化数据库（推荐）** |
+| `make bootstrap-roles` | 仅初始化服务账号 |
 | `make migrate` | 执行 SQL 迁移脚本 |
+| `make verify` | 验证数据库权限配置 |
+| `make db-create` | 创建数据库 |
 | `make db-drop` | 删除数据库（危险操作） |
 | `make gateway` | 启动 Gateway 服务（带热重载） |
 | `make clean` | 清理临时文件 |
@@ -338,12 +427,19 @@ POSTGRES_DSN="postgresql://myuser:mypass@localhost:5432/mydb" make migrate
 # 自定义端口启动 Gateway
 GATEWAY_PORT=9000 make gateway
 
-# 完整开发流程示例
+# 完整开发流程示例（推荐）
+make install-dev     # 1. 安装开发依赖
+make setup-db        # 2. 一键初始化数据库（包含 bootstrap + migrate + verify）
+make test            # 3. 运行测试
+make gateway         # 4. 启动服务
+
+# 分步执行（手动控制）
 make install-dev     # 1. 安装开发依赖
 make db-create       # 2. 创建数据库
-make migrate         # 3. 执行迁移
-make test            # 4. 运行测试
-make gateway         # 5. 启动服务
+make bootstrap-roles # 3. 初始化服务账号
+make migrate         # 4. 执行迁移
+make verify          # 5. 验证权限
+make gateway         # 6. 启动服务
 ```
 
 ### Makefile vs CLI 工具
@@ -383,12 +479,19 @@ export OPENMEMORY_MIGRATOR_PASSWORD=changeme3
 export OPENMEMORY_SVC_PASSWORD=changeme4
 export OM_PG_SCHEMA=openmemory
 
-python logbook_postgres/scripts/db_bootstrap.py \
+# Step 4.1: bootstrap_roles - 创建服务账号
+engram-bootstrap-roles \
   --dsn "postgresql://$USER@localhost:5432/postgres"
 
-python logbook_postgres/scripts/db_migrate.py \
+# Step 4.2: migrate - 执行迁移脚本
+engram-migrate \
   --dsn "postgresql://$USER@localhost:5432/engram" \
   --apply-roles --apply-openmemory-grants
+
+# Step 4.3: verify - 验证权限配置
+engram-migrate \
+  --dsn "postgresql://$USER@localhost:5432/engram" \
+  --verify
 
 # 补充授权（OpenMemory 运行时需要完整权限）
 psql -d engram -c "

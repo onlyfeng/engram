@@ -1,3 +1,21 @@
+# Logbook-only 部署 Compose 配置
+#
+# 服务账号策略（SKIP 模式）：
+#   - 不设置任何 *_PASSWORD 环境变量时自动进入 SKIP 模式
+#   - SKIP 模式下跳过服务账号创建，使用 postgres 超级用户
+#   - 若设置了任意一个密码变量，则要求 4 个密码变量全部设置
+#
+# 使用方式：
+#   # logbook-only 模式（推荐，无需配置密码）
+#   docker compose -f compose/logbook.yml up -d
+#
+#   # 或者设置全部 4 个密码（unified-stack 模式）
+#   export LOGBOOK_MIGRATOR_PASSWORD=xxx
+#   export LOGBOOK_SVC_PASSWORD=xxx
+#   export OPENMEMORY_MIGRATOR_PASSWORD=xxx
+#   export OPENMEMORY_SVC_PASSWORD=xxx
+#   docker compose -f compose/logbook.yml up -d
+
 version: "3.9"
 
 services:
@@ -28,13 +46,17 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-engram}
+      # 服务账号密码（可选）：
+      # - 全部不设置 → logbook-only 模式（SKIP 服务账号创建）
+      # - 全部设置 → unified-stack 模式（创建服务账号）
+      # - 部分设置 → 配置错误，容器初始化失败
       LOGBOOK_MIGRATOR_PASSWORD: ${LOGBOOK_MIGRATOR_PASSWORD:-}
       LOGBOOK_SVC_PASSWORD: ${LOGBOOK_SVC_PASSWORD:-}
       OPENMEMORY_MIGRATOR_PASSWORD: ${OPENMEMORY_MIGRATOR_PASSWORD:-}
       OPENMEMORY_SVC_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:-}
       OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
     command: >
-      sh -c 'python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
+      sh -c 'engram-migrate --dsn "$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
     networks: [logbook_net]
 
 networks:

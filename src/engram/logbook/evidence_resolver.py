@@ -20,13 +20,13 @@ URI 格式:
         按 attachment_id 查询 attachments 表
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
 import psycopg
 
-from .artifact_store import LocalArtifactsStore
 from .config import Config, get_config
 from .db import get_connection
 from .errors import (
@@ -34,10 +34,8 @@ from .errors import (
     MemoryUriNotFoundError,
     Sha256MismatchError,
 )
-from .hashing import hash_bytes, sha256 as compute_sha256
-from .uri import ParsedUri, UriType, parse_uri, resolve_to_local_path
-
-import re
+from .hashing import sha256 as compute_sha256
+from .uri import UriType, parse_uri, resolve_to_local_path
 
 # SHA256 格式正则：64 位十六进制
 _SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")
@@ -46,13 +44,14 @@ _SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")
 @dataclass
 class ResolvedEvidence:
     """解析后的 Evidence 数据"""
-    content: bytes              # 实际内容
-    sha256: str                 # 内容的 SHA256 哈希
-    uri: str                    # 原始 memory:// URI
-    artifact_uri: str           # 底层 artifact URI
-    size_bytes: int             # 内容大小
-    resource_type: str          # 资源类型 (patch_blobs/attachments)
-    resource_id: str            # 资源标识
+
+    content: bytes  # 实际内容
+    sha256: str  # 内容的 SHA256 哈希
+    uri: str  # 原始 memory:// URI
+    artifact_uri: str  # 底层 artifact URI
+    size_bytes: int  # 内容大小
+    resource_type: str  # 资源类型 (patch_blobs/attachments)
+    resource_id: str  # 资源标识
 
     def __repr__(self) -> str:
         return f"ResolvedEvidence(type={self.resource_type}, id={self.resource_id}, size={self.size_bytes})"
@@ -116,6 +115,7 @@ def resolve_memory_uri(
     # 获取 artifacts_root（使用统一的配置获取入口）
     if artifacts_root is None:
         from .config import get_effective_artifacts_root
+
         artifacts_root = get_effective_artifacts_root()
 
     # 是否需要管理连接
@@ -126,13 +126,9 @@ def resolve_memory_uri(
 
     try:
         if resource_type == "patch_blobs":
-            return _resolve_patch_blob(
-                path_parts[1:], uri, conn, artifacts_root, verify_sha256
-            )
+            return _resolve_patch_blob(path_parts[1:], uri, conn, artifacts_root, verify_sha256)
         elif resource_type == "attachments":
-            return _resolve_attachment(
-                path_parts[1:], uri, conn, artifacts_root, verify_sha256
-            )
+            return _resolve_attachment(path_parts[1:], uri, conn, artifacts_root, verify_sha256)
         else:
             raise MemoryUriInvalidError(
                 f"未知的 memory:// 资源类型: {resource_type}",
@@ -171,12 +167,12 @@ def _resolve_patch_blob(
         )
 
     lookup_type = path_parts[0]
-    
+
     # 检测 Canonical URI 格式: {source_type}/{source_id}/{sha256}
     # 条件: path_parts 长度 >= 3 且最后一个部分是 64 位十六进制
     # 同时第一个部分不能是特殊关键字 (sha256, blob_id)
     is_canonical_uri = (
-        len(path_parts) >= 3 
+        len(path_parts) >= 3
         and lookup_type not in ("sha256", "blob_id")
         and _is_sha256_hex(path_parts[-1])
     )
@@ -216,7 +212,7 @@ def _resolve_patch_blob(
             # source_id 可能包含 / ，所以取中间部分
             uri_source_id = "/".join(path_parts[1:-1])
             resource_id = f"{uri_source_type}:{uri_source_id}"
-            
+
             # 策略：优先按 sha256 查询，校验 source_type/source_id 一致
             cur.execute(
                 """
@@ -228,13 +224,13 @@ def _resolve_patch_blob(
                 (uri_sha256,),
             )
             row = cur.fetchone()
-            
+
             if row is not None:
                 # 按 sha256 找到了，校验 source_type/source_id 一致性
                 _, db_source_type, db_source_id, _, _, _ = row
                 if db_source_type != uri_source_type or db_source_id != uri_source_id:
                     raise Sha256MismatchError(
-                        f"Canonical URI source 校验失败: URI 中的 source_type/source_id 与数据库记录不一致",
+                        "Canonical URI source 校验失败: URI 中的 source_type/source_id 与数据库记录不一致",
                         {
                             "uri": original_uri,
                             "uri_source_type": uri_source_type,
@@ -255,13 +251,13 @@ def _resolve_patch_blob(
                     (uri_source_type, uri_source_id),
                 )
                 row = cur.fetchone()
-                
+
                 if row is not None:
                     # 按 source_type+source_id 找到了，校验 sha256 一致性
                     _, _, _, db_sha256, _, _ = row
                     if db_sha256.lower() != uri_sha256:
                         raise Sha256MismatchError(
-                            f"Canonical URI sha256 校验失败: URI 中的 sha256 与数据库记录不一致",
+                            "Canonical URI sha256 校验失败: URI 中的 sha256 与数据库记录不一致",
                             {
                                 "uri": original_uri,
                                 "uri_sha256": uri_sha256,
@@ -288,7 +284,7 @@ def _resolve_patch_blob(
         # 对于非 canonical URI，row 变量来自上面的查询
         if not is_canonical_uri:
             row = cur.fetchone()
-            
+
         if row is None:
             raise MemoryUriNotFoundError(
                 f"patch_blob 未找到: {original_uri}",
@@ -305,7 +301,7 @@ def _resolve_patch_blob(
         actual_sha256 = compute_sha256(content)
         if actual_sha256 != expected_sha256:
             raise Sha256MismatchError(
-                f"patch_blob SHA256 校验失败",
+                "patch_blob SHA256 校验失败",
                 {
                     "uri": original_uri,
                     "expected": expected_sha256,
@@ -373,7 +369,7 @@ def _resolve_attachment(
         actual_sha256 = compute_sha256(content)
         if actual_sha256 != expected_sha256:
             raise Sha256MismatchError(
-                f"attachment SHA256 校验失败",
+                "attachment SHA256 校验失败",
                 {
                     "uri": original_uri,
                     "expected": expected_sha256,
@@ -521,7 +517,7 @@ def get_evidence_info(
 def _get_patch_blob_info(path_parts: list, conn: psycopg.Connection) -> Optional[dict]:
     """
     获取 patch_blob 元数据
-    
+
     支持的路径格式:
     - sha256/{sha256_value}  - 按 SHA256 查找
     - blob_id/{blob_id}      - 按 blob_id 查找
@@ -532,10 +528,10 @@ def _get_patch_blob_info(path_parts: list, conn: psycopg.Connection) -> Optional
         return None
 
     lookup_type = path_parts[0]
-    
+
     # 检测 Canonical URI 格式
     is_canonical_uri = (
-        len(path_parts) >= 3 
+        len(path_parts) >= 3
         and lookup_type not in ("sha256", "blob_id")
         and _is_sha256_hex(path_parts[-1])
     )
@@ -562,7 +558,7 @@ def _get_patch_blob_info(path_parts: list, conn: psycopg.Connection) -> Optional
             uri_source_type = lookup_type
             uri_sha256 = path_parts[-1].lower()
             uri_source_id = "/".join(path_parts[1:-1])
-            
+
             # 优先按 sha256 查询
             cur.execute(
                 """
@@ -572,7 +568,7 @@ def _get_patch_blob_info(path_parts: list, conn: psycopg.Connection) -> Optional
                 (uri_sha256,),
             )
             row = cur.fetchone()
-            
+
             if row is not None:
                 # 校验 source_type/source_id 一致性
                 _, db_source_type, db_source_id, _, _, _ = row
@@ -588,7 +584,7 @@ def _get_patch_blob_info(path_parts: list, conn: psycopg.Connection) -> Optional
                     (uri_source_type, uri_source_id),
                 )
                 row = cur.fetchone()
-                
+
                 if row is not None:
                     # 校验 sha256 一致性
                     _, _, _, db_sha256, _, _ = row
@@ -609,7 +605,7 @@ def _get_patch_blob_info(path_parts: list, conn: psycopg.Connection) -> Optional
         # 对于非 canonical URI，row 变量来自上面的查询
         if not is_canonical_uri:
             row = cur.fetchone()
-            
+
         if row is None:
             return None
 

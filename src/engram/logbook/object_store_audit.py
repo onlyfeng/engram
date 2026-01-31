@@ -45,12 +45,11 @@ engram_logbook.object_store_audit - 对象存储审计 API
 
 import json
 import os
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from .db import get_connection, DbConnectionError
-
+from .db import DbConnectionError, get_connection
 
 # =============================================================================
 # 审计事件数据类
@@ -62,17 +61,17 @@ class ObjectStoreAuditEvent:
     """对象存储审计事件数据类"""
 
     # 必填字段
-    provider: str                       # 对象存储提供者（minio, aws, gcs 等）
-    event_ts: datetime                  # 事件时间戳
-    bucket: str                         # 存储桶名称
-    operation: str                      # 操作类型
+    provider: str  # 对象存储提供者（minio, aws, gcs 等）
+    event_ts: datetime  # 事件时间戳
+    bucket: str  # 存储桶名称
+    operation: str  # 操作类型
 
     # 可选字段
-    object_key: Optional[str] = None    # 对象键
-    status_code: Optional[int] = None   # HTTP 状态码
-    request_id: Optional[str] = None    # 请求 ID
-    principal: Optional[str] = None     # 操作者标识
-    remote_ip: Optional[str] = None     # 客户端 IP 地址
+    object_key: Optional[str] = None  # 对象键
+    status_code: Optional[int] = None  # HTTP 状态码
+    request_id: Optional[str] = None  # 请求 ID
+    principal: Optional[str] = None  # 操作者标识
+    remote_ip: Optional[str] = None  # 客户端 IP 地址
     raw: Dict[str, Any] = field(default_factory=dict)  # 原始审计日志
 
     def to_dict(self) -> Dict[str, Any]:
@@ -396,7 +395,7 @@ def write_object_store_audit_events_batch_dedupe(
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT DISTINCT request_id 
+                        SELECT DISTINCT request_id
                         FROM governance.object_store_audit_events
                         WHERE request_id = ANY(%s)
                         """,
@@ -409,10 +408,7 @@ def write_object_store_audit_events_batch_dedupe(
             pass
 
     # 过滤掉已存在的事件
-    new_events = [
-        e for e in events
-        if not e.request_id or e.request_id not in existing_ids
-    ]
+    new_events = [e for e in events if not e.request_id or e.request_id not in existing_ids]
 
     skipped = len(events) - len(new_events)
     inserted = write_object_store_audit_events_batch(new_events, dsn=dsn)

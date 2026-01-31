@@ -14,6 +14,8 @@
 | 4 | [03_deploy_verify_troubleshoot.md](03_deploy_verify_troubleshoot.md) | 部署验收：最小部署、验收测试、常见问题排错 |
 | 5 | [04_acceptance_criteria.md](04_acceptance_criteria.md) | **验收标准**：MVP 能力清单、不变量约束、验收矩阵 |
 | 6 | [05_definition_of_done.md](05_definition_of_done.md) | **DoD**：变更类型与必须同步更新的文件、破坏性变更要求 |
+| 7 | [06_scm_sync_subsystem.md](06_scm_sync_subsystem.md) | SCM Sync 子系统：状态机、数据流、配置开关 |
+| 8 | [07_scm_sync_ops_guide.md](07_scm_sync_ops_guide.md) | **SCM Sync 运维指南**：部署拓扑、参数推荐、故障处理 |
 
 ---
 
@@ -56,4 +58,4 @@
 
 ---
 
-更新时间：2026-01-30
+更新时间：2026-01-31

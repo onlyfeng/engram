@@ -46,37 +46,30 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional
 
+from .artifact_ops_audit import (
+    write_delete_audit_event,
+)
 from .artifact_store import (
-    ArtifactStore,
-    LocalArtifactsStore,
-    FileUriStore,
-    ObjectStore,
-    ArtifactNotFoundError,
     ArtifactError,
+    ArtifactStore,
     FileUriPathError,
+    FileUriStore,
+    LocalArtifactsStore,
+    ObjectStore,
     PathTraversalError,
     get_artifact_store,
     get_default_store,
-    ENV_S3_USE_OPS,
-)
-from .uri import (
-    normalize_uri,
-    parse_uri,
-    is_physical_uri,
-    ARTIFACT_KEY_SCHEMES,
-    PHYSICAL_URI_SCHEMES,
-)
-from .artifact_ops_audit import (
-    write_delete_audit_event,
-    get_using_ops_from_env,
 )
 from .config import (
     get_gc_require_ops_default,
-    get_gc_require_trash_default,
 )
-
+from .uri import (
+    is_physical_uri,
+    normalize_uri,
+    parse_uri,
+)
 
 # =============================================================================
 # 错误定义
@@ -85,16 +78,19 @@ from .config import (
 
 class ArtifactDeleteError(ArtifactError):
     """制品删除错误"""
+
     error_type = "ARTIFACT_DELETE_ERROR"
 
 
 class ArtifactDeleteOpsCredentialsRequiredError(ArtifactDeleteError):
     """删除操作需要 ops 凭证但未提供"""
+
     error_type = "ARTIFACT_DELETE_OPS_CREDENTIALS_REQUIRED"
 
 
 class ArtifactDeleteNotSupportedError(ArtifactDeleteError):
     """当前存储类型不支持删除操作"""
+
     error_type = "ARTIFACT_DELETE_NOT_SUPPORTED"
 
 
@@ -106,10 +102,11 @@ class ArtifactDeleteNotSupportedError(ArtifactDeleteError):
 @dataclass
 class ArtifactDeleteResult:
     """删除操作结果"""
-    uri: str                     # 删除的 URI
-    deleted: bool                # 是否成功删除
-    existed: bool                # 删除前是否存在
-    trashed: bool = False        # 是否为软删除（移动到 trash）
+
+    uri: str  # 删除的 URI
+    deleted: bool  # 是否成功删除
+    existed: bool  # 删除前是否存在
+    trashed: bool = False  # 是否为软删除（移动到 trash）
     trash_path: Optional[str] = None  # 软删除的目标路径
     error: Optional[str] = None  # 错误信息
 
@@ -264,7 +261,9 @@ def _delete_file_uri_artifact(
                             resolved_root = root_path.resolve()
                         else:
                             resolved_root = root_path.absolute()
-                        resolved_file = file_path.resolve() if file_path.exists() else file_path.absolute()
+                        resolved_file = (
+                            file_path.resolve() if file_path.exists() else file_path.absolute()
+                        )
 
                         if str(resolved_file).startswith(str(resolved_root) + os.sep):
                             trash_root = resolved_root
@@ -390,9 +389,9 @@ def _delete_object_store_artifact(
             # 使用 MetadataDirective='COPY' 保留所有用户元数据
             client.copy_object(
                 Bucket=store.bucket,
-                CopySource={'Bucket': store.bucket, 'Key': key},
+                CopySource={"Bucket": store.bucket, "Key": key},
                 Key=trash_key,
-                MetadataDirective='COPY',
+                MetadataDirective="COPY",
             )
 
             # 删除原对象
@@ -457,13 +456,13 @@ def delete_artifact_key(
     Raises:
         ArtifactDeleteOpsCredentialsRequiredError: object 后端需要 ops 凭证但未提供
         ArtifactDeleteNotSupportedError: 当前存储类型不支持删除操作
-    
+
     治理开关:
         require_ops 参数支持三态逻辑:
         - True: 显式要求 ops 凭证
         - False: 显式禁用 ops 凭证检查
         - None: 使用默认配置（环境变量 ENGRAM_GC_REQUIRE_OPS_DEFAULT 或 config.toml）
-        
+
         默认配置优先级: 环境变量 > config.toml > False
 
     示例:
@@ -483,7 +482,7 @@ def delete_artifact_key(
     """
     if store is None:
         store = get_default_store()
-    
+
     # === 应用治理开关默认值 ===
     # require_ops: None 时从配置读取默认值
     if require_ops is None:
@@ -570,13 +569,13 @@ def delete_physical_uri(
     Raises:
         ArtifactDeleteOpsCredentialsRequiredError: s3 后端需要 ops 凭证但未提供
         ArtifactDeleteNotSupportedError: 不支持的 URI scheme
-    
+
     治理开关:
         require_ops 参数支持三态逻辑:
         - True: 显式要求 ops 凭证
         - False: 显式禁用 ops 凭证检查
         - None: 使用默认配置（环境变量 ENGRAM_GC_REQUIRE_OPS_DEFAULT 或 config.toml）
-        
+
         默认配置优先级: 环境变量 > config.toml > False
 
     示例:
@@ -592,7 +591,7 @@ def delete_physical_uri(
 
         # 删除 s3:// URI（使用默认治理开关）
         result = delete_physical_uri("s3://bucket/key")
-        
+
         # 显式要求 ops 凭证
         result = delete_physical_uri("s3://bucket/key", require_ops=True)
     """
@@ -600,7 +599,7 @@ def delete_physical_uri(
     # require_ops: None 时从配置读取默认值
     if require_ops is None:
         require_ops = get_gc_require_ops_default()
-    
+
     parsed = parse_uri(uri)
 
     # 用于审计事件的元信息
@@ -646,7 +645,7 @@ def delete_physical_uri(
         if store.prefix:
             prefix = store.prefix.rstrip("/") + "/"
             if key.startswith(prefix):
-                logical_uri = key[len(prefix):]
+                logical_uri = key[len(prefix) :]
             else:
                 logical_uri = key
         else:
@@ -712,7 +711,7 @@ def safe_delete_artifact(
 
     Returns:
         ArtifactDeleteResult 删除结果
-    
+
     治理开关:
         require_ops 参数支持三态逻辑:
         - True: 显式要求 ops 凭证
@@ -724,11 +723,15 @@ def safe_delete_artifact(
         result = safe_delete_artifact("scm/proj/1/r100.diff")
         result = safe_delete_artifact("file:///mnt/artifacts/test.txt")
         result = safe_delete_artifact("s3://bucket/key")
-        
+
         # 显式禁用 ops 凭证检查
         result = safe_delete_artifact("s3://bucket/key", require_ops=False)
     """
     if is_physical_uri(uri):
-        return delete_physical_uri(uri, trash_prefix=trash_prefix, require_ops=require_ops, audit=audit)
+        return delete_physical_uri(
+            uri, trash_prefix=trash_prefix, require_ops=require_ops, audit=audit
+        )
     else:
-        return delete_artifact_key(uri, store=store, trash_prefix=trash_prefix, require_ops=require_ops, audit=audit)
+        return delete_artifact_key(
+            uri, store=store, trash_prefix=trash_prefix, require_ops=require_ops, audit=audit
+        )

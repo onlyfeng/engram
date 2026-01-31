@@ -34,7 +34,7 @@ docker compose -f compose/logbook.yml up -d
 | DB 就绪 | `docker exec postgres pg_isready -U postgres` | `accepting connections` |
 
 **限制**：
-- 无法执行 `logbook health`、`logbook-smoke` 等 CLI 命令
+- 无法执行 `engram-logbook health`、`logbook-smoke` 等 CLI 命令
 - 无法验证 Schema 完整性
 - 仅适用于验证基础设施就绪
 
@@ -56,9 +56,11 @@ export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localh
 
 | 验收目标 | 命令 | 说明 |
 |----------|------|------|
-| 健康检查 | `logbook health` | 验证连接、Schema、表、索引 |
-| 数据库迁移 | `make migrate-logbook-stepwise` | Logbook-only 模式迁移（使用 --profile migrate） |
-| 权限验证 | `make verify-permissions-logbook` | Logbook-only 模式权限验证（跳过 OM） |
+| 健康检查 | `engram-logbook health` | 验证连接、Schema、表、索引 |
+| 数据库迁移 | `make migrate-ddl` | 仅执行 DDL 迁移（Schema/表/索引） |
+| 角色权限 | `make apply-roles` | 应用 Logbook 角色和权限 |
+| OM 权限 | `make apply-openmemory-grants` | 应用 OpenMemory 权限 |
+| 权限验证 | `make verify-permissions` | 验证数据库权限配置 |
 | 冒烟测试 | `make logbook-smoke` | CRUD + 视图渲染全流程 |
 | 完整验收 | `make acceptance-logbook-only` | 一键完整验收（启动→迁移→验证→测试） |
 
@@ -67,7 +69,7 @@ export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localh
 | 命令 | 依赖级别 | 说明 |
 |------|----------|------|
 | `docker compose up` + `pg_isready` | A (Baseline) | 最小验证 |
-| `logbook health` | B (Acceptance) | CLI 健康检查 |
+| `engram-logbook health` | B (Acceptance) | CLI 健康检查 |
 | `make logbook-smoke` | B (Acceptance) | 冒烟测试 |
 | `make acceptance-logbook-only` | B (Acceptance) | 完整验收套件 |
 
@@ -99,7 +101,23 @@ POSTGRES_PASSWORD=changeme
 | `POSTGRES_DB` | 数据库名（应与 PROJECT_KEY 一致） | `myproject` |
 | `POSTGRES_PASSWORD` | PostgreSQL 密码 | `changeme` |
 
-> **服务账号策略**：Logbook-only 部署时，**不要设置** `*_PASSWORD` 环境变量（如 `LOGBOOK_MIGRATOR_PASSWORD`）。脚本检测到无密码变量时自动进入 SKIP 模式，使用 postgres 超级用户。若设置了任意一个密码变量，则进入统一栈模式，要求 4 个密码变量全部设置，否则容器初始化失败。详见 `logbook_postgres/scripts/db_bootstrap.py` 与 `sql/04_roles_and_grants.sql`。
+> **服务账号策略（SKIP 模式）**：
+>
+> | 密码设置情况 | 部署模式 | 行为 |
+> |-------------|---------|------|
+> | 全部不设置（0/4） | logbook-only | 跳过服务账号创建，使用 postgres 超级用户 |
+> | 全部设置（4/4） | unified-stack | 创建独立服务账号 |
+> | 部分设置（1-3/4） | **配置错误** | 容器初始化失败，需修正配置 |
+>
+> **Logbook-only 部署时**，**不要设置**任何 `*_PASSWORD` 环境变量（如 `LOGBOOK_MIGRATOR_PASSWORD`）。脚本检测到无密码变量时自动进入 SKIP 模式，使用 postgres 超级用户。
+>
+> **unified-stack 部署时**，必须设置全部 4 个密码变量：
+> - `LOGBOOK_MIGRATOR_PASSWORD`
+> - `LOGBOOK_SVC_PASSWORD`
+> - `OPENMEMORY_MIGRATOR_PASSWORD`
+> - `OPENMEMORY_SVC_PASSWORD`
+>
+> 详见 `scripts/db_bootstrap.py` 中的 `detect_deployment_mode()` 函数。
 
 ### 2. 启动服务
 
@@ -152,12 +170,12 @@ docker compose -p ${PROJECT_KEY:-engram}-logbook -f compose/logbook.yml ps
 #### 2. Logbook CLI 健康检查
 
 ```bash
-# 安装 Logbook CLI
-cd logbook_postgres/scripts && pip install -e .
+# 安装 Engram（包含 Logbook CLI）
+pip install -e .
 
 # 设置 DSN 并检查健康状态
 export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}"
-logbook health
+engram-logbook health
 ```
 
 **预期输出**：
@@ -175,7 +193,7 @@ logbook health
 }
 ```
 
-**`logbook health` 检查项说明**：
+**`engram-logbook health` 检查项说明**：
 
 | 检查项 | 说明 | 来源 |
 |--------|------|------|
@@ -185,7 +203,7 @@ logbook health
 | `matviews` | 物化视图存在性检查 | `scm.v_facts` |
 | `indexes` | 关键索引存在性检查 | 代码内置的 `required_indexes` 列表 |
 
-> **Schema 列表来源**：`logbook_cli.py` 中 `cmd_health()` 函数的 `required_schemas` 变量，硬编码为 5 个固定 schema。这是 Logbook 路线 A（多库方案）的架构约束，每个 schema 对应一个业务域。
+> **Schema 列表来源**：`src/engram/logbook/cli/logbook.py` 中 `cmd_health()` 函数的 `required_schemas` 变量，硬编码为 5 个固定 schema。这是 Logbook 路线 A（多库方案）的架构约束，每个 schema 对应一个业务域。
 
 ### 冒烟测试
 
@@ -225,32 +243,35 @@ Logbook 冒烟测试完成！
 |--------|------|----------|
 | `INSTALL_FAILED` | `engram_logbook` 安装失败 | `cd logbook_postgres/scripts && pip install -e .` |
 | `SERVICE_NOT_RUNNING` | PostgreSQL 服务未运行 | `make deploy` 或设置 `POSTGRES_DSN` 环境变量 |
-| `HEALTH_CHECK_FAILED` | 健康检查失败 | 检查 DSN 配置或运行 `make migrate-logbook-stepwise`（Logbook-only）或 `make migrate-logbook`（统一栈） |
+| `HEALTH_CHECK_FAILED` | 健康检查失败 | 检查 DSN 配置或运行 `make migrate-ddl` |
 | `CREATE_ITEM_FAILED` | 创建 item 失败 | 检查数据库连接和 schema 是否存在 |
 | `ADD_EVENT_FAILED` | 添加事件失败 | 检查 `logbook.events` 表权限 |
 | `ATTACH_FAILED` | 添加附件失败 | 检查 `logbook.attachments` 表权限 |
 | `RENDER_VIEWS_FAILED` | 渲染视图失败 | 检查 item 是否存在及输出目录权限 |
 
-### 权限验证（db_migrate.py --verify）
+### 权限验证（engram-migrate --verify）
 
-权限验证脚本用于验证角色和权限配置是否正确，对应 `sql/99_verify_permissions.sql`。
+权限验证脚本用于验证角色和权限配置是否正确，对应 `sql/verify/99_verify_permissions.sql`。
+
+> **注意**: 验证脚本位于 `sql/verify/` 子目录，不被 PostgreSQL initdb 自动执行。这确保数据库初始化不会因验证脚本的依赖（如 LOGIN 角色可能尚未创建）而失败。
 
 **执行方式**：
 
 ```bash
-# 方式 1: 通过 db_migrate.py（推荐）
-python logbook_postgres/scripts/db_migrate.py --verify
+# 方式 1: 通过 engram-migrate（推荐）
+engram-migrate --verify
 
 # 方式 2: 通过 Makefile（推荐）
 make verify-permissions
 
 # 方式 3: 通过 psql 直接执行（需要指定 schema）
-psql -d <your_db> -f sql/99_verify_permissions.sql
+# 注意：验证脚本位于 sql/verify/ 子目录
+psql -d <your_db> -f sql/verify/99_verify_permissions.sql
 
 # 方式 4: 通过 psql 指定 OpenMemory schema
 psql -d <your_db> \
      -c "SET om.target_schema = 'openmemory'" \
-     -f sql/99_verify_permissions.sql
+     -f sql/verify/99_verify_permissions.sql
 ```
 
 **所需权限**：
@@ -285,18 +306,62 @@ psql -d <your_db> \
 | `SKIP` | 条件不满足，跳过检查 |
 | `COMPAT` | 兼容期警告（使用旧命名，需迁移） |
 
+### 迁移计划预览（engram-migrate --plan）
+
+使用 `--plan` 参数可在**不连接数据库**的情况下查看迁移计划，适用于 CI/CD 预检或部署前审查。
+
+**执行方式**：
+
+```bash
+# 查看默认迁移计划
+engram-migrate --plan
+
+# 查看包含角色权限的迁移计划
+engram-migrate --plan --apply-roles
+
+# 查看完整迁移计划（包含验证脚本）
+engram-migrate --plan --apply-roles --apply-openmemory-grants --verify
+
+# 跳过配置预检（仅查看脚本列表）
+engram-migrate --plan --no-precheck
+```
+
+**输出内容**：
+
+| 字段 | 说明 |
+|------|------|
+| `ddl` | DDL 脚本列表（默认执行） |
+| `permissions` | 权限脚本列表（需要 `--apply-roles` 或 `--apply-openmemory-grants`） |
+| `verify` | 验证脚本列表（需要 `--verify`） |
+| `execute` | 本次将执行的脚本列表 |
+| `duplicates` | 同一前缀多文件的警告 |
+| `precheck` | 配置预检结果（检查 OM_PG_SCHEMA 等） |
+| `script_prefixes` | 脚本前缀分类配置（SSOT） |
+
+**使用场景**：
+
+| 场景 | 命令 |
+|------|------|
+| CI 预检 | `engram-migrate --plan --quiet` |
+| 部署前审查 | `engram-migrate --plan --pretty` |
+| 脚本清单导出 | `engram-migrate --plan \| jq '.execute'` |
+
+> **详细文档**：参见 [SQL 文件清单](sql_file_inventory.md#411-迁移计划模式---plan)
+
 ### 验收命令快速参考
 
 | 命令 | 说明 | 适用场景 |
 |------|------|----------|
 | `make acceptance-logbook-only` | **一键完整验收** | CI/CD、发布前验收 |
 | `make up-logbook` | 启动 Logbook 服务 | 首次部署 |
-| `make migrate-logbook-stepwise` | Logbook 独立迁移 | Logbook-only 模式 |
+| `make migrate-ddl` | DDL 迁移（Schema/表/索引） | 仅 DDL 变更 |
+| `make apply-roles` | 应用 Logbook 角色和权限 | 角色权限变更 |
+| `make apply-openmemory-grants` | 应用 OpenMemory 权限 | OM 权限变更 |
+| `make verify-permissions` | 权限验证 | 权限检查 |
+| `engram-migrate --plan` | 查看迁移计划（不连接数据库） | CI 预检、部署审查 |
 | `make ps-logbook` | 查看服务状态 | 状态检查 |
-| `logbook health` | CLI 健康检查 | 功能验证 |
+| `engram-logbook health` | CLI 健康检查 | 功能验证 |
 | `make logbook-smoke` | 冒烟测试 | 快速验证 |
-| `make verify-permissions-logbook` | 权限验证（Logbook-only） | Logbook-only 权限检查 |
-| `make verify-permissions` | 权限验证（统一栈） | 统一栈权限检查 |
 | `make test-logbook-unit` | 单元测试 | 代码质量 |
 | `make logs-logbook` | 查看日志 | 调试排错 |
 | `make down-logbook` | 停止服务 | 清理环境 |
@@ -332,12 +397,13 @@ make acceptance-logbook-only SKIP_DEPLOY=1 SKIP_MIGRATE=1
   "failed_step": "",
   "steps": {
     "up-logbook": "PASS",
-    "migrate-logbook-stepwise": "PASS",
-    "verify-permissions-logbook": "PASS",
+    "migrate-ddl": "PASS",
+    "apply-roles": "PASS",
+    "verify-permissions": "PASS",
     "logbook-smoke": "PASS",
     "test-logbook-unit": "PASS"
   },
-  "commands": ["up-logbook", "migrate-logbook-stepwise", "verify-permissions-logbook", "logbook-smoke", "test-logbook-unit"]
+  "commands": ["up-logbook", "migrate-ddl", "apply-roles", "verify-permissions", "logbook-smoke", "test-logbook-unit"]
 }
 ```
 
@@ -366,9 +432,9 @@ docker compose -p ${PROJECT_KEY:-engram}-logbook -f compose/logbook.yml ps
 ### 步骤 3：CLI 健康检查
 
 ```bash
-cd logbook_postgres/scripts && pip install -e .
+pip install -e .
 export POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}"
-logbook health
+engram-logbook health
 ```
 
 **成功标准**：输出 JSON 包含 `"ok": true`，所有检查项 `status = "ok"`
@@ -427,15 +493,288 @@ Logbook 冒烟测试完成！
 # 完整的最小验收序列（可直接复制执行）
 make up-logbook && \
 make ps-logbook && \
-cd logbook_postgres/scripts && pip install -e . && \
-POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}" logbook health && \
-cd - && \
+pip install -e . && \
+POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}" engram-logbook health && \
 make logbook-smoke
 ```
 
 **全部通过标志**：最后一行输出 `{"ok":true,...,"message":"Logbook 冒烟测试通过"}`
 
 > **更多信息**：参见 [根 README 快速开始](../../README.md#logbook-only事实账本)
+
+---
+
+## 部署入口职责边界
+
+Engram 提供多个部署入口，各有不同的职责和适用场景。
+
+### 入口对比表
+
+| 入口 | 职责 | 适用场景 | 部署模式 |
+|------|------|----------|----------|
+| `docker-compose.unified.yml` | 完整栈编排（PostgreSQL + 迁移 + Gateway + OpenMemory） | 生产部署、unified-stack 模式 | 强制要求 4 个密码 |
+| `compose/logbook.yml` | 最小栈编排（PostgreSQL + 迁移） | 开发测试、logbook-only 模式 | 支持 SKIP 模式 |
+| `Makefile` | 本地命令入口（调用 Python CLI） | 开发、CI、手动运维 | 两种模式均支持 |
+| `engram-migrate` | DDL/权限迁移执行器 | 被上述入口调用 | 无关模式 |
+
+### 各入口职责详解
+
+#### docker-compose.unified.yml
+
+**用途**：生产级完整栈部署
+
+**包含服务**：
+- `postgres`：数据库实例（挂载 `sql/` 用于 initdb）
+- `bootstrap_roles`：创建服务账号（`--require-roles` 强制）
+- `logbook_migrate`：执行 DDL + 权限迁移
+- `permissions_verify`：执行权限验证
+- `openmemory_migrate`：OpenMemory schema 迁移
+- `openmemory`：OpenMemory 服务
+- `gateway`：Engram Gateway 服务
+- `worker`：Outbox worker
+
+**启动命令**：
+```bash
+# 必须先设置全部 4 个密码环境变量
+export LOGBOOK_MIGRATOR_PASSWORD=xxx
+export LOGBOOK_SVC_PASSWORD=xxx
+export OPENMEMORY_MIGRATOR_PASSWORD=xxx
+export OPENMEMORY_SVC_PASSWORD=xxx
+
+docker compose -f docker-compose.unified.yml up -d
+```
+
+**执行顺序**：
+1. `postgres` 健康 → 2. `bootstrap_roles` 完成 → 3. `logbook_migrate` 完成 → 4. `permissions_verify` 完成 → 5. 应用服务启动
+
+#### compose/logbook.yml
+
+**用途**：最小化 logbook-only 部署
+
+**包含服务**：
+- `postgres`：数据库实例（挂载 `../sql/` 用于 initdb）
+- `logbook_migrate`：执行 DDL + 权限迁移
+
+**服务账号策略（SKIP 模式）**：
+
+| 密码设置情况 | 模式 | 行为 |
+|-------------|------|------|
+| 全部不设置（0/4） | logbook-only | 跳过服务账号创建，使用 postgres 超级用户 |
+| 全部设置（4/4） | unified-stack | 创建独立服务账号 |
+| 部分设置（1-3/4） | **错误** | 容器初始化失败 |
+
+**启动命令**：
+```bash
+# logbook-only 模式（无需密码）
+docker compose -f compose/logbook.yml up -d
+
+# 或 unified-stack 模式（需要全部密码）
+export LOGBOOK_MIGRATOR_PASSWORD=xxx
+# ... 其他密码
+docker compose -f compose/logbook.yml up -d
+```
+
+#### Makefile
+
+**用途**：本地开发和 CI 的命令入口
+
+**核心目标**：
+
+| 目标 | 说明 | 对应 CLI 参数 |
+|------|------|--------------|
+| `setup-db` | 一键初始化（创建库 + 角色 + DDL + 权限 + 验证） | 组合多个目标 |
+| `setup-db-logbook-only` | logbook-only 初始化（跳过服务账号） | 组合多个目标 |
+| `migrate-ddl` | 仅执行 DDL 迁移 | `engram-migrate --dsn ...` |
+| `apply-roles` | 应用角色权限 | `engram-migrate --apply-roles` |
+| `apply-openmemory-grants` | 应用 OM 权限 | `engram-migrate --apply-openmemory-grants` |
+| `verify-permissions` | 验证权限 | `engram-migrate --verify` |
+| `verify-permissions-strict` | 严格验证权限 | `engram-migrate --verify --verify-strict` |
+| `bootstrap-roles` | 初始化服务账号 | `engram-bootstrap-roles` |
+
+**CI 集成**：
+```bash
+# CI 中的典型用法
+make ci                    # 运行所有静态检查
+make migrate-ddl          # 执行迁移
+make verify-permissions-strict  # 严格模式验证
+```
+
+#### engram-migrate（Python CLI）
+
+**用途**：实际执行迁移和验证的核心工具
+
+**命令参数**：
+
+| 参数 | 说明 | 执行的 SQL 文件 |
+|------|------|----------------|
+| （无参数） | 仅执行 DDL 迁移 | 01, 02, 03, 06-09, 11-13 |
+| `--apply-roles` | 应用角色权限 | 04_roles_and_grants.sql |
+| `--apply-openmemory-grants` | 应用 OM 权限 | 05_openmemory_roles_and_grants.sql |
+| `--verify` | 执行权限验证 | verify/99_verify_permissions.sql |
+| `--verify-strict` | 严格模式（配合 `--verify`） | 有 FAIL 或 WARN 时退出码非零（CI 门禁） |
+
+**完整迁移示例**：
+```bash
+engram-migrate --dsn "$POSTGRES_DSN" \
+    --apply-roles \
+    --apply-openmemory-grants \
+    --verify \
+    --verify-strict
+```
+
+---
+
+## 推荐部署流程
+
+根据不同场景选择合适的部署流程。
+
+### 场景 A：新库初始化
+
+#### 方式 1：Docker Compose（推荐）
+
+```bash
+# logbook-only 模式
+docker compose -f compose/logbook.yml up -d
+
+# 或 unified-stack 模式
+export LOGBOOK_MIGRATOR_PASSWORD=xxx
+export LOGBOOK_SVC_PASSWORD=xxx
+export OPENMEMORY_MIGRATOR_PASSWORD=xxx
+export OPENMEMORY_SVC_PASSWORD=xxx
+docker compose -f docker-compose.unified.yml up -d
+```
+
+**特点**：自动按顺序执行 initdb → bootstrap → migrate → verify
+
+#### 方式 2：Makefile（本地开发）
+
+```bash
+# 完整初始化
+make setup-db
+
+# 或 logbook-only 模式
+make setup-db-logbook-only
+```
+
+**特点**：需要本地 PostgreSQL 实例或连接信息
+
+### 场景 B：已有库升级
+
+```bash
+# 1. 执行 DDL 迁移（幂等）
+make migrate-ddl
+
+# 2. 应用角色权限（如有变更）
+make apply-roles
+make apply-openmemory-grants
+
+# 3. 验证权限
+make verify-permissions
+```
+
+**注意**：
+- 所有 SQL 脚本设计为幂等，可安全重复执行
+- 迁移失败可直接重试，无需回滚
+
+### 场景 C：权限变更后验证
+
+```bash
+# 标准验证（查看结果）
+make verify-permissions
+
+# 严格验证（CI 门禁）
+make verify-permissions-strict
+```
+
+### 流程总结表
+
+| 场景 | Compose 命令 | Makefile 命令 | CLI 命令 |
+|------|-------------|---------------|----------|
+| 新库初始化 | `docker compose up -d` | `make setup-db` | 组合多个 CLI 命令 |
+| DDL 升级 | 重启 migrate 容器 | `make migrate-ddl` | `engram-migrate --dsn ...` |
+| 权限变更 | 重启 migrate 容器 | `make apply-roles` | `engram-migrate --apply-roles` |
+| 权限验证 | 重启 verify 容器 | `make verify-permissions` | `engram-migrate --verify` |
+| CI 验证 | N/A | `make verify-permissions-strict` | `engram-migrate --verify --verify-strict` |
+
+---
+
+## Verify 输出判定标准
+
+### 输出级别定义
+
+`99_verify_permissions.sql` 输出以下级别：
+
+| 级别 | 含义 | 标准模式 | 严格模式 |
+|------|------|----------|----------|
+| `OK` | 检查通过 | 继续 | 继续 |
+| `SKIP` | 条件不满足，跳过检查 | 继续 | 继续 |
+| `COMPAT` | 使用旧命名（兼容期） | 继续 | 继续 |
+| `WARN` | 潜在问题，可能影响安全 | 继续（仅提示） | **退出码非零** |
+| `FAIL` | 严重问题，必须修复 | 继续（输出警告） | **退出码非零** |
+
+### 判定逻辑
+
+#### 标准模式（`--verify`）
+
+```bash
+engram-migrate --dsn "$POSTGRES_DSN" --verify
+```
+
+- 输出所有检查结果
+- 退出码始终为 0（除非执行出错）
+- 用于人工查看和诊断
+
+#### 严格模式（`--verify --verify-strict`）
+
+```bash
+engram-migrate --dsn "$POSTGRES_DSN" --verify --verify-strict
+```
+
+- 输出所有检查结果
+- **存在 `FAIL` 或 `WARN` 任一项时退出码非零**
+- **用于 CI 门禁**，确保权限配置完全正确
+- WARN 在标准模式下仅作为潜在问题提示，但在严格模式下视为必须修复的问题
+
+### CI 集成示例
+
+`.github/workflows/ci.yml` 中的配置：
+
+```yaml
+- name: Verify database migrations (strict mode)
+  env:
+    POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram_test
+  run: |
+    python -m engram.logbook.cli.db_migrate \
+      --dsn "$POSTGRES_DSN" \
+      --verify \
+      --verify-strict \
+      2>&1 | tee verify-output.log
+    exit ${PIPESTATUS[0]}
+```
+
+**CI 门禁策略**：
+1. 迁移完成后执行 `--verify --verify-strict`
+2. 任何 `FAIL` 或 `WARN` 导致 CI 失败
+3. 失败时上传 verify 日志供诊断
+
+### 成功判定总结
+
+| 模式 | 成功条件 | 退出码 | 典型用途 |
+|------|----------|--------|----------|
+| 标准模式 | 执行完成即成功 | 0 | 本地调试、查看状态 |
+| 严格模式 | 无 FAIL **且** 无 WARN | 0 | CI 门禁、发布前检查 |
+| 严格模式（失败） | 有 FAIL **或** 有 WARN | 非零 | 阻断 CI 流水线 |
+
+> **设计原则**：严格模式将 WARN 升级为阻断条件，确保 CI 门禁不放过任何潜在的权限配置问题。
+
+### 常见验证失败修复
+
+| 输出示例 | 可能原因 | 修复方法 |
+|----------|----------|----------|
+| `FAIL: Role xxx not found` | 服务账号未创建 | `make bootstrap-roles` |
+| `FAIL: Schema owner incorrect` | 迁移顺序错误 | 按顺序执行迁移 |
+| `WARN: PUBLIC has CREATE on schema` | 权限未收紧 | `make apply-roles` |
+| `SKIP: LOGIN role xxx not exist` | logbook-only 模式 | 预期行为，非错误 |
 
 ---
 
@@ -520,11 +859,11 @@ ERROR: schema "logbook" does not exist
 # 检查迁移是否执行
 docker logs logbook_migrate
 
-# 手动执行迁移（Logbook-only 模式）
-make migrate-logbook-stepwise
+# 手动执行 DDL 迁移
+make migrate-ddl
 
-# 手动执行迁移（统一栈模式）
-make migrate-logbook
+# 应用角色权限（如需要）
+make apply-roles
 ```
 
 **解决方案**：
@@ -534,18 +873,18 @@ make migrate-logbook
 docker compose -p ${PROJECT_KEY:-engram}-logbook -f compose/logbook.yml up logbook_migrate
 ```
 
-### 4. engram_logbook 安装失败
+### 4. engram 安装失败
 
 **症状**：
 
 ```
-ModuleNotFoundError: No module named 'engram_logbook'
+ModuleNotFoundError: No module named 'engram'
 ```
 
 **解决方案**：
 
 ```bash
-cd logbook_postgres/scripts
+# 在项目根目录执行
 pip install -e .
 ```
 
@@ -701,7 +1040,7 @@ make clean-logbook
 cat .artifacts/logbook-smoke.json
 
 # 检查数据库连接
-logbook health
+engram-logbook health
 
 # 检查服务状态
 make ps-logbook
@@ -716,10 +1055,9 @@ make ps-logbook
 | 检查项 | 命令 | 成功标志 |
 |--------|------|----------|
 | PostgreSQL 容器 | `make ps-logbook` | 状态 `running (healthy)` |
-| 数据库连接 | `logbook health` | JSON 输出 `"ok": true` |
-| Schema 完整性 | `logbook health` | `schemas.status = "ok"` |
-| 权限配置（Logbook-only） | `make verify-permissions-logbook` | 无 `FAIL` 输出 |
-| 权限配置（统一栈） | `make verify-permissions` | 无 `FAIL` 输出 |
+| 数据库连接 | `engram-logbook health` | JSON 输出 `"ok": true` |
+| Schema 完整性 | `engram-logbook health` | `schemas.status = "ok"` |
+| 权限配置 | `make verify-permissions` | 无 `FAIL` 输出 |
 | 冒烟测试 | `make logbook-smoke` | `code: "SMOKE_TEST_PASSED"` |
 
 **快速验证命令**（全部成功才算部署完成）：
@@ -728,7 +1066,7 @@ make ps-logbook
 # 一行命令验证部署状态
 make ps-logbook && \
 POSTGRES_DSN="postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-engram}" \
-  logbook health --quiet && \
+  engram-logbook health --quiet && \
 echo "✓ Logbook 部署成功"
 ```
 
@@ -741,10 +1079,11 @@ echo "✓ Logbook 部署成功"
 | [00_overview.md](00_overview.md) | Logbook 概览 |
 | [01_architecture.md](01_architecture.md) | 架构设计 |
 | [02_tools_contract.md](02_tools_contract.md) | 工具契约 |
+| [sql_file_inventory.md](sql_file_inventory.md) | SQL 文件清单与执行顺序 |
 | [环境变量参考](../reference/environment_variables.md) | 完整环境变量列表 |
 | [根 README](../../README.md#logbook-only事实账本) | 快速开始指南 |
 | [项目集成指南](../guides/integrate_existing_project.md) | 在已有项目中集成 Engram |
 
 ---
 
-更新时间：2026-01-30（补充 health 输出字段、db_migrate --verify 使用方式、logbook-smoke 验收标准）
+更新时间：2026-01-31（新增部署入口职责边界、推荐部署流程、Verify 输出判定标准）

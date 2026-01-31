@@ -6,7 +6,7 @@ engram_logbook.hashing - 哈希计算工具模块
 
 import hashlib
 from pathlib import Path
-from typing import BinaryIO, Optional, Union
+from typing import BinaryIO, Union
 
 from .errors import FileHashNotFoundError, HashingError
 

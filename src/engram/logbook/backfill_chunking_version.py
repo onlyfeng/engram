@@ -82,7 +82,9 @@ def get_attachments_to_update(
         return cur.fetchall()
 
 
-def update_patch_blob_chunking_version(conn: psycopg.Connection, blob_id: int, chunking_version: str) -> bool:
+def update_patch_blob_chunking_version(
+    conn: psycopg.Connection, blob_id: int, chunking_version: str
+) -> bool:
     query = """
         UPDATE scm.patch_blobs
         SET chunking_version = %s,
@@ -146,7 +148,11 @@ def backfill_patch_blobs(
         if len(blobs) < batch_size:
             break
 
-    return {"total_processed": total_processed, "total_updated": total_updated, "total_failed": total_failed}
+    return {
+        "total_processed": total_processed,
+        "total_updated": total_updated,
+        "total_failed": total_failed,
+    }
 
 
 def backfill_attachments(
@@ -186,7 +192,11 @@ def backfill_attachments(
         if len(attachments) < batch_size:
             break
 
-    return {"total_processed": total_processed, "total_updated": total_updated, "total_failed": total_failed}
+    return {
+        "total_processed": total_processed,
+        "total_updated": total_updated,
+        "total_failed": total_failed,
+    }
 
 
 def backfill_chunking_version(
@@ -219,8 +229,10 @@ def backfill_chunking_version(
         result["success"] = True
 
         result["summary"] = {
-            "total_processed": patch_blobs_result["total_processed"] + attachments_result["total_processed"],
-            "total_updated": patch_blobs_result["total_updated"] + attachments_result["total_updated"],
+            "total_processed": patch_blobs_result["total_processed"]
+            + attachments_result["total_processed"],
+            "total_updated": patch_blobs_result["total_updated"]
+            + attachments_result["total_updated"],
             "total_failed": patch_blobs_result["total_failed"] + attachments_result["total_failed"],
         }
     except Exception as e:

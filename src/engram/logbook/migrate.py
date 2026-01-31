@@ -10,11 +10,11 @@ engram_logbook.migrate - 数据库迁移模块
 
 使用方法:
     from engram.logbook.migrate import run_all_checks, run_migrate
-    
+
     # 执行检查
     with get_connection(dsn=dsn) as conn:
         result = run_all_checks(conn)
-    
+
     # 执行迁移
     result = run_migrate(dsn=dsn)
 """
@@ -22,21 +22,19 @@ engram_logbook.migrate - 数据库迁移模块
 import os
 import re
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
 from psycopg import sql
 
-from .config import get_config, Config
-from .db import get_connection, execute_sql_file
-from .schema_context import SchemaContext, SCHEMA_SUFFIXES
+from .config import get_config
+from .db import execute_sql_file, get_connection
 from .errors import (
-    DatabaseError,
     EngramError,
-    make_success_result,
     make_error_result,
+    make_success_result,
 )
-from .io import log_info, log_error, log_warning
+from .io import log_error, log_info, log_warning
+from .schema_context import SchemaContext
 
 # 延迟导入 backfill 模块，避免循环依赖
 _backfill_evidence_uri_module = None
@@ -48,6 +46,7 @@ def _get_backfill_evidence_uri():
     global _backfill_evidence_uri_module
     if _backfill_evidence_uri_module is None:
         from .backfill_evidence_uri import backfill_evidence_uri
+
         _backfill_evidence_uri_module = backfill_evidence_uri
     return _backfill_evidence_uri_module
 
@@ -57,6 +56,7 @@ def _get_backfill_chunking_version():
     global _backfill_chunking_version_module
     if _backfill_chunking_version_module is None:
         from .backfill_chunking_version import backfill_chunking_version
+
         _backfill_chunking_version_module = backfill_chunking_version
     return _backfill_chunking_version_module
 
@@ -68,20 +68,19 @@ def _get_backfill_chunking_version():
 # 默认 schema 后缀列表（无前缀时的 schema 名）
 DEFAULT_SCHEMA_SUFFIXES = ["identity", "logbook", "scm", "analysis", "governance"]
 
-# SQL 文件前缀分类
+# SQL 文件前缀分类（SSOT 参见 docs/logbook/sql_file_inventory.md）
 # 默认执行：结构性 DDL 脚本
-# 01: 基础 schema 定义
-# 02: scm 迁移
-# 03: patch_blobs/pgvector 扩展
-# 06: scm_sync_runs
-# 07: scm_sync_locks/security_events
-# 08: database_hardening/scm_sync_jobs
-# 09: sync_jobs_dimension_columns
-# 10: evidence_uri_column
-# 11: sync_jobs_dimension_columns
-# 12: governance_artifact_ops_audit
-# 13: governance_object_store_audit_events
-DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "10", "11", "12", "13"}
+# 01: 核心 schema 与表定义
+# 02: SCM 表结构升级迁移
+# 03: pgvector 扩展初始化
+# 06: sync_runs 同步运行记录表
+# 07: sync_locks 分布式锁表 + security_events
+# 08: sync_jobs 任务队列表
+# 09: patch_blobs 添加 evidence_uri 列
+# 11: sync_jobs 添加维度列（编号 10 已废弃）
+# 12: artifact 操作审计表
+# 13: 对象存储审计事件表
+DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13"}
 # 可选执行：权限脚本（需要 admin/superuser）
 PERMISSION_SCRIPT_PREFIXES = {"04", "05"}
 # 验证脚本：仅通过 --verify 执行
@@ -136,6 +135,9 @@ REQUIRED_COLUMN_TEMPLATES = [
     ("scm", "patch_blobs", "meta_json"),
     ("scm", "patch_blobs", "updated_at"),
     ("governance", "write_audit", "created_at"),
+    # 11_sync_jobs_dimension_columns.sql 添加的维度列
+    ("scm", "sync_jobs", "gitlab_instance"),
+    ("scm", "sync_jobs", "tenant_id"),
 ]
 
 # 需要验证的关键索引模板（格式：schema_suffix, index_name）
@@ -156,6 +158,9 @@ REQUIRED_INDEX_TEMPLATES = [
     # governance - object_store_audit_events 索引
     ("governance", "idx_object_store_audit_bucket_key_ts"),
     ("governance", "idx_object_store_audit_request_id"),
+    # scm - sync_jobs 维度列索引（11_sync_jobs_dimension_columns.sql）
+    ("scm", "idx_sync_jobs_gitlab_instance_active"),
+    ("scm", "idx_sync_jobs_tenant_id_active"),
 ]
 
 # 需要验证的关键触发器模板（格式：schema_suffix, table_name, trigger_name）
@@ -173,13 +178,14 @@ REQUIRED_MATVIEW_TEMPLATES = [
 # 辅助函数 - 测试模式检测
 # ============================================================================
 
+
 def is_testing_mode() -> bool:
     """
     检查是否处于测试模式。
-    
+
     测试模式通过环境变量 ENGRAM_TESTING=1 启用。
     仅在测试模式下允许使用 schema_prefix 参数。
-    
+
     Returns:
         True 表示测试模式，False 表示生产模式
     """
@@ -190,19 +196,20 @@ def is_testing_mode() -> bool:
 # 修复命令提示
 # ============================================================================
 
+
 def get_repair_commands_hint(error_code: str = None, target_db: str = None) -> dict:
     """
     根据错误代码生成修复命令提示。
-    
+
     Args:
         error_code: 错误代码
         target_db: 目标数据库名称
-    
+
     Returns:
         包含修复命令的字典
     """
     db_suffix = f" (数据库: {target_db})" if target_db else ""
-    
+
     base_commands = {
         "bootstrap": "python logbook_postgres/scripts/db_bootstrap.py",
         "migrate": "python logbook_postgres/scripts/db_migrate.py",
@@ -211,9 +218,16 @@ def get_repair_commands_hint(error_code: str = None, target_db: str = None) -> d
         "docker_bootstrap": "docker compose -f docker-compose.unified.yml up bootstrap_roles",
         "docker_migrate": "docker compose -f docker-compose.unified.yml up logbook_migrate openmemory_migrate",
     }
-    
+
     # 根据错误代码推荐不同的修复方案
-    if error_code in ("SCHEMA_MISSING", "TABLE_MISSING", "COLUMN_MISSING", "INDEX_MISSING", "TRIGGER_MISSING", "MATVIEW_MISSING"):
+    if error_code in (
+        "SCHEMA_MISSING",
+        "TABLE_MISSING",
+        "COLUMN_MISSING",
+        "INDEX_MISSING",
+        "TRIGGER_MISSING",
+        "MATVIEW_MISSING",
+    ):
         return {
             "repair_hint": f"数据库结构缺失{db_suffix}",
             "recommended_commands": [
@@ -285,22 +299,23 @@ def get_repair_commands_hint(error_code: str = None, target_db: str = None) -> d
 # 预检相关函数
 # ============================================================================
 
+
 def precheck_openmemory_schema() -> tuple[bool, str]:
     """
     预检 OpenMemory schema 配置是否安全。
-    
+
     当 OM_METADATA_BACKEND=postgres 时，强制要求 OM_PG_SCHEMA 不能是 public。
-    
+
     Returns:
         (ok, message) - ok 为 True 表示检查通过
     """
     backend = os.environ.get("OM_METADATA_BACKEND", "")
     schema = os.environ.get("OM_PG_SCHEMA", "public")
-    
+
     # 仅当使用 postgres 后端时检查
     if backend != "postgres":
         return True, ""
-    
+
     if schema == "public":
         message = """[FATAL] OM_PG_SCHEMA=public 是禁止的配置！
 
@@ -318,24 +333,24 @@ def precheck_openmemory_schema() -> tuple[bool, str]:
   OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
 """
         return False, message
-    
+
     return True, ""
 
 
 def run_precheck(quiet: bool = False) -> dict:
     """
     运行所有预检项。
-    
+
     Args:
         quiet: 静默模式
-    
+
     Returns:
         {ok: bool, checks: {...}, message: str}
     """
     checks = {}
     all_ok = True
     messages = []
-    
+
     # 检查 OpenMemory schema 配置
     om_ok, om_msg = precheck_openmemory_schema()
     checks["openmemory_schema"] = {"ok": om_ok, "message": om_msg}
@@ -344,7 +359,7 @@ def run_precheck(quiet: bool = False) -> dict:
         messages.append(om_msg)
         if not quiet:
             log_error(om_msg)
-    
+
     return {
         "ok": all_ok,
         "checks": checks,
@@ -356,28 +371,67 @@ def run_precheck(quiet: bool = False) -> dict:
 # SQL 文件扫描与分类
 # ============================================================================
 
-def scan_sql_files(sql_dir: Path) -> list[tuple[str, Path]]:
+
+def scan_sql_files(sql_dir: Path, include_verify_subdir: bool = True) -> dict:
     """
     扫描 SQL 目录，返回按前缀数字排序的 SQL 文件列表。
-    
+
     Args:
         sql_dir: SQL 文件目录
-    
+        include_verify_subdir: 是否扫描 verify/ 子目录（默认 True）
+
     Returns:
-        [(prefix, path), ...] 按前缀排序的文件列表
+        {
+            "files": [(prefix, path), ...],  # 按 (int(prefix), filename) 排序的文件列表
+            "duplicates": {prefix: [filename, ...], ...},  # 同一前缀多文件的映射
+        }
+
+    Note:
+        验证脚本（99_*.sql）存放在 sql/verify/ 子目录中，
+        不被 PostgreSQL initdb 自动执行，仅在显式调用 --verify 时执行。
     """
     pattern = re.compile(r"^(\d{2})_.*\.sql$")
     result = []
-    
+    prefix_files: dict[str, list[str]] = {}
+
+    # 扫描主目录
     for sql_file in sql_dir.glob("*.sql"):
         match = pattern.match(sql_file.name)
         if match:
             prefix = match.group(1)
             result.append((prefix, sql_file))
-    
-    # 按前缀数字排序
-    result.sort(key=lambda x: int(x[0]))
-    return result
+            # 记录每个前缀对应的文件
+            if prefix not in prefix_files:
+                prefix_files[prefix] = []
+            prefix_files[prefix].append(sql_file.name)
+
+    # 扫描 verify/ 子目录（存放验证脚本，不被 initdb 执行）
+    if include_verify_subdir:
+        verify_dir = sql_dir / "verify"
+        if verify_dir.is_dir():
+            for sql_file in verify_dir.glob("*.sql"):
+                match = pattern.match(sql_file.name)
+                if match:
+                    prefix = match.group(1)
+                    result.append((prefix, sql_file))
+                    if prefix not in prefix_files:
+                        prefix_files[prefix] = []
+                    prefix_files[prefix].append(f"verify/{sql_file.name}")
+
+    # 按 (int(prefix), filename) 排序，确保排序稳定性
+    result.sort(key=lambda x: (int(x[0]), x[1].name))
+
+    # 检测同 prefix 多文件的情况
+    duplicates = {p: sorted(files) for p, files in prefix_files.items() if len(files) > 1}
+
+    if duplicates:
+        for prefix, files in sorted(duplicates.items()):
+            log_warning(f"前缀 {prefix} 对应多个文件: {files}")
+
+    return {
+        "files": result,
+        "duplicates": duplicates,
+    }
 
 
 def classify_sql_files(
@@ -388,13 +442,13 @@ def classify_sql_files(
 ) -> dict[str, list[Path]]:
     """
     对 SQL 文件进行分类。
-    
+
     Args:
         sql_files: 扫描到的 SQL 文件列表
         apply_roles: 是否包含角色权限脚本（04）
         apply_openmemory_grants: 是否包含 OpenMemory 权限脚本（05）
         verify: 是否包含验证脚本（99）
-    
+
     Returns:
         {
             "ddl": [Path, ...],           # 默认执行的 DDL 脚本
@@ -407,10 +461,10 @@ def classify_sql_files(
     permission_files = []
     verify_files = []
     execute_files = []
-    
+
     for prefix, path in sql_files:
         is_openmemory_script = "openmemory" in path.name.lower()
-        
+
         if prefix in DDL_SCRIPT_PREFIXES:
             ddl_files.append(path)
             execute_files.append(path)
@@ -432,7 +486,7 @@ def classify_sql_files(
             # 仅当 verify=True 时执行
             if verify:
                 execute_files.append(path)
-    
+
     return {
         "ddl": ddl_files,
         "permissions": permission_files,
@@ -444,18 +498,18 @@ def classify_sql_files(
 def check_has_superuser_privilege(conn) -> bool:
     """
     检查当前连接用户是否具有 superuser 或 CREATEROLE 权限。
-    
+
     Args:
         conn: 数据库连接
-    
+
     Returns:
         True 表示有足够权限
     """
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT 
+            SELECT
                 rolsuper OR rolcreaterole AS can_create_role
-            FROM pg_roles 
+            FROM pg_roles
             WHERE rolname = current_user
         """)
         result = cur.fetchone()
@@ -463,41 +517,167 @@ def check_has_superuser_privilege(conn) -> bool:
 
 
 # ============================================================================
+# 迁移计划生成（不连接数据库）
+# ============================================================================
+
+
+def generate_migration_plan(
+    sql_dir: Path = None,
+    apply_roles: bool = False,
+    apply_openmemory_grants: bool = False,
+    verify: bool = False,
+    do_precheck: bool = True,
+) -> dict:
+    """
+    生成迁移计划，输出 JSON 格式的迁移信息。
+
+    此函数不连接数据库，仅扫描 SQL 文件并分类，用于预览迁移内容。
+
+    Args:
+        sql_dir: SQL 文件目录（默认使用项目根目录 sql/）
+        apply_roles: 是否包含角色权限脚本（04）
+        apply_openmemory_grants: 是否包含 OpenMemory 权限脚本（05）
+        verify: 是否包含验证脚本（99）
+        do_precheck: 是否执行配置预检（不连接数据库）
+
+    Returns:
+        {
+            "ok": bool,
+            "plan_mode": True,  # 标识为计划模式
+            "sql_dir": str,     # SQL 目录路径
+            "ddl": [str, ...],  # DDL 脚本路径列表
+            "permissions": [str, ...],  # 权限脚本路径列表
+            "verify": [str, ...],  # 验证脚本路径列表
+            "execute": [str, ...],  # 本次将执行的脚本列表
+            "duplicates": {prefix: [filename, ...], ...},  # 同前缀多文件
+            "precheck": {...},  # 预检结果（若启用）
+            "flags": {  # 当前开关状态
+                "apply_roles": bool,
+                "apply_openmemory_grants": bool,
+                "verify": bool,
+            },
+            "script_prefixes": {  # 脚本前缀分类配置（SSOT）
+                "ddl": [...],
+                "permissions": [...],
+                "verify": [...],
+            },
+        }
+    """
+    # 确定 SQL 目录
+    if sql_dir is None:
+        sql_dir = Path(__file__).parent.parent.parent.parent / "sql"
+
+    result = {
+        "ok": True,
+        "plan_mode": True,
+        "sql_dir": str(sql_dir.resolve()),
+    }
+
+    # 可选预检（不连接数据库）
+    if do_precheck:
+        precheck_result = run_precheck(quiet=True)
+        result["precheck"] = precheck_result
+        if not precheck_result["ok"]:
+            result["ok"] = False
+            result["message"] = "预检失败，请修复配置后重试"
+
+    # 检查 SQL 目录是否存在
+    if not sql_dir.exists():
+        result["ok"] = False
+        result["code"] = "SQL_DIR_NOT_FOUND"
+        result["message"] = f"SQL 目录不存在: {sql_dir}"
+        return result
+
+    # 扫描 SQL 文件
+    scan_result = scan_sql_files(sql_dir)
+    sql_files = scan_result["files"]
+    duplicates = scan_result["duplicates"]
+
+    if not sql_files:
+        result["ok"] = False
+        result["code"] = "NO_SQL_FILES"
+        result["message"] = f"SQL 目录为空: {sql_dir}"
+        return result
+
+    # 分类 SQL 文件
+    classified = classify_sql_files(
+        sql_files,
+        apply_roles=apply_roles,
+        apply_openmemory_grants=apply_openmemory_grants,
+        verify=verify,
+    )
+
+    # 转换为字符串路径列表
+    result["ddl"] = [str(f) for f in classified["ddl"]]
+    result["permissions"] = [str(f) for f in classified["permissions"]]
+    result["verify"] = [str(f) for f in classified["verify"]]
+    result["execute"] = [str(f) for f in classified["execute"]]
+    result["duplicates"] = duplicates
+
+    # 记录当前开关状态
+    result["flags"] = {
+        "apply_roles": apply_roles,
+        "apply_openmemory_grants": apply_openmemory_grants,
+        "verify": verify,
+    }
+
+    # 记录脚本前缀分类配置（SSOT）
+    result["script_prefixes"] = {
+        "ddl": sorted(DDL_SCRIPT_PREFIXES),
+        "permissions": sorted(PERMISSION_SCRIPT_PREFIXES),
+        "verify": sorted(VERIFY_SCRIPT_PREFIXES),
+    }
+
+    # 统计信息
+    result["summary"] = {
+        "total_files": len(sql_files),
+        "ddl_count": len(classified["ddl"]),
+        "permissions_count": len(classified["permissions"]),
+        "verify_count": len(classified["verify"]),
+        "execute_count": len(classified["execute"]),
+        "duplicate_prefixes": list(duplicates.keys()),
+    }
+
+    return result
+
+
+# ============================================================================
 # 数据库名称校验与自动创建相关
 # ============================================================================
+
 
 def validate_db_name(db_name: str) -> tuple[bool, str]:
     """
     校验数据库名称是否符合安全命名规范。
-    
+
     Args:
         db_name: 待校验的数据库名称
-    
+
     Returns:
         (valid, error_message) - valid 为 True 表示合法
     """
     if not db_name:
         return False, "数据库名称不能为空"
-    
+
     if len(db_name) > 63:
         return False, f"数据库名称过长（最大 63 字符）：{len(db_name)} 字符"
-    
+
     if not DB_NAME_PATTERN.match(db_name):
         return False, (
             f"数据库名称 '{db_name}' 不符合命名规范："
             "仅允许小写字母、数字、下划线，且必须以小写字母开头"
         )
-    
+
     return True, ""
 
 
 def parse_db_name_from_dsn(dsn: str) -> str | None:
     """
     从 DSN 中解析数据库名称。
-    
+
     Args:
         dsn: PostgreSQL 连接字符串
-    
+
     Returns:
         数据库名称，解析失败返回 None
     """
@@ -513,11 +693,11 @@ def parse_db_name_from_dsn(dsn: str) -> str | None:
 def replace_db_in_dsn(dsn: str, new_db_name: str) -> str:
     """
     替换 DSN 中的数据库名称。
-    
+
     Args:
         dsn: 原 DSN
         new_db_name: 新数据库名称
-    
+
     Returns:
         替换后的 DSN
     """
@@ -535,23 +715,20 @@ def replace_db_in_dsn(dsn: str, new_db_name: str) -> str:
 def check_database_exists(admin_dsn: str, db_name: str) -> bool:
     """
     检测数据库是否存在。
-    
+
     Args:
         admin_dsn: 管理员 DSN
         db_name: 要检测的数据库名称
-    
+
     Returns:
         True 表示数据库存在
     """
     import psycopg
-    
+
     conn = psycopg.connect(admin_dsn, autocommit=True)
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s",
-                (db_name,)
-            )
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
             return cur.fetchone() is not None
     finally:
         conn.close()
@@ -560,19 +737,19 @@ def check_database_exists(admin_dsn: str, db_name: str) -> bool:
 def create_database(admin_dsn: str, db_name: str, quiet: bool = False) -> None:
     """
     创建数据库。
-    
+
     Args:
         admin_dsn: 管理员 DSN
         db_name: 数据库名称（已校验合法）
         quiet: 静默模式
-    
+
     Raises:
         DatabaseError: 创建失败时
     """
     import psycopg
-    
+
     log_info(f"创建数据库: {db_name}...", quiet=quiet)
-    
+
     conn = psycopg.connect(admin_dsn, autocommit=True)
     try:
         with conn.cursor() as cur:
@@ -589,21 +766,21 @@ def ensure_database_exists(
 ) -> dict:
     """
     确保目标数据库存在，不存在则自动创建。
-    
+
     Args:
         target_dsn: 目标数据库 DSN
         admin_dsn: 管理员 DSN
         project_key: 项目标识（可选，用作数据库名）
         quiet: 静默模式
-    
+
     Returns:
         {ok, db_name, created, message}
     """
     db_name = parse_db_name_from_dsn(target_dsn)
-    
+
     if not db_name and project_key:
         db_name = project_key
-    
+
     if not db_name:
         return {
             "ok": False,
@@ -611,7 +788,7 @@ def ensure_database_exists(
             "created": False,
             "message": "无法确定目标数据库名称：DSN 中未指定数据库名，且未提供 project_key",
         }
-    
+
     valid, error_msg = validate_db_name(db_name)
     if not valid:
         return {
@@ -620,16 +797,16 @@ def ensure_database_exists(
             "created": False,
             "message": error_msg,
         }
-    
+
     if not admin_dsn:
-        log_info(f"未配置 admin_dsn，跳过数据库存在性检查", quiet=quiet)
+        log_info("未配置 admin_dsn，跳过数据库存在性检查", quiet=quiet)
         return {
             "ok": True,
             "db_name": db_name,
             "created": False,
             "message": "",
         }
-    
+
     try:
         exists = check_database_exists(admin_dsn, db_name)
     except Exception as e:
@@ -639,7 +816,7 @@ def ensure_database_exists(
             "created": False,
             "message": f"检测数据库存在性失败: {e}",
         }
-    
+
     if exists:
         log_info(f"数据库 {db_name} 已存在", quiet=quiet)
         return {
@@ -648,7 +825,7 @@ def ensure_database_exists(
             "created": False,
             "message": "",
         }
-    
+
     try:
         create_database(admin_dsn, db_name, quiet=quiet)
         log_info(f"数据库 {db_name} 创建成功", quiet=quiet)
@@ -670,6 +847,7 @@ def ensure_database_exists(
 # ============================================================================
 # Schema 相关辅助函数
 # ============================================================================
+
 
 def get_required_schemas(schema_context: SchemaContext) -> list[str]:
     """获取需要验证的 schema 列表。"""
@@ -741,19 +919,23 @@ def should_auto_apply_openmemory() -> bool:
 # 数据库结构检查函数
 # ============================================================================
 
+
 def check_openmemory_schema_exists(conn, schema_name: str = None) -> tuple[bool, str]:
     """检查 openmemory schema 是否存在。"""
     if schema_name is None:
         schema_name = get_openmemory_schema()
-    
+
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT schema_name
             FROM information_schema.schemata
             WHERE schema_name = %s
-        """, (schema_name,))
+        """,
+            (schema_name,),
+        )
         result = cur.fetchone()
-    
+
     if result is None:
         return False, f"openmemory schema '{schema_name}' 不存在"
     return True, ""
@@ -783,12 +965,15 @@ def check_tables_exist(
     missing = []
     with conn.cursor() as cur:
         for schema, table in tables:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables
                     WHERE table_schema = %s AND table_name = %s
                 )
-            """, (schema, table))
+            """,
+                (schema, table),
+            )
             if not cur.fetchone()[0]:
                 missing.append(f"{schema}.{table}")
 
@@ -812,11 +997,14 @@ def check_schemas_exist(
             schemas = DEFAULT_SCHEMA_SUFFIXES
 
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT schema_name
             FROM information_schema.schemata
             WHERE schema_name = ANY(%s)
-        """, (schemas,))
+        """,
+            (schemas,),
+        )
         existing = {row[0] for row in cur.fetchall()}
 
     missing = [s for s in schemas if s not in existing]
@@ -847,13 +1035,16 @@ def check_columns_exist(
     missing = []
     with conn.cursor() as cur:
         for schema, table, column in columns:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT 1
                 FROM information_schema.columns
                 WHERE table_schema = %s
                   AND table_name = %s
                   AND column_name = %s
-            """, (schema, table, column))
+            """,
+                (schema, table, column),
+            )
             if cur.fetchone() is None:
                 missing.append(f"{schema}.{table}.{column}")
 
@@ -884,12 +1075,15 @@ def check_indexes_exist(
     missing = []
     with conn.cursor() as cur:
         for schema, index_name in indexes:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT 1
                 FROM pg_indexes
                 WHERE schemaname = %s
                   AND indexname = %s
-            """, (schema, index_name))
+            """,
+                (schema, index_name),
+            )
             if cur.fetchone() is None:
                 missing.append(f"{schema}.{index_name}")
 
@@ -920,7 +1114,8 @@ def check_triggers_exist(
     missing = []
     with conn.cursor() as cur:
         for schema, table, trigger_name in triggers:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT 1
                 FROM pg_trigger t
                 JOIN pg_class c ON t.tgrelid = c.oid
@@ -928,7 +1123,9 @@ def check_triggers_exist(
                 WHERE n.nspname = %s
                   AND c.relname = %s
                   AND t.tgname = %s
-            """, (schema, table, trigger_name))
+            """,
+                (schema, table, trigger_name),
+            )
             if cur.fetchone() is None:
                 missing.append(f"{schema}.{table}.{trigger_name}")
 
@@ -959,12 +1156,15 @@ def check_matviews_exist(
     missing = []
     with conn.cursor() as cur:
         for schema, view_name in matviews:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT 1
                 FROM pg_matviews
                 WHERE schemaname = %s
                   AND matviewname = %s
-            """, (schema, view_name))
+            """,
+                (schema, view_name),
+            )
             if cur.fetchone() is None:
                 missing.append(f"{schema}.{view_name}")
 
@@ -998,10 +1198,13 @@ def check_search_path(
         for s in expected_schemas:
             if s in actual_schemas:
                 actual_indices.append(actual_schemas.index(s))
-        
+
         for i in range(1, len(actual_indices)):
             if actual_indices[i] <= actual_indices[i - 1]:
-                return False, f"search_path 顺序不正确，期望: {expected_schemas}，实际: {actual_path}"
+                return (
+                    False,
+                    f"search_path 顺序不正确，期望: {expected_schemas}，实际: {actual_path}",
+                )
 
     return True, ""
 
@@ -1009,6 +1212,7 @@ def check_search_path(
 # ============================================================================
 # 核心函数: run_all_checks
 # ============================================================================
+
 
 def run_all_checks(
     conn,
@@ -1089,7 +1293,11 @@ def run_all_checks(
     # 检查 openmemory schema（可选）
     if check_openmemory_schema:
         om_ok, om_message = check_openmemory_schema_exists(conn, openmemory_schema_name)
-        checks["openmemory_schema"] = {"ok": om_ok, "message": om_message, "schema": openmemory_schema_name}
+        checks["openmemory_schema"] = {
+            "ok": om_ok,
+            "message": om_message,
+            "schema": openmemory_schema_name,
+        }
         all_ok = all_ok and om_ok
 
     return {"ok": all_ok, "checks": checks}
@@ -1098,6 +1306,7 @@ def run_all_checks(
 # ============================================================================
 # 迁移锁相关函数
 # ============================================================================
+
 
 def _build_lock_key(schema_prefix: str = None) -> str:
     """构建迁移锁的唯一标识符。"""
@@ -1125,6 +1334,7 @@ def _release_advisory_lock(conn, lock_key: str, quiet: bool = False) -> None:
 # 核心函数: run_migrate
 # ============================================================================
 
+
 def run_migrate(
     config_path: str = None,
     quiet: bool = False,
@@ -1134,6 +1344,7 @@ def run_migrate(
     apply_openmemory_grants: bool = None,
     precheck_only: bool = False,
     verify: bool = False,
+    verify_strict: bool = False,
     post_backfill: bool = False,
     backfill_chunking_version: str = None,
     backfill_batch_size: int = 1000,
@@ -1143,7 +1354,7 @@ def run_migrate(
     执行数据库迁移。
 
     使用 PostgreSQL 咨询锁确保同一 schema_prefix 的迁移不会并发执行。
-    
+
     Args:
         config_path: 配置文件路径（可选）
         quiet: 静默模式
@@ -1153,6 +1364,7 @@ def run_migrate(
         apply_openmemory_grants: 是否执行 OpenMemory schema 权限脚本
         precheck_only: 仅执行预检
         verify: 是否执行权限验证脚本 99_verify_permissions.sql
+        verify_strict: 严格模式，验证失败时抛出异常（也可通过 ENGRAM_VERIFY_STRICT=1 启用）
         post_backfill: 是否在迁移后执行 backfill（evidence_uri 回填）
         backfill_chunking_version: 若指定，同时执行 chunking_version 回填
         backfill_batch_size: backfill 每批处理记录数（默认 1000）
@@ -1167,7 +1379,7 @@ def run_migrate(
         # ========================================
         log_info("执行预检...", quiet=quiet)
         precheck_result = run_precheck(quiet=quiet)
-        
+
         if not precheck_result["ok"]:
             repair_hint = get_repair_commands_hint("PRECHECK_FAILED")
             return make_error_result(
@@ -1179,16 +1391,16 @@ def run_migrate(
                     **repair_hint,
                 },
             )
-        
+
         log_info("预检通过", quiet=quiet)
-        
+
         # 如果仅执行预检，直接返回成功
         if precheck_only:
             return make_success_result(
                 precheck_only=True,
                 checks=precheck_result["checks"],
             )
-        
+
         # [路线A 约束] 生产模式下禁止使用 schema_prefix
         if schema_prefix and not is_testing_mode():
             return make_error_result(
@@ -1199,7 +1411,7 @@ def run_migrate(
                     "hint": "设置环境变量 ENGRAM_TESTING=1 启用测试模式以使用 schema_prefix",
                 },
             )
-        
+
         # 加载配置
         log_info("加载配置...", quiet=quiet)
         config = get_config(config_path, reload=True)
@@ -1207,10 +1419,7 @@ def run_migrate(
 
         # 获取 DSN 和 admin_dsn
         target_dsn = dsn or config.get("postgres.dsn")
-        admin_dsn = (
-            os.environ.get("ENGRAM_PG_ADMIN_DSN")
-            or config.get("postgres.admin_dsn")
-        )
+        admin_dsn = os.environ.get("ENGRAM_PG_ADMIN_DSN") or config.get("postgres.admin_dsn")
         project_key = config.get("project.project_key")
 
         if not target_dsn:
@@ -1227,7 +1436,7 @@ def run_migrate(
             project_key=project_key,
             quiet=quiet,
         )
-        
+
         if not db_result["ok"]:
             return make_error_result(
                 code="DATABASE_CREATE_ERROR",
@@ -1237,12 +1446,12 @@ def run_migrate(
                     "admin_dsn_configured": bool(admin_dsn),
                 },
             )
-        
+
         db_created = db_result.get("created", False)
 
         # 创建 SchemaContext
         schema_context = SchemaContext(schema_prefix=schema_prefix)
-        
+
         if schema_prefix:
             log_info(f"使用 schema 前缀: {schema_prefix}", quiet=quiet)
 
@@ -1250,12 +1459,12 @@ def run_migrate(
         # migrate.py 在 src/engram/logbook/ 目录下，sql 在项目根目录 sql/
         # 路径: src/engram/logbook/migrate.py -> sql/
         sql_dir = Path(__file__).parent.parent.parent.parent / "sql"
-        
+
         # 确定是否执行角色权限脚本
         should_apply_roles = apply_roles
         if should_apply_roles is None:
             should_apply_roles = config.get("postgres.apply_roles", False)
-        
+
         # 确定是否执行 OpenMemory schema 权限脚本
         should_apply_openmemory = apply_openmemory_grants
         if should_apply_openmemory is None:
@@ -1263,28 +1472,37 @@ def run_migrate(
         if should_apply_openmemory is None:
             should_apply_openmemory = should_auto_apply_openmemory()
             if should_apply_openmemory:
-                log_info("检测到 OM_METADATA_BACKEND=postgres，自动启用 OpenMemory schema 权限脚本", quiet=quiet)
-        
+                log_info(
+                    "检测到 OM_METADATA_BACKEND=postgres，自动启用 OpenMemory schema 权限脚本",
+                    quiet=quiet,
+                )
+
         # 扫描和分类 SQL 文件
         log_info("扫描 SQL 文件...", quiet=quiet)
-        sql_files = scan_sql_files(sql_dir)
-        
+        scan_result = scan_sql_files(sql_dir)
+        sql_files = scan_result["files"]
+        sql_duplicates = scan_result["duplicates"]
+
         if not sql_files:
             return make_error_result(
                 code="NO_SQL_FILES",
                 message=f"SQL 目录为空或不存在: {sql_dir}",
                 detail={"path": str(sql_dir)},
             )
-        
+
+        # 如果有重复前缀，记录到日志（警告已在 scan_sql_files 中输出）
+        if sql_duplicates:
+            log_info(f"检测到 {len(sql_duplicates)} 个前缀有多个文件", quiet=quiet)
+
         classified = classify_sql_files(
             sql_files,
             apply_roles=should_apply_roles,
             apply_openmemory_grants=should_apply_openmemory,
             verify=verify,
         )
-        
+
         execute_sql_files = classified["execute"]
-        
+
         if not execute_sql_files:
             return make_error_result(
                 code="NO_EXECUTABLE_FILES",
@@ -1295,7 +1513,7 @@ def run_migrate(
                     "verify_files": [str(f) for f in classified["verify"]],
                 },
             )
-        
+
         # 验证必需的 01_logbook_schema.sql 存在
         schema_sql = sql_dir / "01_logbook_schema.sql"
         if not schema_sql.exists():
@@ -1304,8 +1522,11 @@ def run_migrate(
                 message=f"核心 SQL 文件不存在: {schema_sql}",
                 detail={"path": str(schema_sql)},
             )
-        
-        log_info(f"将执行 {len(execute_sql_files)} 个 SQL 文件: {[f.name for f in execute_sql_files]}", quiet=quiet)
+
+        log_info(
+            f"将执行 {len(execute_sql_files)} 个 SQL 文件: {[f.name for f in execute_sql_files]}",
+            quiet=quiet,
+        )
 
         # 获取实际需要验证的 schema 和列
         required_schemas = get_required_schemas(schema_context)
@@ -1319,7 +1540,7 @@ def run_migrate(
         executed_files = []
         openmemory_script_applied = False
         openmemory_target_schema = None
-        
+
         with get_connection(dsn=dsn, config=config, autocommit=True) as conn:
             # 获取咨询锁
             _acquire_advisory_lock(conn, lock_key, quiet=quiet)
@@ -1343,23 +1564,30 @@ def run_migrate(
                                 **repair_hint,
                             },
                         )
-                
+
                 # 按顺序执行 SQL 文件
                 for sql_file in execute_sql_files:
                     prefix = sql_file.name[:2]
                     is_openmemory_script = "openmemory" in sql_file.name.lower()
-                    
+
                     # 05_openmemory_* 权限脚本需要特殊处理
+                    # 注意：SQL 脚本使用 FOR ROLE openmemory_migrator 语法设置默认权限，
+                    # 因此不需要 SET ROLE，默认权限会正确绑定到 openmemory_migrator 角色，
+                    # 无论当前连接用户是谁（只要有足够权限执行 ALTER DEFAULT PRIVILEGES）
                     if prefix == "05" and is_openmemory_script and should_apply_openmemory:
                         openmemory_target_schema = get_openmemory_schema()
-                        log_info(f"执行 OpenMemory 脚本: {sql_file.name}，目标 schema: {openmemory_target_schema}...", quiet=quiet)
-                        
+                        log_info(
+                            f"执行 OpenMemory 脚本: {sql_file.name}，目标 schema: {openmemory_target_schema}...",
+                            quiet=quiet,
+                        )
+
                         with conn.cursor() as cur:
                             cur.execute(
-                                sql.SQL("SET om.target_schema = {}")
-                                .format(sql.Literal(openmemory_target_schema))
+                                sql.SQL("SET om.target_schema = {}").format(
+                                    sql.Literal(openmemory_target_schema)
+                                )
                             )
-                        
+
                         execute_sql_file(conn, sql_file, schema_context=schema_context)
                         executed_files.append(str(sql_file))
                         openmemory_script_applied = True
@@ -1369,9 +1597,27 @@ def run_migrate(
                             openmemory_target_schema = get_openmemory_schema()
                             with conn.cursor() as cur:
                                 cur.execute(
-                                    sql.SQL("SET om.target_schema = {}")
-                                    .format(sql.Literal(openmemory_target_schema))
+                                    sql.SQL("SET om.target_schema = {}").format(
+                                        sql.Literal(openmemory_target_schema)
+                                    )
                                 )
+                        # 设置 schema_prefix（测试模式下用于构造带前缀的 schema 名）
+                        if schema_prefix:
+                            log_info(f"设置 verify schema_prefix: {schema_prefix}", quiet=quiet)
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    sql.SQL("SET engram.schema_prefix = {}").format(
+                                        sql.Literal(schema_prefix)
+                                    )
+                                )
+                        # 设置 verify_strict 模式（环境变量或参数）
+                        effective_verify_strict = (
+                            verify_strict or os.environ.get("ENGRAM_VERIFY_STRICT", "") == "1"
+                        )
+                        if effective_verify_strict:
+                            log_info("启用 verify strict 模式", quiet=quiet)
+                            with conn.cursor() as cur:
+                                cur.execute("SET engram.verify_strict = '1'")
                         execute_sql_file(conn, sql_file, schema_context=schema_context)
                         executed_files.append(str(sql_file))
                     elif prefix in PERMISSION_SCRIPT_PREFIXES:
@@ -1388,7 +1634,9 @@ def run_migrate(
                 all_exist, missing = check_schemas_exist(conn, required_schemas)
 
                 if not all_exist:
-                    repair_hint = get_repair_commands_hint("SCHEMA_MISSING", db_result.get("db_name"))
+                    repair_hint = get_repair_commands_hint(
+                        "SCHEMA_MISSING", db_result.get("db_name")
+                    )
                     return make_error_result(
                         code="SCHEMA_MISSING",
                         message=f"以下 schema 未创建成功: {', '.join(missing)}",
@@ -1405,7 +1653,9 @@ def run_migrate(
                 tables_exist, missing_tables = check_tables_exist(conn, required_tables)
 
                 if not tables_exist:
-                    repair_hint = get_repair_commands_hint("TABLE_MISSING", db_result.get("db_name"))
+                    repair_hint = get_repair_commands_hint(
+                        "TABLE_MISSING", db_result.get("db_name")
+                    )
                     return make_error_result(
                         code="TABLE_MISSING",
                         message=f"以下核心表未创建成功: {', '.join(missing_tables)}",
@@ -1420,7 +1670,9 @@ def run_migrate(
                 cols_exist, missing_cols = check_columns_exist(conn, required_columns)
 
                 if not cols_exist:
-                    repair_hint = get_repair_commands_hint("COLUMN_MISSING", db_result.get("db_name"))
+                    repair_hint = get_repair_commands_hint(
+                        "COLUMN_MISSING", db_result.get("db_name")
+                    )
                     return make_error_result(
                         code="COLUMN_MISSING",
                         message=f"以下关键列未创建成功: {', '.join(missing_cols)}",
@@ -1435,7 +1687,9 @@ def run_migrate(
                 indexes_exist, missing_indexes = check_indexes_exist(conn, required_indexes)
 
                 if not indexes_exist:
-                    repair_hint = get_repair_commands_hint("INDEX_MISSING", db_result.get("db_name"))
+                    repair_hint = get_repair_commands_hint(
+                        "INDEX_MISSING", db_result.get("db_name")
+                    )
                     return make_error_result(
                         code="INDEX_MISSING",
                         message=f"以下关键索引未创建成功: {', '.join(missing_indexes)}",
@@ -1450,7 +1704,9 @@ def run_migrate(
                 triggers_exist, missing_triggers = check_triggers_exist(conn, required_triggers)
 
                 if not triggers_exist:
-                    repair_hint = get_repair_commands_hint("TRIGGER_MISSING", db_result.get("db_name"))
+                    repair_hint = get_repair_commands_hint(
+                        "TRIGGER_MISSING", db_result.get("db_name")
+                    )
                     return make_error_result(
                         code="TRIGGER_MISSING",
                         message=f"以下关键触发器未创建成功: {', '.join(missing_triggers)}",
@@ -1465,7 +1721,9 @@ def run_migrate(
                 matviews_exist, missing_matviews = check_matviews_exist(conn, required_matviews)
 
                 if not matviews_exist:
-                    repair_hint = get_repair_commands_hint("MATVIEW_MISSING", db_result.get("db_name"))
+                    repair_hint = get_repair_commands_hint(
+                        "MATVIEW_MISSING", db_result.get("db_name")
+                    )
                     return make_error_result(
                         code="MATVIEW_MISSING",
                         message=f"以下物化视图未创建成功: {', '.join(missing_matviews)}",
@@ -1478,9 +1736,13 @@ def run_migrate(
                 # 验证 OpenMemory schema
                 if openmemory_script_applied:
                     log_info(f"验证 OpenMemory schema: {openmemory_target_schema}...", quiet=quiet)
-                    om_exists, om_message = check_openmemory_schema_exists(conn, openmemory_target_schema)
+                    om_exists, om_message = check_openmemory_schema_exists(
+                        conn, openmemory_target_schema
+                    )
                     if not om_exists:
-                        repair_hint = get_repair_commands_hint("OPENMEMORY_SCHEMA_MISSING", db_result.get("db_name"))
+                        repair_hint = get_repair_commands_hint(
+                            "OPENMEMORY_SCHEMA_MISSING", db_result.get("db_name")
+                        )
                         return make_error_result(
                             code="OPENMEMORY_SCHEMA_MISSING",
                             message=f"OpenMemory schema 未创建成功: {om_message}",
@@ -1493,12 +1755,12 @@ def run_migrate(
                 _release_advisory_lock(conn, lock_key, quiet=quiet)
 
         log_info("迁移完成", quiet=quiet)
-        
+
         # ========================================
         # 迁移后回填（post-backfill）
         # ========================================
         backfill_results = {}
-        
+
         if post_backfill:
             log_info("执行迁移后回填: evidence_uri...", quiet=quiet)
             try:
@@ -1512,12 +1774,12 @@ def run_migrate(
                 if evidence_result.get("success"):
                     log_info(
                         f"evidence_uri 回填完成: 更新={evidence_result.get('total_updated', 0)}",
-                        quiet=quiet
+                        quiet=quiet,
                     )
                 else:
                     log_warning(
                         f"evidence_uri 回填出现问题: {evidence_result.get('error', '未知错误')}",
-                        quiet=quiet
+                        quiet=quiet,
                     )
             except Exception as e:
                 log_error(f"evidence_uri 回填失败: {e}", quiet=quiet)
@@ -1525,9 +1787,11 @@ def run_migrate(
                     "success": False,
                     "error": str(e),
                 }
-        
+
         if backfill_chunking_version:
-            log_info(f"执行迁移后回填: chunking_version={backfill_chunking_version}...", quiet=quiet)
+            log_info(
+                f"执行迁移后回填: chunking_version={backfill_chunking_version}...", quiet=quiet
+            )
             try:
                 backfill_cv_fn = _get_backfill_chunking_version()
                 chunking_result = backfill_cv_fn(
@@ -1541,12 +1805,12 @@ def run_migrate(
                     summary = chunking_result.get("summary", {})
                     log_info(
                         f"chunking_version 回填完成: 更新={summary.get('total_updated', 0)}",
-                        quiet=quiet
+                        quiet=quiet,
                     )
                 else:
                     log_warning(
                         f"chunking_version 回填出现问题: {chunking_result.get('error', '未知错误')}",
-                        quiet=quiet
+                        quiet=quiet,
                     )
             except Exception as e:
                 log_error(f"chunking_version 回填失败: {e}", quiet=quiet)
@@ -1554,7 +1818,7 @@ def run_migrate(
                     "success": False,
                     "error": str(e),
                 }
-        
+
         return make_success_result(
             schemas=required_schemas,
             schema_prefix=schema_prefix,
@@ -1571,13 +1835,16 @@ def run_migrate(
             openmemory_schema_applied=openmemory_script_applied,
             openmemory_target_schema=openmemory_target_schema,
             verify_executed=verify,
+            verify_strict=verify_strict or os.environ.get("ENGRAM_VERIFY_STRICT", "") == "1",
             verified={
                 "tables": [f"{s}.{t}" for s, t in required_tables],
                 "columns": [f"{s}.{t}.{c}" for s, t, c in required_columns],
                 "indexes": [f"{s}.{i}" for s, i in required_indexes],
                 "triggers": [f"{s}.{t}.{tr}" for s, t, tr in required_triggers],
                 "matviews": [f"{s}.{v}" for s, v in required_matviews],
-                "openmemory_schema": openmemory_target_schema if openmemory_script_applied else None,
+                "openmemory_schema": openmemory_target_schema
+                if openmemory_script_applied
+                else None,
             },
             summary={
                 "schemas_count": len(required_schemas),
@@ -1615,6 +1882,10 @@ __all__ = [
     "run_all_checks",
     "run_migrate",
     "run_precheck",
+    "generate_migration_plan",
+    # SQL 扫描与分类
+    "scan_sql_files",
+    "classify_sql_files",
     # 辅助函数
     "is_testing_mode",
     "get_repair_commands_hint",
@@ -1629,6 +1900,9 @@ __all__ = [
     "check_search_path",
     # 常量
     "DEFAULT_SCHEMA_SUFFIXES",
+    "DDL_SCRIPT_PREFIXES",
+    "PERMISSION_SCRIPT_PREFIXES",
+    "VERIFY_SCRIPT_PREFIXES",
     "REQUIRED_TABLE_TEMPLATES",
     "REQUIRED_COLUMN_TEMPLATES",
     "REQUIRED_INDEX_TEMPLATES",

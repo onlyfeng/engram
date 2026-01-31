@@ -209,14 +209,15 @@ Logbook-only 部署支持两种验收级别，详见 [03_deploy_verify_troublesh
 | 验收项 | 命令 | 预期输出 | 产物路径 | 失败排错 |
 |--------|------|----------|----------|----------|
 | **服务启动** | `make up-logbook` | `[OK] Logbook 服务已启动` | - | [§排错-端口占用](#1-端口被占用) |
-| **数据库迁移** | `make migrate-logbook-stepwise` | `[OK] Logbook 迁移完成（stepwise）` | - | [§排错-schema](#3-schema-不存在) |
+| **DDL 迁移** | `make migrate-ddl` | `DDL 迁移完成` | - | [§排错-schema](#3-schema-不存在) |
+| **角色权限** | `make apply-roles` | `Logbook 角色已应用` | - | 检查角色权限配置 |
 | **健康检查** | `logbook health` | `{"ok": true, "database": "connected"}` | - | [§排错-连接失败](#2-数据库连接失败) |
 | **创建 Item** | `logbook item create --type task` | `{"ok": true, "item_id": N}` | - | [§排错-schema](#3-schema-不存在) |
 | **添加 Event** | `logbook event add --item-id N --payload '{}'` | `{"ok": true}` | - | - |
 | **添加 Attachment** | `logbook attachment add --item-id N --uri 'test.txt'` | `{"ok": true}` | `.artifacts/test.txt` | - |
 | **KV 操作** | `logbook kv set ns key value && logbook kv get ns key` | `value` | - | - |
 | **渲染视图** | `logbook render manifest` | `Manifest rendered` | `.artifacts/manifest.json` | - |
-| **权限验证** | `make verify-permissions-logbook` | `[OK] 权限验证通过（Logbook-only）` | `.artifacts/verify-permissions-logbook.txt` | 检查角色权限配置 |
+| **权限验证** | `make verify-permissions` | `权限验证完成` | `.artifacts/verify-permissions.txt` | 检查角色权限配置 |
 | **冒烟测试** | `make logbook-smoke` | `Logbook 冒烟测试通过` | `.artifacts/diag/smoke.log` | [03_deploy_verify_troubleshoot.md](03_deploy_verify_troubleshoot.md) |
 
 ### Unified (Standard) 验收
@@ -378,7 +379,7 @@ FULL profile 下 `degradation` 步骤为**必需步骤**，但可通过以下方
 
 | 文件 | Logbook-only | Unified Stack | With SeekDB | 说明 |
 |------|--------------|---------------|-------------|------|
-| `00_init_service_accounts.sh` | 可选 | 必需 | 必需 | 自动检测模式，SKIP 或 CREATE |
+| `db_bootstrap.py` | 可选 | 必需 | 必需 | 自动检测模式，SKIP 或 CREATE（`python logbook_postgres/scripts/db_bootstrap.py`） |
 | `01_logbook_schema.sql` | **必需** | 必需 | 必需 | 核心 schema 定义（identity, logbook, scm, analysis, governance） |
 | `04_roles_and_grants.sql` | **必需** | 必需 | 必需 | 核心角色定义（engram_*） |
 | `05_openmemory_roles_and_grants.sql` | 不运行 | 必需 | 必需 | OpenMemory 专用 schema 权限 |
@@ -396,7 +397,7 @@ sql/
 ```
 
 **说明**：
-- `00_init_service_accounts.sh`：如果未设置任何 `*_PASSWORD` 环境变量，脚本自动进入 SKIP 模式
+- `db_bootstrap.py`：如果未设置任何 `*_PASSWORD` 环境变量，脚本自动进入 SKIP 模式（执行命令：`python logbook_postgres/scripts/db_bootstrap.py`）
 - `05_openmemory_roles_and_grants.sql`：仅 Unified Stack 需要，Logbook-only 不执行
 - `08_database_hardening.sql`：推荐执行以提升安全性，但在简化部署时可跳过
 
@@ -415,9 +416,9 @@ sql/
 
 ```bash
 # 方式 1：通过 psql 执行时设置
-psql -d $POSTGRES_DB -c "SET seek.enabled = 'false';" -f 99_verify_permissions.sql
+psql -d $POSTGRES_DB -c "SET seek.enabled = 'false';" -f sql/verify/99_verify_permissions.sql
 
-# 方式 2：在 SQL 中预设
+# 方式 2：在 SQL 中预设（需在 sql/verify/ 目录下执行）
 SET seek.enabled = 'false';
 \i 99_verify_permissions.sql
 ```
@@ -525,8 +526,8 @@ docker exec postgres pg_isready    # 测试连接
 
 ```bash
 docker logs logbook_migrate        # 检查迁移日志
-make migrate-logbook-stepwise      # 手动执行迁移（Logbook-only）
-make migrate-logbook               # 手动执行迁移（统一栈）
+make migrate-ddl                   # 手动执行 DDL 迁移
+make apply-roles                   # 应用角色权限（如需要）
 ```
 
 ### 4. Outbox Lease 失败
@@ -618,17 +619,17 @@ logbook audit show --id <audit_id> | jq '.evidence_refs_json'
 
 ### CLI `--json-out` 参数
 
-所有 `logbook_cli.py` 子命令支持 `--json-out` 参数，可将 JSON 输出同时写入文件：
+所有 `engram-logbook` 子命令支持 `--json-out` 参数，可将 JSON 输出同时写入文件：
 
 ```bash
 # 健康检查并输出到文件
-python logbook_cli.py health --json-out .artifacts/health.json
+engram-logbook health --json-out .artifacts/health.json
 
 # 渲染视图并输出到文件
-python logbook_cli.py render_views --json-out .artifacts/render_views.json
+engram-logbook render_views --json-out .artifacts/render_views.json
 
 # 创建 item 并输出到文件
-python logbook_cli.py create_item --item-type task --title "Test" --json-out result.json
+engram-logbook create_item --item-type task --title "Test" --json-out result.json
 ```
 
 ### 错误码清单
@@ -637,7 +638,7 @@ python logbook_cli.py create_item --item-type task --title "Test" --json-out res
 
 | 错误码 | 场景 | 修复建议 |
 |--------|------|----------|
-| `INSTALL_FAILED` | engram_logbook 安装失败 | `pip install -e logbook_postgres/scripts` |
+| `INSTALL_FAILED` | engram 安装失败 | `pip install -e .` |
 | `SERVICE_NOT_RUNNING` | PostgreSQL 服务未运行 | `make deploy` |
 | `HEALTH_CHECK_FAILED` | 数据库健康检查失败 | 检查 DSN 配置和数据库连接 |
 | `CONNECTION_ERROR` | 数据库连接失败 | 检查 `POSTGRES_DSN` 环境变量 |
@@ -674,12 +675,12 @@ python logbook_cli.py create_item --item-type task --title "Test" --json-out res
 
 | 错误码 | 场景 | 修复建议 |
 |--------|------|----------|
-| `LOGBOOK_DB_SCHEMA_MISSING` | 必需 schema 不存在 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
-| `LOGBOOK_DB_TABLE_MISSING` | 必需表不存在 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
-| `LOGBOOK_DB_INDEX_MISSING` | 必需索引不存在 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
-| `LOGBOOK_DB_MATVIEW_MISSING` | 必需物化视图不存在 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
-| `LOGBOOK_DB_STRUCTURE_INCOMPLETE` | DB 结构不完整 | `python db_migrate.py --dsn "$POSTGRES_DSN"` |
-| `LOGBOOK_DB_MIGRATE_NOT_AVAILABLE` | 迁移模块不可用 | `pip install -e logbook_postgres/scripts` |
+| `LOGBOOK_DB_SCHEMA_MISSING` | 必需 schema 不存在 | `engram-migrate --dsn "$POSTGRES_DSN"` |
+| `LOGBOOK_DB_TABLE_MISSING` | 必需表不存在 | `engram-migrate --dsn "$POSTGRES_DSN"` |
+| `LOGBOOK_DB_INDEX_MISSING` | 必需索引不存在 | `engram-migrate --dsn "$POSTGRES_DSN"` |
+| `LOGBOOK_DB_MATVIEW_MISSING` | 必需物化视图不存在 | `engram-migrate --dsn "$POSTGRES_DSN"` |
+| `LOGBOOK_DB_STRUCTURE_INCOMPLETE` | DB 结构不完整 | `engram-migrate --dsn "$POSTGRES_DSN"` |
+| `LOGBOOK_DB_MIGRATE_NOT_AVAILABLE` | 迁移模块不可用 | `pip install -e .` |
 | `LOGBOOK_DB_MIGRATE_FAILED` | 迁移执行失败 | 检查数据库权限和连接 |
 | `LOGBOOK_DB_MIGRATE_PARTIAL` | 迁移部分完成 | 检查迁移日志，手动修复 |
 | `LOGBOOK_DB_CONNECTION_FAILED` | 数据库连接失败 | 检查 DSN 格式和网络 |

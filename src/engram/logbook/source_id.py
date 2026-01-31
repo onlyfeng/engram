@@ -12,7 +12,7 @@ source_id 格式规范:
 
 使用:
     from engram.logbook.source_id import build_mr_source_id, build_svn_source_id
-    
+
     source_id = build_mr_source_id(repo_id=1, mr_iid=42)
     # => "mr:1:42"
 """
@@ -100,11 +100,11 @@ def parse_mr_source_id(source_id: str) -> tuple:
     """
     if not source_id or not source_id.startswith("mr:"):
         raise ValueError(f"Invalid MR source_id format: {source_id}")
-    
+
     parts = source_id.split(":")
     if len(parts) != 3:
         raise ValueError(f"Invalid MR source_id format: {source_id}")
-    
+
     try:
         repo_id = int(parts[1])
         mr_iid = int(parts[2])
@@ -141,25 +141,25 @@ def validate_source_id(source_id: str) -> bool:
     """
     if not source_id or not isinstance(source_id, str):
         return False
-    
+
     parts = source_id.split(":")
     if len(parts) < 2:
         return False
-    
+
     source_type = parts[0]
     if source_type not in _SOURCE_ID_TYPES:
         return False
-    
+
     min_parts, max_parts, _ = _SOURCE_ID_TYPES[source_type]
     if not (min_parts <= len(parts) <= max_parts):
         return False
-    
+
     # 验证 repo_id 必须是数字
     try:
         int(parts[1])
     except ValueError:
         return False
-    
+
     # 类型特定验证
     if source_type == "svn":
         # rev_num 必须是数字
@@ -185,7 +185,7 @@ def validate_source_id(source_id: str) -> bool:
             return False
         if not parts[3]:
             return False
-    
+
     return True
 
 
@@ -210,11 +210,11 @@ def parse_source_id(source_id: str) -> dict:
     """
     if not validate_source_id(source_id):
         raise ValueError(f"Invalid source_id format: {source_id}")
-    
+
     parts = source_id.split(":")
     source_type = parts[0]
     repo_id = int(parts[1])
-    
+
     if source_type == "svn":
         return {
             "type": "svn",
@@ -285,7 +285,7 @@ def build_gitlab_repo_url(gitlab_url: str, project_id_or_path: Union[int, str]) 
     """
     base = normalize_url(gitlab_url)
     project_str = str(project_id_or_path).strip()
-    
+
     if "/" in project_str:
         # namespace/project 格式，去除项目路径的首尾斜杠
         project_path = project_str.strip("/")

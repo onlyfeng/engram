@@ -15,12 +15,12 @@ import sys
 from datetime import datetime
 from typing import Any, Callable, Dict, NoReturn, Optional
 
-from .errors import EngramError, make_success_result, make_error_result
-
+from .errors import EngramError, make_success_result
 
 # =============================================================================
 # JSON 输出
 # =============================================================================
+
 
 def output_json(
     data: Any,
@@ -45,6 +45,7 @@ def output_json(
     if json_out:
         try:
             from pathlib import Path
+
             out_path = Path(json_out)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with open(out_path, "w", encoding="utf-8") as f:
@@ -57,10 +58,7 @@ def output_json(
 
 
 def output_success(
-    data: Optional[Dict[str, Any]] = None,
-    pretty: bool = False,
-    quiet: bool = False,
-    **kwargs
+    data: Optional[Dict[str, Any]] = None, pretty: bool = False, quiet: bool = False, **kwargs
 ) -> None:
     """
     输出成功结果到 stdout
@@ -78,10 +76,7 @@ def output_success(
 
 
 def output_error(
-    error: EngramError,
-    pretty: bool = False,
-    quiet: bool = False,
-    human_message: bool = True
+    error: EngramError, pretty: bool = False, quiet: bool = False, human_message: bool = True
 ) -> None:
     """
     输出错误到 stdout（JSON 格式）
@@ -104,6 +99,7 @@ def output_error(
 # =============================================================================
 # stderr 人读信息
 # =============================================================================
+
 
 def log_info(message: str, quiet: bool = False) -> None:
     """
@@ -157,11 +153,8 @@ def log_debug(message: str, verbose: bool = False) -> None:
 # 退出函数
 # =============================================================================
 
-def exit_with_error(
-    error: EngramError,
-    pretty: bool = False,
-    quiet: bool = False
-) -> NoReturn:
+
+def exit_with_error(error: EngramError, pretty: bool = False, quiet: bool = False) -> NoReturn:
     """
     输出错误并以非 0 exit code 退出
 
@@ -175,10 +168,7 @@ def exit_with_error(
 
 
 def exit_success(
-    data: Optional[Dict[str, Any]] = None,
-    pretty: bool = False,
-    quiet: bool = False,
-    **kwargs
+    data: Optional[Dict[str, Any]] = None, pretty: bool = False, quiet: bool = False, **kwargs
 ) -> NoReturn:
     """
     输出成功结果并退出
@@ -196,6 +186,7 @@ def exit_success(
 # =============================================================================
 # JSON 序列化
 # =============================================================================
+
 
 def _json_serializer(obj: Any) -> Any:
     """
@@ -217,6 +208,7 @@ def _json_serializer(obj: Any) -> Any:
 # =============================================================================
 # CLI 装饰器
 # =============================================================================
+
 
 def cli_wrapper(func: Callable) -> Callable:
     """
@@ -267,6 +259,7 @@ def cli_wrapper(func: Callable) -> Callable:
 # argparse 参数帮助函数
 # =============================================================================
 
+
 def add_output_arguments(parser, include_quiet: bool = True) -> None:
     """
     为 argparse.ArgumentParser 添加输出格式参数
@@ -287,7 +280,8 @@ def add_output_arguments(parser, include_quiet: bool = True) -> None:
     )
     if include_quiet:
         parser.add_argument(
-            "-q", "--quiet",
+            "-q",
+            "--quiet",
             action="store_true",
             help="静默模式（不输出 stderr 人读信息）",
         )

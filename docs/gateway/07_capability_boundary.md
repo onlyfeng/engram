@@ -142,9 +142,11 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 ```json
 {
   "ok": true,
-  "action": "allow",  // allow / redirect / reject / error
+  "action": "allow",  // allow / redirect / deferred / reject / error
   "space_written": "team:default",
   "memory_id": "mem_xxx",
+  "outbox_id": null,  // action=deferred 时必需
+  "correlation_id": "corr-abc123def456789",
   "evidence_refs": ["..."],
   "message": null
 }
@@ -152,12 +154,21 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 
 | action 值 | ok 值 | 说明 |
 |-----------|-------|------|
-| `allow` | `true` | 写入成功 |
-| `redirect` | `true/false` | 降级写入（策略导向或失败降级） |
-| `reject` | `false` | 策略拒绝 |
+| `allow` | `true` | 直接写入 OpenMemory 成功 |
+| `redirect` | `true` | 策略降级：空间被重定向后写入成功 |
+| `deferred` | `false` | 已入队 outbox：OpenMemory 不可用，等待后台重试 |
+| `reject` | `false` | 策略拒绝，未写入 |
 | `error` | `false` | 内部错误或审计失败 |
 
-**测试引用**：[`test_unified_stack_integration.py::TestMemoryOperations`](../../tests/gateway/test_unified_stack_integration.py)
+> **`redirect` vs `deferred` 边界**：
+> - `redirect`（对外）：策略决定空间重定向，**已成功写入** OpenMemory
+> - `deferred`（对外）：OpenMemory 不可用，**未写入**，已入队 outbox 补偿队列
+> - 审计内部统一使用 `action=redirect` 表示"写入路径被重定向"，通过 `intended_action=deferred` 字段区分 outbox 降级场景
+
+**测试引用**：
+- [`test_unified_stack_integration.py::TestMemoryOperations`](../../tests/gateway/test_unified_stack_integration.py) - 正常写入流程
+- [`test_error_codes.py::TestDeferredResponseContract`](../../tests/gateway/test_error_codes.py) - deferred 响应契约
+- [`test_audit_event_contract.py::TestOpenMemoryFailureAuditPath`](../../tests/gateway/test_audit_event_contract.py) - 审计内 redirect/deferred 区分
 
 ---
 
@@ -482,20 +493,28 @@ Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `ok` | boolean | 操作是否成功 |
-| `action` | string | 动作类型：allow/redirect/reject/error |
-| `space_written` | string | 实际写入的空间 |
-| `memory_id` | string | OpenMemory 返回的 memory ID |
+| `action` | string | 动作类型：allow/redirect/deferred/reject/error |
+| `space_written` | string | 实际写入的空间（action=allow/redirect 时） |
+| `memory_id` | string | OpenMemory 返回的 memory ID（action=allow 时） |
+| `outbox_id` | integer | Outbox 补偿记录 ID（action=deferred 时必需） |
+| `correlation_id` | string | 追踪 ID（所有响应必需） |
 | `evidence_refs` | array | 证据引用 |
 | `message` | string | 附加消息 |
 
 **失败/降级语义**：
 
-| action | ok | 含义 |
-|--------|-----|------|
-| `allow` | true | 成功写入 OpenMemory |
-| `redirect` | true/false | 策略降级或失败入 outbox |
-| `reject` | false | 策略拒绝，未写入 |
-| `error` | false | 内部错误（如审计写入失败） |
+| action | ok | 含义 | 后续处理 |
+|--------|-----|------|----------|
+| `allow` | true | 直接写入 OpenMemory 成功 | 无 |
+| `redirect` | true | 策略降级：空间被重定向后写入成功 | 无 |
+| `deferred` | false | OpenMemory 不可用，已入队 outbox | outbox_worker 后台重试 |
+| `reject` | false | 策略拒绝，未写入 | 无 |
+| `error` | false | 内部错误（如审计写入失败） | 需人工介入 |
+
+> **对外响应 vs 审计内部 action 的区别**：
+> - 对外响应使用 `deferred` 明确告知调用方操作已入队
+> - 审计内部统一使用 `redirect` 表示"写入路径被重定向"
+> - 通过 `evidence_refs_json.intended_action="deferred"` 区分 outbox 降级场景
 
 ---
 
@@ -677,6 +696,129 @@ Gateway 依赖 `engram_logbook` 提供的原语接口：
 
 ---
 
+## correlation_id 统一规则
+
+每个请求都有唯一的 `correlation_id` 用于追踪，必须遵循以下契约。
+
+### 契约要求
+
+| 规则 | 说明 |
+|------|------|
+| **唯一性** | 每个请求只生成一次 correlation_id |
+| **格式** | `corr-{16位十六进制}`，总长度 21 字符 |
+| **传播** | 从请求入口生成后，传递到所有子调用 |
+| **必需性** | HTTP/MCP/JSON-RPC 的错误与业务响应都必须携带 |
+
+### 生成位置
+
+| 入口点 | 生成位置 | 传递方式 |
+|--------|----------|----------|
+| `/mcp` (JSON-RPC) | `mcp_endpoint()` 入口处 | 通过 `mcp_router.dispatch(correlation_id=...)` → `handle_tools_call()` → `_execute_tool(correlation_id=...)` → `*_impl(correlation_id=...)` |
+| `/mcp` (旧协议) | `mcp_endpoint()` 入口处 | 通过 `_execute_tool(correlation_id=...)` → `*_impl(correlation_id=...)` |
+| `/memory/store` (REST) | `memory_store_endpoint()` 入口处 | 通过 `memory_store_impl(correlation_id=...)` 传入 |
+| `/memory/query` (REST) | `memory_query_endpoint()` 入口处 | 通过 `memory_query_impl(correlation_id=...)` 传入 |
+
+**Handler 入参契约**：
+
+`memory_store_impl()` 和 `memory_query_impl()` 都接受可选的 `correlation_id: Optional[str]` 参数：
+- 若 REST/MCP 入口传入非空值，Handler 使用传入的值
+- 若未传入或为 `None`，Handler 内部调用 `generate_correlation_id()` 作为回退
+- 这确保同一请求的所有审计记录和错误返回使用同一 correlation_id
+
+### 响应格式
+
+#### JSON-RPC 2.0 错误响应
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32602,
+    "message": "...",
+    "data": {
+      "category": "validation",
+      "reason": "MISSING_REQUIRED_PARAM",
+      "retryable": false,
+      "correlation_id": "corr-abc123def456789"
+    }
+  }
+}
+```
+
+#### JSON-RPC 2.0 成功响应
+
+correlation_id 在业务结果的 JSON 中：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ok\":true,\"action\":\"allow\",\"correlation_id\":\"corr-abc123def456789\",...}"
+      }
+    ]
+  }
+}
+```
+
+#### 旧协议响应
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "ok": true,
+    "action": "allow",
+    "correlation_id": "corr-abc123def456789",
+    ...
+  }
+}
+```
+
+错误响应：
+
+```json
+{
+  "ok": false,
+  "error": "错误消息",
+  "correlation_id": "corr-abc123def456789"
+}
+```
+
+### 日志格式
+
+日志中统一使用 `correlation_id` 字段名：
+
+```
+INFO  MCP 请求: Mcp-Session-Id=xxx, correlation_id=corr-abc123def456789
+WARN  旧协议请求格式无效: correlation_id=corr-abc123def456789, error=...
+ERROR JSON-RPC 方法执行失败: method=tools/call, correlation_id=corr-abc123def456789
+```
+
+### 代码实现位置
+
+| 功能 | 代码位置 |
+|------|----------|
+| 生成函数 | `mcp_rpc.py:generate_correlation_id()` |
+| ErrorData 自动生成 | `mcp_rpc.py:ErrorData.to_dict()` |
+| 请求入口 | `main.py:mcp_endpoint()` |
+
+### 契约测试引用
+
+| 测试文件 | 测试类 |
+|----------|--------|
+| `test_mcp_jsonrpc_contract.py` | `TestCorrelationIdUnifiedContract` |
+| `test_error_codes.py` | `TestCorrelationIdInErrorResponses` |
+| `test_error_codes.py` | `TestErrorDataCorrelationIdContract` |
+
+---
+
 ## 关键不变量
 
 以下不变量必须在系统运行过程中始终成立，违反时应触发告警。
@@ -731,13 +873,30 @@ success_rate = audit_stats.allow / audit_stats.total
 
 ### 4. Evidence refs_json 可查询性
 
+`evidence_refs_json` 顶层必须包含以下字段，确保 SQL 查询兼容性：
+
+| 顶层字段 | 类型 | 必需性 | SQL 查询用途 |
+|----------|------|--------|--------------|
+| `outbox_id` | int | outbox 场景必需 | `(evidence_refs_json->>'outbox_id')::int` |
+| `source` | str | 必需 | `evidence_refs_json->>'source'` |
+| `correlation_id` | str | 必需 | `evidence_refs_json->>'correlation_id'` |
+| `payload_sha` | str | 必需 | `evidence_refs_json->>'payload_sha'` |
+| `memory_id` | str | 成功场景可选 | `evidence_refs_json->>'memory_id'` |
+| `retry_count` | int | outbox 场景可选 | `evidence_refs_json->>'retry_count'` |
+| `intended_action` | str | redirect 场景必需 | `evidence_refs_json->>'intended_action'` |
+
 ```sql
--- outbox_id 必须在 evidence_refs_json 顶层，确保可查询
+-- reconcile_outbox 使用的查询模式
 SELECT * FROM governance.write_audit 
-WHERE evidence_refs_json->>'outbox_id' = ?
+WHERE reason LIKE 'outbox_flush_success%'
+  AND (evidence_refs_json->>'outbox_id')::int = ?
 ```
 
-**测试引用**：[`test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../tests/gateway/test_audit_event_contract.py)
+**代码实现**：[`src/engram/gateway/reconcile_outbox.py`](../../src/engram/gateway/reconcile_outbox.py)（顶部 SQL 契约声明）
+
+**测试引用**：
+- [`test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../tests/gateway/test_audit_event_contract.py) - 顶层字段契约
+- [`test_reconcile_outbox.py::TestAuditOutboxInvariants`](../../tests/gateway/test_reconcile_outbox.py) - reason/action 映射一致性
 
 ---
 
@@ -772,6 +931,15 @@ WHERE evidence_refs_json->>'outbox_id' = ?
 | audit↔outbox 闭环 | `test_reconcile_outbox.py` | `TestAuditOutboxInvariants` |
 | evidence_refs_json 查询 | `test_audit_event_contract.py` | `TestEvidenceRefsJsonLogbookQueryContract` |
 | reliability_report 结构 | `test_reliability_report_contract.py` | 全部 |
+
+### action 契约测试（deferred vs redirect）
+
+| 测试场景 | 测试文件 | 测试类/函数 | 说明 |
+|----------|----------|-------------|------|
+| deferred 响应契约 | `test_error_codes.py` | `TestDeferredResponseContract` | 验证 action=deferred 时必须返回 outbox_id |
+| OpenMemory 失败审计路径 | `test_audit_event_contract.py` | `TestOpenMemoryFailureAuditPath` | 验证审计内 action=redirect 且 intended_action=deferred |
+| redirect/deferred 边界区分 | `test_audit_event_contract.py` | `test_redirect_action_for_outbox_is_distinct_from_space_redirect` | 验证策略降级与 outbox 降级的区分 |
+| 对外响应与审计 action 一致性 | `test_error_codes.py` | `TestOpenMemoryFailureAuditContract` | 验证对外 deferred 对应审计 redirect |
 
 ### 降级测试
 
@@ -896,6 +1064,376 @@ python -m gateway.reconcile_outbox --once -v
 | 契约测试 | `test_reconcile_outbox.py::TestReconcileReasonErrorCodeContract` | ErrorCode 一致性 |
 | 不变量测试 | `test_reconcile_outbox.py::TestAuditOutboxInvariants` | 审计/Outbox 闭环 |
 | 冒烟测试 | `test_reconcile_outbox.py::TestReconcileSmokeTest` | 命令行退出码与摘要格式 |
+
+---
+
+---
+
+## memory_store 字段契约
+
+本节详细定义 `memory_store` 工具的输入/输出字段契约。
+
+### 输入字段（MemoryStoreRequest）
+
+| 字段 | 类型 | 必需 | 默认值 | 说明 | 单一事实来源 |
+|------|------|------|--------|------|--------------|
+| `payload_md` | string | **是** | - | 记忆内容（Markdown 格式） | `main.py:MemoryStoreRequest` |
+| `target_space` | string | 否 | `team:<project>` | 目标空间 | `main.py:MemoryStoreRequest` |
+| `meta_json` | object | 否 | `null` | 元数据 | `main.py:MemoryStoreRequest` |
+| `kind` | string | 否 | `null` | 知识类型：FACT/PROCEDURE/PITFALL/DECISION/REVIEW_GUIDE | `main.py:MemoryStoreRequest` |
+| `evidence_refs` | array[string] | 否 | `null` | 证据链引用（v1 legacy 格式，已废弃） | `main.py:MemoryStoreRequest` |
+| `evidence` | array[object] | 否 | `null` | 结构化证据（v2 格式，推荐） | `main.py:MemoryStoreRequest` |
+| `is_bulk` | boolean | 否 | `false` | 是否为批量提交 | `main.py:MemoryStoreRequest` |
+| `item_id` | integer | 否 | `null` | 关联的 logbook.items.item_id | `main.py:MemoryStoreRequest` |
+| `actor_user_id` | string | 否 | `null` | 执行操作的用户标识 | `main.py:MemoryStoreRequest` |
+
+### 输出字段（MemoryStoreResponse）
+
+| 字段 | 类型 | 说明 | 条件 | 单一事实来源 |
+|------|------|------|------|--------------|
+| `ok` | boolean | 操作是否成功 | 必需 | `handlers/memory_store.py:MemoryStoreResponse` |
+| `action` | string | 动作类型 | 必需，枚举：allow/redirect/deferred/reject/error | `handlers/memory_store.py:MemoryStoreResponse` |
+| `space_written` | string | 实际写入的空间 | action=allow/redirect 时 | `handlers/memory_store.py:MemoryStoreResponse` |
+| `memory_id` | string | OpenMemory 返回的 ID | action=allow 时 | `handlers/memory_store.py:MemoryStoreResponse` |
+| `outbox_id` | integer | Outbox 补偿记录 ID | **action=deferred 时必需** | `handlers/memory_store.py:MemoryStoreResponse` |
+| `correlation_id` | string | 追踪 ID | 必需 | `handlers/memory_store.py:MemoryStoreResponse` |
+| `evidence_refs` | array | 证据引用列表 | 可选 | `handlers/memory_store.py:MemoryStoreResponse` |
+| `message` | string | 附加消息 | 可选 | `handlers/memory_store.py:MemoryStoreResponse` |
+
+### action 语义映射
+
+| action | ok | 含义 | 后续处理 |
+|--------|-----|------|----------|
+| `allow` | `true` | 直接写入 OpenMemory 成功 | 无 |
+| `redirect` | `true` | 策略降级：空间被重定向后写入成功 | 无 |
+| `deferred` | `false` | OpenMemory 不可用，已入队 outbox | outbox_worker 后台重试 |
+| `reject` | `false` | 策略拒绝，未写入 | 无 |
+| `error` | `false` | 内部错误（如审计写入失败） | 需人工介入 |
+
+### deferred vs redirect 边界说明
+
+**对外响应 action**（MemoryStoreResponse.action）：
+
+| 场景 | action | 说明 |
+|------|--------|------|
+| OpenMemory 直接写入成功 | `allow` | 正常路径 |
+| 策略降级空间后写入成功 | `redirect` | 空间被重定向，但已写入 OpenMemory |
+| OpenMemory 不可用 | `deferred` | 未写入 OpenMemory，已入队 outbox |
+| 策略拒绝 | `reject` | 未写入 |
+| 系统错误 | `error` | 未写入 |
+
+**审计内部 action**（governance.write_audit.action）：
+
+| 场景 | 审计 action | intended_action | 说明 |
+|------|-------------|-----------------|------|
+| 策略降级空间后写入成功 | `redirect` | （无） | 空间重定向但已成功 |
+| OpenMemory 不可用入 outbox | `redirect` | `deferred` | 写入路径重定向到 outbox |
+| outbox 后台重试成功 | `allow` | - | 通过 outbox_worker 补偿成功 |
+| outbox 超过重试次数 | `reject` | - | 通过 outbox_worker 标记死信 |
+
+**契约测试引用**：
+- [`test_unified_stack_integration.py::TestMemoryOperations`](../../tests/gateway/test_unified_stack_integration.py) - 正常写入流程
+- [`test_error_codes.py::TestDeferredResponseContract`](../../tests/gateway/test_error_codes.py) - deferred 响应契约验证
+- [`test_audit_event_contract.py::TestOpenMemoryFailureAuditPath`](../../tests/gateway/test_audit_event_contract.py) - OpenMemory 失败路径审计
+- [`test_audit_event_contract.py::test_redirect_action_for_outbox_is_distinct_from_space_redirect`](../../tests/gateway/test_audit_event_contract.py) - redirect/deferred 边界区分
+
+---
+
+## 审计事件字段契约（audit_event）
+
+本节定义审计事件的完整字段结构，包括版本演进规则。
+
+### Schema 版本
+
+| 版本 | 说明 | 变更 |
+|------|------|------|
+| `1.0` | 初始版本 | 包含 source/operation/correlation_id/decision/evidence_summary 等核心字段 |
+| `1.1` | 当前版本 | 新增 `policy` 和 `validation` 稳定子结构 |
+
+**版本约束规则**：
+- 主版本号变更（1.x → 2.x）：不兼容变更，需要迁移脚本
+- 次版本号变更（1.0 → 1.1）：向后兼容，仅新增可选字段
+
+**单一事实来源**：
+- Schema 定义：[`schemas/audit_event_v1.schema.json`](../../schemas/audit_event_v1.schema.json)
+- 代码实现：[`audit_event.py:AUDIT_EVENT_SCHEMA_VERSION`](../../src/engram/gateway/audit_event.py)
+
+### 核心字段（必需）
+
+| 字段 | 类型 | 说明 | 单一事实来源 |
+|------|------|------|--------------|
+| `schema_version` | string | 审计事件版本号（当前 "1.1"） | `audit_event.py` |
+| `source` | string | 事件来源：`gateway`/`outbox_worker`/`reconcile_outbox` | `audit_event.py` |
+| `operation` | string | 操作类型：`memory_store`/`governance_update`/`outbox_flush`/`outbox_reconcile` | `audit_event.py` |
+| `correlation_id` | string | 关联追踪 ID，格式：`corr-{16位十六进制}` | `audit_event.py` |
+| `decision` | object | 决策信息 `{action, reason}` | `audit_event.py` |
+| `evidence_summary` | object | 证据摘要 `{count, has_strong, uris}` | `audit_event.py` |
+| `trim` | object | 裁剪信息 `{was_trimmed, why, original_len}` | `audit_event.py` |
+| `refs` | array | 兼容旧字段：证据引用列表 | `audit_event.py` |
+| `event_ts` | string | ISO 8601 时间戳 | `audit_event.py` |
+
+### 可选字段
+
+| 字段 | 类型 | 说明 | 条件 | 单一事实来源 |
+|------|------|------|------|--------------|
+| `actor_user_id` | string | 执行操作的用户标识 | 可选 | `audit_event.py` |
+| `requested_space` | string | 原始请求的目标空间 | 可选 | `audit_event.py` |
+| `final_space` | string | 最终写入的空间 | 可选 | `audit_event.py` |
+| `payload_sha` | string | 内容 SHA256 哈希（64位十六进制） | 可选 | `audit_event.py` |
+| `payload_len` | integer | 内容长度（字符数） | 可选 | `audit_event.py` |
+| `outbox_id` | integer | Outbox 记录 ID | outbox 相关操作 | `audit_event.py` |
+| `memory_id` | string | OpenMemory 返回的 ID | 写入成功时 | `audit_event.py` |
+| `retry_count` | integer | 重试次数 | outbox 相关操作 | `audit_event.py` |
+| `next_attempt_at` | string | 下次尝试时间 | outbox 重试时 | `audit_event.py` |
+
+### decision.reason 分层设计
+
+reason 采用分层命名，区分业务层与协议/依赖层：
+
+| 层级 | 命名规则 | 示例 | 单一事实来源 |
+|------|----------|------|--------------|
+| **业务层** | 小写 + 下划线 | `policy_passed`, `team_write_disabled`, `user_not_in_allowlist` | `policy.py` 模块注释 |
+| **校验层** | 大写 + 下划线 | `EVIDENCE_MISSING_SHA256`, `PAYLOAD_TOO_LARGE` | `audit_event.py` |
+| **依赖层** | 大写 + 下划线 | `OPENMEMORY_CONNECTION_FAILED`, `LOGBOOK_DB_ERROR` | `mcp_rpc.py:ErrorReason` |
+| **Outbox 层** | 小写 + 下划线 | `outbox_flush_success`, `outbox_flush_dead`, `outbox_stale` | `engram_logbook.errors:ErrorCode` |
+
+**契约测试引用**：[`test_audit_event_contract.py::TestDecisionSubstructure`](../../tests/gateway/test_audit_event_contract.py)
+
+### v1.1 新增子结构
+
+#### policy 子结构（策略决策上下文）
+
+| 字段 | 类型 | 说明 | 单一事实来源 |
+|------|------|------|--------------|
+| `mode` | string | 策略模式：`strict`/`compat` | `audit_event.py` |
+| `mode_reason` | string | 模式判定说明 | `audit_event.py` |
+| `policy_version` | string | 策略版本：`v1`/`v2` | `audit_event.py` |
+| `is_pointerized` | boolean | 是否 pointerized（v2 特性） | `audit_event.py` |
+| `policy_source` | string | 策略来源：`settings`/`default`/`override` | `audit_event.py` |
+
+#### validation 子结构（校验状态上下文）
+
+| 字段 | 类型 | 说明 | 单一事实来源 |
+|------|------|------|--------------|
+| `validate_refs_effective` | boolean | 实际生效的 validate_refs 值 | `audit_event.py` |
+| `validate_refs_reason` | string | validate_refs 决策原因 | `audit_event.py` |
+| `evidence_validation` | object | evidence 校验详情（strict 模式） | `audit_event.py` |
+
+**契约测试引用**：[`test_audit_event_contract.py::TestPolicySubstructure`](../../tests/gateway/test_audit_event_contract.py)
+
+---
+
+## evidence_refs_json 字段契约
+
+`evidence_refs_json` 是写入 `governance.write_audit` 表的核心字段，用于存储完整的审计元数据和证据链。
+
+### 顶层结构
+
+| 字段 | 类型 | 必需 | 说明 | 单一事实来源 |
+|------|------|------|------|--------------|
+| `gateway_event` | object | **是** | 完整的审计事件（见上节） | `audit_event.py:build_evidence_refs_json` |
+| `patches` | array | 否 | patch_blobs 类型证据列表 | `audit_event.py:build_evidence_refs_json` |
+| `attachments` | array | 否 | attachments 类型证据列表 | `audit_event.py:build_evidence_refs_json` |
+| `external` | array | 否 | 外部 URI 证据列表 | `audit_event.py:build_evidence_refs_json` |
+| `evidence_summary` | object | 否 | 证据摘要（从 gateway_event 复制） | `audit_event.py:build_evidence_refs_json` |
+
+### 顶层兼容字段（Logbook 查询契约）
+
+以下字段从 `gateway_event` 提升到顶层，用于支持 SQL 查询：
+
+| 字段 | 说明 | SQL 查询用途 | 单一事实来源 |
+|------|------|-------------|--------------|
+| `outbox_id` | Outbox 记录 ID | `evidence_refs_json->>'outbox_id'` | `audit_event.py` |
+| `memory_id` | OpenMemory ID | `evidence_refs_json->>'memory_id'` | `audit_event.py` |
+| `source` | 事件来源 | `evidence_refs_json->>'source'` | `audit_event.py` |
+| `correlation_id` | 追踪 ID | `evidence_refs_json->>'correlation_id'` | `audit_event.py` |
+| `payload_sha` | 内容哈希 | `evidence_refs_json->>'payload_sha'` | `audit_event.py` |
+| `retry_count` | 重试次数 | `evidence_refs_json->>'retry_count'` | `audit_event.py` |
+| `intended_action` | 原意动作（redirect 补偿场景） | `evidence_refs_json->>'intended_action'` | `audit_event.py` |
+
+**重要**：`reconcile_outbox.py` 使用 `(evidence_refs_json->>'outbox_id')::int` 查询，因此 `outbox_id` 必须在顶层。
+
+**契约测试引用**：[`test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract`](../../tests/gateway/test_audit_event_contract.py)
+
+### patches 元素结构
+
+| 字段 | 类型 | 必需 | 说明 | URI 格式 |
+|------|------|------|------|----------|
+| `artifact_uri` | string | **是** | Canonical 格式 URI | `memory://patch_blobs/<source_type>/<source_id>/<sha256>` |
+| `sha256` | string | **是** | 64位十六进制哈希 | - |
+| `source_type` | string | 否 | 来源类型：`svn`/`git`/`mr` | - |
+| `source_id` | string | 否 | 来源 ID，格式：`<repo_id>:<revision>` | - |
+| `kind` | string | 否 | 条目类型，默认 `patch` | - |
+
+### attachments 元素结构
+
+| 字段 | 类型 | 必需 | 说明 | URI 格式 |
+|------|------|------|------|----------|
+| `artifact_uri` | string | **是** | Canonical 格式 URI | `memory://attachments/<attachment_id>/<sha256>` |
+| `sha256` | string | **是** | 64位十六进制哈希 | - |
+| `source_id` | string | 否 | 来源 ID | - |
+| `source_type` | string | 否 | 来源类型 | - |
+| `kind` | string | 否 | 条目类型，默认 `attachment` | - |
+
+**注意**：`attachment_id` 必须为整数（数据库主键），`sha256` 必须为 64 位十六进制。旧格式 `memory://attachments/<namespace>/<id>/<sha256>` 已废弃。
+
+### external 元素结构
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `uri` | string | **是** | 外部资源 URI（git://, https://, svn:// 等） |
+| `sha256` | string | 否 | 外部资源哈希（可选，外部资源可能无法获取） |
+| `event_id` | integer | 否 | 事件 ID |
+| `svn_rev` | integer | 否 | SVN revision |
+| `git_commit` | string | 否 | Git commit SHA |
+| `mr` | integer | 否 | Merge Request ID |
+
+**Schema 单一事实来源**：[`schemas/audit_event_v1.schema.json`](../../schemas/audit_event_v1.schema.json)
+
+---
+
+## Outbox 状态机与对账规则
+
+### Outbox 状态机
+
+```
+                    ┌──────────────────────────────────────────────┐
+                    │                                              │
+                    │  ┌────────────┐     ack_sent()      ┌──────┐ │
+ enqueue_memory() ─►│  │  pending   │ ───────────────────► │ sent │ │
+                    │  └────────────┘                      └──────┘ │
+                    │       │  ▲                                    │
+                    │       │  │ fail_retry()                       │
+                    │       │  │ (retry_count < max)                │
+                    │       │  │                                    │
+                    │       ▼  │                                    │
+                    │  ┌────────────┐                               │
+                    │  │  pending   │ (retry_count++)               │
+                    │  │  + locked  │                               │
+                    │  └────────────┘                               │
+                    │       │                                       │
+                    │       │ mark_dead()                           │
+                    │       │ (retry_count >= max)                  │
+                    │       ▼                                       │
+                    │  ┌────────────┐                               │
+                    │  │    dead    │                               │
+                    │  └────────────┘                               │
+                    │                                              │
+                    └──────────────────────────────────────────────┘
+```
+
+### 状态定义
+
+| 状态 | 说明 | 后续操作 |
+|------|------|----------|
+| `pending` | 等待处理或重试中 | outbox_worker 会 claim 并处理 |
+| `sent` | 成功写入 OpenMemory | 终态，无后续操作 |
+| `dead` | 超过最大重试次数 | 终态，需人工介入 |
+
+### Lease 协议
+
+| 操作 | 函数 | 说明 | 单一事实来源 |
+|------|------|------|--------------|
+| **领取任务** | `claim_outbox(worker_id, limit, lease_seconds)` | 获取 pending 记录并设置 lease | `outbox_worker.py` |
+| **确认成功** | `ack_sent(outbox_id, worker_id, memory_id)` | 标记为 sent | `outbox_worker.py` |
+| **失败重试** | `fail_retry(outbox_id, worker_id, error, next_attempt_at)` | 保持 pending，递增 retry_count | `outbox_worker.py` |
+| **标记死信** | `mark_dead(outbox_id, worker_id, error)` | 标记为 dead | `outbox_worker.py` |
+| **续期租约** | `renew_lease(outbox_id, worker_id)` | 延长 lease 时间 | `outbox_worker.py` |
+
+**契约测试引用**：[`test_outbox_worker.py::TestLeaseProtocolCalls`](../../tests/gateway/test_outbox_worker.py)
+
+### 审计/Outbox 映射表
+
+| outbox 状态 | 审计 action | 审计 reason | 说明 | 单一事实来源 |
+|-------------|-------------|-------------|------|--------------|
+| `sent` | `allow` | `outbox_flush_success` | 成功写入 OpenMemory | `engram_logbook.errors:ErrorCode` |
+| `sent` (dedup) | `allow` | `outbox_flush_dedup_hit` | 去重命中，跳过写入 | `engram_logbook.errors:ErrorCode` |
+| `pending` (retry) | `redirect` | `outbox_flush_retry` | 失败重试，延后处理 | `engram_logbook.errors:ErrorCode` |
+| `dead` | `reject` | `outbox_flush_dead` | 超过最大重试，放弃 | `engram_logbook.errors:ErrorCode` |
+| `pending` (stale) | `redirect` | `outbox_stale` | 租约过期，重新调度 | `engram_logbook.errors:ErrorCode` |
+| `pending` (conflict) | `redirect` | `outbox_flush_conflict` | 并发冲突，跳过处理 | `engram_logbook.errors:ErrorCode` |
+| `pending` (db_timeout) | `redirect` | `outbox_flush_db_timeout` | 数据库超时 | `engram_logbook.errors:ErrorCode` |
+| `pending` (db_error) | `redirect` | `outbox_flush_db_error` | 数据库错误 | `engram_logbook.errors:ErrorCode` |
+
+### Reconcile 对账规则
+
+`reconcile_outbox` 模块负责检测并修复 `outbox_memory` 与 `write_audit` 的数据不一致。
+
+#### 对账逻辑
+
+| 检测条件 | 补写审计 | 附加操作 |
+|----------|----------|----------|
+| `status=sent` 且缺少 `outbox_flush_success`/`outbox_flush_dedup_hit` 审计 | `reason=outbox_flush_success, action=allow` | 无 |
+| `status=dead` 且缺少 `outbox_flush_dead` 审计 | `reason=outbox_flush_dead, action=reject` | 无 |
+| `status=pending` 且 `locked_at` 超过 stale 阈值 | `reason=outbox_stale, action=redirect` | 可选重新调度（清除 lock） |
+
+#### Reconcile 配置参数
+
+| 参数 | 类型 | 默认值 | 说明 | 单一事实来源 |
+|------|------|--------|------|--------------|
+| `scan_window_hours` | int | 24 | 扫描时间窗口（小时） | `reconcile_outbox.py:ReconcileConfig` |
+| `batch_size` | int | 100 | 批量处理大小 | `reconcile_outbox.py:ReconcileConfig` |
+| `stale_threshold_seconds` | int | 600 | Stale 阈值（秒），默认 10 分钟 | `reconcile_outbox.py:ReconcileConfig` |
+| `auto_fix` | bool | true | 是否自动修复缺失审计 | `reconcile_outbox.py:ReconcileConfig` |
+| `reschedule_stale` | bool | true | 是否重新调度 stale 记录 | `reconcile_outbox.py:ReconcileConfig` |
+| `reschedule_delay_seconds` | int | 0 | 重新调度延迟（秒） | `reconcile_outbox.py:ReconcileConfig` |
+
+#### 退出码契约
+
+| 退出码 | 含义 |
+|--------|------|
+| `0` | 成功：所有检测到的缺失审计都已修复 |
+| `1` | 部分失败：存在未修复的缺失审计（如 auto_fix=false） |
+| `2` | 执行错误：程序异常终止 |
+
+**契约测试引用**：
+- [`test_reconcile_outbox.py::TestReconcileSentRecords`](../../tests/gateway/test_reconcile_outbox.py)
+- [`test_reconcile_outbox.py::TestReconcileDeadRecords`](../../tests/gateway/test_reconcile_outbox.py)
+- [`test_reconcile_outbox.py::TestReconcileStaleRecords`](../../tests/gateway/test_reconcile_outbox.py)
+- [`test_reconcile_outbox.py::TestAuditOutboxInvariants`](../../tests/gateway/test_reconcile_outbox.py)
+
+---
+
+## 单一事实来源索引
+
+本节汇总各契约的"单一事实来源"，便于维护时快速定位。
+
+### Schema 为单一事实来源
+
+| 契约 | Schema 文件 | 验证测试 |
+|------|-------------|----------|
+| audit_event 结构 | `schemas/audit_event_v1.schema.json` | `test_audit_event_contract.py::TestAuditEventSchema` |
+| evidence_refs_json 结构 | `schemas/audit_event_v1.schema.json` | `test_audit_event_contract.py::TestEvidenceRefsJsonSchema` |
+| reliability_report 结构 | `schemas/reliability_report_v1.schema.json` | `test_reliability_report_contract.py` |
+| object_store_audit 结构 | `schemas/object_store_audit_event_v1.schema.json` | `test_audit_event_contract.py::TestObjectStoreAuditEventSchema` |
+
+### 代码为单一事实来源
+
+| 契约 | 代码位置 | 验证测试 |
+|------|----------|----------|
+| MemoryStoreRequest 字段 | `main.py:MemoryStoreRequest` | `test_unified_stack_integration.py` |
+| MemoryStoreResponse 字段 | `handlers/memory_store.py:MemoryStoreResponse` | `test_unified_stack_integration.py` |
+| audit_event 构建逻辑 | `audit_event.py:build_audit_event` | `test_audit_event_contract.py` |
+| outbox 状态机 | `outbox_worker.py:process_single_item` | `test_outbox_worker.py` |
+| reconcile 对账逻辑 | `reconcile_outbox.py:run_reconcile` | `test_reconcile_outbox.py` |
+| ErrorCode 枚举 | `engram_logbook.errors:ErrorCode` | `test_reconcile_outbox.py::TestReconcileReasonErrorCodeContract` |
+
+### 测试为单一事实来源
+
+| 契约 | 测试文件 | 说明 |
+|------|----------|------|
+| evidence_refs_json 顶层字段 | `test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract` | 验证 SQL 查询兼容性 |
+| audit/outbox 不变量 | `test_reconcile_outbox.py::TestAuditOutboxInvariants` | 验证状态映射一致性 |
+| OpenMemory 失败路径审计 | `test_audit_event_contract.py::TestOpenMemoryFailureAuditEventSchema` | 验证 redirect 语义 |
+| Audit-First 语义 | `test_audit_event_contract.py::TestAuditFirstSemantics` | 验证审计不可丢 |
+
+### 文档为单一事实来源
+
+| 契约 | 文档位置 | 说明 |
+|------|----------|------|
+| reason 分层命名规则 | `audit_event.py` 模块注释 | 业务层/校验层/依赖层命名 |
+| 策略语义 | `docs/gateway/04_governance_switch.md` | policy 决策逻辑 |
+| Gateway ↔ Logbook 边界 | `docs/contracts/gateway_logbook_boundary.md` | 接口签名契约 |
 
 ---
 

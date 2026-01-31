@@ -362,11 +362,74 @@ make deploy && make verify-unified
 
 ---
 
-### 6.4 兼容策略总览
+### 6.4 域 B：engram_logbook 兼容包
+
+> **治理策略：stub（永久保留）**
+>
+> **适用范围**：`engram_logbook` 顶层包及其子模块别名（如 `engram_logbook.errors`）
+
+`engram_logbook` 是 `engram.logbook` 的**兼容别名包**，提供以下稳定导入路径：
+
+| 兼容路径 | 实际模块 | 用途 |
+|----------|----------|------|
+| `import engram_logbook` | `engram.logbook` | 顶层包 |
+| `from engram_logbook.errors import ErrorCode` | `engram.logbook.errors` | 错误码常量 |
+| `from engram_logbook.uri import parse_uri` | `engram.logbook.uri` | URI 解析 |
+| `from engram_logbook.config import get_config` | `engram.logbook.config` | 配置管理 |
+| `from engram_logbook.db import get_connection` | `engram.logbook.db` | 数据库连接 |
+| `from engram_logbook.migrate import run_migration` | `engram.logbook.migrate` | 迁移工具 |
+
+#### 为何采用 stub 策略
+
+1. **测试代码广泛使用**：现有测试大量使用 `with patch('engram_logbook.xxx')` 形式的 mock
+2. **向后兼容承诺**：作为稳定 API 对外暴露，迁移成本高
+3. **无歧义**：`engram_logbook` 明确指向 Logbook 模块，不会与其他包冲突
+
+#### 实现机制
+
+`engram_logbook/__init__.py` 通过以下方式实现别名：
+
+```python
+# 核心实现（简化）
+import importlib
+_base = importlib.import_module("engram.logbook")
+__path__ = _base.__path__  # 支持子模块导入
+
+# 预注册常用子模块
+_ALIAS_MODULES = ["errors", "uri", "config", "db", "migrate", ...]
+for name in _ALIAS_MODULES:
+    sys.modules[f"engram_logbook.{name}"] = importlib.import_module(f"engram.logbook.{name}")
+```
+
+#### 使用建议
+
+| 场景 | 推荐写法 | 说明 |
+|------|----------|------|
+| 新代码 | `from engram.logbook.errors import ErrorCode` | 使用规范路径 |
+| 测试 mock | `with patch('engram_logbook.errors.ErrorCode')` | 兼容路径可用于 mock |
+| 旧代码 | `from engram_logbook.errors import ErrorCode` | 保持兼容，无需迁移 |
+
+#### CI 验证
+
+建议添加兼容导入测试，确保别名稳定可用：
+
+```python
+def test_engram_logbook_alias_imports():
+    """验证 engram_logbook 兼容别名可正常导入"""
+    from engram_logbook import errors
+    from engram_logbook.errors import ErrorCode
+    from engram_logbook.uri import parse_uri
+    assert hasattr(ErrorCode, 'OPENMEMORY_WRITE_FAILED_CONNECTION')
+```
+
+---
+
+### 6.5 兼容策略总览
 
 | 域 | 适用范围 | 策略 | 移除时间 | 参考文档 |
 |----|----------|------|----------|----------|
 | **A: StepX 历史命名** | 目录、模块、数字阶段命名文案 | remove | 已移除 | [§6.1 历史迁移说明](#历史迁移说明) |
+| **B: engram_logbook 兼容包** | 顶层包及子模块别名 | stub | 永久保留 | [§6.4 兼容包说明](#64-域-bengram_logbook-兼容包) |
 
 ---
 
@@ -385,5 +448,6 @@ make deploy && make verify-unified
 
 - [README.md](../../README.md) - 项目快速开始
 - [旧组件命名治理规范](./legacy_naming_governance.md) - 旧组件命名与流程编号的区分规则
+- [SQL 文件清单与迁移指南](../logbook/sql_file_inventory.md) - SQL 文件 SSOT 清单（编号、分类、执行顺序）
 - [04_roles_and_grants.sql](../../sql/04_roles_and_grants.sql) - Logbook 角色定义
 - [05_openmemory_roles_and_grants.sql](../../sql/05_openmemory_roles_and_grants.sql) - OpenMemory 角色定义

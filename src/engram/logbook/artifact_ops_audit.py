@@ -69,12 +69,10 @@ engram_logbook.artifact_ops_audit - 制品操作审计 API
 
 import json
 import os
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional
 
-from .db import get_connection, DbConnectionError
-
+from .db import DbConnectionError, get_connection
 
 # =============================================================================
 # 审计事件数据类
@@ -86,18 +84,18 @@ class AuditEvent:
     """审计事件数据类"""
 
     # 必填字段
-    tool: str                           # 操作工具标识
-    operation: str                      # 操作类型
-    success: bool                       # 操作是否成功
+    tool: str  # 操作工具标识
+    operation: str  # 操作类型
+    success: bool  # 操作是否成功
 
     # 可选字段
-    backend: Optional[str] = None       # 存储后端类型
-    uri: Optional[str] = None           # Artifact 标识
-    bucket: Optional[str] = None        # 存储桶名称
-    object_key: Optional[str] = None    # 对象键
+    backend: Optional[str] = None  # 存储后端类型
+    uri: Optional[str] = None  # Artifact 标识
+    bucket: Optional[str] = None  # 存储桶名称
+    object_key: Optional[str] = None  # 对象键
     trash_prefix: Optional[str] = None  # 垃圾桶前缀
     using_ops_credentials: Optional[bool] = None  # 是否使用运维凭据
-    error: Optional[str] = None         # 错误信息
+    error: Optional[str] = None  # 错误信息
     details: Dict[str, Any] = field(default_factory=dict)  # 详细信息
 
     def to_dict(self) -> Dict[str, Any]:
@@ -352,16 +350,18 @@ def write_gc_summary_audit_event(
         插入的 event_id，如果写入失败返回 None
     """
     event_details = details.copy() if details else {}
-    event_details.update({
-        "gc_mode": gc_mode,
-        "prefix": prefix,
-        "scanned": scanned,
-        "protected": protected,
-        "candidates": candidates,
-        "deleted": deleted,
-        "trashed": trashed,
-        "failed": failed,
-    })
+    event_details.update(
+        {
+            "gc_mode": gc_mode,
+            "prefix": prefix,
+            "scanned": scanned,
+            "protected": protected,
+            "candidates": candidates,
+            "deleted": deleted,
+            "trashed": trashed,
+            "failed": failed,
+        }
+    )
 
     if require_ops is not None:
         event_details["require_ops"] = require_ops

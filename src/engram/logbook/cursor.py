@@ -31,22 +31,21 @@ from typing import Any, Dict, Optional
 
 from .db import get_kv, set_kv
 
-
 # === 时间戳解析与标准化 ===
 
 
 def parse_iso_ts(ts_str: Optional[str]) -> Optional[datetime]:
     """
     将 ISO 8601 格式的时间戳字符串解析为带时区的 datetime 对象
-    
+
     支持的格式：
     - "2024-01-15T12:00:00Z" -> UTC
     - "2024-01-15T12:00:00+00:00" -> UTC
     - "2024-01-15T12:00:00.123456Z" -> UTC (带微秒)
-    
+
     Args:
         ts_str: ISO 8601 格式的时间戳字符串，或 None
-    
+
     Returns:
         带时区的 datetime 对象，或 None（如果输入为 None 或解析失败）
     """
@@ -62,35 +61,36 @@ def parse_iso_ts(ts_str: Optional[str]) -> Optional[datetime]:
 def normalize_iso_ts_z(ts_str: Optional[str]) -> Optional[str]:
     """
     将 ISO 8601 格式的时间戳字符串标准化为以 'Z' 结尾的 UTC 格式
-    
+
     确保存储的游标时间戳格式一致：
     - "2024-01-15T12:00:00+00:00" -> "2024-01-15T12:00:00Z"
     - "2024-01-15T12:00:00Z" -> "2024-01-15T12:00:00Z" (不变)
-    
+
     Args:
         ts_str: ISO 8601 格式的时间戳字符串，或 None
-    
+
     Returns:
         标准化后的时间戳字符串（以 Z 结尾），或 None（如果输入为 None 或解析失败）
     """
     if not ts_str:
         return None
-    
+
     dt = parse_iso_ts(ts_str)
     if dt is None:
         return ts_str  # 解析失败时返回原值
-    
+
     # 确保转换为 UTC
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     else:
         dt = dt.astimezone(timezone.utc)
-    
+
     # 格式化为 ISO 格式并替换 +00:00 为 Z
     iso_str = dt.isoformat()
     if iso_str.endswith("+00:00"):
         iso_str = iso_str[:-6] + "Z"
     return iso_str
+
 
 # 游标版本
 CURSOR_VERSION = 2
@@ -119,6 +119,7 @@ class Cursor:
             - last_sync_at: 最后同步时间 (ISO 8601)
             - last_sync_count: 最后同步的记录数
     """
+
     version: int = CURSOR_VERSION
     watermark: Dict[str, Any] = field(default_factory=dict)
     stats: Dict[str, Any] = field(default_factory=dict)
@@ -273,7 +274,9 @@ def upgrade_cursor(data: Dict[str, Any], cursor_type: str) -> Cursor:
             # GitLab Reviews: last_mr_updated_at, last_mr_iid 移入 watermark（MR 列表驱动）
             # 可选支持 last_event_ts（事件级水位线）
             if "last_mr_updated_at" in data or "last_updated_at" in data:
-                watermark["last_mr_updated_at"] = data.get("last_mr_updated_at") or data.get("last_updated_at")
+                watermark["last_mr_updated_at"] = data.get("last_mr_updated_at") or data.get(
+                    "last_updated_at"
+                )
             if "last_mr_iid" in data:
                 watermark["last_mr_iid"] = data["last_mr_iid"]
             if "last_event_ts" in data:
@@ -597,7 +600,7 @@ def should_advance_mr_cursor(
     # 解析为 datetime 进行比较（支持 Z 与 +00:00 等价）
     new_dt = parse_iso_ts(new_updated_at)
     last_dt = parse_iso_ts(last_updated_at)
-    
+
     # 如果解析失败，回退到字符串比较
     if new_dt is None or last_dt is None:
         if new_updated_at > last_updated_at:
@@ -647,7 +650,7 @@ def should_advance_gitlab_commit_cursor(
     # 解析为 datetime 进行比较（支持 Z 与 +00:00 等价）
     new_dt = parse_iso_ts(new_ts)
     last_dt = parse_iso_ts(last_ts)
-    
+
     # 如果解析失败，回退到字符串比较
     if new_dt is None or last_dt is None:
         if new_ts > last_ts:
@@ -673,23 +676,23 @@ def should_advance_gitlab_commit_cursor(
 def get_cursor_updated_at_timestamp(cursor: Cursor) -> Optional[float]:
     """
     获取游标最后更新时间的 Unix 时间戳
-    
+
     从游标的 stats.last_sync_at 字段解析时间戳。
-    
+
     Args:
         cursor: Cursor 对象
-    
+
     Returns:
         Unix 时间戳（秒），如果没有同步记录返回 None
     """
     last_sync_at = cursor.last_sync_at
     if not last_sync_at:
         return None
-    
+
     dt = parse_iso_ts(last_sync_at)
     if dt is None:
         return None
-    
+
     return dt.timestamp()
 
 
@@ -699,32 +702,32 @@ def calculate_cursor_age_seconds(
 ) -> float:
     """
     计算游标年龄（距离上次同步的秒数）
-    
+
     Args:
         cursor: Cursor 对象
         now: 当前时间戳，None 时使用 datetime.now()
-    
+
     Returns:
         游标年龄（秒），如果从未同步返回 float('inf')
     """
     cursor_ts = get_cursor_updated_at_timestamp(cursor)
-    
+
     if cursor_ts is None:
-        return float('inf')
-    
+        return float("inf")
+
     if now is None:
         now = datetime.now(timezone.utc).timestamp()
-    
+
     return max(0.0, now - cursor_ts)
 
 
 def get_all_cursor_keys_for_repo(repo_id: int) -> list:
     """
     获取仓库所有可能的游标 key 列表
-    
+
     Args:
         repo_id: 仓库 ID
-    
+
     Returns:
         游标 key 列表
     """
@@ -739,11 +742,11 @@ def get_all_cursor_keys_for_repo(repo_id: int) -> list:
 def get_cursor_type_for_job(job_type: str, repo_type: str) -> Optional[str]:
     """
     根据 job_type 和 repo_type 获取对应的游标类型
-    
+
     Args:
         job_type: 任务类型 ('commits', 'mrs', 'reviews')
         repo_type: 仓库类型 ('git', 'svn')
-    
+
     Returns:
         游标类型，无效组合返回 None
     """
@@ -757,5 +760,5 @@ def get_cursor_type_for_job(job_type: str, repo_type: str) -> Optional[str]:
             return CURSOR_TYPE_GITLAB_MR
         elif job_type == "reviews":
             return CURSOR_TYPE_GITLAB_REVIEWS
-    
+
     return None

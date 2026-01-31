@@ -23,24 +23,24 @@ engram_logbook.scm_sync_payload - SCM 同步任务 Payload 契约定义
 使用示例:
     # 解析 payload
     payload = parse_payload(job.payload)
-    
+
     # 访问字段
     instance = payload.gitlab_instance
     since_ts = payload.since_ts
-    
+
     # 序列化
     payload_dict = payload.to_json_dict()
-    
+
     # 查看字段规范
     from engram.logbook.scm_sync_payload import PAYLOAD_FIELD_SPEC
     print(PAYLOAD_FIELD_SPEC["gitlab_instance"])
 """
 
-from dataclasses import dataclass, field, asdict
+import re
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
-import re
 
 __all__ = [
     # 契约规范常量
@@ -85,12 +85,14 @@ Payload 契约规范版本号
 # PhysicalJobType 枚举
 # =============================================================================
 
+
 class PhysicalJobType(str, Enum):
     """
     物理任务类型枚举
-    
+
     对应 sync_jobs.job_type 列的有效值。
     """
+
     SVN = "svn"
     GITLAB_COMMITS = "gitlab_commits"
     GITLAB_MRS = "gitlab_mrs"
@@ -118,7 +120,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "claim_filter": True,  # claim SQL 使用 payload_json ->> 'tenant_id' 过滤
         "example": "tenant-acme",
     },
-    
     # === 认证字段 ===
     "token": {
         "meaning": "可选的 payload 内联认证 token（覆盖 secrets 中的 token）",
@@ -127,7 +128,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "example": None,  # 不应在文档中出现真实 token
         "notes": "敏感字段，存储时应考虑加密或脱敏",
     },
-    
     # === 执行参数 ===
     "batch_size": {
         "meaning": "每次 API 请求的批量大小（如 per_page）",
@@ -154,16 +154,17 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "type": "str",
         "required": False,
         "example": "best_effort",
-        "valid_values": ["always", "best_effort", "none"],
+        "valid_values": ["always", "best_effort", "minimal", "none"],
+        "notes": "minimal 表示仅获取 ministat，用于熔断降级场景",
     },
     "diff_mode": {
         "meaning": "Diff 获取模式",
         "type": "str",
         "required": False,
         "example": "best_effort",
-        "valid_values": ["always", "best_effort", "none"],
+        "valid_values": ["always", "best_effort", "minimal", "none"],
+        "notes": "minimal 表示仅获取 ministat，不获取完整 diff 内容",
     },
-    
     # === 熔断降级参数 ===
     "is_backfill_only": {
         "meaning": "是否仅执行 backfill（熔断降级模式，不做增量同步）",
@@ -192,7 +193,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "required": False,
         "example": 10,
     },
-    
     # === Backfill 时间窗口参数（Git/MR/Review）===
     "since": {
         "meaning": "backfill 开始时间（Unix timestamp 或 ISO8601 字符串）",
@@ -214,7 +214,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "default": False,
         "example": True,
     },
-    
     # === 分块参数（TimeWindowChunk.to_payload / RevisionWindowChunk.to_payload）===
     "window_type": {
         "meaning": "窗口类型（time = 时间窗口，revision = SVN revision 窗口）",
@@ -265,7 +264,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "required": False,
         "example": "last_chunk_only",
     },
-    
     # === SVN 专用参数 ===
     "start_rev": {
         "meaning": "SVN backfill 开始 revision",
@@ -295,7 +293,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "example": "^trunk/src/",
         "job_types": [PhysicalJobType.SVN.value],
     },
-    
     # === MR 专用参数 ===
     "mr_state_filter": {
         "meaning": "MR 状态过滤（opened / merged / closed / all）",
@@ -313,7 +310,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "example": True,
         "job_types": [PhysicalJobType.GITLAB_MRS.value],
     },
-    
     # === 通用调试参数 ===
     "verbose": {
         "meaning": "是否输出详细日志",
@@ -329,7 +325,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "default": False,
         "example": True,
     },
-    
     # === Scheduler 注入的调度元数据 ===
     "reason": {
         "meaning": "任务调度原因（scheduler 注入）",
@@ -355,7 +350,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "required": False,
         "example": "gitlab_commits",
     },
-    
     # === Bucket 惩罚信息（scheduler 注入）===
     "bucket_paused": {
         "meaning": "bucket 是否暂停",
@@ -381,7 +375,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "required": False,
         "example": 300,
     },
-    
     # === 游标相关 ===
     "cursor_age_seconds": {
         "meaning": "游标年龄秒数（scheduler 注入，用于调度决策）",
@@ -401,7 +394,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         "required": False,
         "example": 0.05,
     },
-    
     # === 预算快照（scheduler 注入，用于排障和可观测性）===
     "budget_snapshot": {
         "meaning": "调度时的并发预算快照",
@@ -416,7 +408,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         },
         "notes": "包含 global_running, global_pending, global_active, by_instance, by_tenant 字段",
     },
-    
     # === 熔断决策（scheduler 注入，用于排障和可观测性）===
     "circuit_breaker_decision": {
         "meaning": "调度时的熔断决策快照",
@@ -430,7 +421,6 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
         },
         "notes": "包含 current_state, allow_sync, trigger_reason, suggested_* 等字段",
     },
-    
     # === 旧字段兼容 ===
     "page": {
         "meaning": "分页页码（旧字段，已废弃）",
@@ -449,13 +439,10 @@ PAYLOAD_FIELD_SPEC: Dict[str, Dict[str, Any]] = {
 MIN_REQUIRED_FIELDS: Dict[str, List[str]] = {
     # SVN 同步：无严格必需字段，但 backfill 需要 start_rev/end_rev
     PhysicalJobType.SVN.value: [],
-    
     # GitLab Commits 同步：gitlab_instance 用于 claim 过滤
     PhysicalJobType.GITLAB_COMMITS.value: [],
-    
     # GitLab MRs 同步
     PhysicalJobType.GITLAB_MRS.value: [],
-    
     # GitLab Reviews 同步
     PhysicalJobType.GITLAB_REVIEWS.value: [],
 }
@@ -523,7 +510,7 @@ UNKNOWN_FIELD_PASSTHROUGH_RULES = """
    # Worker 访问未知字段
    payload = job["payload"]  # SyncJobPayload
    custom_value = payload.extra.get("custom_field", default_value)
-   
+
    # 或使用 dict-like API（向后兼容）
    custom_value = payload.get("custom_field", default_value)
    ```
@@ -541,9 +528,10 @@ UNKNOWN_FIELD_PASSTHROUGH_RULES = """
 class JobPayloadVersion(str, Enum):
     """
     Payload 版本枚举
-    
+
     用于标识 payload 的版本，支持平滑升级。
     """
+
     V1 = "v1"
     # 未来版本预留
     # V2 = "v2"
@@ -552,48 +540,55 @@ class JobPayloadVersion(str, Enum):
 class DiffMode(str, Enum):
     """
     Diff 获取模式
-    
+
     - ALWAYS: 总是获取 diff（失败则报错）
     - BEST_EFFORT: 尽力获取 diff（失败则降级）
+    - MINIMAL: 仅获取 ministat（不获取完整 diff 内容，用于熔断降级）
     - NONE: 不获取 diff（仅同步元数据）
     """
+
     ALWAYS = "always"
     BEST_EFFORT = "best_effort"
+    MINIMAL = "minimal"
     NONE = "none"
 
 
 class SyncMode(str, Enum):
     """
     同步模式
-    
+
     - INCREMENTAL: 增量同步（从游标位置继续）
     - BACKFILL: 回填同步（指定时间/revision 窗口）
+    - PROBE: 熔断器探测模式（half_open 状态下的受限同步）
     """
+
     INCREMENTAL = "incremental"
     BACKFILL = "backfill"
+    PROBE = "probe"
 
 
 class WindowType(str, Enum):
     """
     窗口类型
-    
+
     - TIME: 时间窗口（用于 Git/MR/Review）
     - REV: Revision 窗口（用于 SVN）
-    
+
     注意：Schema 中还允许 "revision" 作为 "rev" 的别名（用于向后兼容），
     parse_payload 会自动将 "revision" 规范化为 "rev"。
     """
+
     TIME = "time"
     REV = "rev"
-    
+
     @classmethod
     def normalize(cls, value: str) -> str:
         """
         规范化 window_type 值，将 "revision" 映射为 "rev"。
-        
+
         Args:
             value: 原始 window_type 值
-            
+
         Returns:
             规范化后的值
         """
@@ -608,10 +603,10 @@ class WindowType(str, Enum):
 class PayloadValidationError(ValueError):
     """
     Payload 验证错误
-    
+
     当 payload 字段不符合契约时抛出。
     """
-    
+
     def __init__(self, message: str, errors: Optional[List[str]] = None):
         super().__init__(message)
         self.errors = errors or []
@@ -643,10 +638,10 @@ MAX_TOTAL_CHUNKS = 10000
 
 # ISO8601 时间戳正则（支持多种格式）
 ISO8601_PATTERN = re.compile(
-    r'^\d{4}-\d{2}-\d{2}'  # 日期部分
-    r'(?:[T ]\d{2}:\d{2}:\d{2}'  # 时间部分（可选）
-    r'(?:\.\d+)?'  # 毫秒（可选）
-    r'(?:Z|[+-]\d{2}:?\d{2})?)?$'  # 时区（可选）
+    r"^\d{4}-\d{2}-\d{2}"  # 日期部分
+    r"(?:[T ]\d{2}:\d{2}:\d{2}"  # 时间部分（可选）
+    r"(?:\.\d+)?"  # 毫秒（可选）
+    r"(?:Z|[+-]\d{2}:?\d{2})?)?$"  # 时区（可选）
 )
 
 
@@ -656,58 +651,60 @@ ISO8601_PATTERN = re.compile(
 def _parse_timestamp(value: Any) -> Optional[float]:
     """
     解析时间戳（支持多种格式）
-    
+
     支持的格式：
     - Unix timestamp（int/float）
     - ISO8601 字符串
     - datetime 对象
-    
+
     Args:
         value: 待解析的值
-        
+
     Returns:
         Unix timestamp（float），无效值返回 None
     """
     if value is None:
         return None
-    
+
     # 已经是数字类型
     if isinstance(value, (int, float)):
         return float(value)
-    
+
     # datetime 对象
     if isinstance(value, datetime):
         return value.timestamp()
-    
+
     # 字符串类型
     if isinstance(value, str):
         value = value.strip()
         if not value:
             return None
-        
+
         # 尝试解析为数字
         try:
             return float(value)
         except ValueError:
             pass
-        
+
         # 尝试解析为 ISO8601
         try:
             # 简单格式：2024-01-01
-            if len(value) == 10 and '-' in value:
+            if len(value) == 10 and "-" in value:
                 dt = datetime.strptime(value, "%Y-%m-%d")
                 return dt.replace(tzinfo=timezone.utc).timestamp()
-            
+
             # 带时间：2024-01-01T12:00:00
-            if 'T' in value or ' ' in value:
+            if "T" in value or " " in value:
                 # 移除毫秒和时区，简化解析
-                clean_value = value.replace('T', ' ').split('.')[0].split('+')[0].split('Z')[0].strip()
+                clean_value = (
+                    value.replace("T", " ").split(".")[0].split("+")[0].split("Z")[0].strip()
+                )
                 if len(clean_value) == 19:  # 2024-01-01 12:00:00
                     dt = datetime.strptime(clean_value, "%Y-%m-%d %H:%M:%S")
                     return dt.replace(tzinfo=timezone.utc).timestamp()
         except (ValueError, AttributeError):
             pass
-    
+
     return None
 
 
@@ -715,14 +712,14 @@ def _validate_timestamp(value: Optional[float], field_name: str, errors: List[st
     """验证时间戳范围"""
     if value is None:
         return
-    
+
     if not isinstance(value, (int, float)):
         errors.append(f"{field_name} 类型错误: 期望数字，实际 {type(value).__name__}")
         return
-    
+
     if value < MIN_TIMESTAMP:
         errors.append(f"{field_name} 值过小: {value} < {MIN_TIMESTAMP}")
-    
+
     if value > MAX_TIMESTAMP:
         errors.append(f"{field_name} 值过大: {value} > {MAX_TIMESTAMP}")
 
@@ -731,49 +728,47 @@ def _validate_revision(value: Optional[int], field_name: str, errors: List[str])
     """验证 revision 范围"""
     if value is None:
         return
-    
+
     if not isinstance(value, int):
         errors.append(f"{field_name} 类型错误: 期望 int，实际 {type(value).__name__}")
         return
-    
+
     if value < MIN_REVISION:
         errors.append(f"{field_name} 值过小: {value} < {MIN_REVISION}")
-    
+
     if value > MAX_REVISION:
         errors.append(f"{field_name} 值过大: {value} > {MAX_REVISION}")
 
 
-def _validate_enum(value: Optional[str], field_name: str, valid_values: List[str], errors: List[str]) -> None:
+def _validate_enum(
+    value: Optional[str], field_name: str, valid_values: List[str], errors: List[str]
+) -> None:
     """验证枚举值"""
     if value is None:
         return
-    
+
     if not isinstance(value, str):
         errors.append(f"{field_name} 类型错误: 期望 str，实际 {type(value).__name__}")
         return
-    
+
     if value.lower() not in [v.lower() for v in valid_values]:
         errors.append(f"{field_name} 值无效: '{value}'，有效值: {valid_values}")
 
 
 def _validate_int_range(
-    value: Optional[int], 
-    field_name: str, 
-    min_val: int, 
-    max_val: int, 
-    errors: List[str]
+    value: Optional[int], field_name: str, min_val: int, max_val: int, errors: List[str]
 ) -> None:
     """验证整数范围"""
     if value is None:
         return
-    
+
     if not isinstance(value, int):
         errors.append(f"{field_name} 类型错误: 期望 int，实际 {type(value).__name__}")
         return
-    
+
     if value < min_val:
         errors.append(f"{field_name} 值过小: {value} < {min_val}")
-    
+
     if value > max_val:
         errors.append(f"{field_name} 值过大: {value} > {max_val}")
 
@@ -785,9 +780,9 @@ def _validate_int_range(
 class SyncJobPayloadV1:
     """
     V1 版本的同步任务 Payload
-    
+
     包含任务执行所需的所有参数。
-    
+
     字段分组:
     1. 版本标识
     2. Repo 定位信息
@@ -796,9 +791,10 @@ class SyncJobPayloadV1:
     5. 分块参数
     6. 扩展字段
     """
+
     # === 版本标识 ===
     version: str = JobPayloadVersion.V1.value
-    
+
     # === Repo 定位信息 ===
     # GitLab 实例标识（规范化后的 host，如 gitlab.example.com）
     gitlab_instance: Optional[str] = None
@@ -806,7 +802,7 @@ class SyncJobPayloadV1:
     tenant_id: Optional[str] = None
     # 项目 key（如 group/project）
     project_key: Optional[str] = None
-    
+
     # === 时间窗口（Git/MR/Review 专用）===
     # 窗口类型
     window_type: str = WindowType.TIME.value
@@ -814,13 +810,13 @@ class SyncJobPayloadV1:
     since_ts: Optional[float] = None
     # 结束时间戳（Unix timestamp）
     until_ts: Optional[float] = None
-    
+
     # === Revision 窗口（SVN 专用）===
     # 开始 revision
     start_rev: Optional[int] = None
     # 结束 revision
     end_rev: Optional[int] = None
-    
+
     # === 同步控制参数 ===
     # 同步模式
     mode: str = SyncMode.INCREMENTAL.value
@@ -830,13 +826,13 @@ class SyncJobPayloadV1:
     strict: bool = False
     # 是否更新 watermark（游标）
     update_watermark: bool = True
-    
+
     # === 批量参数 ===
     # 批量大小
     batch_size: Optional[int] = None
     # 前向窗口秒数
     forward_window_seconds: Optional[int] = None
-    
+
     # === 分块参数（大窗口切分）===
     # 分块大小（时间秒数或 revision 数量）
     chunk_size: Optional[int] = None
@@ -844,27 +840,29 @@ class SyncJobPayloadV1:
     total_chunks: int = 1
     # 当前分块索引（0-based）
     current_chunk: int = 0
-    
+
     # === 扩展字段（用于向前兼容）===
     # 存储未识别的字段，避免丢失数据
     extra: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_json_dict(self, include_none: bool = False, include_extra: bool = True) -> Dict[str, Any]:
+
+    def to_json_dict(
+        self, include_none: bool = False, include_extra: bool = True
+    ) -> Dict[str, Any]:
         """
         转换为 JSON 可序列化的字典
-        
+
         Args:
             include_none: 是否包含值为 None 的字段
             include_extra: 是否包含扩展字段
-            
+
         Returns:
             payload 字典
         """
         result: Dict[str, Any] = {}
-        
+
         # 版本
         result["version"] = self.version
-        
+
         # Repo 定位信息
         if include_none or self.gitlab_instance is not None:
             result["gitlab_instance"] = self.gitlab_instance
@@ -872,10 +870,10 @@ class SyncJobPayloadV1:
             result["tenant_id"] = self.tenant_id
         if include_none or self.project_key is not None:
             result["project_key"] = self.project_key
-        
+
         # 窗口参数
         result["window_type"] = self.window_type
-        
+
         if self.window_type == WindowType.TIME.value:
             if include_none or self.since_ts is not None:
                 result["since"] = self.since_ts
@@ -886,156 +884,134 @@ class SyncJobPayloadV1:
                 result["start_rev"] = self.start_rev
             if include_none or self.end_rev is not None:
                 result["end_rev"] = self.end_rev
-        
+
         # 同步控制参数
         result["mode"] = self.mode
         result["diff_mode"] = self.diff_mode
         result["strict"] = self.strict
         result["update_watermark"] = self.update_watermark
-        
+
         # 批量参数
         if include_none or self.batch_size is not None:
             result["batch_size"] = self.batch_size
         if include_none or self.forward_window_seconds is not None:
             result["forward_window_seconds"] = self.forward_window_seconds
-        
+
         # 分块参数
         if include_none or self.chunk_size is not None:
             result["chunk_size"] = self.chunk_size
         result["total_chunks"] = self.total_chunks
         result["current_chunk"] = self.current_chunk
-        
+
         # 扩展字段
         if include_extra and self.extra:
             result.update(self.extra)
-        
+
         return result
-    
+
     def validate(self) -> List[str]:
         """
         验证 payload 字段
-        
+
         Returns:
             错误列表，空列表表示验证通过
         """
         errors: List[str] = []
-        
+
         # 验证版本
-        _validate_enum(
-            self.version, "version", 
-            [v.value for v in JobPayloadVersion], 
-            errors
-        )
-        
+        _validate_enum(self.version, "version", [v.value for v in JobPayloadVersion], errors)
+
         # 验证窗口类型
-        _validate_enum(
-            self.window_type, "window_type",
-            [v.value for v in WindowType],
-            errors
-        )
-        
+        _validate_enum(self.window_type, "window_type", [v.value for v in WindowType], errors)
+
         # 验证时间窗口
         if self.window_type == WindowType.TIME.value:
             _validate_timestamp(self.since_ts, "since_ts", errors)
             _validate_timestamp(self.until_ts, "until_ts", errors)
-            
+
             # 验证窗口边界
             if self.since_ts is not None and self.until_ts is not None:
                 if self.since_ts > self.until_ts:
-                    errors.append(f"时间窗口无效: since_ts({self.since_ts}) > until_ts({self.until_ts})")
-        
+                    errors.append(
+                        f"时间窗口无效: since_ts({self.since_ts}) > until_ts({self.until_ts})"
+                    )
+
         # 验证 revision 窗口
         if self.window_type == WindowType.REV.value:
             _validate_revision(self.start_rev, "start_rev", errors)
             _validate_revision(self.end_rev, "end_rev", errors)
-            
+
             # 验证窗口边界
             if self.start_rev is not None and self.end_rev is not None:
                 if self.start_rev > self.end_rev:
-                    errors.append(f"revision 窗口无效: start_rev({self.start_rev}) > end_rev({self.end_rev})")
-        
+                    errors.append(
+                        f"revision 窗口无效: start_rev({self.start_rev}) > end_rev({self.end_rev})"
+                    )
+
         # 验证同步模式
-        _validate_enum(
-            self.mode, "mode",
-            [v.value for v in SyncMode],
-            errors
-        )
-        
+        _validate_enum(self.mode, "mode", [v.value for v in SyncMode], errors)
+
         # 验证 diff 模式
-        _validate_enum(
-            self.diff_mode, "diff_mode",
-            [v.value for v in DiffMode],
-            errors
-        )
-        
+        _validate_enum(self.diff_mode, "diff_mode", [v.value for v in DiffMode], errors)
+
         # 验证批量参数
         if self.batch_size is not None:
             _validate_int_range(
-                self.batch_size, "batch_size",
-                MIN_BATCH_SIZE, MAX_BATCH_SIZE,
-                errors
+                self.batch_size, "batch_size", MIN_BATCH_SIZE, MAX_BATCH_SIZE, errors
             )
-        
+
         if self.forward_window_seconds is not None:
             _validate_int_range(
-                self.forward_window_seconds, "forward_window_seconds",
-                MIN_FORWARD_WINDOW_SECONDS, MAX_FORWARD_WINDOW_SECONDS,
-                errors
+                self.forward_window_seconds,
+                "forward_window_seconds",
+                MIN_FORWARD_WINDOW_SECONDS,
+                MAX_FORWARD_WINDOW_SECONDS,
+                errors,
             )
-        
+
         # 验证分块参数
         if self.chunk_size is not None:
             _validate_int_range(
-                self.chunk_size, "chunk_size",
-                MIN_CHUNK_SIZE, MAX_CHUNK_SIZE,
-                errors
+                self.chunk_size, "chunk_size", MIN_CHUNK_SIZE, MAX_CHUNK_SIZE, errors
             )
-        
-        _validate_int_range(
-            self.total_chunks, "total_chunks",
-            1, MAX_TOTAL_CHUNKS,
-            errors
-        )
-        
-        _validate_int_range(
-            self.current_chunk, "current_chunk",
-            0, MAX_TOTAL_CHUNKS - 1,
-            errors
-        )
-        
+
+        _validate_int_range(self.total_chunks, "total_chunks", 1, MAX_TOTAL_CHUNKS, errors)
+
+        _validate_int_range(self.current_chunk, "current_chunk", 0, MAX_TOTAL_CHUNKS - 1, errors)
+
         # 验证 current_chunk < total_chunks
         if self.current_chunk >= self.total_chunks:
             errors.append(
                 f"current_chunk({self.current_chunk}) >= total_chunks({self.total_chunks})"
             )
-        
+
         return errors
-    
+
     def is_backfill(self) -> bool:
         """是否为回填模式"""
         return self.mode == SyncMode.BACKFILL.value
-    
+
     def is_strict(self) -> bool:
         """是否为严格模式"""
         return self.strict
-    
+
     def should_fetch_diff(self) -> bool:
         """是否应该获取 diff"""
         return self.diff_mode != DiffMode.NONE.value
-    
+
     def get_time_window(self) -> tuple:
         """
         获取时间窗口
-        
+
         Returns:
             (since_ts, until_ts) 元组
         """
         return (self.since_ts, self.until_ts)
-    
+
     def get_rev_window(self) -> tuple:
         """
         获取 revision 窗口
-        
+
         Returns:
             (start_rev, end_rev) 元组
         """
@@ -1051,112 +1027,114 @@ def parse_payload(
 ) -> SyncJobPayloadV1:
     """
     解析 payload 字典为 SyncJobPayloadV1 对象
-    
+
     支持兼容旧字段名：
     - "since" -> since_ts
     - "until" -> until_ts
     - "gitlab_host" -> gitlab_instance（旧字段名）
-    
+
     Args:
         data: payload 字典（可以为 None 或空）
         strict: 是否在验证失败时抛出异常
-        
+
     Returns:
         SyncJobPayloadV1 对象
-        
+
     Raises:
         PayloadValidationError: strict=True 且验证失败时
     """
     if data is None:
         data = {}
-    
+
     if not isinstance(data, dict):
         if strict:
             raise PayloadValidationError(f"payload 必须是 dict 类型，实际 {type(data).__name__}")
         return SyncJobPayloadV1()
-    
+
     # 收集已知字段
     known_fields = set()
-    
+
     # === 版本 ===
     version = data.get("version", JobPayloadVersion.V1.value)
     known_fields.add("version")
-    
+
     # === Repo 定位信息 ===
     # 兼容旧字段名 gitlab_host -> gitlab_instance
     gitlab_instance = data.get("gitlab_instance") or data.get("gitlab_host")
     known_fields.update(["gitlab_instance", "gitlab_host"])
-    
+
     tenant_id = data.get("tenant_id")
     known_fields.add("tenant_id")
-    
+
     project_key = data.get("project_key")
     known_fields.add("project_key")
-    
+
     # === 窗口类型 ===
     window_type_raw = data.get("window_type", WindowType.TIME.value)
     # 规范化 "revision" -> "rev"（Schema 兼容）
-    window_type = WindowType.normalize(window_type_raw) if window_type_raw else WindowType.TIME.value
+    window_type = (
+        WindowType.normalize(window_type_raw) if window_type_raw else WindowType.TIME.value
+    )
     known_fields.add("window_type")
-    
+
     # === 时间窗口 ===
     # 兼容多种字段名：since/since_ts, until/until_ts
     since_raw = data.get("since") or data.get("since_ts")
     until_raw = data.get("until") or data.get("until_ts")
     known_fields.update(["since", "since_ts", "until", "until_ts"])
-    
+
     since_ts = _parse_timestamp(since_raw)
     until_ts = _parse_timestamp(until_raw)
-    
+
     # === Revision 窗口 ===
     start_rev = data.get("start_rev")
     end_rev = data.get("end_rev")
     known_fields.update(["start_rev", "end_rev"])
-    
+
     if start_rev is not None and not isinstance(start_rev, int):
         try:
             start_rev = int(start_rev)
         except (ValueError, TypeError):
             start_rev = None
-    
+
     if end_rev is not None and not isinstance(end_rev, int):
         try:
             end_rev = int(end_rev)
         except (ValueError, TypeError):
             end_rev = None
-    
+
     # 自动推断 window_type
     if window_type == WindowType.TIME.value and (start_rev is not None or end_rev is not None):
         # 如果有 revision 字段，切换到 REV 模式
         if since_ts is None and until_ts is None:
             window_type = WindowType.REV.value
-    
+
     # === 同步控制参数 ===
     mode = data.get("mode", SyncMode.INCREMENTAL.value)
     known_fields.add("mode")
-    
+
     # 兼容 diff_mode 的不同写法
     diff_mode = data.get("diff_mode") or data.get("diffMode") or DiffMode.BEST_EFFORT.value
     known_fields.update(["diff_mode", "diffMode"])
-    
+
     # 规范化 diff_mode
     if isinstance(diff_mode, str):
         diff_mode = diff_mode.lower()
-    
+
     strict_flag = data.get("strict", False)
     known_fields.add("strict")
     if isinstance(strict_flag, str):
         strict_flag = strict_flag.lower() in ("true", "1", "yes")
     elif isinstance(strict_flag, (int, float)) and not isinstance(strict_flag, bool):
         strict_flag = bool(strict_flag)
-    
+
     update_watermark = data.get("update_watermark", True)
     known_fields.add("update_watermark")
     if isinstance(update_watermark, str):
         update_watermark = update_watermark.lower() in ("true", "1", "yes")
     elif isinstance(update_watermark, (int, float)) and not isinstance(update_watermark, bool):
         update_watermark = bool(update_watermark)
-    
+
     # === 批量参数 ===
     batch_size = data.get("batch_size")
     known_fields.add("batch_size")
@@ -1165,7 +1143,7 @@ def parse_payload(
             batch_size = int(batch_size)
         except (ValueError, TypeError):
             batch_size = None
-    
+
     forward_window_seconds = data.get("forward_window_seconds")
     known_fields.add("forward_window_seconds")
     if forward_window_seconds is not None and not isinstance(forward_window_seconds, int):
@@ -1173,7 +1151,7 @@ def parse_payload(
             forward_window_seconds = int(forward_window_seconds)
         except (ValueError, TypeError):
             forward_window_seconds = None
-    
+
     # === 分块参数 ===
     chunk_size = data.get("chunk_size")
     known_fields.add("chunk_size")
@@ -1182,7 +1160,7 @@ def parse_payload(
             chunk_size = int(chunk_size)
         except (ValueError, TypeError):
             chunk_size = None
-    
+
     total_chunks = data.get("total_chunks", 1)
     known_fields.add("total_chunks")
     if not isinstance(total_chunks, int):
@@ -1190,7 +1168,7 @@ def parse_payload(
             total_chunks = int(total_chunks)
         except (ValueError, TypeError):
             total_chunks = 1
-    
+
     current_chunk = data.get("current_chunk", 0)
     known_fields.add("current_chunk")
     if not isinstance(current_chunk, int):
@@ -1198,10 +1176,10 @@ def parse_payload(
             current_chunk = int(current_chunk)
         except (ValueError, TypeError):
             current_chunk = 0
-    
+
     # === 收集扩展字段 ===
     extra = {k: v for k, v in data.items() if k not in known_fields}
-    
+
     # 构建 payload 对象
     payload = SyncJobPayloadV1(
         version=version,
@@ -1224,16 +1202,13 @@ def parse_payload(
         current_chunk=current_chunk,
         extra=extra,
     )
-    
+
     # 验证
     if strict:
         errors = payload.validate()
         if errors:
-            raise PayloadValidationError(
-                f"Payload 验证失败: {'; '.join(errors)}",
-                errors=errors
-            )
-    
+            raise PayloadValidationError(f"Payload 验证失败: {'; '.join(errors)}", errors=errors)
+
     return payload
 
 
@@ -1242,10 +1217,10 @@ def validate_payload(
 ) -> tuple:
     """
     验证 payload 是否符合契约
-    
+
     Args:
         data: payload 字典或 SyncJobPayloadV1 对象
-        
+
     Returns:
         (is_valid, errors) 元组
         - is_valid: bool, 是否有效
@@ -1259,7 +1234,7 @@ def validate_payload(
             errors = payload.validate()
         except PayloadValidationError as e:
             return (False, e.errors or [str(e)])
-    
+
     return (len(errors) == 0, errors)
 
 
@@ -1267,8 +1242,10 @@ def validate_payload(
 # SyncJobPayload - 运行时 payload 解析（简化版，向后兼容）
 # =============================================================================
 
+
 class PayloadParseError(Exception):
     """Payload 解析错误（契约不匹配）"""
+
     pass
 
 
@@ -1276,12 +1253,12 @@ class PayloadParseError(Exception):
 class SyncJobPayload:
     """
     同步任务 payload 的类型化表示（运行时使用）。
-    
+
     设计原则：
     - 所有字段都有默认值（向后兼容：旧任务可能缺少新字段）
     - 未知字段保留在 extra 中（向前兼容：新字段不破坏旧代码）
     - 从 dict 解析时验证基本类型约束
-    
+
     字段说明：
     - gitlab_instance: GitLab 实例 key（如 gitlab.example.com）
     - tenant_id: 租户 ID
@@ -1297,30 +1274,30 @@ class SyncJobPayload:
     - fetch_details: 是否获取详情
     - extra: 未知字段（向前兼容）
     """
-    
+
     # === Pool 过滤字段 ===
     gitlab_instance: Optional[str] = None
     tenant_id: Optional[str] = None
-    
+
     # === 认证字段 ===
     token: Optional[str] = None
-    
+
     # === 执行参数 ===
     batch_size: Optional[int] = None
     suggested_batch_size: Optional[int] = None
     suggested_forward_window_seconds: Optional[int] = None
     suggested_diff_mode: Optional[str] = None
     diff_mode: Optional[str] = None
-    
+
     # === 熔断降级参数 ===
     is_backfill_only: bool = False
     circuit_state: Optional[str] = None
-    
+
     # === Backfill 时间窗口参数 ===
     since: Optional[Union[str, int, float]] = None
     until: Optional[Union[str, int, float]] = None
     update_watermark: bool = False
-    
+
     # === 分块窗口参数（TimeWindowChunk / RevisionWindowChunk）===
     window_type: Optional[str] = None  # "time" | "revision"
     window_since: Optional[str] = None
@@ -1332,95 +1309,132 @@ class SyncJobPayload:
     # 旧字段名兼容（映射自 chunk_index/chunk_total）
     current_chunk: Optional[int] = None
     total_chunks: Optional[int] = None
-    
+
     # === SVN 专用参数 ===
     start_rev: Optional[int] = None
     end_rev: Optional[int] = None
     fetch_patches: Optional[bool] = None
     patch_path_filter: Optional[str] = None
-    
+
     # === MR 专用参数 ===
     mr_state_filter: Optional[str] = None
     fetch_details: bool = False
-    
+
     # === 通用参数 ===
     verbose: bool = False
     dry_run: bool = False
     page: Optional[int] = None  # 旧字段兼容
-    
+
     # === 向前兼容：保留未知字段 ===
     extra: Dict[str, Any] = field(default_factory=dict)
-    
+
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "SyncJobPayload":
         """
         从 dict 解析为 SyncJobPayload。
-        
+
         规则：
         - 已知字段映射到对应属性
         - 未知字段保留在 extra 中
         - 类型验证失败抛出 PayloadParseError
         - 支持字段名映射（chunk_index <-> current_chunk）
-        
+
         Args:
             data: payload dict（可为 None）
-        
+
         Returns:
             SyncJobPayload 实例
-        
+
         Raises:
             PayloadParseError: 类型验证失败
         """
         if data is None:
             return cls()
-        
+
         if not isinstance(data, dict):
-            raise PayloadParseError(
-                f"payload must be a dict, got {type(data).__name__}"
-            )
-        
+            raise PayloadParseError(f"payload must be a dict, got {type(data).__name__}")
+
         # 已知字段列表
         known_fields = {
-            "gitlab_instance", "tenant_id", "token",
-            "batch_size", "suggested_batch_size", "suggested_forward_window_seconds",
-            "suggested_diff_mode", "diff_mode",
-            "is_backfill_only", "circuit_state",
-            "since", "until", "update_watermark",
-            "window_type", "window_since", "window_until",
-            "window_start_rev", "window_end_rev",
-            "chunk_index", "chunk_total", "current_chunk", "total_chunks",
-            "start_rev", "end_rev", "fetch_patches", "patch_path_filter",
-            "mr_state_filter", "fetch_details",
-            "verbose", "dry_run", "page",
+            "gitlab_instance",
+            "tenant_id",
+            "token",
+            "batch_size",
+            "suggested_batch_size",
+            "suggested_forward_window_seconds",
+            "suggested_diff_mode",
+            "diff_mode",
+            "is_backfill_only",
+            "circuit_state",
+            "since",
+            "until",
+            "update_watermark",
+            "window_type",
+            "window_since",
+            "window_until",
+            "window_start_rev",
+            "window_end_rev",
+            "chunk_index",
+            "chunk_total",
+            "current_chunk",
+            "total_chunks",
+            "start_rev",
+            "end_rev",
+            "fetch_patches",
+            "patch_path_filter",
+            "mr_state_filter",
+            "fetch_details",
+            "verbose",
+            "dry_run",
+            "page",
         }
-        
+
         # 分离已知字段和未知字段
         known_values = {}
         extra = {}
-        
+
         for key, value in data.items():
             if key in known_fields:
                 known_values[key] = value
             else:
                 extra[key] = value
-        
+
         # 类型验证和转换
         try:
             # 字符串字段
-            for str_field in ["gitlab_instance", "tenant_id", "token", 
-                             "suggested_diff_mode", "diff_mode", "circuit_state",
-                             "mr_state_filter", "patch_path_filter",
-                             "window_type", "window_since", "window_until"]:
+            for str_field in [
+                "gitlab_instance",
+                "tenant_id",
+                "token",
+                "suggested_diff_mode",
+                "diff_mode",
+                "circuit_state",
+                "mr_state_filter",
+                "patch_path_filter",
+                "window_type",
+                "window_since",
+                "window_until",
+            ]:
                 if str_field in known_values:
                     val = known_values[str_field]
                     if val is not None and not isinstance(val, str):
                         known_values[str_field] = str(val)
-            
+
             # 整数字段
-            for int_field in ["batch_size", "suggested_batch_size", "suggested_forward_window_seconds",
-                             "start_rev", "end_rev", "page",
-                             "chunk_index", "chunk_total", "current_chunk", "total_chunks",
-                             "window_start_rev", "window_end_rev"]:
+            for int_field in [
+                "batch_size",
+                "suggested_batch_size",
+                "suggested_forward_window_seconds",
+                "start_rev",
+                "end_rev",
+                "page",
+                "chunk_index",
+                "chunk_total",
+                "current_chunk",
+                "total_chunks",
+                "window_start_rev",
+                "window_end_rev",
+            ]:
                 if int_field in known_values:
                     val = known_values[int_field]
                     if val is not None:
@@ -1430,15 +1444,21 @@ class SyncJobPayload:
                             raise PayloadParseError(
                                 f"field '{int_field}' must be int, got {type(val).__name__}: {val}"
                             ) from e
-            
+
             # 布尔字段
-            for bool_field in ["is_backfill_only", "update_watermark", "fetch_details", 
-                              "verbose", "dry_run", "fetch_patches"]:
+            for bool_field in [
+                "is_backfill_only",
+                "update_watermark",
+                "fetch_details",
+                "verbose",
+                "dry_run",
+                "fetch_patches",
+            ]:
                 if bool_field in known_values:
                     val = known_values[bool_field]
                     if val is not None:
                         known_values[bool_field] = bool(val)
-            
+
             # since/until 可以是字符串或数字（时间戳）
             for time_field in ["since", "until"]:
                 if time_field in known_values:
@@ -1447,65 +1467,65 @@ class SyncJobPayload:
                         raise PayloadParseError(
                             f"field '{time_field}' must be str/int/float, got {type(val).__name__}"
                         )
-            
+
             # === 字段名映射：chunk_index <-> current_chunk, chunk_total <-> total_chunks ===
             # 如果只有一方存在，映射到另一方
             if "chunk_index" in known_values and "current_chunk" not in known_values:
                 known_values["current_chunk"] = known_values["chunk_index"]
             elif "current_chunk" in known_values and "chunk_index" not in known_values:
                 known_values["chunk_index"] = known_values["current_chunk"]
-            
+
             if "chunk_total" in known_values and "total_chunks" not in known_values:
                 known_values["total_chunks"] = known_values["chunk_total"]
             elif "total_chunks" in known_values and "chunk_total" not in known_values:
                 known_values["chunk_total"] = known_values["total_chunks"]
-            
+
         except PayloadParseError:
             raise
         except Exception as e:
             raise PayloadParseError(f"payload validation failed: {e}") from e
-        
+
         return cls(extra=extra, **known_values)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """
         转换为 dict（用于序列化到数据库）。
-        
+
         规则：
         - None 值的字段不包含在结果中（减少存储空间）
         - False 布尔值保留（与 None 区分）
         - extra 字段合并到顶层
-        
+
         Returns:
             payload dict
         """
-        from dataclasses import asdict
+
         result = {}
-        
+
         # 序列化已知字段
         d = asdict(self)
         extra = d.pop("extra", {})
-        
+
         for key, value in d.items():
             # 跳过 None 值（节省存储）
             if value is None:
                 continue
             # 保留布尔 False（与 None 区分）
             result[key] = value
-        
+
         # 合并 extra 字段（未知字段保留）
         result.update(extra)
-        
+
         return result
-    
+
     def get(self, key: str, default: Any = None) -> Any:
         """
         兼容 dict-like 访问（便于渐进迁移）。
-        
+
         Args:
             key: 字段名
             default: 默认值
-        
+
         Returns:
             字段值
         """
@@ -1513,13 +1533,13 @@ class SyncJobPayload:
             val = getattr(self, key)
             return val if val is not None else default
         return self.extra.get(key, default)
-    
+
     def __getitem__(self, key: str) -> Any:
         """支持 payload[key] 访问（向后兼容）"""
         if hasattr(self, key) and key != "extra":
             return getattr(self, key)
         return self.extra[key]
-    
+
     def __contains__(self, key: str) -> bool:
         """支持 'key' in payload 检查（向后兼容）"""
         if hasattr(self, key) and key != "extra":
@@ -1533,11 +1553,11 @@ def parse_payload_runtime(
 ) -> tuple:
     """
     安全解析 payload_json 为 SyncJobPayload（运行时使用）。
-    
+
     Args:
         payload_json: 原始 payload（可以是 dict、JSON 字符串或 None）
         job_id: 可选，用于日志
-    
+
     Returns:
         (payload, error) 元组：
         - 成功: (SyncJobPayload, None)
@@ -1545,27 +1565,28 @@ def parse_payload_runtime(
     """
     import json as json_mod
     import logging
+
     logger = logging.getLogger(__name__)
-    
+
     try:
         # 处理 None
         if payload_json is None:
             return SyncJobPayload(), None
-        
+
         # 处理 JSON 字符串
         if isinstance(payload_json, str):
             try:
                 payload_json = json_mod.loads(payload_json)
             except json_mod.JSONDecodeError as e:
                 return None, f"invalid JSON: {e}"
-        
+
         # 处理已经是 SyncJobPayload 的情况
         if isinstance(payload_json, SyncJobPayload):
             return payload_json, None
-        
+
         # 解析 dict
         return SyncJobPayload.from_dict(payload_json), None
-        
+
     except PayloadParseError as e:
         error_msg = f"payload contract mismatch: {e}"
         if job_id:
@@ -1594,7 +1615,7 @@ def build_time_window_payload(
 ) -> SyncJobPayloadV1:
     """
     构建时间窗口 payload（用于 Git/MR/Review）
-    
+
     Args:
         since_ts: 开始时间戳
         until_ts: 结束时间戳
@@ -1604,7 +1625,7 @@ def build_time_window_payload(
         diff_mode: diff 获取模式
         strict: 严格模式
         **extra: 扩展字段
-        
+
     Returns:
         SyncJobPayloadV1 对象
     """
@@ -1633,7 +1654,7 @@ def build_rev_window_payload(
 ) -> SyncJobPayloadV1:
     """
     构建 revision 窗口 payload（用于 SVN）
-    
+
     Args:
         start_rev: 开始 revision
         end_rev: 结束 revision
@@ -1642,7 +1663,7 @@ def build_rev_window_payload(
         diff_mode: diff 获取模式
         strict: 严格模式
         **extra: 扩展字段
-        
+
     Returns:
         SyncJobPayloadV1 对象
     """

@@ -22,17 +22,16 @@ engram_logbook.gitlab_client - 可复用的 GitLab REST API 客户端
 import json
 import logging
 import random
-import time
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 from urllib.parse import quote
 
 import requests
 
 from .errors import EngramError
-
 
 # ============ 速率限制器协议 ============
 
@@ -40,23 +39,23 @@ from .errors import EngramError
 class RateLimiterProtocol(Protocol):
     """
     速率限制器协议（抽象接口）
-    
+
     所有速率限制器（local/distributed）都应实现此协议。
     支持请求前 acquire、429 通知、统计获取。
     """
-    
+
     def acquire(self, timeout: Optional[float] = None) -> bool:
         """
         获取一个请求令牌
-        
+
         Args:
             timeout: 超时时间（秒），None 表示使用默认策略
-            
+
         Returns:
             True 如果成功获取，False 如果超时或被拒绝
         """
         ...
-    
+
     def notify_rate_limit(
         self,
         retry_after: Optional[float] = None,
@@ -64,13 +63,13 @@ class RateLimiterProtocol(Protocol):
     ) -> None:
         """
         通知收到了速率限制响应（429）
-        
+
         Args:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
         """
         ...
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
         ...
@@ -82,14 +81,14 @@ class RateLimiterProtocol(Protocol):
 class ConcurrencyLimiter:
     """
     并发限制器（基于 Semaphore）
-    
+
     用于控制同时进行的 HTTP 请求数量，避免对 GitLab 服务造成过大压力。
     """
-    
+
     def __init__(self, max_concurrency: int):
         """
         初始化并发限制器
-        
+
         Args:
             max_concurrency: 最大并发数
         """
@@ -102,72 +101,72 @@ class ConcurrencyLimiter:
         self._waiting_count = 0
         self._total_acquired = 0
         self._total_wait_time_ms = 0.0
-    
+
     @property
     def max_concurrency(self) -> int:
         """最大并发数"""
         return self._max_concurrency
-    
+
     @property
     def active_count(self) -> int:
         """当前活跃请求数"""
         with self._lock:
             return self._active_count
-    
+
     @property
     def waiting_count(self) -> int:
         """当前等待请求数"""
         with self._lock:
             return self._waiting_count
-    
+
     def acquire(self, timeout: Optional[float] = None) -> bool:
         """
         获取一个并发槽位
-        
+
         Args:
             timeout: 超时时间（秒），None 表示无限等待
-            
+
         Returns:
             True 如果成功获取，False 如果超时
         """
         start_time = time.time()
-        
+
         with self._lock:
             self._waiting_count += 1
-        
+
         try:
             acquired = self._semaphore.acquire(blocking=True, timeout=timeout)
-            
+
             with self._lock:
                 self._waiting_count -= 1
                 if acquired:
                     self._active_count += 1
                     self._total_acquired += 1
                     self._total_wait_time_ms += (time.time() - start_time) * 1000
-            
+
             return acquired
         except Exception:
             with self._lock:
                 self._waiting_count -= 1
             raise
-    
+
     def release(self) -> None:
         """释放一个并发槽位"""
         with self._lock:
             if self._active_count > 0:
                 self._active_count -= 1
         self._semaphore.release()
-    
+
     def __enter__(self):
         """上下文管理器入口"""
         self.acquire()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """上下文管理器出口"""
         self.release()
         return False
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
         with self._lock:
@@ -176,27 +175,29 @@ class ConcurrencyLimiter:
                 "active_count": self._active_count,
                 "waiting_count": self._waiting_count,
                 "total_acquired": self._total_acquired,
-                "avg_wait_time_ms": round(self._total_wait_time_ms / self._total_acquired, 2) if self._total_acquired > 0 else 0,
+                "avg_wait_time_ms": round(self._total_wait_time_ms / self._total_acquired, 2)
+                if self._total_acquired > 0
+                else 0,
             }
 
 
 class RateLimiter:
     """
     速率限制器（基于令牌桶算法）
-    
+
     用于控制 HTTP 请求速率，避免触发 GitLab 的 429 限流。
     支持根据 429 响应中的 Retry-After 或 RateLimit-Reset 头自动调整。
-    
+
     429 处理优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
     """
-    
+
     # 默认暂停时间（秒）
     DEFAULT_PAUSE_SECONDS = 1.0
     # 最大暂停时间（秒），用于 clamp 异常值
     MAX_PAUSE_SECONDS = 3600.0  # 1 小时
     # 最小暂停时间（秒），用于 clamp 负值
     MIN_PAUSE_SECONDS = 0.0
-    
+
     def __init__(
         self,
         requests_per_second: float = 10.0,
@@ -204,59 +205,59 @@ class RateLimiter:
     ):
         """
         初始化速率限制器
-        
+
         Args:
             requests_per_second: 每秒允许的请求数
             burst_size: 突发容量（默认等于 requests_per_second）
         """
         if requests_per_second <= 0:
             raise ValueError(f"requests_per_second 必须为正数，当前: {requests_per_second}")
-        
+
         self._rate = requests_per_second
         self._burst_size = burst_size or int(max(1, requests_per_second))
         self._tokens = float(self._burst_size)
         self._last_update = time.time()
         self._lock = threading.Lock()
-        
+
         # 统计信息
         self._total_requests = 0
         self._total_wait_time_ms = 0.0
         self._throttled_count = 0
-        
+
         # 429 响应时暂停直到的时间
         self._paused_until: Optional[float] = None
         # 暂停的来源（便于 status 查询）
         self._pause_source: Optional[str] = None
-    
+
     @property
     def rate(self) -> float:
         """每秒请求数"""
         return self._rate
-    
+
     @property
     def burst_size(self) -> int:
         """突发容量"""
         return self._burst_size
-    
+
     def acquire(self, timeout: Optional[float] = None) -> bool:
         """
         获取一个请求令牌
-        
+
         如果令牌不足，会等待直到有可用令牌或超时。
-        
+
         Args:
             timeout: 超时时间（秒），None 表示无限等待
-            
+
         Returns:
             True 如果成功获取，False 如果超时
         """
         start_time = time.time()
         deadline = start_time + timeout if timeout else None
-        
+
         while True:
             with self._lock:
                 now = time.time()
-                
+
                 # 检查是否因 429 被暂停
                 if self._paused_until and now < self._paused_until:
                     wait_time = self._paused_until - now
@@ -264,33 +265,33 @@ class RateLimiter:
                         return False
                 else:
                     self._paused_until = None
-                
+
                 # 补充令牌
                 elapsed = now - self._last_update
                 self._tokens = min(self._burst_size, self._tokens + elapsed * self._rate)
                 self._last_update = now
-                
+
                 if self._tokens >= 1.0:
                     self._tokens -= 1.0
                     self._total_requests += 1
                     self._total_wait_time_ms += (now - start_time) * 1000
                     return True
-                
+
                 # 计算需要等待的时间
                 wait_time = (1.0 - self._tokens) / self._rate
                 self._throttled_count += 1
-            
+
             # 检查是否超时
             if deadline and time.time() + wait_time > deadline:
                 return False
-            
+
             # 等待令牌补充
             time.sleep(min(wait_time, 0.1))  # 最多等待 0.1 秒后重新检查
-    
+
     def pause_until(self, resume_time: float, source: Optional[str] = None) -> None:
         """
         暂停请求直到指定时间（用于处理 429 响应）
-        
+
         Args:
             resume_time: 恢复请求的时间戳
             source: 暂停来源（如 "retry_after", "rate_limit_reset", "default"）
@@ -299,25 +300,27 @@ class RateLimiter:
             if self._paused_until is None or resume_time > self._paused_until:
                 self._paused_until = resume_time
                 self._pause_source = source
-    
+
     def _clamp_pause_seconds(self, seconds: float) -> float:
         """
         对暂停秒数做 clamp 处理
-        
+
         Args:
             seconds: 原始暂停秒数
-            
+
         Returns:
             clamp 后的暂停秒数，范围 [MIN_PAUSE_SECONDS, MAX_PAUSE_SECONDS]
         """
         return max(self.MIN_PAUSE_SECONDS, min(seconds, self.MAX_PAUSE_SECONDS))
-    
-    def notify_rate_limit(self, retry_after: Optional[float] = None, reset_time: Optional[float] = None) -> None:
+
+    def notify_rate_limit(
+        self, retry_after: Optional[float] = None, reset_time: Optional[float] = None
+    ) -> None:
         """
         通知收到了速率限制响应（429）
-        
+
         优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
-        
+
         Args:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
@@ -325,7 +328,7 @@ class RateLimiter:
         now = time.time()
         pause_seconds: float
         source: str
-        
+
         # 优先级 1: Retry-After（秒）
         if retry_after is not None:
             try:
@@ -355,12 +358,12 @@ class RateLimiter:
         else:
             pause_seconds = self.DEFAULT_PAUSE_SECONDS
             source = "default"
-        
+
         resume_time = now + pause_seconds
         self.pause_until(resume_time, source=source)
-        
+
         logger.debug(f"RateLimiter: 429 响应，暂停 {pause_seconds:.2f}s (来源: {source})")
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
         with self._lock:
@@ -370,7 +373,9 @@ class RateLimiter:
                 "tokens": round(self._tokens, 2),
                 "total_requests": self._total_requests,
                 "throttled_count": self._throttled_count,
-                "avg_wait_time_ms": round(self._total_wait_time_ms / self._total_requests, 2) if self._total_requests > 0 else 0,
+                "avg_wait_time_ms": round(self._total_wait_time_ms / self._total_requests, 2)
+                if self._total_requests > 0
+                else 0,
                 "paused_until": self._paused_until,
                 "pause_source": self._pause_source,
             }
@@ -379,27 +384,27 @@ class RateLimiter:
 class PostgresRateLimiter:
     """
     基于 Postgres 的分布式速率限制器
-    
+
     与内存版 RateLimiter 相比，此限制器：
     - 支持多进程/多 worker 共享限流状态
     - 使用 Postgres 行锁保证原子性
     - 支持 429 Retry-After 反馈机制
-    
+
     429 处理优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
-    
+
     适用场景：
     - 多 worker 并发同步
     - 需要跨进程共享限流状态
     - 需要持久化限流配置
     """
-    
+
     # 默认暂停时间（秒）
     DEFAULT_PAUSE_SECONDS = 1.0
     # 最大暂停时间（秒），用于 clamp 异常值
     MAX_PAUSE_SECONDS = 3600.0  # 1 小时
     # 最小暂停时间（秒），用于 clamp 负值
     MIN_PAUSE_SECONDS = 0.0
-    
+
     def __init__(
         self,
         instance_key: str,
@@ -410,7 +415,7 @@ class PostgresRateLimiter:
     ):
         """
         初始化 Postgres 限流器
-        
+
         Args:
             instance_key: 实例标识（如 GitLab 域名）
             dsn: 数据库连接字符串，为 None 时从环境变量 POSTGRES_DSN 读取
@@ -424,60 +429,62 @@ class PostgresRateLimiter:
         self._burst = burst
         self._max_wait_seconds = max_wait_seconds
         self._lock = threading.Lock()
-        
+
         # 统计信息
         self._total_requests = 0
         self._total_wait_time_ms = 0.0
         self._throttled_count = 0
         self._rejected_count = 0
-        
+
         # 本地缓存最后一次 429 暂停信息（便于 status 查询）
         self._last_pause_until: Optional[float] = None
         self._last_pause_source: Optional[str] = None
-    
+
     @property
     def instance_key(self) -> str:
         """实例标识"""
         return self._instance_key
-    
+
     @property
     def rate(self) -> float:
         """每秒请求数"""
         return self._rate
-    
+
     @property
     def burst_size(self) -> int:
         """突发容量"""
         return self._burst
-    
+
     def _get_conn(self):
         """获取数据库连接"""
         import os
+
         dsn = self._dsn or os.environ.get("POSTGRES_DSN")
         if not dsn:
             raise ValueError("POSTGRES_DSN 环境变量未设置，且未提供 dsn 参数")
-        
+
         import psycopg
+
         return psycopg.connect(dsn, autocommit=True)
-    
+
     def acquire(self, timeout: Optional[float] = None) -> bool:
         """
         获取一个请求令牌（从 Postgres 消费）
-        
+
         如果令牌不足或被暂停，会等待直到有可用令牌或超时。
-        
+
         Args:
             timeout: 超时时间（秒），None 表示使用 max_wait_seconds
-            
+
         Returns:
             True 如果成功获取，False 如果超时或被拒绝
         """
         # 延迟导入避免循环依赖
         from ..db import consume_rate_limit_token
-        
+
         max_wait = timeout if timeout is not None else self._max_wait_seconds
         start_time = time.time()
-        
+
         while True:
             elapsed = time.time() - start_time
             if elapsed >= max_wait:
@@ -485,7 +492,7 @@ class PostgresRateLimiter:
                     self._rejected_count += 1
                 logger.debug(f"Postgres 限流器: 等待超时 ({elapsed:.2f}s >= {max_wait}s)")
                 return False
-            
+
             try:
                 with self._get_conn() as conn:
                     result = consume_rate_limit_token(
@@ -495,42 +502,42 @@ class PostgresRateLimiter:
                         default_rate=self._rate,
                         default_burst=self._burst,
                     )
-                
+
                 if result.allowed:
                     with self._lock:
                         self._total_requests += 1
                         self._total_wait_time_ms += elapsed * 1000
                     return True
-                
+
                 # 需要等待
                 wait_seconds = min(result.wait_seconds, max_wait - elapsed, 1.0)
                 if wait_seconds <= 0:
                     with self._lock:
                         self._rejected_count += 1
                     return False
-                
+
                 with self._lock:
                     self._throttled_count += 1
-                
+
                 logger.debug(f"Postgres 限流器: 等待 {wait_seconds:.2f}s")
                 time.sleep(wait_seconds)
-                
+
             except Exception as e:
                 logger.warning(f"Postgres 限流器操作失败: {e}，允许请求通过")
                 return True  # 失败时允许通过，避免阻塞
-    
+
     def _clamp_pause_seconds(self, seconds: float) -> float:
         """
         对暂停秒数做 clamp 处理
-        
+
         Args:
             seconds: 原始暂停秒数
-            
+
         Returns:
             clamp 后的暂停秒数，范围 [MIN_PAUSE_SECONDS, MAX_PAUSE_SECONDS]
         """
         return max(self.MIN_PAUSE_SECONDS, min(seconds, self.MAX_PAUSE_SECONDS))
-    
+
     def notify_rate_limit(
         self,
         retry_after: Optional[float] = None,
@@ -538,21 +545,21 @@ class PostgresRateLimiter:
     ) -> None:
         """
         通知收到了速率限制响应（429）
-        
+
         将暂停信息写入 Postgres，影响所有使用相同 instance_key 的 worker。
-        
+
         优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 默认值(1秒)
-        
+
         Args:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
         """
         from ..db import pause_rate_limit_bucket
-        
+
         now = time.time()
         pause_seconds: float
         source: str
-        
+
         # 优先级 1: Retry-After（秒）
         if retry_after is not None:
             try:
@@ -562,7 +569,9 @@ class PostgresRateLimiter:
                 source = "retry_after"
             except (ValueError, TypeError):
                 # 解析失败，回退到默认值
-                logger.warning(f"Postgres 限流器: 无法解析 Retry-After 值: {retry_after}，使用默认值")
+                logger.warning(
+                    f"Postgres 限流器: 无法解析 Retry-After 值: {retry_after}，使用默认值"
+                )
                 pause_seconds = self.DEFAULT_PAUSE_SECONDS
                 source = "default"
         # 优先级 2: RateLimit-Reset（时间戳）
@@ -575,19 +584,21 @@ class PostgresRateLimiter:
                 source = "rate_limit_reset"
             except (ValueError, TypeError):
                 # 解析失败，回退到默认值
-                logger.warning(f"Postgres 限流器: 无法解析 RateLimit-Reset 值: {reset_time}，使用默认值")
+                logger.warning(
+                    f"Postgres 限流器: 无法解析 RateLimit-Reset 值: {reset_time}，使用默认值"
+                )
                 pause_seconds = self.DEFAULT_PAUSE_SECONDS
                 source = "default"
         # 优先级 3: 默认值
         else:
             pause_seconds = self.DEFAULT_PAUSE_SECONDS
             source = "default"
-        
+
         # 记录本地缓存（便于 status 查询）
         with self._lock:
             self._last_pause_until = now + pause_seconds
             self._last_pause_source = source
-        
+
         try:
             with self._get_conn() as conn:
                 pause_rate_limit_bucket(
@@ -599,7 +610,7 @@ class PostgresRateLimiter:
             logger.info(f"Postgres 限流器: 收到 429，暂停 {pause_seconds:.1f}s (来源: {source})")
         except Exception as e:
             logger.warning(f"Postgres 限流器: 记录 429 失败: {e}")
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""
         with self._lock:
@@ -611,17 +622,17 @@ class PostgresRateLimiter:
                 "total_requests": self._total_requests,
                 "throttled_count": self._throttled_count,
                 "rejected_count": self._rejected_count,
-                "avg_wait_time_ms": round(
-                    self._total_wait_time_ms / self._total_requests, 2
-                ) if self._total_requests > 0 else 0,
+                "avg_wait_time_ms": round(self._total_wait_time_ms / self._total_requests, 2)
+                if self._total_requests > 0
+                else 0,
                 "last_pause_until": self._last_pause_until,
                 "last_pause_source": self._last_pause_source,
             }
-    
+
     def get_bucket_status(self) -> Optional[Dict[str, Any]]:
         """从 Postgres 获取当前桶状态"""
         from ..db import get_rate_limit_status
-        
+
         try:
             with self._get_conn() as conn:
                 return get_rate_limit_status(conn, self._instance_key)
@@ -633,87 +644,87 @@ class PostgresRateLimiter:
 class ComposedRateLimiter:
     """
     组合速率限制器
-    
+
     将多个限制器（local + distributed）组合为一个，支持：
     - acquire 时依次调用所有 limiter
     - 429 通知时通知所有 limiter
     - 统计信息聚合
-    
+
     使用场景：
     - 同时使用本地令牌桶 + Postgres 分布式限流
     - 多层限流策略
     """
-    
+
     def __init__(self, limiters: Optional[List[Any]] = None):
         """
         初始化组合限流器
-        
+
         Args:
             limiters: 限流器列表（可包含 RateLimiter、PostgresRateLimiter 或任何实现 RateLimiterProtocol 的对象）
         """
         self._limiters: List[Any] = limiters or []
         self._lock = threading.Lock()
-        
+
         # 聚合统计
         self._total_requests = 0
         self._total_429_hits = 0
         self._timeout_count = 0
         self._total_wait_time_ms = 0.0
-    
+
     def add_limiter(self, limiter: Any) -> None:
         """添加一个限流器"""
         with self._lock:
             self._limiters.append(limiter)
-    
+
     @property
     def limiters(self) -> List[Any]:
         """获取所有限流器"""
         with self._lock:
             return list(self._limiters)
-    
+
     def acquire(self, timeout: Optional[float] = None) -> bool:
         """
         获取一个请求令牌（依次调用所有 limiter）
-        
+
         如果任一 limiter 拒绝，则整体拒绝。
-        
+
         Args:
             timeout: 超时时间（秒）
-            
+
         Returns:
             True 如果所有 limiter 都允许，False 如果任一拒绝
         """
         start_time = time.time()
-        
+
         with self._lock:
             self._total_requests += 1
             limiters_copy = list(self._limiters)
-        
+
         acquired_limiters = []
-        
+
         try:
             for limiter in limiters_copy:
-                if hasattr(limiter, 'acquire'):
+                if hasattr(limiter, "acquire"):
                     if not limiter.acquire(timeout=timeout):
                         # 某个 limiter 拒绝，记录超时
                         with self._lock:
                             self._timeout_count += 1
                         return False
                     acquired_limiters.append(limiter)
-            
+
             # 所有 limiter 都通过，记录等待时间
             wait_time_ms = (time.time() - start_time) * 1000
             with self._lock:
                 self._total_wait_time_ms += wait_time_ms
-            
+
             return True
-            
+
         except Exception as e:
             logger.warning(f"ComposedRateLimiter.acquire 异常: {e}")
             with self._lock:
                 self._timeout_count += 1
             return False
-    
+
     def notify_rate_limit(
         self,
         retry_after: Optional[float] = None,
@@ -721,7 +732,7 @@ class ComposedRateLimiter:
     ) -> None:
         """
         通知收到了速率限制响应（429），通知所有 limiter
-        
+
         Args:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
@@ -729,9 +740,9 @@ class ComposedRateLimiter:
         with self._lock:
             self._total_429_hits += 1
             limiters_copy = list(self._limiters)
-        
+
         for limiter in limiters_copy:
-            if hasattr(limiter, 'notify_rate_limit'):
+            if hasattr(limiter, "notify_rate_limit"):
                 try:
                     limiter.notify_rate_limit(
                         retry_after=retry_after,
@@ -739,11 +750,11 @@ class ComposedRateLimiter:
                     )
                 except Exception as e:
                     logger.warning(f"ComposedRateLimiter: 通知 limiter 失败: {e}")
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """
         获取聚合统计信息
-        
+
         包含组合器自身统计 + 各子 limiter 统计
         """
         with self._lock:
@@ -752,26 +763,26 @@ class ComposedRateLimiter:
                 "total_requests": self._total_requests,
                 "total_429_hits": self._total_429_hits,
                 "timeout_count": self._timeout_count,
-                "avg_wait_time_ms": round(
-                    self._total_wait_time_ms / self._total_requests, 2
-                ) if self._total_requests > 0 else 0,
+                "avg_wait_time_ms": round(self._total_wait_time_ms / self._total_requests, 2)
+                if self._total_requests > 0
+                else 0,
                 "limiter_count": len(self._limiters),
             }
-            
+
             # 收集各子 limiter 的统计
             sub_stats = []
             for i, limiter in enumerate(self._limiters):
-                if hasattr(limiter, 'get_stats'):
+                if hasattr(limiter, "get_stats"):
                     try:
                         sub_stat = limiter.get_stats()
                         sub_stat["index"] = i
                         sub_stats.append(sub_stat)
                     except Exception as e:
                         logger.warning(f"ComposedRateLimiter: 获取子 limiter 统计失败: {e}")
-            
+
             if sub_stats:
                 stats["sub_limiters"] = sub_stats
-            
+
             return stats
 
 
@@ -784,6 +795,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RequestStats:
     """单次请求统计"""
+
     endpoint: str
     method: str
     status_code: Optional[int] = None
@@ -801,6 +813,7 @@ class RequestStats:
 @dataclass
 class ClientStats:
     """客户端级别的请求统计汇总"""
+
     total_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
@@ -808,22 +821,22 @@ class ClientStats:
     total_retries: int = 0
     total_duration_ms: float = 0.0
     request_history: List[RequestStats] = field(default_factory=list)
-    
+
     # 429 限流详细信息
     last_retry_after: Optional[float] = None  # 最后一次 Retry-After 值
     last_rate_limit_reset: Optional[float] = None  # 最后一次 RateLimit-Reset 值
     last_rate_limit_remaining: Optional[int] = None  # 最后一次 RateLimit-Remaining 值
-    
+
     # limiter 统计（通过 set_limiter_stats 设置）
     timeout_count: int = 0  # 超时次数（limiter 等待超时）
     avg_wait_time_ms: float = 0.0  # 平均等待时间（limiter acquire）
-    
+
     # 线程安全锁
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-    
+
     # limiter stats 缓存（由 GitLabClient 设置）
     _limiter_stats: Optional[Dict[str, Any]] = field(default=None, repr=False)
-    
+
     def record(self, stats: RequestStats) -> None:
         """记录一次请求统计"""
         with self._lock:
@@ -843,9 +856,9 @@ class ClientStats:
                 if stats.rate_limit_remaining is not None:
                     self.last_rate_limit_remaining = stats.rate_limit_remaining
             if stats.attempt_count > 1:
-                self.total_retries += (stats.attempt_count - 1)
+                self.total_retries += stats.attempt_count - 1
             self.request_history.append(stats)
-    
+
     def set_limiter_stats(
         self,
         timeout_count: int = 0,
@@ -854,7 +867,7 @@ class ClientStats:
     ) -> None:
         """
         设置 limiter 相关统计（由 GitLabClient 调用）
-        
+
         Args:
             timeout_count: 超时次数
             avg_wait_time_ms: 平均等待时间（毫秒）
@@ -864,11 +877,11 @@ class ClientStats:
             self.timeout_count = timeout_count
             self.avg_wait_time_ms = avg_wait_time_ms
             self._limiter_stats = limiter_stats
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """
         转换为字典（用于 logbook event payload 和 sync_runs.counts）
-        
+
         包含以下稳定字段（向后兼容）：
         - total_requests: 总请求数
         - successful_requests: 成功请求数
@@ -889,7 +902,9 @@ class ClientStats:
                 "total_429_hits": self.total_429_hits,
                 "total_retries": self.total_retries,
                 "total_duration_ms": round(self.total_duration_ms, 2),
-                "avg_duration_ms": round(self.total_duration_ms / self.total_requests, 2) if self.total_requests > 0 else 0,
+                "avg_duration_ms": round(self.total_duration_ms / self.total_requests, 2)
+                if self.total_requests > 0
+                else 0,
                 # limiter 统计（稳定字段）
                 "timeout_count": self.timeout_count,
                 "avg_wait_time_ms": round(self.avg_wait_time_ms, 2),
@@ -905,7 +920,7 @@ class ClientStats:
             if self._limiter_stats:
                 result["limiter_stats"] = self._limiter_stats
             return result
-    
+
     def reset(self) -> None:
         """重置统计数据"""
         with self._lock:
@@ -929,6 +944,7 @@ class ClientStats:
 
 class GitLabErrorCategory(str, Enum):
     """GitLab 错误分类"""
+
     TIMEOUT = "timeout"
     RATE_LIMITED = "rate_limited"
     AUTH_ERROR = "auth_error"
@@ -946,10 +962,11 @@ class GitLabErrorCategory(str, Enum):
 @dataclass
 class GitLabAPIResult:
     """GitLab API 请求结果（支持成功和失败场景）"""
+
     success: bool
     data: Optional[Any] = None  # 成功时的 JSON 响应
     response: Optional[requests.Response] = None  # 原始响应对象
-    
+
     # 错误信息（失败时填充）
     status_code: Optional[int] = None
     endpoint: Optional[str] = None
@@ -958,7 +975,7 @@ class GitLabAPIResult:
     retry_after: Optional[float] = None  # 429 时的 Retry-After 值（秒）
     rate_limit_reset: Optional[float] = None  # RateLimit-Reset 头的值（Unix 时间戳）
     rate_limit_remaining: Optional[int] = None  # RateLimit-Remaining 头的值
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（用于日志/序列化），对敏感信息进行脱敏"""
         result = {
@@ -980,6 +997,7 @@ class GitLabAPIResult:
 
 class GitLabAPIError(EngramError):
     """GitLab API 错误"""
+
     exit_code = 11
     error_type = "GITLAB_API_ERROR"
 
@@ -999,20 +1017,17 @@ class GitLabAPIError(EngramError):
 
 class GitLabRateLimitError(GitLabAPIError):
     """GitLab API 限流错误 (429)"""
+
     error_type = "GITLAB_RATE_LIMIT_ERROR"
 
-    def __init__(
-        self,
-        message: str,
-        retry_after: Optional[float] = None,
-        **kwargs
-    ):
+    def __init__(self, message: str, retry_after: Optional[float] = None, **kwargs):
         super().__init__(message, category=GitLabErrorCategory.RATE_LIMITED, **kwargs)
         self.retry_after = retry_after
 
 
 class GitLabAuthError(GitLabAPIError):
     """GitLab 认证错误 (401/403)"""
+
     error_type = "GITLAB_AUTH_ERROR"
 
     def __init__(self, message: str, **kwargs):
@@ -1021,6 +1036,7 @@ class GitLabAuthError(GitLabAPIError):
 
 class GitLabServerError(GitLabAPIError):
     """GitLab 服务器错误 (5xx)"""
+
     error_type = "GITLAB_SERVER_ERROR"
 
     def __init__(self, message: str, **kwargs):
@@ -1029,6 +1045,7 @@ class GitLabServerError(GitLabAPIError):
 
 class GitLabNetworkError(GitLabAPIError):
     """GitLab 网络/连接错误"""
+
     error_type = "GITLAB_NETWORK_ERROR"
 
     def __init__(self, message: str, **kwargs):
@@ -1037,6 +1054,7 @@ class GitLabNetworkError(GitLabAPIError):
 
 class GitLabTimeoutError(GitLabAPIError):
     """GitLab 请求超时错误"""
+
     error_type = "GITLAB_TIMEOUT_ERROR"
 
     def __init__(self, message: str, **kwargs):
@@ -1047,7 +1065,7 @@ class GitLabTimeoutError(GitLabAPIError):
 
 # 复用 scm_auth 模块中的 TokenProvider（避免重复定义）
 try:
-    from .scm_auth import TokenProvider, StaticTokenProvider, mask_token, redact, redact_headers
+    from .scm_auth import StaticTokenProvider, TokenProvider, mask_token, redact, redact_headers
 except ImportError:
     # Fallback: 如果 scm_auth 不存在，使用 Protocol 定义
     from typing import Protocol
@@ -1088,19 +1106,22 @@ except ImportError:
         if not text:
             return ""
         import re
+
         result = str(text)
         # GitLab token 模式
-        result = re.sub(r'\b(glp[a-z]{1,2}-[A-Za-z0-9_-]{10,})\b', '[GITLAB_TOKEN]', result)
+        result = re.sub(r"\b(glp[a-z]{1,2}-[A-Za-z0-9_-]{10,})\b", "[GITLAB_TOKEN]", result)
         # PRIVATE-TOKEN header 值
-        result = re.sub(r'(PRIVATE-TOKEN[:\s]+)[^\s,;]+', r'\1[REDACTED]', result, flags=re.IGNORECASE)
+        result = re.sub(
+            r"(PRIVATE-TOKEN[:\s]+)[^\s,;]+", r"\1[REDACTED]", result, flags=re.IGNORECASE
+        )
         return result
 
     def redact_headers(headers) -> dict:
         """简单的 header 脱敏"""
         if not headers:
             return {}
-        sensitive = {'authorization', 'private-token', 'x-private-token', 'cookie'}
-        return {k: '[REDACTED]' if k.lower() in sensitive else v for k, v in headers.items()}
+        sensitive = {"authorization", "private-token", "x-private-token", "cookie"}
+        return {k: "[REDACTED]" if k.lower() in sensitive else v for k, v in headers.items()}
 
 
 # ============ HTTP 配置 ============
@@ -1109,6 +1130,7 @@ except ImportError:
 @dataclass
 class HttpConfig:
     """HTTP 请求配置"""
+
     timeout_seconds: float = 60.0
     max_attempts: int = 3
     backoff_base_seconds: float = 1.0
@@ -1135,33 +1157,33 @@ class HttpConfig:
     def from_config(cls, config: Optional["Config"] = None) -> "HttpConfig":
         """
         从配置对象加载 HTTP 配置
-        
+
         使用 config.py 中定义的默认值常量，确保默认值与文档一致。
         """
         import os
-        
+
         # 延迟导入避免循环依赖，获取统一的默认值常量
         from .config import (
-            DEFAULT_HTTP_TIMEOUT_SECONDS,
-            DEFAULT_HTTP_MAX_ATTEMPTS,
-            DEFAULT_HTTP_BACKOFF_BASE_SECONDS,
-            DEFAULT_HTTP_BACKOFF_MAX_SECONDS,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT,
+            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE,
+            DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE,
             DEFAULT_GITLAB_RATE_LIMIT_ENABLED,
             DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND,
-            DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE,
-            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED,
-            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE,
-            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST,
-            DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT,
-            DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED,
-            DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE,
             DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST,
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED,
             DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT,
+            DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE,
+            DEFAULT_HTTP_BACKOFF_BASE_SECONDS,
+            DEFAULT_HTTP_BACKOFF_MAX_SECONDS,
+            DEFAULT_HTTP_MAX_ATTEMPTS,
+            DEFAULT_HTTP_TIMEOUT_SECONDS,
         )
-        
+
         if config is None:
             return cls()
-        
+
         # postgres_rate_limit_dsn: 优先 scm.gitlab.postgres_rate_limit_dsn，否则回退 POSTGRES_DSN
         postgres_dsn = config.get("scm.gitlab.postgres_rate_limit_dsn")
         if postgres_dsn is None:
@@ -1170,23 +1192,51 @@ class HttpConfig:
         return cls(
             timeout_seconds=config.get("scm.http.timeout_seconds", DEFAULT_HTTP_TIMEOUT_SECONDS),
             max_attempts=config.get("scm.http.max_attempts", DEFAULT_HTTP_MAX_ATTEMPTS),
-            backoff_base_seconds=config.get("scm.http.backoff_base_seconds", DEFAULT_HTTP_BACKOFF_BASE_SECONDS),
-            backoff_max_seconds=config.get("scm.http.backoff_max_seconds", DEFAULT_HTTP_BACKOFF_MAX_SECONDS),
+            backoff_base_seconds=config.get(
+                "scm.http.backoff_base_seconds", DEFAULT_HTTP_BACKOFF_BASE_SECONDS
+            ),
+            backoff_max_seconds=config.get(
+                "scm.http.backoff_max_seconds", DEFAULT_HTTP_BACKOFF_MAX_SECONDS
+            ),
             max_concurrency=config.get("scm.gitlab.max_concurrency"),
-            rate_limit_enabled=config.get("scm.gitlab.rate_limit_enabled", DEFAULT_GITLAB_RATE_LIMIT_ENABLED),
-            rate_limit_requests_per_second=config.get("scm.gitlab.rate_limit_requests_per_second", DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND),
-            rate_limit_burst_size=config.get("scm.gitlab.rate_limit_burst_size", DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE),
+            rate_limit_enabled=config.get(
+                "scm.gitlab.rate_limit_enabled", DEFAULT_GITLAB_RATE_LIMIT_ENABLED
+            ),
+            rate_limit_requests_per_second=config.get(
+                "scm.gitlab.rate_limit_requests_per_second",
+                DEFAULT_GITLAB_RATE_LIMIT_REQUESTS_PER_SECOND,
+            ),
+            rate_limit_burst_size=config.get(
+                "scm.gitlab.rate_limit_burst_size", DEFAULT_GITLAB_RATE_LIMIT_BURST_SIZE
+            ),
             # Postgres 限流配置（实例维度）
-            postgres_rate_limit_enabled=config.get("scm.gitlab.postgres_rate_limit_enabled", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED),
+            postgres_rate_limit_enabled=config.get(
+                "scm.gitlab.postgres_rate_limit_enabled", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_ENABLED
+            ),
             postgres_rate_limit_dsn=postgres_dsn,
-            postgres_rate_limit_rate=config.get("scm.gitlab.postgres_rate_limit_rate", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE),
-            postgres_rate_limit_burst=config.get("scm.gitlab.postgres_rate_limit_burst", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST),
-            postgres_rate_limit_max_wait=config.get("scm.gitlab.postgres_rate_limit_max_wait", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT),
+            postgres_rate_limit_rate=config.get(
+                "scm.gitlab.postgres_rate_limit_rate", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_RATE
+            ),
+            postgres_rate_limit_burst=config.get(
+                "scm.gitlab.postgres_rate_limit_burst", DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_BURST
+            ),
+            postgres_rate_limit_max_wait=config.get(
+                "scm.gitlab.postgres_rate_limit_max_wait",
+                DEFAULT_GITLAB_POSTGRES_RATE_LIMIT_MAX_WAIT,
+            ),
             # Postgres 限流配置（tenant 维度）
-            tenant_rate_limit_enabled=config.get("scm.gitlab.tenant_rate_limit_enabled", DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED),
-            tenant_rate_limit_rate=config.get("scm.gitlab.tenant_rate_limit_rate", DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE),
-            tenant_rate_limit_burst=config.get("scm.gitlab.tenant_rate_limit_burst", DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST),
-            tenant_rate_limit_max_wait=config.get("scm.gitlab.tenant_rate_limit_max_wait", DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT),
+            tenant_rate_limit_enabled=config.get(
+                "scm.gitlab.tenant_rate_limit_enabled", DEFAULT_GITLAB_TENANT_RATE_LIMIT_ENABLED
+            ),
+            tenant_rate_limit_rate=config.get(
+                "scm.gitlab.tenant_rate_limit_rate", DEFAULT_GITLAB_TENANT_RATE_LIMIT_RATE
+            ),
+            tenant_rate_limit_burst=config.get(
+                "scm.gitlab.tenant_rate_limit_burst", DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST
+            ),
+            tenant_rate_limit_max_wait=config.get(
+                "scm.gitlab.tenant_rate_limit_max_wait", DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT
+            ),
         )
 
 
@@ -1256,13 +1306,15 @@ class GitLabClient:
 
         # 创建 Session
         self.session = requests.Session()
-        self.session.headers.update({
-            "Accept": "application/json",
-        })
-        
+        self.session.headers.update(
+            {
+                "Accept": "application/json",
+            }
+        )
+
         # 请求统计
         self.stats = ClientStats()
-        
+
         # 并发限制器
         if concurrency_limiter is not None:
             self._concurrency_limiter = concurrency_limiter
@@ -1270,7 +1322,7 @@ class GitLabClient:
             self._concurrency_limiter = ConcurrencyLimiter(self.http_config.max_concurrency)
         else:
             self._concurrency_limiter = None
-        
+
         # 速率限制器（内存版）
         if rate_limiter is not None:
             self._rate_limiter = rate_limiter
@@ -1281,7 +1333,7 @@ class GitLabClient:
             )
         else:
             self._rate_limiter = None
-        
+
         # Postgres 限流器（分布式版，实例维度）
         if postgres_rate_limiter is not None:
             self._postgres_rate_limiter = postgres_rate_limiter
@@ -1297,7 +1349,7 @@ class GitLabClient:
             )
         else:
             self._postgres_rate_limiter = None
-        
+
         # Postgres 限流器（分布式版，tenant 维度）
         # key 形如: gitlab:<host>:tenant:<id>
         self._tenant_id = tenant_id
@@ -1315,54 +1367,56 @@ class GitLabClient:
             )
         else:
             self._tenant_rate_limiter = None
-    
+
     def _extract_instance_key(self, url: str) -> str:
         """
         从 URL 提取实例标识
-        
+
         生成规则: gitlab:<host>
         例如: https://gitlab.example.com -> gitlab:gitlab.example.com
-        
+
         这确保同一 GitLab host 的所有请求共享同一个限流桶。
-        
+
         Args:
             url: GitLab 实例 URL
-            
+
         Returns:
             格式为 "gitlab:<host>" 的实例标识
         """
         from urllib.parse import urlparse
+
         try:
             parsed = urlparse(url)
             host = parsed.netloc or url
             return f"gitlab:{host}"
         except Exception:
             return f"gitlab:{url}"
-    
+
     def _extract_tenant_key(self, url: str, tenant_id: str) -> str:
         """
         从 URL 和 tenant_id 提取 tenant 维度的限流 key
-        
+
         生成规则: gitlab:<host>:tenant:<id>
         例如: https://gitlab.example.com + tenant123 -> gitlab:gitlab.example.com:tenant:tenant123
-        
+
         这确保同一 GitLab host 下的每个 tenant 有独立的限流桶。
-        
+
         Args:
             url: GitLab 实例 URL
             tenant_id: 租户 ID
-            
+
         Returns:
             格式为 "gitlab:<host>:tenant:<id>" 的 tenant 限流 key
         """
         from urllib.parse import urlparse
+
         try:
             parsed = urlparse(url)
             host = parsed.netloc or url
             return f"gitlab:{host}:tenant:{tenant_id}"
         except Exception:
             return f"gitlab:{url}:tenant:{tenant_id}"
-    
+
     def _notify_all_rate_limiters(
         self,
         retry_after: Optional[float] = None,
@@ -1370,9 +1424,9 @@ class GitLabClient:
     ) -> None:
         """
         通知所有速率限制器收到了 429 响应
-        
+
         同时通知 local、distributed 和 tenant limiter，确保所有限流器状态同步。
-        
+
         Args:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
@@ -1386,7 +1440,7 @@ class GitLabClient:
                 )
             except Exception as e:
                 logger.warning(f"通知本地速率限制器失败: {e}")
-        
+
         # 通知分布式速率限制器（Postgres，实例维度）
         if self._postgres_rate_limiter:
             try:
@@ -1396,7 +1450,7 @@ class GitLabClient:
                 )
             except Exception as e:
                 logger.warning(f"通知 Postgres 限流器失败: {e}")
-        
+
         # 通知 tenant 维度的限流器（Postgres）
         if self._tenant_rate_limiter:
             try:
@@ -1406,38 +1460,38 @@ class GitLabClient:
                 )
             except Exception as e:
                 logger.warning(f"通知 Tenant 限流器失败: {e}")
-    
+
     @property
     def concurrency_limiter(self) -> Optional[ConcurrencyLimiter]:
         """获取并发限制器"""
         return self._concurrency_limiter
-    
+
     @property
     def rate_limiter(self) -> Optional[RateLimiter]:
         """获取速率限制器（内存版）"""
         return self._rate_limiter
-    
+
     @property
     def postgres_rate_limiter(self) -> Optional[PostgresRateLimiter]:
         """获取 Postgres 限流器（分布式版，实例维度）"""
         return self._postgres_rate_limiter
-    
+
     @property
     def tenant_rate_limiter(self) -> Optional[PostgresRateLimiter]:
         """获取 Tenant 维度的 Postgres 限流器"""
         return self._tenant_rate_limiter
-    
+
     @property
     def tenant_id(self) -> Optional[str]:
         """获取当前 tenant ID"""
         return self._tenant_id
-    
+
     def get_limiter_stats(self) -> Dict[str, Any]:
         """
         获取所有 limiter 的统计信息
-        
+
         聚合 local、distributed limiter 的统计数据。
-        
+
         Returns:
             包含 timeout_count、avg_wait_time_ms 等统计的字典
         """
@@ -1446,78 +1500,86 @@ class GitLabClient:
             "avg_wait_time_ms": 0.0,
             "total_limiter_requests": 0,
         }
-        
+
         sub_stats = []
         total_wait_time_ms = 0.0
         total_requests = 0
-        
+
         # 收集本地速率限制器统计
         if self._rate_limiter:
             try:
                 local_stats = self._rate_limiter.get_stats()
                 local_stats["type"] = "local"
                 sub_stats.append(local_stats)
-                
+
                 total_requests += local_stats.get("total_requests", 0)
-                total_wait_time_ms += local_stats.get("avg_wait_time_ms", 0) * local_stats.get("total_requests", 0)
+                total_wait_time_ms += local_stats.get("avg_wait_time_ms", 0) * local_stats.get(
+                    "total_requests", 0
+                )
                 stats["timeout_count"] += local_stats.get("throttled_count", 0)
             except Exception as e:
                 logger.debug(f"获取本地限流器统计失败: {e}")
-        
+
         # 收集 Postgres 限流器统计（实例维度）
         if self._postgres_rate_limiter:
             try:
                 pg_stats = self._postgres_rate_limiter.get_stats()
                 sub_stats.append(pg_stats)
-                
+
                 total_requests += pg_stats.get("total_requests", 0)
-                total_wait_time_ms += pg_stats.get("avg_wait_time_ms", 0) * pg_stats.get("total_requests", 0)
+                total_wait_time_ms += pg_stats.get("avg_wait_time_ms", 0) * pg_stats.get(
+                    "total_requests", 0
+                )
                 stats["timeout_count"] += pg_stats.get("rejected_count", 0)
                 stats["timeout_count"] += pg_stats.get("throttled_count", 0)
             except Exception as e:
                 logger.debug(f"获取 Postgres 限流器统计失败: {e}")
-        
+
         # 收集 Tenant 维度限流器统计
         if self._tenant_rate_limiter:
             try:
                 tenant_stats = self._tenant_rate_limiter.get_stats()
                 tenant_stats["type"] = "tenant"
                 sub_stats.append(tenant_stats)
-                
+
                 total_requests += tenant_stats.get("total_requests", 0)
-                total_wait_time_ms += tenant_stats.get("avg_wait_time_ms", 0) * tenant_stats.get("total_requests", 0)
+                total_wait_time_ms += tenant_stats.get("avg_wait_time_ms", 0) * tenant_stats.get(
+                    "total_requests", 0
+                )
                 stats["timeout_count"] += tenant_stats.get("rejected_count", 0)
                 stats["timeout_count"] += tenant_stats.get("throttled_count", 0)
             except Exception as e:
                 logger.debug(f"获取 Tenant 限流器统计失败: {e}")
-        
+
         # 收集并发限制器统计
         if self._concurrency_limiter:
             try:
                 conc_stats = self._concurrency_limiter.get_stats()
                 conc_stats["type"] = "concurrency"
                 sub_stats.append(conc_stats)
-                
+
                 # 并发限制器也有等待时间
-                conc_wait_time = conc_stats.get("avg_wait_time_ms", 0) * conc_stats.get("total_acquired", 0)
+                conc_wait_time = conc_stats.get("avg_wait_time_ms", 0) * conc_stats.get(
+                    "total_acquired", 0
+                )
                 total_wait_time_ms += conc_wait_time
             except Exception as e:
                 logger.debug(f"获取并发限制器统计失败: {e}")
-        
+
         # 计算平均等待时间
         stats["total_limiter_requests"] = total_requests
         if total_requests > 0:
             stats["avg_wait_time_ms"] = round(total_wait_time_ms / total_requests, 2)
-        
+
         if sub_stats:
             stats["sub_limiters"] = sub_stats
-        
+
         return stats
-    
+
     def update_stats_with_limiter_info(self) -> None:
         """
         将 limiter 统计更新到 ClientStats
-        
+
         在需要获取完整统计信息前调用此方法。
         """
         limiter_stats = self.get_limiter_stats()
@@ -1541,7 +1603,7 @@ class GitLabClient:
     ) -> float:
         """
         计算退避等待时间（指数退避 + 随机抖动）
-        
+
         优先级: Retry-After(秒) > RateLimit-Reset(时间戳) > 指数退避默认值
 
         Args:
@@ -1557,7 +1619,7 @@ class GitLabClient:
             # 使用服务器返回的 Retry-After，加上少量抖动
             jitter = random.uniform(0, 1)
             return retry_after + jitter
-        
+
         # 优先级 2: RateLimit-Reset（时间戳）
         if rate_limit_reset is not None:
             now = time.time()
@@ -1590,22 +1652,22 @@ class GitLabClient:
             # 可能是 HTTP 日期格式，暂不支持
             logger.warning(f"无法解析 Retry-After 头: {retry_after}")
             return None
-    
+
     def _parse_rate_limit_headers(self, response: requests.Response) -> tuple:
         """
         解析 RateLimit 相关响应头
-        
+
         GitLab 可能返回以下头:
         - RateLimit-Reset: Unix 时间戳，表示限流重置时间
         - RateLimit-Remaining: 剩余请求数
         - RateLimit-Limit: 时间窗口内的总请求限制
-        
+
         Returns:
             (rate_limit_reset, rate_limit_remaining)
         """
         rate_limit_reset: Optional[float] = None
         rate_limit_remaining: Optional[int] = None
-        
+
         # 解析 RateLimit-Reset（Unix 时间戳）
         reset_header = response.headers.get("RateLimit-Reset")
         if reset_header:
@@ -1613,7 +1675,7 @@ class GitLabClient:
                 rate_limit_reset = float(reset_header)
             except ValueError:
                 logger.debug(f"无法解析 RateLimit-Reset 头: {reset_header}")
-        
+
         # 解析 RateLimit-Remaining
         remaining_header = response.headers.get("RateLimit-Remaining")
         if remaining_header:
@@ -1621,7 +1683,7 @@ class GitLabClient:
                 rate_limit_remaining = int(remaining_header)
             except ValueError:
                 logger.debug(f"无法解析 RateLimit-Remaining 头: {remaining_header}")
-        
+
         return rate_limit_reset, rate_limit_remaining
 
     def _classify_error(
@@ -1645,7 +1707,12 @@ class GitLabClient:
             return (GitLabErrorCategory.TIMEOUT, "请求超时", status_code, None)
 
         if isinstance(exception, requests.exceptions.ConnectionError):
-            return (GitLabErrorCategory.NETWORK_ERROR, f"连接错误: {redact(str(exception))}", status_code, None)
+            return (
+                GitLabErrorCategory.NETWORK_ERROR,
+                f"连接错误: {redact(str(exception))}",
+                status_code,
+                None,
+            )
 
         if isinstance(exception, requests.exceptions.HTTPError) and response is not None:
             status_code = response.status_code
@@ -1663,19 +1730,44 @@ class GitLabClient:
 
             if status_code == 429:
                 retry_after = self._parse_retry_after(response)
-                return (GitLabErrorCategory.RATE_LIMITED, f"限流 (429): {redact(error_msg)}", status_code, retry_after)
+                return (
+                    GitLabErrorCategory.RATE_LIMITED,
+                    f"限流 (429): {redact(error_msg)}",
+                    status_code,
+                    retry_after,
+                )
 
             if status_code in (401, 403):
-                return (GitLabErrorCategory.AUTH_ERROR, f"认证错误 ({status_code}): {redact(error_msg)}", status_code, None)
+                return (
+                    GitLabErrorCategory.AUTH_ERROR,
+                    f"认证错误 ({status_code}): {redact(error_msg)}",
+                    status_code,
+                    None,
+                )
 
             if 500 <= status_code < 600:
-                return (GitLabErrorCategory.SERVER_ERROR, f"服务器错误 ({status_code}): {redact(error_msg)}", status_code, None)
+                return (
+                    GitLabErrorCategory.SERVER_ERROR,
+                    f"服务器错误 ({status_code}): {redact(error_msg)}",
+                    status_code,
+                    None,
+                )
 
             if 400 <= status_code < 500:
-                return (GitLabErrorCategory.CLIENT_ERROR, f"客户端错误 ({status_code}): {redact(error_msg)}", status_code, None)
+                return (
+                    GitLabErrorCategory.CLIENT_ERROR,
+                    f"客户端错误 ({status_code}): {redact(error_msg)}",
+                    status_code,
+                    None,
+                )
 
         if isinstance(exception, requests.exceptions.RequestException):
-            return (GitLabErrorCategory.NETWORK_ERROR, f"请求失败: {redact(str(exception))}", status_code, None)
+            return (
+                GitLabErrorCategory.NETWORK_ERROR,
+                f"请求失败: {redact(str(exception))}",
+                status_code,
+                None,
+            )
 
         return (GitLabErrorCategory.UNKNOWN, redact(str(exception)), status_code, None)
 
@@ -1694,11 +1786,7 @@ class GitLabClient:
         return category in retryable
 
     def _request(
-        self,
-        method: str,
-        endpoint: str,
-        raise_on_error: bool = True,
-        **kwargs
+        self, method: str, endpoint: str, raise_on_error: bool = True, **kwargs
     ) -> GitLabAPIResult:
         """
         发送 HTTP 请求（带自动重试）
@@ -1721,14 +1809,14 @@ class GitLabClient:
         # 获取并发槽位
         if self._concurrency_limiter:
             self._concurrency_limiter.acquire()
-        
+
         # 获取速率限制令牌（依次检查：Postgres 实例级 -> Tenant 级 -> 内存级）
         if self._postgres_rate_limiter:
             if not self._postgres_rate_limiter.acquire():
                 # Postgres 限流器拒绝请求
                 if self._concurrency_limiter:
                     self._concurrency_limiter.release()
-                
+
                 result = GitLabAPIResult(
                     success=False,
                     endpoint=url,
@@ -1738,14 +1826,14 @@ class GitLabClient:
                 if raise_on_error:
                     self._raise_error(result)
                 return result
-        
+
         # Tenant 维度限流（如果启用）
         if self._tenant_rate_limiter:
             if not self._tenant_rate_limiter.acquire():
                 # Tenant 限流器拒绝请求
                 if self._concurrency_limiter:
                     self._concurrency_limiter.release()
-                
+
                 result = GitLabAPIResult(
                     success=False,
                     endpoint=url,
@@ -1757,21 +1845,16 @@ class GitLabClient:
                 return result
         elif self._rate_limiter:
             self._rate_limiter.acquire()
-        
+
         try:
             return self._do_request(method, endpoint, url, raise_on_error, **kwargs)
         finally:
             # 释放并发槽位
             if self._concurrency_limiter:
                 self._concurrency_limiter.release()
-    
+
     def _do_request(
-        self,
-        method: str,
-        endpoint: str,
-        url: str,
-        raise_on_error: bool,
-        **kwargs
+        self, method: str, endpoint: str, url: str, raise_on_error: bool, **kwargs
     ) -> GitLabAPIResult:
         """实际执行 HTTP 请求（带重试逻辑）"""
         attempt = 0
@@ -1810,40 +1893,44 @@ class GitLabClient:
                     status_code=response.status_code,
                     endpoint=url,
                 )
-                
+
                 # 记录成功的请求统计
                 duration_ms = (time.time() - start_time) * 1000
-                self.stats.record(RequestStats(
-                    endpoint=endpoint,
-                    method=method,
-                    status_code=response.status_code,
-                    duration_ms=duration_ms,
-                    attempt_count=attempt,
-                    hit_429=hit_429,
-                    success=True,
-                    retry_after=last_retry_after,
-                    rate_limit_reset=last_rate_limit_reset,
-                    rate_limit_remaining=last_rate_limit_remaining,
-                ))
-                
+                self.stats.record(
+                    RequestStats(
+                        endpoint=endpoint,
+                        method=method,
+                        status_code=response.status_code,
+                        duration_ms=duration_ms,
+                        attempt_count=attempt,
+                        hit_429=hit_429,
+                        success=True,
+                        retry_after=last_retry_after,
+                        rate_limit_reset=last_rate_limit_reset,
+                        rate_limit_remaining=last_rate_limit_remaining,
+                    )
+                )
+
                 return result
 
             except Exception as e:
                 category, error_msg, status_code, retry_after = self._classify_error(e, response)
-                
+
                 # 解析更多限流头信息
                 rate_limit_reset: Optional[float] = None
                 rate_limit_remaining: Optional[int] = None
                 if response is not None:
-                    rate_limit_reset, rate_limit_remaining = self._parse_rate_limit_headers(response)
-                
+                    rate_limit_reset, rate_limit_remaining = self._parse_rate_limit_headers(
+                        response
+                    )
+
                 # 记录是否命中 429
                 if category == GitLabErrorCategory.RATE_LIMITED:
                     hit_429 = True
                     last_retry_after = retry_after
                     last_rate_limit_reset = rate_limit_reset
                     last_rate_limit_remaining = rate_limit_remaining
-                    
+
                     # 通知所有速率限制器（local + distributed 都要通知）
                     self._notify_all_rate_limiters(
                         retry_after=retry_after,
@@ -1889,20 +1976,26 @@ class GitLabClient:
 
         # 记录失败的请求统计
         duration_ms = (time.time() - start_time) * 1000
-        error_cat = last_result.error_category.value if last_result and last_result.error_category else "unknown"
-        self.stats.record(RequestStats(
-            endpoint=endpoint,
-            method=method,
-            status_code=last_result.status_code if last_result else None,
-            duration_ms=duration_ms,
-            attempt_count=attempt,
-            hit_429=hit_429,
-            success=False,
-            error_category=error_cat,
-            retry_after=last_retry_after,
-            rate_limit_reset=last_rate_limit_reset,
-            rate_limit_remaining=last_rate_limit_remaining,
-        ))
+        error_cat = (
+            last_result.error_category.value
+            if last_result and last_result.error_category
+            else "unknown"
+        )
+        self.stats.record(
+            RequestStats(
+                endpoint=endpoint,
+                method=method,
+                status_code=last_result.status_code if last_result else None,
+                duration_ms=duration_ms,
+                attempt_count=attempt,
+                hit_429=hit_429,
+                success=False,
+                error_category=error_cat,
+                retry_after=last_retry_after,
+                rate_limit_reset=last_rate_limit_reset,
+                rate_limit_remaining=last_rate_limit_remaining,
+            )
+        )
 
         # 返回最后一次结果
         if last_result and not last_result.success:
@@ -1948,12 +2041,7 @@ class GitLabClient:
                 **kwargs,
             )
 
-    def request_safe(
-        self,
-        method: str,
-        endpoint: str,
-        **kwargs
-    ) -> GitLabAPIResult:
+    def request_safe(self, method: str, endpoint: str, **kwargs) -> GitLabAPIResult:
         """
         发送 HTTP 请求（不抛异常版本）
 
@@ -2241,6 +2329,7 @@ def create_gitlab_client(
 
     if config is None:
         from .config import get_config
+
         config = get_config()
 
     gitlab_cfg = get_gitlab_config(config)
@@ -2251,7 +2340,9 @@ def create_gitlab_client(
     if not url:
         raise ValueError("缺少 GitLab URL，请配置 scm.gitlab.url 或传入 base_url 参数")
     if not token:
-        raise ValueError("缺少 GitLab Token，请配置 scm.gitlab.token、设置 GITLAB_TOKEN 环境变量或传入 private_token 参数")
+        raise ValueError(
+            "缺少 GitLab Token，请配置 scm.gitlab.token、设置 GITLAB_TOKEN 环境变量或传入 private_token 参数"
+        )
 
     return GitLabClient(
         base_url=url,

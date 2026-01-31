@@ -14,8 +14,7 @@ Lease 协议:
     4. 不可恢复失败调用 mark_dead(outbox_id, worker_id, error)
 """
 
-import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 import psycopg
@@ -270,19 +269,21 @@ def get_pending(
 
             results = []
             for row in rows:
-                results.append({
-                    "outbox_id": row[0],
-                    "item_id": row[1],
-                    "target_space": row[2],
-                    "payload_md": row[3],
-                    "payload_sha": row[4],
-                    "status": row[5],
-                    "retry_count": row[6],
-                    "next_attempt_at": row[7],
-                    "last_error": row[8],
-                    "created_at": row[9],
-                    "updated_at": row[10],
-                })
+                results.append(
+                    {
+                        "outbox_id": row[0],
+                        "item_id": row[1],
+                        "target_space": row[2],
+                        "payload_md": row[3],
+                        "payload_sha": row[4],
+                        "status": row[5],
+                        "retry_count": row[6],
+                        "next_attempt_at": row[7],
+                        "last_error": row[8],
+                        "created_at": row[9],
+                        "updated_at": row[10],
+                    }
+                )
 
             return results
     except psycopg.Error as e:
@@ -334,20 +335,22 @@ def claim_pending(
 
             results = []
             for row in rows:
-                results.append({
-                    "outbox_id": row[0],
-                    "item_id": row[1],
-                    "target_space": row[2],
-                    "payload_md": row[3],
-                    "payload_sha": row[4],
-                    "status": row[5],
-                    "retry_count": row[6],
-                    "next_attempt_at": row[7],
-                    "last_error": row[8],
-                    "created_at": row[9],
-                    "updated_at": row[10],
-                    "_conn": conn,  # 返回连接以便调用方在同一事务中操作
-                })
+                results.append(
+                    {
+                        "outbox_id": row[0],
+                        "item_id": row[1],
+                        "target_space": row[2],
+                        "payload_md": row[3],
+                        "payload_sha": row[4],
+                        "status": row[5],
+                        "retry_count": row[6],
+                        "next_attempt_at": row[7],
+                        "last_error": row[8],
+                        "created_at": row[9],
+                        "updated_at": row[10],
+                        "_conn": conn,  # 返回连接以便调用方在同一事务中操作
+                    }
+                )
 
             return results
     except psycopg.Error as e:
@@ -525,21 +528,23 @@ def claim_outbox(
 
             results = []
             for row in rows:
-                results.append({
-                    "outbox_id": row[0],
-                    "item_id": row[1],
-                    "target_space": row[2],
-                    "payload_md": row[3],
-                    "payload_sha": row[4],
-                    "status": row[5],
-                    "retry_count": row[6],
-                    "next_attempt_at": row[7],
-                    "locked_at": row[8],
-                    "locked_by": row[9],
-                    "last_error": row[10],
-                    "created_at": row[11],
-                    "updated_at": row[12],
-                })
+                results.append(
+                    {
+                        "outbox_id": row[0],
+                        "item_id": row[1],
+                        "target_space": row[2],
+                        "payload_md": row[3],
+                        "payload_sha": row[4],
+                        "status": row[5],
+                        "retry_count": row[6],
+                        "next_attempt_at": row[7],
+                        "locked_at": row[8],
+                        "locked_by": row[9],
+                        "last_error": row[10],
+                        "created_at": row[11],
+                        "updated_at": row[12],
+                    }
+                )
 
             return results
     except psycopg.Error as e:

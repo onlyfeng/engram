@@ -129,9 +129,16 @@ make help          # 查看所有命令
 make install-full  # 安装完整依赖
 make install-dev   # 安装开发依赖
 
-# 数据库
-make setup-db      # 一键初始化数据库（创建库 + 迁移 + 角色）
-make migrate       # 仅执行迁移脚本
+# 数据库（一键初始化）
+make setup-db      # 一键初始化数据库（创建库 + DDL + 角色 + 权限 + 验证）
+
+# 数据库（分步操作）
+make db-create              # 创建数据库并启用 pgvector
+make bootstrap-roles        # 初始化服务账号
+make migrate-ddl            # 仅执行 DDL 迁移（Schema/表/索引）
+make apply-roles            # 应用 Logbook 角色和权限
+make apply-openmemory-grants # 应用 OpenMemory 权限
+make verify-permissions     # 验证数据库权限配置
 
 # 服务
 make gateway       # 启动 Gateway（带热重载）
@@ -210,6 +217,10 @@ engram/
 | [Gateway 文档](docs/gateway/) | MCP 集成、治理开关、降级策略 |
 | [Logbook 文档](docs/logbook/) | 架构设计、工具契约、部署运维 |
 | [环境变量参考](docs/reference/environment_variables.md) | 所有环境变量说明 |
+| [架构文档](docs/architecture/) | 架构决策记录（ADR）、命名规范、迭代计划 |
+| [Iteration 2 计划](docs/architecture/iteration_2_plan.md) | 当前迭代：脚本收敛、SQL 整理、CI 硬化、Gateway 模块化 |
+| [回归 Runbook](docs/acceptance/iteration_3_regression.md) | 本地与 CI 对齐的回归测试命令 |
+| [验收测试矩阵](docs/acceptance/00_acceptance_matrix.md) | 验收测试执行记录与覆盖点 |
 
 ---
 
@@ -247,6 +258,31 @@ engram-logbook health              # 健康检查
 engram-logbook create_item ...     # 创建条目
 engram-gateway                     # 启动 Gateway
 ```
+
+### SCM 同步工具
+
+SCM 同步子系统提供以下 CLI 工具：
+
+```bash
+# 调度器 - 扫描仓库并入队同步任务
+engram-scm-scheduler --once --dry-run
+
+# Worker - 从队列处理同步任务
+engram-scm-worker --worker-id worker-1
+
+# Reaper - 回收过期任务
+engram-scm-reaper --grace-seconds 60
+
+# 状态查看 - 查看同步健康状态
+engram-scm-status --prometheus
+
+# 运行器 - 手动执行同步
+engram-scm run incremental --repo gitlab:123
+```
+
+> **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已弃用，将在 v1.0 移除。请迁移至 `engram-scm-*` 命令。
+
+> 详细配置参见 [SCM Sync 子系统文档](docs/logbook/06_scm_sync_subsystem.md) 和 [环境变量参考](docs/reference/environment_variables.md#scm-同步服务)
 
 ---
 
