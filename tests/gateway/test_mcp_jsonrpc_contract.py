@@ -3086,5 +3086,392 @@ class TestCorrelationIdSingleSourceContract:
                     )
 
 
+# ===================== 错误路径 correlation_id 一致性测试（增强版）=====================
+
+
+class TestCorrelationIdConsistencyAllErrorPaths:
+    """
+    验证所有错误路径中 X-Correlation-ID header 与 error.data.correlation_id 一致
+
+    契约要求（钉死规则）：
+    ================================================================================
+    1. 真实 dispatch 链路中，correlation_id 由 HTTP 入口层（app.py mcp_endpoint）生成
+    2. 所有错误响应的 X-Correlation-ID header 与 error.data.correlation_id 必须一致
+    3. ErrorData.to_dict() 在真实链路中不应触发重新生成（因为 correlation_id 已传入）
+    ================================================================================
+
+    覆盖路径：
+    - PARSE_ERROR (-32700): JSON 解析失败
+    - INVALID_REQUEST (-32600): 无效的 JSON-RPC 请求结构
+    - METHOD_NOT_FOUND (-32601): 未知方法
+    - INVALID_PARAMS (-32602): tools/call 参数错误（如未知工具）
+    - TOOL_EXECUTION_ERROR (-32000): 工具执行时抛出异常
+    - INTERNAL_ERROR (-32603): 内部错误
+    """
+
+    CORRELATION_ID_PATTERN = r"^corr-[a-fA-F0-9]{16}$"
+
+    def _assert_header_matches_error_data(self, response, scenario_name: str):
+        """
+        断言 X-Correlation-ID header 与 error.data.correlation_id 一致
+
+        这是契约核心断言：确保单次生成语义。
+        """
+        import re
+
+        result = response.json()
+
+        # 验证 header 中有 X-Correlation-ID
+        header_corr_id = response.headers.get("X-Correlation-ID")
+        assert header_corr_id is not None, (
+            f"{scenario_name}: 响应 header 中必须包含 X-Correlation-ID"
+        )
+        assert re.match(self.CORRELATION_ID_PATTERN, header_corr_id), (
+            f"{scenario_name}: X-Correlation-ID 格式不正确: {header_corr_id}"
+        )
+
+        # 验证 error.data 存在且包含 correlation_id
+        assert "error" in result, f"{scenario_name}: 响应应包含 error 字段"
+        assert "data" in result["error"], (
+            f"{scenario_name}: error 应包含 data 字段（契约要求）"
+        )
+        error_data = result["error"]["data"]
+        error_corr_id = error_data.get("correlation_id")
+        assert error_corr_id is not None, (
+            f"{scenario_name}: error.data 中必须包含 correlation_id"
+        )
+
+        # 核心断言：header 与 error.data 中的 correlation_id 必须一致
+        assert header_corr_id == error_corr_id, (
+            f"{scenario_name}: X-Correlation-ID header ({header_corr_id}) "
+            f"与 error.data.correlation_id ({error_corr_id}) 不一致！"
+            f"这违反了单次生成语义契约。"
+        )
+
+        return header_corr_id, error_corr_id
+
+    def test_parse_error_json_invalid(self, client):
+        """
+        PARSE_ERROR 路径：无效 JSON 触发 -32700
+
+        契约断言：X-Correlation-ID header 与 error.data.correlation_id 一致
+        """
+        response = client.post(
+            "/mcp",
+            content=b"{ invalid json }",
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 400
+
+        self._assert_header_matches_error_data(response, "PARSE_ERROR (invalid JSON)")
+
+        # 验证错误码
+        result = response.json()
+        assert result["error"]["code"] == -32700
+
+    def test_invalid_request_empty_method(self, client):
+        """
+        INVALID_REQUEST 路径：method 为空字符串触发 -32600
+
+        契约断言：X-Correlation-ID header 与 error.data.correlation_id 一致
+
+        注意：缺少 method 字段的请求会被当作旧协议处理，
+        所以这里使用空字符串 method 来触发 JSON-RPC 格式校验失败。
+        """
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "",  # 空字符串，触发 Pydantic 校验失败
+                "id": 1,
+            },
+        )
+        # 可能返回 400（格式错误）或 200（方法不存在）
+        # 取决于 Pydantic 是否校验空字符串
+        result = response.json()
+
+        # 无论哪种情况，header 和 error.data 中的 correlation_id 应一致
+        self._assert_header_matches_error_data(response, "INVALID_REQUEST (empty method)")
+
+    def test_invalid_request_wrong_params_type(self, client):
+        """
+        INVALID_REQUEST 路径：params 类型错误触发 -32600
+
+        契约断言：X-Correlation-ID header 与 error.data.correlation_id 一致
+        """
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/list",
+                "params": "should_be_dict_not_string",  # 应该是 dict
+                "id": 1,
+            },
+        )
+        assert response.status_code == 400
+
+        self._assert_header_matches_error_data(response, "INVALID_REQUEST (wrong params type)")
+
+        result = response.json()
+        assert result["error"]["code"] == -32600
+
+    def test_method_not_found(self, client):
+        """
+        METHOD_NOT_FOUND 路径：未知方法触发 -32601
+
+        契约断言：X-Correlation-ID header 与 error.data.correlation_id 一致
+        """
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "unknown/nonexistent_method",
+                "id": 1,
+            },
+        )
+        assert response.status_code == 200  # JSON-RPC 错误仍返回 200
+
+        self._assert_header_matches_error_data(response, "METHOD_NOT_FOUND")
+
+        result = response.json()
+        assert result["error"]["code"] == -32601
+
+    def test_tools_call_unknown_tool(self, client):
+        """
+        INVALID_PARAMS 路径：tools/call 未知工具触发 -32602
+
+        契约断言：X-Correlation-ID header 与 error.data.correlation_id 一致
+        """
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "nonexistent_tool_xyz",
+                    "arguments": {},
+                },
+                "id": 1,
+            },
+        )
+        assert response.status_code == 200
+
+        self._assert_header_matches_error_data(response, "tools/call unknown tool")
+
+        result = response.json()
+        assert result["error"]["code"] == -32602
+        assert result["error"]["data"]["reason"] == "UNKNOWN_TOOL"
+
+    def test_tools_call_missing_name(self, client):
+        """
+        INVALID_PARAMS 路径：tools/call 缺少 name 参数触发 -32602
+
+        契约断言：X-Correlation-ID header 与 error.data.correlation_id 一致
+        """
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    # "name" 缺失
+                    "arguments": {},
+                },
+                "id": 1,
+            },
+        )
+        assert response.status_code == 200
+
+        self._assert_header_matches_error_data(response, "tools/call missing name")
+
+        result = response.json()
+        assert result["error"]["code"] == -32602
+        assert result["error"]["data"]["reason"] == "MISSING_REQUIRED_PARAM"
+
+    def test_tools_call_execution_exception(self, client):
+        """
+        INTERNAL_ERROR 路径：工具执行时抛出异常触发 -32603
+
+        契约断言：X-Correlation-ID header 与 error.data.correlation_id 一致
+
+        注意：需要在 mcp_rpc 模块层面 mock 工具执行器，确保异常能正确传播。
+        """
+        # 模拟工具执行器抛出异常
+        async def mock_executor(tool_name, tool_args, correlation_id):
+            raise RuntimeError("模拟工具执行异常")
+
+        with patch(
+            "engram.gateway.mcp_rpc.get_tool_executor",
+            return_value=mock_executor,
+        ):
+            response = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_query",
+                        "arguments": {"query": "test"},
+                    },
+                    "id": 1,
+                },
+            )
+
+        assert response.status_code == 200
+
+        self._assert_header_matches_error_data(response, "tools/call execution exception")
+
+        result = response.json()
+        # 工具执行错误码为 -32603（内部错误）
+        assert result["error"]["code"] == -32603
+
+    def test_multiple_sequential_requests_unique_correlation_ids(self, client):
+        """
+        验证多次请求生成不同的 correlation_id（确保每次请求独立）
+        """
+        correlation_ids = set()
+
+        for i in range(5):
+            response = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "unknown/method",
+                    "id": i,
+                },
+            )
+            header_corr_id = response.headers.get("X-Correlation-ID")
+            assert header_corr_id is not None
+            correlation_ids.add(header_corr_id)
+
+        # 5 次请求应产生 5 个不同的 correlation_id
+        assert len(correlation_ids) == 5, (
+            f"5 次请求应产生 5 个不同的 correlation_id，实际: {len(correlation_ids)}"
+        )
+
+
+class TestErrorDataStrictModeInDispatchChain:
+    """
+    验证在真实 dispatch 链路中 ErrorData 的 correlation_id 单一来源契约
+
+    使用 ErrorData.to_dict(strict=True) 来钉死规则：
+    若真实链路中出现 correlation_id 未设置或不合规，测试应失败。
+    """
+
+    @pytest.mark.asyncio
+    async def test_dispatch_sets_correlation_id_before_error_data(self):
+        """
+        验证 dispatch 在构造 ErrorData 前已设置 correlation_id
+
+        这确保了 ErrorData.to_dict() 不会触发重新生成。
+        """
+        from engram.gateway.mcp_rpc import (
+            JsonRpcRequest,
+            JsonRpcRouter,
+            generate_correlation_id,
+            get_current_correlation_id,
+        )
+
+        router = JsonRpcRouter()
+
+        # 注册一个测试 handler，验证 contextvars 已设置
+        captured_corr_ids = []
+
+        @router.method("test/capture_correlation_id")
+        async def capture_handler(params):
+            corr_id = get_current_correlation_id()
+            captured_corr_ids.append(corr_id)
+            return {"captured": corr_id}
+
+        # 使用显式传入的 correlation_id
+        test_corr_id = generate_correlation_id()
+        request = JsonRpcRequest(
+            jsonrpc="2.0",
+            method="test/capture_correlation_id",
+            params={},
+            id=1,
+        )
+
+        response = await router.dispatch(request, correlation_id=test_corr_id)
+
+        # 验证 handler 捕获的 correlation_id 与传入的一致
+        assert len(captured_corr_ids) == 1
+        assert captured_corr_ids[0] == test_corr_id, (
+            f"Handler 捕获的 correlation_id ({captured_corr_ids[0]}) "
+            f"与传入的 ({test_corr_id}) 不一致"
+        )
+
+        # 验证成功响应
+        assert response.result is not None
+        assert response.result["captured"] == test_corr_id
+
+    @pytest.mark.asyncio
+    async def test_dispatch_method_not_found_uses_passed_correlation_id(self):
+        """
+        验证 dispatch 在 METHOD_NOT_FOUND 错误时使用传入的 correlation_id
+        """
+        from engram.gateway.mcp_rpc import (
+            JsonRpcRequest,
+            JsonRpcRouter,
+            generate_correlation_id,
+        )
+
+        router = JsonRpcRouter()
+
+        test_corr_id = generate_correlation_id()
+        request = JsonRpcRequest(
+            jsonrpc="2.0",
+            method="nonexistent/method",
+            params={},
+            id=1,
+        )
+
+        response = await router.dispatch(request, correlation_id=test_corr_id)
+
+        # 验证错误响应
+        assert response.error is not None
+        assert response.error.code == -32601
+
+        # 验证 error.data.correlation_id 与传入的一致
+        assert response.error.data is not None
+        error_data = response.error.data
+        assert error_data["correlation_id"] == test_corr_id, (
+            f"error.data.correlation_id ({error_data['correlation_id']}) "
+            f"与传入的 ({test_corr_id}) 不一致"
+        )
+
+    def test_error_data_strict_mode_in_real_dispatch_chain(self):
+        """
+        验证在真实 dispatch 链路中 ErrorData 使用 strict=True 不会失败
+
+        这钉死了规则：真实链路中 correlation_id 必须已正确设置。
+        """
+        from engram.gateway.mcp_rpc import (
+            ErrorCategory,
+            ErrorData,
+            ErrorReason,
+            generate_correlation_id,
+        )
+
+        # 模拟真实链路：HTTP 入口层生成 correlation_id
+        http_entry_corr_id = generate_correlation_id()
+
+        # 模拟 dispatch 中构造 ErrorData（如 METHOD_NOT_FOUND）
+        error_data = ErrorData(
+            category=ErrorCategory.PROTOCOL,
+            reason=ErrorReason.METHOD_NOT_FOUND,
+            retryable=False,
+            correlation_id=http_entry_corr_id,  # 传入已有的 correlation_id
+            details={"method": "unknown/method"},
+        )
+
+        # strict=True 不应抛出异常（因为 correlation_id 已正确设置）
+        d = error_data.to_dict(strict=True)
+
+        assert d["correlation_id"] == http_entry_corr_id
+        assert d["category"] == ErrorCategory.PROTOCOL
+        assert d["reason"] == ErrorReason.METHOD_NOT_FOUND
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

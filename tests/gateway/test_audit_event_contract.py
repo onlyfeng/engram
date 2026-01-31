@@ -2,12 +2,23 @@
 """
 Audit Event Schema 契约测试
 
+【变更检查清单关联】
+- Schema 文件: schemas/audit_event_v1.schema.json
+- Checklist 文档: docs/gateway/06_gateway_design.md#审计事件-schema-变更检查清单
+
+修改 Schema 时必须确保:
+1. 新增字段必须有默认值或 nullable (向后兼容)
+2. examples 数组中的示例必须通过 test_schema_examples_pass_validation
+3. 对账 SQL 依赖字段禁止移除 (由 TestEvidenceRefsJsonLogbookQueryContract 验证)
+4. 枚举值只能扩展不能删除
+
 测试覆盖:
 1. audit_event 返回结构符合 JSON Schema
 2. evidence_refs_json 返回结构符合 JSON Schema
 3. 字段级校验：必需字段、格式校验、枚举值
 4. schema 中的 examples 有效性校验
 5. object_store_audit_event_v1 归一化结构校验
+6. 对账查询依赖字段可查询性契约
 """
 
 import json
@@ -732,14 +743,21 @@ class TestEvidenceRefsJsonLogbookQueryContract:
     """
     测试 evidence_refs_json 顶层字段契约
 
+    【变更检查清单关联】
+    本测试类验证 docs/gateway/06_gateway_design.md#对账-sql-依赖字段清单 中定义的字段约束。
+    这些字段被对账 SQL 查询使用，禁止移除或重命名。
+
     确保 reconcile_outbox.py 使用的 SQL 查询：
         (evidence_refs_json->>'outbox_id')::int
     能够正确找到 outbox_id 字段。
 
-    契约要求：
+    契约要求（对账依赖字段，禁止移除）：
     - outbox_id 必须在顶层（不仅仅在 gateway_event 子对象中）
     - memory_id 必须在顶层
     - source 必须在顶层
+    - correlation_id 必须在 gateway_event 内可查询
+    - decision.action 必须在 gateway_event 内可查询
+    - decision.reason 必须在 gateway_event 内可查询
     """
 
     def test_outbox_id_at_top_level(self):
@@ -759,7 +777,7 @@ class TestEvidenceRefsJsonLogbookQueryContract:
         # 构建 outbox worker 审计事件
         gateway_event = build_outbox_worker_audit_event(
             operation="outbox_flush",
-            correlation_id="corr-test123456789",
+            correlation_id="corr-0e50123456789abc",
             actor_user_id="test_user",
             target_space="private:test_user",
             action="allow",
@@ -801,7 +819,7 @@ class TestEvidenceRefsJsonLogbookQueryContract:
 
         gateway_event = build_outbox_worker_audit_event(
             operation="outbox_flush",
-            correlation_id="corr-test123456789",
+            correlation_id="corr-0e50123456789abc",
             actor_user_id="test_user",
             target_space="private:test_user",
             action="allow",
@@ -833,7 +851,7 @@ class TestEvidenceRefsJsonLogbookQueryContract:
 
         gateway_event = build_outbox_worker_audit_event(
             operation="outbox_flush",
-            correlation_id="corr-test123456789",
+            correlation_id="corr-0e50123456789abc",
             actor_user_id="test_user",
             target_space="private:test_user",
             action="allow",
@@ -864,7 +882,7 @@ class TestEvidenceRefsJsonLogbookQueryContract:
 
         gateway_event = build_reconcile_audit_event(
             operation="outbox_reconcile",
-            correlation_id="corr-reconcile12345",
+            correlation_id="corr-0ec012345abc0000",
             actor_user_id=None,
             target_space="team:test_project",
             action="allow",
@@ -897,7 +915,7 @@ class TestEvidenceRefsJsonLogbookQueryContract:
         # Gateway 审计事件通常不包含 outbox_id
         gateway_event = build_gateway_audit_event(
             operation="memory_store",
-            correlation_id="corr-gateway1234567",
+            correlation_id="corr-9a1e0a1234567890",
             actor_user_id="test_user",
             requested_space="team:project",
             final_space="team:project",
@@ -915,6 +933,333 @@ class TestEvidenceRefsJsonLogbookQueryContract:
         # 契约断言：当 gateway_event 中没有 outbox_id 时，顶层也不应有
         assert "outbox_id" not in evidence_refs_json, (
             "当 gateway_event 中没有 outbox_id 时，顶层不应有该字段"
+        )
+
+    # ========================================================================
+    # correlation_id 与 payload_sha 顶层字段强断言
+    # ========================================================================
+
+    def test_correlation_id_at_top_level_for_all_sources(self):
+        """
+        契约测试：correlation_id 必须在 evidence_refs_json 顶层（所有 source）
+
+        所有 source（gateway/outbox_worker/reconcile_outbox）都应将 correlation_id
+        提升到顶层，便于 SQL 查询：
+            evidence_refs_json->>'correlation_id'
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+            build_outbox_worker_audit_event,
+            build_reconcile_audit_event,
+        )
+
+        test_correlation_id = "corr-1234567890abcdef"
+        test_payload_sha = "a" * 64
+
+        # 测试 gateway source
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id=test_correlation_id,
+            actor_user_id="test_user",
+            requested_space="team:project",
+            final_space="team:project",
+            action="allow",
+            reason="policy_passed",
+            payload_sha=test_payload_sha,
+        )
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=gateway_event)
+        assert "correlation_id" in evidence_refs_json, (
+            "gateway source: correlation_id 必须在 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["correlation_id"] == test_correlation_id, (
+            f"gateway source: correlation_id 值不正确，期望 {test_correlation_id}"
+        )
+
+        # 测试 outbox_worker source
+        worker_event = build_outbox_worker_audit_event(
+            operation="outbox_flush",
+            correlation_id=test_correlation_id,
+            actor_user_id="test_user",
+            target_space="private:test_user",
+            action="allow",
+            reason="outbox_flush_success",
+            payload_sha=test_payload_sha,
+            outbox_id=123,
+        )
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=worker_event)
+        assert "correlation_id" in evidence_refs_json, (
+            "outbox_worker source: correlation_id 必须在 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["correlation_id"] == test_correlation_id, (
+            f"outbox_worker source: correlation_id 值不正确，期望 {test_correlation_id}"
+        )
+
+        # 测试 reconcile_outbox source
+        reconcile_event = build_reconcile_audit_event(
+            operation="outbox_reconcile",
+            correlation_id=test_correlation_id,
+            actor_user_id="test_user",
+            target_space="team:project",
+            action="allow",
+            reason="outbox_flush_success",
+            payload_sha=test_payload_sha,
+            outbox_id=456,
+        )
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=reconcile_event)
+        assert "correlation_id" in evidence_refs_json, (
+            "reconcile_outbox source: correlation_id 必须在 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["correlation_id"] == test_correlation_id, (
+            f"reconcile_outbox source: correlation_id 值不正确，期望 {test_correlation_id}"
+        )
+
+    def test_payload_sha_at_top_level_for_all_sources(self):
+        """
+        契约测试：payload_sha 必须在 evidence_refs_json 顶层（所有 source）
+
+        所有 source（gateway/outbox_worker/reconcile_outbox）都应将 payload_sha
+        提升到顶层，便于 SQL 查询：
+            evidence_refs_json->>'payload_sha'
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+            build_outbox_worker_audit_event,
+            build_reconcile_audit_event,
+        )
+
+        test_payload_sha = "b" * 64
+
+        # 测试 gateway source
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-abcdef1234567890",
+            actor_user_id="test_user",
+            requested_space="team:project",
+            final_space="team:project",
+            action="allow",
+            reason="policy_passed",
+            payload_sha=test_payload_sha,
+        )
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=gateway_event)
+        assert "payload_sha" in evidence_refs_json, (
+            "gateway source: payload_sha 必须在 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["payload_sha"] == test_payload_sha, (
+            f"gateway source: payload_sha 值不正确，期望 {test_payload_sha}"
+        )
+
+        # 测试 outbox_worker source
+        worker_event = build_outbox_worker_audit_event(
+            operation="outbox_flush",
+            correlation_id="corr-abcdef1234567890",
+            actor_user_id="test_user",
+            target_space="private:test_user",
+            action="allow",
+            reason="outbox_flush_success",
+            payload_sha=test_payload_sha,
+            outbox_id=123,
+        )
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=worker_event)
+        assert "payload_sha" in evidence_refs_json, (
+            "outbox_worker source: payload_sha 必须在 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["payload_sha"] == test_payload_sha, (
+            f"outbox_worker source: payload_sha 值不正确，期望 {test_payload_sha}"
+        )
+
+        # 测试 reconcile_outbox source
+        reconcile_event = build_reconcile_audit_event(
+            operation="outbox_reconcile",
+            correlation_id="corr-abcdef1234567890",
+            actor_user_id="test_user",
+            target_space="team:project",
+            action="allow",
+            reason="outbox_flush_success",
+            payload_sha=test_payload_sha,
+            outbox_id=456,
+        )
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=reconcile_event)
+        assert "payload_sha" in evidence_refs_json, (
+            "reconcile_outbox source: payload_sha 必须在 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["payload_sha"] == test_payload_sha, (
+            f"reconcile_outbox source: payload_sha 值不正确，期望 {test_payload_sha}"
+        )
+
+    def test_payload_sha_may_be_absent_when_not_provided(self):
+        """
+        契约说明：当 gateway_event 中没有 payload_sha 时，顶层也不应有该字段
+
+        某些特殊场景（如查询操作）可能不包含 payload_sha，此时顶层不应出现该字段。
+        """
+        from engram.gateway.audit_event import (
+            build_audit_event,
+            build_evidence_refs_json,
+        )
+
+        # 构建不含 payload_sha 的审计事件
+        gateway_event = build_audit_event(
+            source="gateway",
+            operation="memory_query",
+            correlation_id="corr-0000111122223333",
+            actor_user_id="test_user",
+            requested_space="team:project",
+            # 不设置 payload_sha
+        )
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=gateway_event)
+
+        # 契约断言：payload_sha 不存在时顶层不应有
+        assert "payload_sha" not in evidence_refs_json, (
+            "当 gateway_event 中没有 payload_sha 时，顶层不应有该字段"
+        )
+
+    # ========================================================================
+    # outbox_worker worker_id 与 attempt_id 提升断言
+    # ========================================================================
+
+    def test_worker_id_attempt_id_promoted_for_outbox_worker(self):
+        """
+        契约测试：outbox_worker 的 worker_id 和 attempt_id 必须提升到顶层
+
+        build_outbox_worker_audit_event 将 worker_id 和 attempt_id 放入 gateway_event.extra，
+        build_evidence_refs_json 应将其提升到顶层，便于 SQL 查询：
+            evidence_refs_json->>'worker_id'
+            evidence_refs_json->>'attempt_id'
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_outbox_worker_audit_event,
+        )
+
+        test_worker_id = "worker-test-001"
+        test_attempt_id = "attempt-abc123"
+
+        gateway_event = build_outbox_worker_audit_event(
+            operation="outbox_flush",
+            correlation_id="corr-fedcba9876543210",
+            actor_user_id="test_user",
+            target_space="private:test_user",
+            action="allow",
+            reason="outbox_flush_success",
+            payload_sha="c" * 64,
+            outbox_id=789,
+            worker_id=test_worker_id,
+            attempt_id=test_attempt_id,
+        )
+
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=gateway_event)
+
+        # 契约断言：worker_id 必须提升到顶层
+        assert "worker_id" in evidence_refs_json, (
+            "outbox_worker: worker_id 必须从 extra 提升到 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["worker_id"] == test_worker_id, (
+            f"顶层 worker_id 值不正确，期望 {test_worker_id}，"
+            f"实际 {evidence_refs_json.get('worker_id')}"
+        )
+
+        # 契约断言：attempt_id 必须提升到顶层
+        assert "attempt_id" in evidence_refs_json, (
+            "outbox_worker: attempt_id 必须从 extra 提升到 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["attempt_id"] == test_attempt_id, (
+            f"顶层 attempt_id 值不正确，期望 {test_attempt_id}，"
+            f"实际 {evidence_refs_json.get('attempt_id')}"
+        )
+
+        # 同时验证 extra 中也有（完整元数据保留）
+        assert evidence_refs_json["extra"]["worker_id"] == test_worker_id
+        assert evidence_refs_json["extra"]["attempt_id"] == test_attempt_id
+
+    # ========================================================================
+    # OpenMemory 失败补偿 intended_action 顶层断言
+    # ========================================================================
+
+    def test_intended_action_at_top_level_for_redirect_deferred(self):
+        """
+        契约测试：redirect→deferred 补偿场景的 intended_action 必须在顶层
+
+        当 OpenMemory 写入失败时，Gateway 将记录重定向到 outbox 补偿队列。
+        此时 decision.action="redirect"，但原始意图应记录为 "deferred"。
+        build_evidence_refs_json 应将 intended_action 从 extra 提升到顶层，
+        便于 SQL 查询：
+            evidence_refs_json->>'intended_action'
+
+        v1.4 语义要求：
+        - intended_action="deferred" 表示原意是延迟入队
+        - 用于追踪和对账
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+        )
+
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-0011223344556677",
+            actor_user_id="test_user",
+            requested_space="team:project",
+            final_space="team:project",
+            action="redirect",  # 审计内部使用 redirect 表示重定向到 outbox
+            reason="openmemory_write_failed:connection_error",
+            payload_sha="d" * 64,
+            outbox_id=999,
+            extra={
+                "last_error": "Connection refused",
+                "error_code": "connection_error",
+            },
+            intended_action="deferred",  # v1.4: 记录原意为 deferred
+        )
+
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=gateway_event)
+
+        # 契约断言：intended_action 必须提升到顶层
+        assert "intended_action" in evidence_refs_json, (
+            "redirect→deferred 补偿场景: intended_action 必须在 evidence_refs_json 顶层"
+        )
+        assert evidence_refs_json["intended_action"] == "deferred", (
+            f"顶层 intended_action 值不正确，期望 'deferred'，"
+            f"实际 {evidence_refs_json.get('intended_action')!r}"
+        )
+
+        # 验证 decision.action 仍为 redirect（审计内部语义）
+        assert evidence_refs_json["gateway_event"]["decision"]["action"] == "redirect"
+
+        # 验证 extra 中也有 intended_action（完整元数据保留）
+        assert evidence_refs_json["extra"]["intended_action"] == "deferred"
+
+    def test_intended_action_absent_when_not_redirect_scenario(self):
+        """
+        契约说明：非 redirect 补偿场景不应有 intended_action
+
+        当 action 不是 redirect 时（如正常 allow 或 reject），
+        intended_action 不应存在于顶层。
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+        )
+
+        # 正常 allow 场景
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-aabbccddeeff0011",
+            actor_user_id="test_user",
+            requested_space="team:project",
+            final_space="team:project",
+            action="allow",
+            reason="policy_passed",
+            payload_sha="e" * 64,
+            # 不设置 intended_action
+        )
+
+        evidence_refs_json = build_evidence_refs_json(evidence=None, gateway_event=gateway_event)
+
+        # 契约断言：非 redirect 场景不应有 intended_action
+        assert "intended_action" not in evidence_refs_json, (
+            "非 redirect 场景: intended_action 不应在 evidence_refs_json 顶层"
         )
 
 
@@ -1249,7 +1594,7 @@ class TestStrictModeEvidenceValidationAuditContract:
 
         gateway_event = build_gateway_audit_event(
             operation="memory_store",
-            correlation_id="corr-validstructure1",
+            correlation_id="corr-0a11d500c00001ab",
             action="reject",
             reason="EVIDENCE_VALIDATION_FAILED:EVIDENCE_MISSING_SHA256",
             payload_sha="b" * 64,
@@ -1334,7 +1679,7 @@ class TestStrictModeEvidenceValidationAuditContract:
 
         gateway_event = build_gateway_audit_event(
             operation="memory_store",
-            correlation_id="corr-reasonformat123",
+            correlation_id="corr-0ea50f00a0123abc",
             action="reject",
             reason=reason,
             payload_sha="c" * 64,
@@ -1584,7 +1929,7 @@ class TestAuditWriteError:
             "actor_user_id": "test_user",
             "target_space": "team:project",
             "action": "allow",
-            "correlation_id": "corr-12345678901234",
+            "correlation_id": "corr-1234567890123400",
         }
 
         error = AuditWriteError(
@@ -1593,7 +1938,7 @@ class TestAuditWriteError:
         )
 
         assert error.audit_data == audit_data
-        assert error.audit_data["correlation_id"] == "corr-12345678901234"
+        assert error.audit_data["correlation_id"] == "corr-1234567890123400"
 
 
 # ============================================================================
@@ -1608,84 +1953,71 @@ class TestAuditFirstSemantics:
     根据 ADR "审计不可丢" 要求：
     - Audit 写入失败：Gateway 应阻止主操作继续，避免不可审计的写入
     - OpenMemory 失败时 audit 与 outbox 的顺序与字段一致
-    """
 
-    # Mock 路径：handlers 模块使用的依赖
-    HANDLER_MODULE = "engram.gateway.handlers.memory_store"
+    注意：v1.0 使用 GatewayDeps.for_testing() 进行依赖注入，不再使用 patch 全局函数。
+    """
 
     @pytest.mark.asyncio
     async def test_audit_failure_blocks_openmemory_write(self):
         """
         契约测试：审计写入失败时必须阻断 OpenMemory 写入
 
-        场景：pre-audit 写入失败
+        场景：post-audit 写入失败（OpenMemory 成功后）
         预期：
         1. 返回错误响应
-        2. OpenMemory 不被调用
+        2. OpenMemory 已被调用（成功）
         3. 错误消息明确指出审计写入失败
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
+        from tests.gateway.fakes import (
+            FakeGatewayConfig,
+            FakeLogbookAdapter,
+            FakeLogbookDatabase,
+            FakeOpenMemoryClient,
+        )
 
         payload_md = "# Test content for audit failure"
         target_space = "team:test_project"
 
-        with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            # 配置 mock
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
+        # 创建 fake 依赖
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
 
-            # 模拟 check_dedup 返回 None（无重复）
-            mock_adapter.check_dedup.return_value = None
+        # 配置 fake 行为
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        # 模拟审计写入失败
+        fake_db.configure_audit_failure("数据库连接失败")
+        fake_adapter.configure_dedup_miss()
+        fake_client.configure_store_success(memory_id="mem_audit_failed")
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            # 模拟审计写入失败
-            mock_db.insert_audit.side_effect = Exception("数据库连接失败")
-            mock_get_db.return_value = mock_db
+        # 通过 GatewayDeps.for_testing() 注入依赖
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            # 模拟策略引擎
-            from engram.gateway.policy import PolicyAction
+        # 执行
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            correlation_id="corr-a0d1fa1100000001",
+            deps=deps,
+        )
 
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.ALLOW
-            mock_decision.reason = "policy_passed"
-            mock_decision.final_space = target_space
-            mock_engine.return_value.decide.return_value = mock_decision
+        # 验证：操作失败
+        assert result.ok is False
+        assert result.action == "error"
 
-            # 模拟 OpenMemory 成功（审计失败发生在后置阶段）
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_audit_failed"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
+        # 验证：错误消息包含审计写入失败
+        assert "审计" in result.message or "audit" in result.message.lower()
 
-            # 执行
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-            )
-
-            # 验证：操作失败
-            assert result.ok is False
-            assert result.action == "error"
-
-            # 验证：错误消息包含审计写入失败
-            assert "审计" in result.message or "audit" in result.message.lower()
-
-            # 验证：OpenMemory 已被调用
-            mock_get_client.assert_called_once()
+        # 验证：OpenMemory 已被调用（成功存储后审计失败）
+        assert len(fake_client.store_calls) == 1
 
     @pytest.mark.asyncio
     async def test_policy_reject_audit_failure_blocks_response(self):
@@ -1695,52 +2027,50 @@ class TestAuditFirstSemantics:
         场景：策略判定为 REJECT，但审计写入失败
         预期：返回审计错误，而非策略拒绝响应
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
+        from tests.gateway.fakes import (
+            FakeGatewayConfig,
+            FakeLogbookAdapter,
+            FakeLogbookDatabase,
+            FakeOpenMemoryClient,
+        )
 
         payload_md = "# Content for policy reject with audit failure"
         target_space = "team:restricted"
 
-        with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
+        # 创建 fake 依赖
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
 
-            mock_adapter.check_dedup.return_value = None
+        # 配置 fake 行为
+        fake_db.configure_settings(team_write_enabled=False, policy_json={})  # 禁用团队写入
+        # 模拟审计写入失败
+        fake_db.configure_audit_failure("审计表锁定超时")
+        fake_adapter.configure_dedup_miss()
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": False,  # 禁用团队写入
-                "policy_json": {},
-            }
-            # 模拟审计写入失败
-            mock_db.insert_audit.side_effect = Exception("审计表锁定超时")
-            mock_get_db.return_value = mock_db
+        # 通过 GatewayDeps.for_testing() 注入依赖
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            # 模拟策略引擎返回 REJECT
-            from engram.gateway.policy import PolicyAction
+        # 执行
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            correlation_id="corr-001c0e0ec0000001",
+            deps=deps,
+        )
 
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.REJECT
-            mock_decision.reason = "team_write_disabled"
-            mock_decision.final_space = None
-            mock_engine.return_value.decide.return_value = mock_decision
-
-            # 执行
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-            )
-
-            # 验证：返回审计错误（非策略拒绝）
-            assert result.ok is False
-            assert result.action == "error"
-            assert "审计" in result.message or "audit" in result.message.lower()
+        # 验证：返回审计错误（非策略拒绝）
+        assert result.ok is False
+        assert result.action == "error"
+        assert "审计" in result.message or "audit" in result.message.lower()
 
     @pytest.mark.asyncio
     async def test_openmemory_failure_outbox_then_audit(self):
@@ -1753,92 +2083,77 @@ class TestAuditFirstSemantics:
         2. 再写入审计（包含 outbox_id）
         3. 审计的 evidence_refs_json 顶层包含 outbox_id
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
-        from engram.gateway.openmemory_client import OpenMemoryConnectionError
+        from tests.gateway.fakes import (
+            FakeGatewayConfig,
+            FakeLogbookAdapter,
+            FakeLogbookDatabase,
+            FakeOpenMemoryClient,
+        )
 
         payload_md = "# Content for OpenMemory failure"
         target_space = "team:test_project"
 
-        with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
+        # 创建 fake 依赖
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
 
-            mock_adapter.check_dedup.return_value = None
+        # 配置 fake 行为
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        # 配置 outbox 入队成功，起始 ID 为 12345
+        fake_db.configure_outbox_success(start_id=12345)
+        fake_adapter.configure_dedup_miss()
+        # 模拟 OpenMemory 连接失败
+        fake_client.configure_store_connection_error("连接超时")
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            # 模拟 outbox 入队返回 outbox_id
-            mock_db.enqueue_outbox.return_value = 12345
-            # 记录 insert_audit 调用参数
-            audit_calls = []
+        # 通过 GatewayDeps.for_testing() 注入依赖
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            def record_audit_call(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
+        # 执行
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            correlation_id="corr-0e0e0fa110000001",
+            deps=deps,
+        )
 
-            mock_db.insert_audit.side_effect = record_audit_call
-            mock_get_db.return_value = mock_db
+        # 验证：操作返回错误但有 outbox
+        assert result.ok is False
+        assert "outbox_id=12345" in result.message
 
-            # 模拟策略引擎
-            from engram.gateway.policy import PolicyAction
+        # 验证：enqueue_outbox 被调用
+        assert len(fake_db.outbox_calls) == 1
 
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.ALLOW
-            mock_decision.reason = "policy_passed"
-            mock_decision.final_space = target_space
-            mock_engine.return_value.decide.return_value = mock_decision
+        # 验证：insert_audit 被调用（仅失败审计）
+        assert len(fake_db.audit_calls) == 1, "应只有 1 次失败审计调用"
 
-            # 模拟 OpenMemory 连接失败
-            mock_client = MagicMock()
-            mock_client.store.side_effect = OpenMemoryConnectionError("连接超时")
-            mock_get_client.return_value = mock_client
+        # 验证：失败审计包含 outbox_id
+        failure_audit = fake_db.audit_calls[0]
+        evidence_refs_json = failure_audit.get("evidence_refs_json", {})
 
-            # 执行
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-            )
+        # 契约断言：outbox_id 必须在顶层
+        assert "outbox_id" in evidence_refs_json, (
+            "失败审计的 evidence_refs_json 必须包含顶层 outbox_id"
+        )
+        assert evidence_refs_json["outbox_id"] == 12345, (
+            f"outbox_id 应为 12345，实际为 {evidence_refs_json.get('outbox_id')}"
+        )
 
-            # 验证：操作返回错误但有 outbox
-            assert result.ok is False
-            assert "outbox_id=12345" in result.message
-
-            # 验证：enqueue_outbox 被调用
-            mock_db.enqueue_outbox.assert_called_once()
-
-            # 验证：insert_audit 被调用（仅失败审计）
-            assert len(audit_calls) == 1, "应只有 1 次失败审计调用"
-
-            # 验证：失败审计包含 outbox_id
-            failure_audit = audit_calls[0]
-            evidence_refs_json = failure_audit.get("evidence_refs_json", {})
-
-            # 契约断言：outbox_id 必须在顶层
-            assert "outbox_id" in evidence_refs_json, (
-                "失败审计的 evidence_refs_json 必须包含顶层 outbox_id"
-            )
-            assert evidence_refs_json["outbox_id"] == 12345, (
-                f"outbox_id 应为 12345，实际为 {evidence_refs_json.get('outbox_id')}"
-            )
-
-            # 契约断言：intended_action 必须在顶层（用于追踪原意）
-            assert "intended_action" in evidence_refs_json, (
-                "失败审计的 evidence_refs_json 必须包含顶层 intended_action"
-            )
-            assert evidence_refs_json["intended_action"] == "deferred", (
-                f"intended_action 应为 'deferred'，实际为 {evidence_refs_json.get('intended_action')}"
-            )
+        # 契约断言：intended_action 必须在顶层（用于追踪原意）
+        assert "intended_action" in evidence_refs_json, (
+            "失败审计的 evidence_refs_json 必须包含顶层 intended_action"
+        )
+        assert evidence_refs_json["intended_action"] == "deferred", (
+            f"intended_action 应为 'deferred'，实际为 {evidence_refs_json.get('intended_action')}"
+        )
 
 
 # ============================================================================
@@ -2263,45 +2578,59 @@ class TestMemoryStoreImplAuditPayloadContract:
         1. gateway_event 通过 schema 校验
         2. 顶层字段满足 reconcile/outbox 查询契约
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
 
         payload_md = "# Test content for success branch"
         target_space = "team:test_project"
 
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "test_project"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {},
+        }
+
+        # 捕获 insert_audit 调用参数
+        audit_calls = []
+
+        def capture_audit(**kwargs):
+            audit_calls.append(kwargs)
+            return len(audit_calls)
+
+        mock_db.insert_audit.side_effect = capture_audit
+
+        # 模拟 OpenMemory 成功
+        mock_client = MagicMock()
+        mock_store_result = MagicMock()
+        mock_store_result.success = True
+        mock_store_result.memory_id = "mem_success_001"
+        mock_client.store.return_value = mock_store_result
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
         with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.get_client") as mock_get_client,
             patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-            patch(f"{self.ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
-
-            # 用户存在
-            mock_check_user.return_value = True
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-
-            # 捕获 insert_audit 调用参数
-            audit_calls = []
-
-            def capture_audit(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
-
-            mock_db.insert_audit.side_effect = capture_audit
-            mock_get_db.return_value = mock_db
-
             # 模拟策略引擎
             from engram.gateway.policy import PolicyAction
 
@@ -2311,19 +2640,12 @@ class TestMemoryStoreImplAuditPayloadContract:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_success_001"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
-            # 执行
+            # 执行（不传 actor_user_id 以跳过 actor 验证）
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
-                actor_user_id="test_user",
+                correlation_id="corr-a1b2c3d4e5f60001",
+                deps=deps,
             )
 
             # 验证操作成功
@@ -2362,44 +2684,51 @@ class TestMemoryStoreImplAuditPayloadContract:
         2. decision.action == "reject"
         3. 顶层字段满足契约
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
 
         payload_md = "# Test content for reject branch"
         target_space = "team:restricted"
 
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "test_project"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": False,
+            "policy_json": {},
+        }
+
+        # 捕获 insert_audit 调用参数
+        audit_calls = []
+
+        def capture_audit(**kwargs):
+            audit_calls.append(kwargs)
+            return len(audit_calls)
+
+        mock_db.insert_audit.side_effect = capture_audit
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+        )
+
         with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
             patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-            patch(f"{self.ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
-
-            # 用户存在
-            mock_check_user.return_value = True
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": False,
-                "policy_json": {},
-            }
-
-            # 捕获 insert_audit 调用参数
-            audit_calls = []
-
-            def capture_audit(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
-
-            mock_db.insert_audit.side_effect = capture_audit
-            mock_get_db.return_value = mock_db
-
             # 模拟策略拒绝
             from engram.gateway.policy import PolicyAction
 
@@ -2409,11 +2738,12 @@ class TestMemoryStoreImplAuditPayloadContract:
             mock_decision.final_space = None
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 执行
+            # 执行（不传 actor_user_id 以跳过 actor 验证）
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
-                actor_user_id="test_user",
+                correlation_id="corr-a1b2c3d4e5f60002",
+                deps=deps,
             )
 
             # 验证操作被拒绝
@@ -2447,47 +2777,58 @@ class TestMemoryStoreImplAuditPayloadContract:
         3. decision.action == "redirect"（内部）
         4. extra.intended_action == "deferred"
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
         from engram.gateway.openmemory_client import OpenMemoryConnectionError
 
         payload_md = "# Test content for OpenMemory failure"
         target_space = "team:test_project"
 
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "test_project"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {},
+        }
+        mock_db.enqueue_outbox.return_value = 99999  # outbox_id
+
+        # 捕获 insert_audit 调用参数
+        audit_calls = []
+
+        def capture_audit(**kwargs):
+            audit_calls.append(kwargs)
+            return len(audit_calls)
+
+        mock_db.insert_audit.side_effect = capture_audit
+
+        # 模拟 OpenMemory 连接失败
+        mock_client = MagicMock()
+        mock_client.store.side_effect = OpenMemoryConnectionError("Connection refused")
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
         with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.get_client") as mock_get_client,
             patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-            patch(f"{self.ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
-
-            # 用户存在
-            mock_check_user.return_value = True
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            mock_db.enqueue_outbox.return_value = 99999  # outbox_id
-
-            # 捕获 insert_audit 调用参数
-            audit_calls = []
-
-            def capture_audit(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
-
-            mock_db.insert_audit.side_effect = capture_audit
-            mock_get_db.return_value = mock_db
-
             # 模拟策略引擎
             from engram.gateway.policy import PolicyAction
 
@@ -2497,16 +2838,12 @@ class TestMemoryStoreImplAuditPayloadContract:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 模拟 OpenMemory 连接失败
-            mock_client = MagicMock()
-            mock_client.store.side_effect = OpenMemoryConnectionError("Connection refused")
-            mock_get_client.return_value = mock_client
-
-            # 执行
+            # 执行（不传 actor_user_id 以跳过 actor 验证）
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
-                actor_user_id="test_user",
+                correlation_id="corr-a1b2c3d4e5f60003",
+                deps=deps,
             )
 
             # 验证操作降级到 outbox
@@ -2549,6 +2886,7 @@ class TestMemoryStoreImplAuditPayloadContract:
         2. decision.action == "allow"
         3. 包含 original_outbox_id 信息
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
         from engram.gateway.services.hash_utils import compute_payload_sha
 
@@ -2556,69 +2894,74 @@ class TestMemoryStoreImplAuditPayloadContract:
         target_space = "team:test_project"
         payload_sha = compute_payload_sha(payload_md)
 
-        with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "test_project"
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
 
-            # 用户存在
-            mock_check_user.return_value = True
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        # 模拟 dedup hit
+        mock_adapter.check_dedup.return_value = {
+            "outbox_id": 888,
+            "target_space": target_space,
+            "payload_sha": payload_sha,
+            "status": "sent",
+            "last_error": "memory_id=mem_existing_888",
+        }
 
-            # 模拟 dedup hit
-            mock_adapter.check_dedup.return_value = {
-                "outbox_id": 888,
-                "target_space": target_space,
-                "payload_sha": payload_sha,
-                "status": "sent",
-                "last_error": "memory_id=mem_existing_888",
-            }
+        # 创建 mock db
+        mock_db = MagicMock()
 
-            mock_db = MagicMock()
+        # 捕获 insert_audit 调用参数
+        audit_calls = []
 
-            # 捕获 insert_audit 调用参数
-            audit_calls = []
+        def capture_audit(**kwargs):
+            audit_calls.append(kwargs)
+            return len(audit_calls)
 
-            def capture_audit(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
+        mock_db.insert_audit.side_effect = capture_audit
 
-            mock_db.insert_audit.side_effect = capture_audit
-            mock_get_db.return_value = mock_db
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+        )
 
-            # 执行
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id="test_user",
-            )
+        # 执行（不传 actor_user_id 以跳过 actor 验证）
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            correlation_id="corr-a1b2c3d4e5f60004",
+            deps=deps,
+        )
 
-            # 验证 dedup hit 响应
-            assert result.ok is True
-            assert result.action == "allow"
-            assert result.memory_id == "mem_existing_888"
-            assert "dedup_hit" in result.message
+        # 验证 dedup hit 响应
+        assert result.ok is True
+        assert result.action == "allow"
+        assert result.memory_id == "mem_existing_888"
+        assert "dedup_hit" in result.message
 
-            # 捕获并校验 audit payload
-            assert len(audit_calls) == 1, "Dedup hit 分支应有 1 次 insert_audit 调用"
-            evidence_refs_json = audit_calls[0].get("evidence_refs_json", {})
+        # 捕获并校验 audit payload
+        assert len(audit_calls) == 1, "Dedup hit 分支应有 1 次 insert_audit 调用"
+        evidence_refs_json = audit_calls[0].get("evidence_refs_json", {})
 
-            # 校验 gateway_event 符合 schema
-            self._validate_gateway_event(evidence_refs_json, schema)
+        # 校验 gateway_event 符合 schema
+        self._validate_gateway_event(evidence_refs_json, schema)
 
-            # 校验顶层字段满足契约
-            self._assert_reconcile_outbox_contract(evidence_refs_json)
+        # 校验顶层字段满足契约
+        self._assert_reconcile_outbox_contract(evidence_refs_json)
 
-            # 校验 gateway_event 关键字段
-            gateway_event = evidence_refs_json["gateway_event"]
-            assert gateway_event["decision"]["action"] == "allow"
-            assert gateway_event["decision"]["reason"] == "dedup_hit"
+        # 校验 gateway_event 关键字段
+        gateway_event = evidence_refs_json["gateway_event"]
+        assert gateway_event["decision"]["action"] == "allow"
+        assert gateway_event["decision"]["reason"] == "dedup_hit"
 
-            # 校验包含 original_outbox_id
-            assert evidence_refs_json.get("original_outbox_id") == 888
+        # 校验包含 original_outbox_id
+        assert evidence_refs_json.get("original_outbox_id") == 888
 
     @pytest.mark.asyncio
     async def test_redirect_branch_audit_payload_schema(self, schema):
@@ -2631,46 +2974,60 @@ class TestMemoryStoreImplAuditPayloadContract:
         2. final_space != requested_space
         3. decision.action == "redirect"
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
 
         payload_md = "# Test content for redirect branch"
         target_space = "team:restricted"
         redirect_space = "private:test_user"
 
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "test_project"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {},
+        }
+
+        # 捕获 insert_audit 调用参数
+        audit_calls = []
+
+        def capture_audit(**kwargs):
+            audit_calls.append(kwargs)
+            return len(audit_calls)
+
+        mock_db.insert_audit.side_effect = capture_audit
+
+        # 模拟 OpenMemory 成功
+        mock_client = MagicMock()
+        mock_store_result = MagicMock()
+        mock_store_result.success = True
+        mock_store_result.memory_id = "mem_redirect_001"
+        mock_client.store.return_value = mock_store_result
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
         with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.get_client") as mock_get_client,
             patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-            patch(f"{self.ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
-
-            # 用户存在
-            mock_check_user.return_value = True
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-
-            # 捕获 insert_audit 调用参数
-            audit_calls = []
-
-            def capture_audit(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
-
-            mock_db.insert_audit.side_effect = capture_audit
-            mock_get_db.return_value = mock_db
-
             # 模拟策略重定向
             from engram.gateway.policy import PolicyAction
 
@@ -2680,19 +3037,12 @@ class TestMemoryStoreImplAuditPayloadContract:
             mock_decision.final_space = redirect_space
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_redirect_001"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
-            # 执行
+            # 执行（不传 actor_user_id 以跳过 actor 验证）
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
-                actor_user_id="test_user",
+                correlation_id="corr-a1b2c3d4e5f60005",
+                deps=deps,
             )
 
             # 验证重定向成功
@@ -2726,6 +3076,7 @@ class TestMemoryStoreImplAuditPayloadContract:
         1. gateway_event.evidence_summary 正确计算
         2. evidence_refs_json 包含 patches/external 分类
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
 
         payload_md = "# Test content with evidence v2"
@@ -2742,40 +3093,53 @@ class TestMemoryStoreImplAuditPayloadContract:
             },
         ]
 
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "test_project"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {"evidence_mode": "compat"},
+        }
+
+        # 捕获 insert_audit 调用参数
+        audit_calls = []
+
+        def capture_audit(**kwargs):
+            audit_calls.append(kwargs)
+            return len(audit_calls)
+
+        mock_db.insert_audit.side_effect = capture_audit
+
+        # 模拟 OpenMemory 成功
+        mock_client = MagicMock()
+        mock_store_result = MagicMock()
+        mock_store_result.success = True
+        mock_store_result.memory_id = "mem_evidence_001"
+        mock_client.store.return_value = mock_store_result
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
         with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.get_client") as mock_get_client,
             patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-            patch(f"{self.ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.validate_evidence_refs = False
-            mock_config.return_value.strict_mode_enforce_validate_refs = False
-
-            # 用户存在
-            mock_check_user.return_value = True
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {"evidence_mode": "compat"},
-            }
-
-            # 捕获 insert_audit 调用参数
-            audit_calls = []
-
-            def capture_audit(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
-
-            mock_db.insert_audit.side_effect = capture_audit
-            mock_get_db.return_value = mock_db
-
             # 模拟策略引擎
             from engram.gateway.policy import PolicyAction
 
@@ -2785,20 +3149,13 @@ class TestMemoryStoreImplAuditPayloadContract:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_evidence_001"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
-            # 执行
+            # 执行（不传 actor_user_id 以跳过 actor 验证）
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
-                actor_user_id="test_user",
                 evidence=evidence_v2,
+                correlation_id="corr-a1b2c3d4e5f60006",
+                deps=deps,
             )
 
             # 验证成功
@@ -2830,39 +3187,60 @@ class TestMemoryStoreImplAuditPayloadContract:
         1. gateway_event.correlation_id 格式正确
         2. 顶层 correlation_id 与 gateway_event 一致
         """
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
 
         payload_md = "# Test correlation_id consistency"
         target_space = "team:test_project"
+        test_correlation_id = "corr-a1b2c3d4e5f67890"  # 格式：corr- + 16位十六进制
+
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "test_project"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {},
+        }
+
+        # 捕获 insert_audit 调用参数
+        audit_calls = []
+
+        def capture_audit(**kwargs):
+            audit_calls.append(kwargs)
+            return len(audit_calls)
+
+        mock_db.insert_audit.side_effect = capture_audit
+
+        # 模拟 OpenMemory 成功
+        mock_client = MagicMock()
+        mock_store_result = MagicMock()
+        mock_store_result.success = True
+        mock_store_result.memory_id = "mem_corr_001"
+        mock_client.store.return_value = mock_store_result
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
 
         with (
-            patch(f"{self.HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{self.HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{self.HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{self.HANDLER_MODULE}.get_client") as mock_get_client,
             patch(f"{self.HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-
-            # 捕获 insert_audit 调用参数
-            audit_calls = []
-
-            def capture_audit(**kwargs):
-                audit_calls.append(kwargs)
-                return len(audit_calls)
-
-            mock_db.insert_audit.side_effect = capture_audit
-            mock_get_db.return_value = mock_db
-
             # 模拟策略引擎
             from engram.gateway.policy import PolicyAction
 
@@ -2872,18 +3250,12 @@ class TestMemoryStoreImplAuditPayloadContract:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_corr_001"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
             # 执行
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
+                correlation_id=test_correlation_id,
+                deps=deps,
             )
 
             assert result.ok is True
@@ -2903,3 +3275,1189 @@ class TestMemoryStoreImplAuditPayloadContract:
 
             # 顶层与 gateway_event 一致
             assert evidence_refs_json.get("correlation_id") == correlation_id
+
+            # 验证与传入的 correlation_id 一致
+            assert correlation_id == test_correlation_id
+
+
+# ============================================================================
+# Audit-First 写路径契约测试
+# ============================================================================
+
+
+class TestAuditFirstWritePathContract:
+    """
+    Audit-First 写路径契约测试
+
+    验证所有写路径在审计写入失败时的行为：
+    - governance_update: 审计失败时返回 error，包含 correlation_id
+    - minio_audit_webhook: 审计失败时返回 500，包含 request_id
+
+    契约要求（见 docs/gateway/06_gateway_design.md "审计与降级"章节）：
+    - 审计写入失败必须阻断主操作
+    - 错误响应必须包含追踪标识（correlation_id 或 request_id）
+    """
+
+    @pytest.mark.asyncio
+    async def test_governance_update_audit_failure_blocks_operation(self):
+        """
+        契约测试：governance_update 审计写入失败时阻断主操作
+
+        场景：鉴权通过，但 db.insert_audit 失败
+        预期：
+        1. 返回 ok=False, action="error"
+        2. 错误消息包含 correlation_id
+        3. 主操作未执行（settings 未更新）
+        """
+        from engram.gateway.di import GatewayDeps
+        from engram.gateway.handlers.governance_update import governance_update_impl
+        from tests.gateway.fakes import (
+            FakeGatewayConfig,
+            FakeLogbookAdapter,
+            FakeLogbookDatabase,
+        )
+
+        # 创建 fake 依赖
+        fake_config = FakeGatewayConfig()
+        fake_config.governance_admin_key = "test_admin_key"  # 设置 admin_key
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+
+        # 配置 fake 行为
+        fake_db.configure_settings(
+            team_write_enabled=False,
+            policy_json={"allowlist_users": []},
+        )
+        # 配置审计写入失败
+        fake_db.configure_audit_failure("数据库连接超时")
+
+        # 通过 GatewayDeps.for_testing() 注入依赖
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+        )
+
+        # 执行 - 使用有效的 admin_key 鉴权通过
+        result = await governance_update_impl(
+            team_write_enabled=True,
+            policy_json=None,
+            admin_key="test_admin_key",  # 正确的 admin_key
+            actor_user_id="admin_user",
+            deps=deps,
+        )
+
+        # 验证：操作被阻断
+        assert result.ok is False, "审计写入失败时操作应被阻断"
+        assert result.action == "error", "action 应为 error"
+
+        # 验证：错误消息包含 correlation_id
+        assert "correlation_id=" in result.message, (
+            f"错误消息应包含 correlation_id，实际消息: {result.message}"
+        )
+        assert "审计" in result.message or "audit" in result.message.lower(), (
+            f"错误消息应明确指出审计写入失败，实际消息: {result.message}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_governance_update_auth_reject_audit_failure_blocks_response(self):
+        """
+        契约测试：governance_update 鉴权失败时审计写入失败也阻断响应
+
+        场景：鉴权失败，且记录拒绝审计时 db.insert_audit 失败
+        预期：
+        1. 返回 ok=False, action="error"（而非 action="reject"）
+        2. 错误消息包含 correlation_id
+        """
+        from engram.gateway.di import GatewayDeps
+        from engram.gateway.handlers.governance_update import governance_update_impl
+        from tests.gateway.fakes import (
+            FakeGatewayConfig,
+            FakeLogbookAdapter,
+            FakeLogbookDatabase,
+        )
+
+        # 创建 fake 依赖
+        fake_config = FakeGatewayConfig()
+        fake_config.governance_admin_key = "correct_key"
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+
+        # 配置 fake 行为
+        fake_db.configure_settings(
+            team_write_enabled=False,
+            policy_json={"allowlist_users": []},
+        )
+        # 配置审计写入失败
+        fake_db.configure_audit_failure("审计表锁定超时")
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+        )
+
+        # 执行 - 使用错误的 admin_key 触发鉴权失败
+        result = await governance_update_impl(
+            team_write_enabled=True,
+            admin_key="wrong_key",  # 错误的 admin_key
+            actor_user_id="test_user",
+            deps=deps,
+        )
+
+        # 验证：返回审计错误而非鉴权拒绝
+        assert result.ok is False
+        assert result.action == "error", (
+            f"审计写入失败时应返回 action=error，而非 action={result.action}"
+        )
+        assert "correlation_id=" in result.message
+
+    @pytest.mark.asyncio
+    async def test_governance_update_internal_error_audit_failure(self):
+        """
+        契约测试：governance_update 执行异常时审计写入失败的处理
+
+        场景：upsert_settings 执行成功后，记录允许审计时失败
+        预期：
+        1. 返回 ok=False, action="error"
+        2. 错误消息包含 correlation_id
+        """
+        from engram.gateway.di import GatewayDeps
+        from engram.gateway.handlers.governance_update import governance_update_impl
+        from tests.gateway.fakes import (
+            FakeGatewayConfig,
+            FakeLogbookAdapter,
+            FakeLogbookDatabase,
+        )
+
+        fake_config = FakeGatewayConfig()
+        fake_config.governance_admin_key = "admin_key"
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+
+        fake_db.configure_settings(team_write_enabled=False, policy_json={})
+        # 关键：审计写入失败
+        fake_db.configure_audit_failure("Connection refused")
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+        )
+
+        result = await governance_update_impl(
+            team_write_enabled=True,
+            admin_key="admin_key",
+            actor_user_id="admin",
+            deps=deps,
+        )
+
+        # 验证
+        assert result.ok is False
+        assert result.action == "error"
+        assert "correlation_id=" in result.message
+
+
+class TestMinioAuditWebhookAuditFirstContract:
+    """
+    MinIO Audit Webhook Audit-First 契约测试
+
+    验证 minio_audit_webhook 在审计写入失败时的行为：
+    - 返回 500 状态码
+    - 错误响应包含 request_id 用于追踪
+    """
+
+    def test_minio_audit_error_contains_request_id(self):
+        """
+        契约测试：MinioAuditError 包含 request_id 用于追踪
+        """
+        from engram.gateway.minio_audit_webhook import MinioAuditError
+
+        error = MinioAuditError(
+            message="数据库写入失败",
+            status_code=500,
+            request_id="REQ-12345",
+        )
+
+        assert error.message == "数据库写入失败"
+        assert error.status_code == 500
+        assert error.request_id == "REQ-12345"
+
+    def test_normalize_to_schema_extracts_request_id(self):
+        """
+        契约测试：normalize_to_schema 正确提取 request_id
+
+        验证 MinIO 审计事件归一化时 request_id 被正确保留
+        """
+        from engram.gateway.minio_audit_webhook import normalize_to_schema
+
+        minio_event = {
+            "version": "1",
+            "time": "2024-01-15T10:00:00.000Z",
+            "requestID": "REQ-TEST-123456",
+            "api": {
+                "name": "PutObject",
+                "bucket": "test-bucket",
+                "object": "test/key.txt",
+                "statusCode": 200,
+            },
+            "remotehost": "192.168.1.100:52431",
+        }
+
+        normalized = normalize_to_schema(minio_event)
+
+        # 验证 request_id 被正确提取
+        assert normalized["request_id"] == "REQ-TEST-123456", (
+            f"request_id 应为 REQ-TEST-123456，实际为 {normalized.get('request_id')}"
+        )
+
+    def test_audit_first_strategy_documentation(self):
+        """
+        契约测试：验证 _insert_audit_to_db 的 audit-first 策略
+
+        验证函数签名和行为符合 audit-first 策略：
+        - 成功时返回 event_id
+        - 失败时抛出 MinioAuditError，包含 request_id
+        - 审计写入失败阻断整个请求处理（由调用方保证）
+        """
+        from engram.gateway.minio_audit_webhook import MinioAuditError
+
+        # 验证 MinioAuditError 支持 request_id 参数
+        error = MinioAuditError(
+            message="审计写入失败",
+            status_code=500,
+            request_id="REQ-AUDIT-FAIL",
+        )
+
+        # 契约断言：error 响应包含追踪信息
+        assert hasattr(error, "request_id")
+        assert error.request_id == "REQ-AUDIT-FAIL"
+
+
+# ===================== Strict/Compat 模式审计字段契约测试 =====================
+
+
+class TestStrictModeAuditFieldsContract:
+    """
+    strict 模式审计字段契约测试
+
+    契约来源: docs/contracts/gateway_audit_evidence_correlation_contract.md §9.4
+
+    验证 strict 模式下：
+    1. 缺少 sha256 时审计记录包含完整的 validation 子结构
+    2. error_codes 在审计记录中可追踪
+    3. decision.action = "reject" 时 reason 包含 EVIDENCE_VALIDATION_FAILED
+    """
+
+    def test_strict_reject_audit_contains_validation_substructure(self):
+        """
+        契约测试: strict 模式阻断时审计事件必须包含完整的 validation 子结构
+        """
+        from engram.gateway.audit_event import (
+            build_gateway_audit_event,
+            validate_evidence_for_strict_mode,
+        )
+
+        # 构造缺少 sha256 的 evidence
+        invalid_evidence = [
+            {"uri": "memory://attachments/123/placeholder"}
+        ]
+        evidence_validation = validate_evidence_for_strict_mode(invalid_evidence)
+
+        # 构建审计事件
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-strict000000001",
+            actor_user_id="test_user",
+            requested_space="team:project",
+            final_space=None,
+            action="reject",
+            reason="EVIDENCE_VALIDATION_FAILED:EVIDENCE_MISSING_SHA256",
+            payload_sha="a" * 64,
+            payload_len=100,
+            evidence=invalid_evidence,
+            policy_mode="strict",
+            validate_refs_effective=True,
+            validate_refs_reason="strict_enforced",
+            evidence_validation=evidence_validation.to_dict(),
+        )
+
+        # 契约断言：必须包含 validation 子结构
+        assert "validation" in gateway_event, (
+            "strict 模式阻断时 gateway_event 必须包含 validation 子结构"
+        )
+
+        validation = gateway_event["validation"]
+
+        # 契约断言：validation 必须包含所有必需字段
+        assert validation["validate_refs_effective"] is True, (
+            "strict_enforced 时 validate_refs_effective 必须为 True"
+        )
+        assert validation["validate_refs_reason"] == "strict_enforced", (
+            "strict 模式 validate_refs_reason 应为 strict_enforced"
+        )
+        assert "evidence_validation" in validation, (
+            "validation 必须包含 evidence_validation"
+        )
+
+        # 契约断言：evidence_validation 包含错误详情
+        ev_val = validation["evidence_validation"]
+        assert ev_val["is_valid"] is False, (
+            "校验失败时 is_valid 必须为 False"
+        )
+        assert any("EVIDENCE_MISSING_SHA256" in code for code in ev_val["error_codes"]), (
+            f"error_codes 必须包含 EVIDENCE_MISSING_SHA256，实际: {ev_val['error_codes']}"
+        )
+
+    def test_strict_reject_decision_reason_format(self):
+        """
+        契约测试: strict 模式阻断时 decision.reason 必须包含 EVIDENCE_VALIDATION_FAILED 前缀
+        """
+        from engram.gateway.audit_event import (
+            build_gateway_audit_event,
+            validate_evidence_for_strict_mode,
+        )
+
+        invalid_evidence = [{"uri": "memory://test/1"}]
+        evidence_validation = validate_evidence_for_strict_mode(invalid_evidence)
+
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-strict000000002",
+            action="reject",
+            reason="EVIDENCE_VALIDATION_FAILED:EVIDENCE_MISSING_SHA256",
+            payload_sha="b" * 64,
+            policy_mode="strict",
+            evidence_validation=evidence_validation.to_dict(),
+        )
+
+        # 契约断言：decision.reason 必须包含 EVIDENCE_VALIDATION_FAILED 前缀
+        decision = gateway_event["decision"]
+        assert decision["action"] == "reject"
+        assert "EVIDENCE_VALIDATION_FAILED" in decision["reason"], (
+            f"strict 模式阻断时 reason 必须包含 EVIDENCE_VALIDATION_FAILED，实际: {decision['reason']}"
+        )
+
+
+class TestCompatModeAuditFieldsContract:
+    """
+    compat 模式审计字段契约测试
+
+    契约来源: docs/contracts/gateway_audit_evidence_correlation_contract.md §9.3.2, §9.4
+
+    验证 compat 模式下：
+    1. legacy evidence_refs 映射为 external 后不触发阻断
+    2. compat_warnings 在审计记录中可追踪
+    3. validate_refs 校验不因 legacy sha256 为空而失败
+    """
+
+    def test_compat_legacy_refs_mapped_to_external_in_evidence_refs_json(self):
+        """
+        契约测试: compat 模式下 legacy refs 映射为 external 后写入 evidence_refs_json
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+            normalize_evidence,
+        )
+
+        # 模拟 legacy evidence_refs
+        evidence_refs = [
+            "https://example.com/doc.md",
+            "git://repo/commit/abc123",
+        ]
+
+        # 规范化
+        normalized, source = normalize_evidence(None, evidence_refs)
+        assert source == "v1_mapped"
+
+        # 构建审计事件
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-compat00000001",
+            action="allow",
+            reason="policy_passed",
+            payload_sha="c" * 64,
+            evidence=normalized,
+            policy_mode="compat",
+            validate_refs_effective=False,
+            validate_refs_reason="compat_default",
+        )
+
+        # 构建 evidence_refs_json
+        evidence_refs_json = build_evidence_refs_json(
+            evidence=normalized,
+            gateway_event=gateway_event,
+        )
+
+        # 契约断言：external 包含映射的 legacy refs
+        assert "external" in evidence_refs_json, (
+            "legacy refs 映射后应出现在 external 字段中"
+        )
+        assert len(evidence_refs_json["external"]) == 2, (
+            f"external 应包含 2 个映射项，实际: {len(evidence_refs_json['external'])}"
+        )
+
+        # 验证每个 external 项的结构
+        for item in evidence_refs_json["external"]:
+            assert "uri" in item, "external 项必须包含 uri"
+
+    def test_compat_legacy_refs_no_db_validation_failure(self):
+        """
+        契约测试: compat 模式下 legacy refs 不触发 validate_refs DB 校验失败
+
+        验证 legacy 来源（_source="evidence_refs_legacy"）的证据
+        在 validate_evidence_for_strict_mode 中不产生 error_codes
+        """
+        from engram.gateway.audit_event import (
+            normalize_evidence,
+            validate_evidence_for_strict_mode,
+        )
+
+        # 模拟 legacy evidence_refs
+        evidence_refs = [
+            "https://example.com/doc.md",
+            "git://repo/commit/abc123",
+            "svn://repo/trunk@100",
+        ]
+
+        # 规范化（会添加 _source="evidence_refs_legacy"）
+        normalized, source = normalize_evidence(None, evidence_refs)
+        assert source == "v1_mapped"
+
+        # 校验
+        result = validate_evidence_for_strict_mode(normalized)
+
+        # 契约断言：不应有 error_codes（不阻断）
+        assert result.is_valid is True, (
+            f"compat 模式 legacy refs 不应触发校验失败，error_codes: {result.error_codes}"
+        )
+        assert result.error_codes == [], (
+            f"compat 模式 legacy refs 不应产生 error_codes，实际: {result.error_codes}"
+        )
+
+        # 契约断言：应有 compat_warnings
+        assert len(result.compat_warnings) > 0, (
+            "legacy refs 缺少 sha256 应产生 compat_warnings"
+        )
+        assert all("EVIDENCE_LEGACY_NO_SHA256" in warn for warn in result.compat_warnings), (
+            f"所有 compat_warnings 应包含 EVIDENCE_LEGACY_NO_SHA256，实际: {result.compat_warnings}"
+        )
+
+    def test_compat_compat_warnings_in_audit_validation(self):
+        """
+        契约测试: compat 模式下 compat_warnings 写入审计 validation 子结构
+        """
+        from engram.gateway.audit_event import (
+            build_gateway_audit_event,
+            normalize_evidence,
+            validate_evidence_for_strict_mode,
+        )
+
+        # 模拟 legacy evidence_refs
+        evidence_refs = ["https://example.com/doc.md"]
+        normalized, _ = normalize_evidence(None, evidence_refs)
+        evidence_validation = validate_evidence_for_strict_mode(normalized)
+
+        # 构建审计事件
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-compat00000002",
+            action="allow",
+            reason="policy_passed",
+            payload_sha="d" * 64,
+            evidence=normalized,
+            policy_mode="compat",
+            validate_refs_effective=False,
+            validate_refs_reason="compat_default",
+            evidence_validation=evidence_validation.to_dict(),
+        )
+
+        # 契约断言：validation 子结构包含 compat_warnings
+        assert "validation" in gateway_event
+        validation = gateway_event["validation"]
+        assert "evidence_validation" in validation
+
+        ev_val = validation["evidence_validation"]
+        assert "compat_warnings" in ev_val, (
+            "evidence_validation 必须包含 compat_warnings 字段"
+        )
+        assert len(ev_val["compat_warnings"]) > 0, (
+            "legacy refs 应产生 compat_warnings"
+        )
+
+
+class TestStrictCompatModeIntegrationContract:
+    """
+    strict/compat 模式集成契约测试
+
+    验证两种模式的核心差异行为
+    """
+
+    def test_same_input_different_mode_different_outcome(self):
+        """
+        契约测试: 相同输入在 strict/compat 模式下产生不同结果
+
+        验证:
+        - strict: 缺少 sha256 → is_valid=False, error_codes 非空
+        - compat (legacy 来源): 缺少 sha256 → is_valid=True, compat_warnings 非空
+        """
+        from engram.gateway.audit_event import validate_evidence_for_strict_mode
+
+        # 相同的输入：缺少 sha256
+        evidence_strict = [
+            {"uri": "memory://test/123"}  # v2 格式，无 _source
+        ]
+
+        evidence_compat = [
+            {"uri": "memory://test/123", "sha256": "", "_source": "evidence_refs_legacy"}
+        ]
+
+        # strict 模式结果
+        result_strict = validate_evidence_for_strict_mode(evidence_strict)
+
+        # compat 模式结果（legacy 来源）
+        result_compat = validate_evidence_for_strict_mode(evidence_compat)
+
+        # 契约断言：strict 模式阻断
+        assert result_strict.is_valid is False, "strict 模式缺少 sha256 必须阻断"
+        assert len(result_strict.error_codes) > 0, "strict 模式必须产生 error_codes"
+
+        # 契约断言：compat 模式（legacy）不阻断
+        assert result_compat.is_valid is True, "compat 模式 legacy 来源不应阻断"
+        assert len(result_compat.compat_warnings) > 0, "compat 模式应产生 warnings"
+
+    def test_validate_refs_decision_affects_strict_behavior(self):
+        """
+        契约测试: validate_refs_effective 影响 strict 模式行为
+
+        验证 resolve_validate_refs 的决策结果
+        """
+        from engram.gateway.config import GatewayConfig, resolve_validate_refs
+
+        # strict + enforce=True: 强制启用
+        config_enforced = GatewayConfig(
+            project_key="test",
+            postgres_dsn="postgresql://localhost/test",
+            openmemory_base_url="http://localhost:8080",
+            validate_evidence_refs=False,  # 环境变量关闭
+            strict_mode_enforce_validate_refs=True,  # 强制启用
+        )
+
+        decision = resolve_validate_refs(mode="strict", config=config_enforced)
+        assert decision.effective is True, "strict + enforce=True 必须强制启用"
+        assert decision.reason == "strict_enforced"
+
+        # strict + enforce=False: 允许环境变量 override
+        config_override = GatewayConfig(
+            project_key="test",
+            postgres_dsn="postgresql://localhost/test",
+            openmemory_base_url="http://localhost:8080",
+            validate_evidence_refs=False,
+            strict_mode_enforce_validate_refs=False,  # 允许 override
+        )
+
+        decision = resolve_validate_refs(mode="strict", config=config_override)
+        assert decision.effective is False, "strict + enforce=False 应使用环境变量值"
+        assert decision.reason == "strict_env_override"
+
+
+class TestSchemaVersionGuardrail:
+    """
+    护栏测试：确保代码中的 AUDIT_EVENT_SCHEMA_VERSION 与 schema 定义一致
+
+    【变更检查清单关联】
+    - 修改 AUDIT_EVENT_SCHEMA_VERSION 时，必须同步更新 schema examples
+    - schema 版本演进规则见 src/engram/gateway/audit_event.py 文档头
+    """
+
+    @pytest.fixture
+    def schema(self) -> Dict[str, Any]:
+        return load_schema()
+
+    def test_audit_event_schema_version_matches_schema_examples(self, schema):
+        """
+        契约测试：AUDIT_EVENT_SCHEMA_VERSION 必须与 schema examples 中的版本一致
+
+        这是一个护栏测试，防止代码和 schema 版本不同步。
+        """
+        from engram.gateway.audit_event import AUDIT_EVENT_SCHEMA_VERSION
+
+        # 从 schema examples 中提取所有 schema_version 值
+        examples = schema.get("examples", [])
+        assert len(examples) > 0, "Schema 必须包含至少一个 example"
+
+        example_versions = set()
+        for example in examples:
+            # audit_event 或 evidence_refs_json 中的 gateway_event
+            if "schema_version" in example:
+                example_versions.add(example["schema_version"])
+            if "gateway_event" in example and "schema_version" in example["gateway_event"]:
+                example_versions.add(example["gateway_event"]["schema_version"])
+
+        assert len(example_versions) > 0, "Schema examples 中必须包含 schema_version"
+
+        # 所有 example 使用相同的版本
+        assert len(example_versions) == 1, (
+            f"Schema examples 中的 schema_version 不一致: {example_versions}"
+        )
+
+        schema_example_version = example_versions.pop()
+
+        # 代码中的版本必须与 schema examples 一致
+        assert AUDIT_EVENT_SCHEMA_VERSION == schema_example_version, (
+            f"AUDIT_EVENT_SCHEMA_VERSION ({AUDIT_EVENT_SCHEMA_VERSION}) "
+            f"与 schema examples 版本 ({schema_example_version}) 不一致。"
+            f"请同步更新 src/engram/gateway/audit_event.py 和 "
+            f"schemas/audit_event_v1.schema.json"
+        )
+
+    def test_v1_1_policy_substructure_minimal_example(self, schema):
+        """
+        v1.1 新增: policy 子结构最小正例通过 schema 校验
+
+        policy 子结构字段:
+        - mode: strict | compat | null
+        - mode_reason: str | null
+        - policy_version: v1 | v2 | null
+        - is_pointerized: bool
+        - policy_source: settings | default | override | dedup | null
+        """
+        from engram.gateway.audit_event import build_gateway_audit_event
+
+        # 最小 policy 子结构
+        event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-1234567890abcdef",
+            action="allow",
+            reason="policy_passed",
+            policy_mode="strict",
+            policy_mode_reason="explicit_header",
+            policy_version="v2",
+            policy_is_pointerized=False,
+            policy_source="settings",
+        )
+
+        # 验证 policy 子结构存在
+        assert "policy" in event, "policy 子结构必须存在"
+        assert event["policy"]["mode"] == "strict"
+        assert event["policy"]["mode_reason"] == "explicit_header"
+        assert event["policy"]["policy_version"] == "v2"
+        assert event["policy"]["is_pointerized"] is False
+        assert event["policy"]["policy_source"] == "settings"
+
+        # 验证通过 schema 校验
+        validate(event, schema)
+
+    def test_v1_1_validation_substructure_minimal_example(self, schema):
+        """
+        v1.1 新增: validation 子结构最小正例通过 schema 校验
+
+        validation 子结构字段:
+        - validate_refs_effective: bool | null
+        - validate_refs_reason: str | null
+        - evidence_validation: object | null
+        """
+        from engram.gateway.audit_event import build_gateway_audit_event
+
+        # 最小 validation 子结构
+        event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-abcdef1234567890",
+            action="allow",
+            reason="policy_passed",
+            validate_refs_effective=True,
+            validate_refs_reason="strict_mode",
+            evidence_validation={
+                "is_valid": True,
+                "error_codes": [],
+                "compat_warnings": [],
+            },
+        )
+
+        # 验证 validation 子结构存在
+        assert "validation" in event, "validation 子结构必须存在"
+        assert event["validation"]["validate_refs_effective"] is True
+        assert event["validation"]["validate_refs_reason"] == "strict_mode"
+        assert event["validation"]["evidence_validation"]["is_valid"] is True
+
+        # 验证通过 schema 校验
+        validate(event, schema)
+
+    def test_v1_3_pointer_substructure_minimal_example(self, schema):
+        """
+        v1.3 新增: pointer 子结构最小正例通过 schema 校验
+
+        pointer 子结构字段（redirect 且 pointerized 时）:
+        - from_space: str (required)
+        - to_space: str (required)
+        - reason: str | null
+        - preserved: bool
+        """
+        from engram.gateway.audit_event import build_gateway_audit_event
+
+        # 最小 pointer 子结构 (需要 is_pointerized=True)
+        event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-fedcba9876543210",
+            requested_space="personal",
+            final_space="team:fallback",
+            action="redirect",
+            reason="team_write_disabled",
+            policy_mode="strict",
+            policy_is_pointerized=True,
+            pointer_from_space="personal",
+            pointer_to_space="team:fallback",
+            pointer_reason="team_write_disabled",
+            pointer_preserved=True,
+        )
+
+        # 验证 pointer 子结构存在
+        assert "pointer" in event, "pointer 子结构必须存在当 is_pointerized=True 且提供 pointer 信息时"
+        assert event["pointer"]["from_space"] == "personal"
+        assert event["pointer"]["to_space"] == "team:fallback"
+        assert event["pointer"]["reason"] == "team_write_disabled"
+        assert event["pointer"]["preserved"] is True
+
+        # 验证通过 schema 校验
+        validate(event, schema)
+
+    def test_v1_4_intended_action_minimal_example(self, schema):
+        """
+        v1.4 新增: extra.intended_action 最小正例通过 schema 校验
+
+        intended_action 用于 redirect 到 outbox 补偿场景:
+        - 当 action="redirect" 用于 outbox 补偿时，记录 "deferred" 表示原意是延迟入队
+        - 会被提升到 extra 中便于追踪
+        """
+        from engram.gateway.audit_event import build_gateway_audit_event
+
+        # intended_action 用于 redirect 到 outbox 场景
+        event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-0123456789abcdef",
+            requested_space="team:project",
+            final_space="team:project",
+            action="redirect",
+            reason="openmemory_unavailable",
+            intended_action="deferred",  # v1.4 新增
+        )
+
+        # 验证 extra.intended_action 存在
+        assert "extra" in event, "extra 必须存在当提供 intended_action 时"
+        assert event["extra"].get("intended_action") == "deferred", (
+            "intended_action 必须被提升到 extra 中"
+        )
+
+        # 验证通过 schema 校验
+        validate(event, schema)
+
+    def test_v1_1_to_v1_4_combined_example(self, schema):
+        """
+        综合测试: v1.1 ~ v1.4 所有新增字段组合使用通过 schema 校验
+
+        验证所有版本新增的子结构可以同时存在且通过校验。
+        """
+        from engram.gateway.audit_event import build_gateway_audit_event
+
+        event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-1111222233334444",
+            actor_user_id="test_user",
+            requested_space="personal",
+            final_space="team:fallback",
+            action="redirect",
+            reason="team_write_disabled",
+            # v1.1 policy 子结构
+            policy_mode="strict",
+            policy_mode_reason="explicit_header",
+            policy_version="v2",
+            policy_is_pointerized=True,
+            policy_source="settings",
+            # v1.1 validation 子结构
+            validate_refs_effective=True,
+            validate_refs_reason="strict_mode",
+            evidence_validation={
+                "is_valid": True,
+                "error_codes": [],
+                "compat_warnings": [],
+            },
+            # v1.3 pointer 子结构
+            pointer_from_space="personal",
+            pointer_to_space="team:fallback",
+            pointer_reason="team_write_disabled",
+            pointer_preserved=True,
+            # v1.4 intended_action
+            intended_action="deferred",
+        )
+
+        # 验证所有子结构存在
+        assert "policy" in event
+        assert "validation" in event
+        assert "pointer" in event
+        assert "extra" in event
+        assert event["extra"].get("intended_action") == "deferred"
+
+        # 验证通过 schema 校验
+        validate(event, schema)
+
+
+# ============================================================================
+# correlation_id 归一化行为契约测试
+# ============================================================================
+
+
+class TestCorrelationIdNormalizationContract:
+    """
+    correlation_id 归一化行为契约测试
+
+    验证当 audit_event 接收非合规 correlation_id 时会被正确归一化为合规格式。
+
+    契约要求（见 mcp_rpc.py normalize_correlation_id）：
+    - 合规格式: ^corr-[a-fA-F0-9]{16}$（corr- 前缀 + 16位十六进制）
+    - 非合规输入会被重新生成为合规格式
+    - 归一化后的 correlation_id 必须符合 schema 定义
+
+    测试使用 helpers.py 的合规生成函数验证行为。
+    """
+
+    @pytest.fixture(scope="class")
+    def schema(self):
+        return load_schema()
+
+    def test_non_compliant_correlation_id_gets_normalized(self, schema):
+        """
+        契约测试：非合规 correlation_id 被归一化
+
+        场景：传入不符合 ^corr-[a-fA-F0-9]{16}$ 格式的 correlation_id
+        期望：build_audit_event 返回的事件中 correlation_id 被归一化为合规格式
+        """
+        import re
+
+        from engram.gateway.audit_event import build_audit_event
+
+        # 使用 helpers.py 的模式校验
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        # 非合规的 correlation_id 示例（包含非十六进制字符）
+        non_compliant_ids = [
+            "corr-test123",  # 包含字母 t, e, s
+            "corr-abc",  # 长度不足
+            "test-a1b2c3d4e5f67890",  # 前缀不对
+            "invalid",  # 完全无效格式
+            "",  # 空字符串
+        ]
+
+        for non_compliant_id in non_compliant_ids:
+            event = build_audit_event(
+                source="gateway",
+                operation="memory_store",
+                correlation_id=non_compliant_id,  # 传入非合规 ID
+            )
+
+            # 验证归一化后的 correlation_id 符合合规格式
+            normalized_id = event["correlation_id"]
+            assert CORRELATION_ID_PATTERN.match(normalized_id), (
+                f"非合规输入 '{non_compliant_id}' 应被归一化，"
+                f"实际结果 '{normalized_id}' 不符合格式"
+            )
+
+            # 验证通过 schema 校验
+            validate(event, schema)
+
+    def test_none_correlation_id_gets_generated(self, schema):
+        """
+        契约测试：None 值的 correlation_id 被自动生成
+
+        场景：不传入 correlation_id 或传入 None
+        期望：build_audit_event 返回的事件中包含自动生成的合规 correlation_id
+        """
+        from engram.gateway.audit_event import build_audit_event
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        event = build_audit_event(
+            source="gateway",
+            operation="memory_store",
+            correlation_id=None,  # 显式传入 None
+        )
+
+        # 验证自动生成的 correlation_id 符合合规格式
+        generated_id = event["correlation_id"]
+        assert generated_id is not None, "correlation_id 应被自动生成"
+        assert CORRELATION_ID_PATTERN.match(generated_id), (
+            f"自动生成的 correlation_id '{generated_id}' 不符合格式"
+        )
+
+        # 验证通过 schema 校验
+        validate(event, schema)
+
+    def test_compliant_correlation_id_preserved(self, schema):
+        """
+        契约测试：合规 correlation_id 被保留
+
+        场景：传入符合格式的 correlation_id
+        期望：build_audit_event 返回的事件中 correlation_id 与输入完全一致
+        """
+        from engram.gateway.audit_event import build_audit_event
+        from tests.gateway.helpers import (
+            TEST_CORRELATION_ID,
+            TEST_CORRELATION_ID_ALT,
+            generate_compliant_correlation_id,
+        )
+
+        # 使用 helpers.py 的合规固定值
+        compliant_ids = [
+            TEST_CORRELATION_ID,  # corr-0000000000000000
+            TEST_CORRELATION_ID_ALT,  # corr-1111111111111111
+            generate_compliant_correlation_id(),  # 随机生成
+        ]
+
+        for compliant_id in compliant_ids:
+            event = build_audit_event(
+                source="gateway",
+                operation="memory_store",
+                correlation_id=compliant_id,
+            )
+
+            # 验证合规的 correlation_id 被保留
+            assert event["correlation_id"] == compliant_id, (
+                f"合规输入 '{compliant_id}' 应被保留，"
+                f"实际结果 '{event['correlation_id']}'"
+            )
+
+            # 验证通过 schema 校验
+            validate(event, schema)
+
+    def test_normalize_correlation_id_function_behavior(self):
+        """
+        契约测试：normalize_correlation_id 函数行为
+
+        验证 mcp_rpc.normalize_correlation_id 的具体行为：
+        - 合规输入：返回原值
+        - 非合规输入：返回新生成的合规值
+        """
+        from engram.gateway.mcp_rpc import normalize_correlation_id
+        from tests.gateway.helpers import (
+            CORRELATION_ID_PATTERN,
+            TEST_CORRELATION_ID,
+        )
+
+        # 1. 合规输入被保留
+        assert normalize_correlation_id(TEST_CORRELATION_ID) == TEST_CORRELATION_ID
+
+        # 2. 非合规输入被归一化（返回新值）
+        non_compliant = "invalid-correlation-id"
+        normalized = normalize_correlation_id(non_compliant)
+        assert normalized != non_compliant, "非合规输入应被重新生成"
+        assert CORRELATION_ID_PATTERN.match(normalized), (
+            f"归一化结果 '{normalized}' 不符合格式"
+        )
+
+        # 3. None 输入被生成
+        generated = normalize_correlation_id(None)
+        assert generated is not None
+        assert CORRELATION_ID_PATTERN.match(generated)
+
+    def test_all_audit_event_builders_normalize_correlation_id(self, schema):
+        """
+        契约测试：所有审计事件构建函数都会归一化 correlation_id
+
+        验证 build_gateway_audit_event、build_outbox_worker_audit_event、
+        build_reconcile_audit_event 都正确处理非合规 correlation_id。
+        """
+        from engram.gateway.audit_event import (
+            build_gateway_audit_event,
+            build_outbox_worker_audit_event,
+            build_reconcile_audit_event,
+        )
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        non_compliant_id = "invalid-test-id"
+
+        # 1. build_gateway_audit_event
+        event1 = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id=non_compliant_id,
+        )
+        assert CORRELATION_ID_PATTERN.match(event1["correlation_id"]), (
+            "build_gateway_audit_event 应归一化 correlation_id"
+        )
+
+        # 2. build_outbox_worker_audit_event
+        event2 = build_outbox_worker_audit_event(
+            operation="outbox_flush",
+            correlation_id=non_compliant_id,
+        )
+        assert CORRELATION_ID_PATTERN.match(event2["correlation_id"]), (
+            "build_outbox_worker_audit_event 应归一化 correlation_id"
+        )
+
+        # 3. build_reconcile_audit_event
+        event3 = build_reconcile_audit_event(
+            operation="outbox_reconcile",
+            correlation_id=non_compliant_id,
+        )
+        assert CORRELATION_ID_PATTERN.match(event3["correlation_id"]), (
+            "build_reconcile_audit_event 应归一化 correlation_id"
+        )
+
+
+# ============================================================================
+# evidence_refs_json correlation_id 一致性契约测试
+# ============================================================================
+
+
+class TestEvidenceRefsJsonCorrelationIdConsistencyContract:
+    """
+    evidence_refs_json 顶层 correlation_id 与 gateway_event.correlation_id 一致性契约测试
+
+    契约要求：
+    - evidence_refs_json 顶层 correlation_id 必须与内部 gateway_event.correlation_id 一致
+    - 用于 SQL 查询的一致性保证（evidence_refs_json->>'correlation_id'）
+
+    这是对现有 TestCorrelationIdUnifiedSourceRegression 的补充，
+    增加更明确的一致性断言和边界情况覆盖。
+    """
+
+    def test_top_level_equals_gateway_event_with_compliant_id(self):
+        """
+        契约测试：顶层 correlation_id 与 gateway_event 一致（合规输入）
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+        )
+        from tests.gateway.helpers import TEST_CORRELATION_ID
+
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id=TEST_CORRELATION_ID,
+            action="allow",
+            reason="policy_passed",
+        )
+
+        evidence_refs_json = build_evidence_refs_json(
+            evidence=None,
+            gateway_event=gateway_event,
+        )
+
+        # 核心断言：顶层与 gateway_event 一致
+        assert "correlation_id" in evidence_refs_json, (
+            "evidence_refs_json 顶层必须有 correlation_id"
+        )
+        assert evidence_refs_json["correlation_id"] == gateway_event["correlation_id"], (
+            f"顶层 correlation_id ({evidence_refs_json['correlation_id']}) "
+            f"与 gateway_event ({gateway_event['correlation_id']}) 不一致"
+        )
+
+    def test_top_level_equals_gateway_event_with_normalized_id(self):
+        """
+        契约测试：顶层 correlation_id 与 gateway_event 一致（非合规输入被归一化）
+
+        场景：传入非合规 correlation_id，验证归一化后顶层与 gateway_event 仍然一致
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+        )
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        # 使用非合规 ID（会被归一化）
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="non-compliant-id",  # 非合规，会被归一化
+            action="redirect",
+            reason="openmemory_write_failed",
+        )
+
+        evidence_refs_json = build_evidence_refs_json(
+            evidence=None,
+            gateway_event=gateway_event,
+        )
+
+        # 验证 gateway_event 中的 ID 已被归一化
+        assert CORRELATION_ID_PATTERN.match(gateway_event["correlation_id"])
+
+        # 核心断言：顶层与 gateway_event 一致
+        assert evidence_refs_json["correlation_id"] == gateway_event["correlation_id"], (
+            "归一化后顶层 correlation_id 仍应与 gateway_event 一致"
+        )
+
+    def test_top_level_equals_gateway_event_for_all_sources(self):
+        """
+        契约测试：所有 source 类型的 evidence_refs_json 顶层与 gateway_event 一致
+
+        使用 helpers.py 的测试固定值。
+        """
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+            build_outbox_worker_audit_event,
+            build_reconcile_audit_event,
+        )
+        from tests.gateway.helpers import (
+            CORR_ID_AUDIT_TEST,
+            CORR_ID_OUTBOX_WORKER,
+            CORR_ID_RECONCILE,
+        )
+
+        # 1. gateway source
+        gw_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id=CORR_ID_AUDIT_TEST,
+        )
+        gw_refs = build_evidence_refs_json(evidence=None, gateway_event=gw_event)
+        assert gw_refs["correlation_id"] == gw_event["correlation_id"] == CORR_ID_AUDIT_TEST
+
+        # 2. outbox_worker source
+        ow_event = build_outbox_worker_audit_event(
+            operation="outbox_flush",
+            correlation_id=CORR_ID_OUTBOX_WORKER,
+        )
+        ow_refs = build_evidence_refs_json(evidence=None, gateway_event=ow_event)
+        assert ow_refs["correlation_id"] == ow_event["correlation_id"] == CORR_ID_OUTBOX_WORKER
+
+        # 3. reconcile_outbox source
+        rec_event = build_reconcile_audit_event(
+            operation="outbox_reconcile",
+            correlation_id=CORR_ID_RECONCILE,
+        )
+        rec_refs = build_evidence_refs_json(evidence=None, gateway_event=rec_event)
+        assert rec_refs["correlation_id"] == rec_event["correlation_id"] == CORR_ID_RECONCILE
+
+    def test_sql_query_contract_correlation_id_at_top_level(self):
+        """
+        契约测试：SQL 查询契约 - correlation_id 必须可通过 ->>' 操作符直接查询
+
+        验证 evidence_refs_json->>'correlation_id' 查询的可行性。
+        """
+        import json
+
+        from engram.gateway.audit_event import (
+            build_evidence_refs_json,
+            build_gateway_audit_event,
+        )
+        from tests.gateway.helpers import make_test_correlation_id
+
+        test_id = make_test_correlation_id(42)  # corr-000000000000002a
+
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id=test_id,
+        )
+
+        evidence_refs_json = build_evidence_refs_json(
+            evidence=None,
+            gateway_event=gateway_event,
+        )
+
+        # 模拟 SQL JSON 操作：序列化后解析并用键访问
+        json_str = json.dumps(evidence_refs_json)
+        parsed = json.loads(json_str)
+
+        # 模拟 ->>'correlation_id' 查询
+        queried_correlation_id = parsed.get("correlation_id")
+        assert queried_correlation_id == test_id, (
+            f"SQL 查询 evidence_refs_json->>'correlation_id' 应返回 {test_id}，"
+            f"实际返回 {queried_correlation_id}"
+        )

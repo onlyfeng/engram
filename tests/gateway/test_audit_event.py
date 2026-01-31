@@ -104,15 +104,34 @@ class TestBuildAuditEvent:
         assert event["correlation_id"].startswith("corr-")
 
     def test_uses_provided_correlation_id(self):
-        """验证使用提供的 correlation_id"""
-        custom_corr_id = "corr-custom12345678"
+        """验证合规的 correlation_id 原样保留"""
+        # 使用合规格式：corr- + 16位十六进制
+        compliant_corr_id = "corr-1234567890abcdef"
         event = build_audit_event(
             source="test",
             operation="test_op",
-            correlation_id=custom_corr_id,
+            correlation_id=compliant_corr_id,
         )
 
-        assert event["correlation_id"] == custom_corr_id
+        # 合规的 correlation_id 应原样保留
+        assert event["correlation_id"] == compliant_corr_id
+
+    def test_noncompliant_correlation_id_regenerated(self):
+        """验证不合规的 correlation_id 会被重新生成为合规格式"""
+        from engram.gateway.mcp_rpc import CORRELATION_ID_PATTERN
+
+        # 不合规的 correlation_id（非16位十六进制）
+        noncompliant_corr_id = "corr-test123"
+        event = build_audit_event(
+            source="test",
+            operation="test_op",
+            correlation_id=noncompliant_corr_id,
+        )
+
+        # 应生成新的合规 correlation_id，而不是保留原样
+        assert event["correlation_id"] != noncompliant_corr_id
+        # 新生成的必须匹配 CORRELATION_ID_PATTERN (corr-{16位hex})
+        assert CORRELATION_ID_PATTERN.match(event["correlation_id"]) is not None
 
     def test_contains_required_fields(self):
         """验证审计事件包含所有必需字段"""
@@ -812,9 +831,11 @@ class TestBuildEvidenceRefsJson:
         """验证 patches/attachments/external 与 gateway_event 相互独立不污染"""
         sha = "d" * 64
         evidence = [{"uri": f"memory://patch_blobs/p/{sha}", "sha256": sha}]
+        # 使用合规的 correlation_id（corr- + 16位十六进制）
+        compliant_corr_id = "corr-abcdef1234567890"
         gateway_event = build_gateway_audit_event(
             operation="memory_store",
-            correlation_id="corr-test123",
+            correlation_id=compliant_corr_id,
             actor_user_id="user1",
         )
 
@@ -829,8 +850,8 @@ class TestBuildEvidenceRefsJson:
         # gateway_event 不应包含 patches 的字段
         gw = result["gateway_event"]
         assert "artifact_uri" not in gw
-        # gateway_event 应保留其原有字段
-        assert gw["correlation_id"] == "corr-test123"
+        # gateway_event 应保留其原有字段（合规的 correlation_id 原样保留）
+        assert gw["correlation_id"] == compliant_corr_id
         assert gw["actor_user_id"] == "user1"
 
     def test_toplevel_evidence_summary_from_gateway_event(self):

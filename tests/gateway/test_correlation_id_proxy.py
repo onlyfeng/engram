@@ -41,7 +41,8 @@ class TestCorrelationIdSingleSource:
 
     def test_contextvars_propagation(self):
         """correlation_id 应通过 contextvars 正确传递"""
-        test_corr_id = "test-correlation-id-12345"
+        # 使用符合 schema 格式的 correlation_id（corr-{16位十六进制}）
+        test_corr_id = "corr-a1b2c3d4e5f67001"
 
         # 设置 correlation_id
         token = set_current_correlation_id(test_corr_id)
@@ -61,8 +62,8 @@ class TestCorrelationIdSingleSource:
         assert get_current_correlation_id() is None
 
         # 设置后应可获取
-        token = set_current_correlation_id("request-1")
-        assert get_current_correlation_id() == "request-1"
+        token = set_current_correlation_id("corr-a1b2c3d4e5f67002")
+        assert get_current_correlation_id() == "corr-a1b2c3d4e5f67002"
 
         # 重置后应回到 None
         from engram.gateway.mcp_rpc import _current_correlation_id
@@ -87,10 +88,12 @@ class TestMcpRpcCorrelationIdPropagation:
             return {"ok": True}
 
         request = JsonRpcRequest(method="test/method", params={})
-        test_corr_id = "dispatch-test-corr-id"
+        # 使用符合 schema 格式的 correlation_id（corr-{16位十六进制}）
+        test_corr_id = "corr-a1b2c3d4e5f67890"
 
         await router.dispatch(request, correlation_id=test_corr_id)
 
+        # 合规的 correlation_id 应被保留
         assert captured_corr_id == test_corr_id
 
     @pytest.mark.asyncio
@@ -123,11 +126,12 @@ class TestMcpRpcCorrelationIdPropagation:
             raise ValueError("test error")
 
         request = JsonRpcRequest(method="test/error", params={})
-        test_corr_id = "error-test-corr-id"
+        # 使用符合 schema 格式的 correlation_id
+        test_corr_id = "corr-e1f2a3b4c5d67890"
 
         response = await router.dispatch(request, correlation_id=test_corr_id)
 
-        # 错误响应应包含原始 correlation_id
+        # 错误响应应包含原始 correlation_id（合规格式被保留）
         assert response.error is not None
         assert response.error.data is not None
         assert response.error.data.get("correlation_id") == test_corr_id
@@ -139,7 +143,8 @@ class TestToJsonrpcErrorCorrelationId:
     def test_preserves_provided_correlation_id(self):
         """应使用提供的 correlation_id"""
         error = ValueError("test error")
-        test_corr_id = "provided-corr-id"
+        # 使用符合 schema 格式的 correlation_id（corr-{16位十六进制}）
+        test_corr_id = "corr-a1b2c3d4e5f67003"
 
         response = to_jsonrpc_error(
             error=error,
@@ -168,11 +173,12 @@ class TestToJsonrpcErrorCorrelationId:
         """GatewayError 的 correlation_id 应被覆盖参数取代"""
         from engram.gateway.mcp_rpc import GatewayError
 
+        # 使用符合 schema 格式的 correlation_id（corr-{16位十六进制}）
         error = GatewayError(
             message="test",
-            correlation_id="error-internal-corr-id",
+            correlation_id="corr-a1b2c3d4e5f67004",
         )
-        override_corr_id = "override-corr-id"
+        override_corr_id = "corr-a1b2c3d4e5f67005"
 
         response = to_jsonrpc_error(
             error=error,
@@ -189,14 +195,16 @@ class TestErrorDataCorrelationId:
 
     def test_to_dict_preserves_correlation_id(self):
         """to_dict 应保留 correlation_id"""
+        # 使用符合 schema 格式的 correlation_id（corr-{16位十六进制}）
+        test_corr_id = "corr-a1b2c3d4e5f67006"
         error_data = ErrorData(
             category=ErrorCategory.VALIDATION,
             reason=ErrorReason.MISSING_REQUIRED_PARAM,
-            correlation_id="test-corr-id",
+            correlation_id=test_corr_id,
         )
 
         d = error_data.to_dict()
-        assert d["correlation_id"] == "test-corr-id"
+        assert d["correlation_id"] == test_corr_id
 
     def test_to_dict_generates_if_missing(self):
         """to_dict 在 correlation_id 缺失时应生成"""
@@ -217,12 +225,20 @@ class TestHandlerCorrelationIdRequirement:
     @pytest.mark.asyncio
     async def test_memory_store_requires_correlation_id(self):
         """memory_store_impl 必须接收 correlation_id"""
+        from unittest.mock import MagicMock
+
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
+
+        # 创建 mock deps（用于触发 correlation_id 校验，在此之前会抛出 ValueError）
+        mock_config = MagicMock()
+        mock_deps = GatewayDeps.for_testing(config=mock_config)
 
         with pytest.raises(ValueError) as exc_info:
             await memory_store_impl(
                 payload_md="test",
                 correlation_id=None,  # 显式传 None
+                deps=mock_deps,
             )
 
         assert "correlation_id 是必需参数" in str(exc_info.value)
@@ -230,12 +246,20 @@ class TestHandlerCorrelationIdRequirement:
     @pytest.mark.asyncio
     async def test_memory_query_requires_correlation_id(self):
         """memory_query_impl 必须接收 correlation_id"""
+        from unittest.mock import MagicMock
+
+        from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_query import memory_query_impl
+
+        # 创建 mock deps（用于触发 correlation_id 校验，在此之前会抛出 ValueError）
+        mock_config = MagicMock()
+        mock_deps = GatewayDeps.for_testing(config=mock_config)
 
         with pytest.raises(ValueError) as exc_info:
             await memory_query_impl(
                 query="test",
                 correlation_id=None,  # 显式传 None
+                deps=mock_deps,
             )
 
         assert "correlation_id 是必需参数" in str(exc_info.value)

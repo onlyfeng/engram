@@ -913,7 +913,7 @@ class TestMockDegradationFlow:
         from unittest.mock import MagicMock, patch
 
         # 导入所需模块
-        from engram.gateway.main import memory_store_impl
+        from engram.gateway.handlers.memory_store import memory_store_impl
         from engram.gateway.openmemory_client import (
             OpenMemoryClient,
             OpenMemoryConnectionError,
@@ -1202,6 +1202,235 @@ class TestMockDegradationFlow:
         print(f"  - success_correlation_id: {success_correlation_id}")
         print(f"  - shared outbox_id: {outbox_id}")
         print(f"  - memory_id: {mock_memory_id}")
+
+    def test_outbox_id_and_correlation_id_audit_contract(
+        self, integration_config, postgres_connection
+    ):
+        """
+        验证 outbox 流程中两条 audit 记录的 outbox_id 和 correlation_id 契约
+
+        测试场景：
+        1. Mock OpenMemory 失败，触发入队 outbox（Gateway 写入第一条 audit）
+        2. 切换 Mock 为成功，运行 outbox_worker flush（Worker 写入第二条 audit）
+        3. 验证两条 write_audit 记录满足以下契约：
+           - evidence_refs_json->>'outbox_id' 相等（共享同一 outbox 记录）
+           - 两条记录的 correlation_id 均匹配 pattern（^corr-[a-fA-F0-9]{16}$）
+           - source 分别为 'gateway' 和 'outbox_worker'
+
+        注意：
+        - 两条记录的 correlation_id 不要求相等，因为它们是独立生成的
+        - gateway 的 correlation_id 追踪原始请求
+        - outbox_worker 的 correlation_id 追踪补偿处理批次
+        """
+        import asyncio
+        import hashlib
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        # 导入所需模块
+        from engram.gateway.handlers.memory_store import memory_store_impl
+        from engram.gateway.openmemory_client import (
+            OpenMemoryClient,
+            OpenMemoryConnectionError,
+            StoreResult,
+        )
+        from engram.gateway.outbox_worker import WorkerConfig, process_batch
+
+        # 生成唯一测试内容
+        unique_id = uuid.uuid4().hex[:12]
+        test_content = f"# Outbox ID 契约测试 {unique_id}\n\n验证 audit 记录的 outbox_id 和 correlation_id。"
+        test_space = f"team:outbox_id_contract_{unique_id[:6]}"
+        test_actor = f"contract_tester_{unique_id[:6]}"
+        test_payload_sha = hashlib.sha256(test_content.encode("utf-8")).hexdigest()
+
+        # ============ 阶段 1: Mock OpenMemory 失败，触发入队 ============
+
+        mock_store_error = OpenMemoryConnectionError(
+            message="模拟连接失败以触发 outbox 入队",
+            status_code=None,
+            response=None,
+        )
+
+        with patch("engram.gateway.main.get_client") as mock_get_client:
+            mock_client = MagicMock(spec=OpenMemoryClient)
+            mock_client.store.side_effect = mock_store_error
+            mock_get_client.return_value = mock_client
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    result = pool.submit(
+                        asyncio.run,
+                        memory_store_impl(
+                            payload_md=test_content,
+                            target_space=test_space,
+                            actor_user_id=test_actor,
+                            kind="FACT",
+                            evidence_refs=[f"test_ref_{unique_id}"],
+                        ),
+                    ).result()
+            else:
+                result = asyncio.run(
+                    memory_store_impl(
+                        payload_md=test_content,
+                        target_space=test_space,
+                        actor_user_id=test_actor,
+                        kind="FACT",
+                        evidence_refs=[f"test_ref_{unique_id}"],
+                    )
+                )
+
+            # 验证返回结果
+            assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
+            assert result.action == "deferred", (
+                f"应返回 action=deferred，实际: {result.action}"
+            )
+            assert result.outbox_id is not None, f"deferred 响应必须包含 outbox_id: {result}"
+            outbox_id = result.outbox_id
+
+        # ============ 阶段 2: Mock OpenMemory 成功，运行 process_batch ============
+
+        mock_memory_id = f"mem_{unique_id}"
+        mock_store_success = StoreResult(
+            success=True,
+            memory_id=mock_memory_id,
+            data={"id": mock_memory_id},
+        )
+
+        with patch(
+            "engram.gateway.outbox_worker.openmemory_client.OpenMemoryClient"
+        ) as MockClientClass:
+            mock_client_instance = MagicMock()
+            mock_client_instance.store.return_value = mock_store_success
+            MockClientClass.return_value = mock_client_instance
+
+            worker_config = WorkerConfig(
+                batch_size=10,
+                max_retries=5,
+                base_backoff_seconds=60,
+                lease_seconds=120,
+                openmemory_timeout_seconds=30.0,
+                openmemory_max_client_retries=0,
+            )
+
+            worker_id = f"contract-worker-{unique_id[:8]}"
+            results = process_batch(config=worker_config, worker_id=worker_id)
+
+            # 如果没处理到，再尝试一次
+            our_result = None
+            for r in results:
+                if r.outbox_id == outbox_id:
+                    our_result = r
+                    break
+
+            if our_result is None:
+                results = process_batch(config=worker_config, worker_id=worker_id)
+
+        # ============ 阶段 3: 查询两条 audit 记录并验证契约 ============
+
+        with postgres_connection.cursor() as cur:
+            # 查询所有与此 payload_sha 相关且包含 outbox_id 的 audit 记录
+            cur.execute(
+                """
+                SELECT audit_id, action, reason, evidence_refs_json
+                FROM governance.write_audit
+                WHERE payload_sha = %s
+                  AND evidence_refs_json->>'outbox_id' = %s
+                ORDER BY created_at ASC
+            """,
+                (test_payload_sha, str(outbox_id)),
+            )
+            audit_rows = cur.fetchall()
+
+            # 应至少有两条记录（gateway 入队 + worker flush）
+            assert len(audit_rows) >= 2, (
+                f"应至少有两条 audit 记录（gateway 入队 + worker flush），"
+                f"实际: {len(audit_rows)} 条"
+            )
+
+            # 解析 evidence_refs_json
+            audits = []
+            for row in audit_rows:
+                audit_id, action, reason, evidence_json = row
+                if isinstance(evidence_json, str):
+                    evidence_json = json.loads(evidence_json)
+                audits.append({
+                    "audit_id": audit_id,
+                    "action": action,
+                    "reason": reason,
+                    "evidence_refs_json": evidence_json,
+                })
+
+            # 找到 gateway 和 outbox_worker 的 audit 记录
+            gateway_audit = None
+            worker_audit = None
+
+            for audit in audits:
+                source = audit["evidence_refs_json"].get("source")
+                if source == "gateway":
+                    gateway_audit = audit
+                elif source == "outbox_worker":
+                    worker_audit = audit
+
+            # 断言 1: 两条记录的 source 分别为 gateway 和 outbox_worker
+            assert gateway_audit is not None, (
+                f"未找到 source='gateway' 的 audit 记录。所有记录: {audits}"
+            )
+            assert worker_audit is not None, (
+                f"未找到 source='outbox_worker' 的 audit 记录。所有记录: {audits}"
+            )
+
+            # 提取 outbox_id
+            gateway_outbox_id = gateway_audit["evidence_refs_json"].get("outbox_id")
+            worker_outbox_id = worker_audit["evidence_refs_json"].get("outbox_id")
+
+            # 断言 2: evidence_refs_json->>'outbox_id' 相等
+            assert gateway_outbox_id == worker_outbox_id == outbox_id, (
+                f"两条 audit 记录的 outbox_id 应相等:\n"
+                f"  gateway_outbox_id: {gateway_outbox_id}\n"
+                f"  worker_outbox_id: {worker_outbox_id}\n"
+                f"  expected: {outbox_id}"
+            )
+
+            # 提取 correlation_id
+            gateway_corr_id = gateway_audit["evidence_refs_json"].get("correlation_id")
+            worker_corr_id = worker_audit["evidence_refs_json"].get("correlation_id")
+
+            # 断言 3: 两条记录的 correlation_id 均匹配 pattern
+            assert gateway_corr_id is not None, (
+                f"gateway audit 的 correlation_id 不应为空: {gateway_audit}"
+            )
+            assert worker_corr_id is not None, (
+                f"worker audit 的 correlation_id 不应为空: {worker_audit}"
+            )
+
+            assert CORRELATION_ID_PATTERN.match(gateway_corr_id), (
+                f"gateway audit 的 correlation_id 格式不正确: {gateway_corr_id}\n"
+                f"期望匹配: ^corr-[a-fA-F0-9]{{16}}$"
+            )
+            assert CORRELATION_ID_PATTERN.match(worker_corr_id), (
+                f"worker audit 的 correlation_id 格式不正确: {worker_corr_id}\n"
+                f"期望匹配: ^corr-[a-fA-F0-9]{{16}}$"
+            )
+
+            # 输出测试结果
+            print("\n[Outbox ID 契约测试完成]")
+            print(f"  - shared outbox_id: {outbox_id}")
+            print(f"  - gateway audit_id: {gateway_audit['audit_id']}")
+            print(f"  - gateway correlation_id: {gateway_corr_id}")
+            print(f"  - gateway source: gateway")
+            print(f"  - worker audit_id: {worker_audit['audit_id']}")
+            print(f"  - worker correlation_id: {worker_corr_id}")
+            print(f"  - worker source: outbox_worker")
+            print(f"  - correlation_ids 独立生成: {gateway_corr_id != worker_corr_id}")
 
 
 # ======================== Mock 查询降级测试 ========================
@@ -2309,7 +2538,7 @@ class TestStartupVerificationErrors:
 
         # 导入 Gateway 模块
         try:
-            from engram.gateway.main import memory_store_impl
+            from engram.gateway.handlers.memory_store import memory_store_impl
             from engram.gateway.openmemory_client import (
                 OpenMemoryClient,
                 OpenMemoryConnectionError,
@@ -3104,7 +3333,7 @@ class TestMCPMemoryStoreWithMockDegradation:
         # ============ 阶段 1: 模拟 OpenMemory 失败 ============
 
         try:
-            from engram.gateway.main import memory_store_impl
+            from engram.gateway.handlers.memory_store import memory_store_impl
             from engram.gateway.openmemory_client import (
                 OpenMemoryClient,
                 OpenMemoryConnectionError,
@@ -3816,32 +4045,54 @@ class TestAuditFirstSemantics:
         """
         from unittest.mock import MagicMock, patch
 
-        from engram.gateway.main import memory_store_impl
+        from engram.gateway.di import GatewayDeps
+        from engram.gateway.handlers.memory_store import memory_store_impl
 
         payload_md = "# Integration test for audit failure"
         target_space = "team:audit_test"
 
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "audit_test"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {},
+        }
+        # 模拟审计写入失败
+        mock_db.insert_audit.side_effect = Exception("Database connection lost")
+
+        # 模拟 OpenMemory 成功（但审计失败）
+        mock_client = MagicMock()
+        mock_store_result = MagicMock()
+        mock_store_result.success = True
+        mock_store_result.memory_id = "mem_audit_failed"
+        mock_client.store.return_value = mock_store_result
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
         with (
-            patch("engram.gateway.main.get_config") as mock_config,
-            patch("engram.gateway.main.logbook_adapter") as mock_adapter,
-            patch("engram.gateway.main.get_db") as mock_get_db,
-            patch("engram.gateway.main.get_client") as mock_get_client,
-            patch("engram.gateway.main.create_engine_from_settings") as mock_engine,
+            patch(
+                "engram.gateway.handlers.memory_store.create_engine_from_settings"
+            ) as mock_engine,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "audit_test"
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            # 模拟审计写入失败
-            mock_db.insert_audit.side_effect = Exception("Database connection lost")
-            mock_get_db.return_value = mock_db
-
             from engram.gateway.policy import PolicyAction
 
             mock_decision = MagicMock()
@@ -3850,17 +4101,11 @@ class TestAuditFirstSemantics:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 模拟 OpenMemory 成功（但审计失败）
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_audit_failed"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
+                correlation_id="corr-a1b2c3d4e5f60010",
+                deps=deps,
             )
 
             # 验证：操作被阻断
@@ -3868,7 +4113,7 @@ class TestAuditFirstSemantics:
             assert result.action == "error"
 
             # 验证：OpenMemory 已被调用（审计失败在后置阶段）
-            mock_get_client.assert_called_once()
+            mock_client.store.assert_called_once()
 
             # 验证：错误消息明确
             assert "审计" in result.message or "audit" in result.message.lower()
@@ -3884,47 +4129,66 @@ class TestAuditFirstSemantics:
         """
         from unittest.mock import MagicMock, patch
 
-        from engram.gateway.main import memory_store_impl
+        from engram.gateway.di import GatewayDeps
+        from engram.gateway.handlers.memory_store import memory_store_impl
         from engram.gateway.openmemory_client import OpenMemoryConnectionError
 
         payload_md = "# Integration test for outbox consistency"
         target_space = "team:outbox_test"
 
+        # 创建 mock 配置
+        mock_config = MagicMock()
+        mock_config.default_team_space = "team:default"
+        mock_config.project_key = "outbox_test"
+        mock_config.validate_evidence_refs = False
+        mock_config.strict_mode_enforce_validate_refs = False
+        mock_config.unknown_actor_policy = "degrade"
+        mock_config.private_space_prefix = "private:"
+
+        # 创建 mock logbook_adapter
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # 创建 mock db
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {},
+        }
+
+        # 记录调用顺序
+        call_order = []
+        audit_evidence_refs = []
+
+        def mock_insert_audit(**kwargs):
+            call_order.append("audit")
+            audit_evidence_refs.append(kwargs.get("evidence_refs_json", {}))
+            return len(call_order)
+
+        def mock_enqueue_outbox(**kwargs):
+            call_order.append("outbox")
+            return 99999  # 返回固定的 outbox_id
+
+        mock_db.insert_audit.side_effect = mock_insert_audit
+        mock_db.enqueue_outbox.side_effect = mock_enqueue_outbox
+
+        # 模拟 OpenMemory 失败
+        mock_client = MagicMock()
+        mock_client.store.side_effect = OpenMemoryConnectionError("Connection refused")
+
+        # 使用 GatewayDeps.for_testing 创建 deps
+        deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
         with (
-            patch("engram.gateway.main.get_config") as mock_config,
-            patch("engram.gateway.main.logbook_adapter") as mock_adapter,
-            patch("engram.gateway.main.get_db") as mock_get_db,
-            patch("engram.gateway.main.get_client") as mock_get_client,
-            patch("engram.gateway.main.create_engine_from_settings") as mock_engine,
+            patch(
+                "engram.gateway.handlers.memory_store.create_engine_from_settings"
+            ) as mock_engine,
         ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "outbox_test"
-
-            mock_adapter.check_dedup.return_value = None
-
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-
-            # 记录调用顺序
-            call_order = []
-            audit_evidence_refs = []
-
-            def mock_insert_audit(**kwargs):
-                call_order.append("audit")
-                audit_evidence_refs.append(kwargs.get("evidence_refs_json", {}))
-                return len(call_order)
-
-            def mock_enqueue_outbox(**kwargs):
-                call_order.append("outbox")
-                return 99999  # 返回固定的 outbox_id
-
-            mock_db.insert_audit.side_effect = mock_insert_audit
-            mock_db.enqueue_outbox.side_effect = mock_enqueue_outbox
-            mock_get_db.return_value = mock_db
-
             from engram.gateway.policy import PolicyAction
 
             mock_decision = MagicMock()
@@ -3933,14 +4197,11 @@ class TestAuditFirstSemantics:
             mock_decision.final_space = target_space
             mock_engine.return_value.decide.return_value = mock_decision
 
-            # 模拟 OpenMemory 失败
-            mock_client = MagicMock()
-            mock_client.store.side_effect = OpenMemoryConnectionError("Connection refused")
-            mock_get_client.return_value = mock_client
-
             result = await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
+                correlation_id="corr-a1b2c3d4e5f60011",
+                deps=deps,
             )
 
             # 验证：返回包含 outbox_id 的错误
@@ -3959,6 +4220,380 @@ class TestAuditFirstSemantics:
             assert failure_evidence["outbox_id"] == 99999, (
                 f"outbox_id 应为 99999，实际为 {failure_evidence.get('outbox_id')}"
             )
+
+
+# ======================== correlation_id REST 端点契约测试 ========================
+
+
+class TestCorrelationIdRestEndpointContract:
+    """
+    验证 REST 端点 /memory/store 和 /memory/query 的 correlation_id 契约
+
+    契约要求:
+    1. 响应 JSON 中必须包含 correlation_id 字段
+    2. correlation_id 格式必须符合 schema: ^corr-[a-fA-F0-9]{16}$
+    3. correlation_id 在入口层生成一次，透传一致（不分裂）
+    """
+
+    @pytest.fixture
+    def test_app(self):
+        """
+        创建测试用 FastAPI 应用
+
+        使用 mock 依赖，避免需要真实的 OpenMemory/DB 连接
+        """
+        from unittest.mock import MagicMock
+
+        from engram.gateway.app import create_app
+        from engram.gateway.config import GatewayConfig
+        from engram.gateway.container import GatewayContainer
+        from engram.gateway.di import GatewayDeps
+
+        # 创建 mock 配置
+        mock_config = GatewayConfig(
+            project_key="test-project",
+            postgres_dsn="postgresql://mock:mock@localhost/mock",
+            openmemory_base_url="http://mock:8080",
+        )
+
+        # 创建 mock 依赖
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {"evidence_mode": "compat"},
+        }
+        mock_db.insert_audit.return_value = 1
+
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        # Mock OpenMemory client
+        mock_client = MagicMock()
+        mock_store_result = MagicMock()
+        mock_store_result.success = True
+        mock_store_result.memory_id = "mem-test-123"
+        mock_store_result.error = None
+        mock_client.store.return_value = mock_store_result
+
+        mock_search_result = MagicMock()
+        mock_search_result.success = True
+        mock_search_result.results = [{"id": "mem-1", "content": "test"}]
+        mock_search_result.error = None
+        mock_client.search.return_value = mock_search_result
+
+        # 创建 deps
+        mock_deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
+        # 创建 container
+        mock_container = MagicMock(spec=GatewayContainer)
+        mock_container.deps = mock_deps
+
+        # 创建应用
+        app = create_app(config=mock_config, container=mock_container, skip_db_check=True)
+
+        return app
+
+    @pytest.fixture
+    def client(self, test_app):
+        """创建 TestClient"""
+        from fastapi.testclient import TestClient
+
+        return TestClient(test_app)
+
+    def test_memory_store_response_contains_correlation_id(self, client):
+        """
+        /memory/store 响应必须包含格式合规的 correlation_id
+
+        验证:
+        1. 响应 JSON 包含 correlation_id 字段
+        2. correlation_id 格式符合 schema: ^corr-[a-fA-F0-9]{16}$
+        """
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        response = client.post(
+            "/memory/store",
+            json={
+                "payload_md": "# Test Memory\n\nThis is a test memory for correlation_id verification.",
+            },
+        )
+
+        assert response.status_code == 200, f"请求失败: {response.text}"
+        result = response.json()
+
+        # 验证: 响应包含 correlation_id
+        assert "correlation_id" in result, f"响应必须包含 correlation_id 字段: {result}"
+
+        # 验证: correlation_id 格式合规
+        correlation_id = result["correlation_id"]
+        assert correlation_id is not None, "correlation_id 不能为 None"
+        assert CORRELATION_ID_PATTERN.match(correlation_id), (
+            f"correlation_id 格式不合规: {correlation_id}。"
+            f"期望格式: ^corr-[a-fA-F0-9]{{16}}$ (corr- + 16位十六进制)"
+        )
+
+    def test_memory_query_response_contains_correlation_id(self, client):
+        """
+        /memory/query 响应必须包含格式合规的 correlation_id
+
+        验证:
+        1. 响应 JSON 包含 correlation_id 字段
+        2. correlation_id 格式符合 schema: ^corr-[a-fA-F0-9]{16}$
+        """
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        response = client.post(
+            "/memory/query",
+            json={
+                "query": "test query for correlation_id verification",
+            },
+        )
+
+        assert response.status_code == 200, f"请求失败: {response.text}"
+        result = response.json()
+
+        # 验证: 响应包含 correlation_id
+        assert "correlation_id" in result, f"响应必须包含 correlation_id 字段: {result}"
+
+        # 验证: correlation_id 格式合规
+        correlation_id = result["correlation_id"]
+        assert correlation_id is not None, "correlation_id 不能为 None"
+        assert CORRELATION_ID_PATTERN.match(correlation_id), (
+            f"correlation_id 格式不合规: {correlation_id}。"
+            f"期望格式: ^corr-[a-fA-F0-9]{{16}}$ (corr- + 16位十六进制)"
+        )
+
+    def test_memory_store_correlation_id_generated_once_and_propagated(self, monkeypatch):
+        """
+        验证 /memory/store 的 correlation_id "入口生成一次且透传一致"
+
+        通过 monkeypatch spy 验证:
+        1. generate_correlation_id() 在每个请求中只被调用一次
+        2. handler 接收到的 correlation_id 与响应中的一致
+        """
+        from unittest.mock import MagicMock
+
+        from fastapi.testclient import TestClient
+
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        # 记录 generate_correlation_id 调用
+        call_count = 0
+        generated_ids = []
+
+        # 获取原始函数
+        import engram.gateway.mcp_rpc as mcp_rpc_module
+
+        original_generate = mcp_rpc_module.generate_correlation_id
+
+        def spy_generate_correlation_id():
+            nonlocal call_count
+            call_count += 1
+            result = original_generate()
+            generated_ids.append(result)
+            return result
+
+        # 在创建应用前 patch（确保 from .mcp_rpc import 获取到 patched 版本）
+        monkeypatch.setattr(mcp_rpc_module, "generate_correlation_id", spy_generate_correlation_id)
+
+        # 现在创建应用（此时 import 会获取到 patched 的函数）
+        from engram.gateway.app import create_app
+        from engram.gateway.config import GatewayConfig
+        from engram.gateway.container import GatewayContainer
+        from engram.gateway.di import GatewayDeps
+
+        mock_config = GatewayConfig(
+            project_key="test-project",
+            postgres_dsn="postgresql://mock:mock@localhost/mock",
+            openmemory_base_url="http://mock:8080",
+        )
+
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {"evidence_mode": "compat"},
+        }
+        mock_db.insert_audit.return_value = 1
+
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        mock_client = MagicMock()
+        mock_store_result = MagicMock()
+        mock_store_result.success = True
+        mock_store_result.memory_id = "mem-test-123"
+        mock_store_result.error = None
+        mock_client.store.return_value = mock_store_result
+
+        mock_deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
+        mock_container = MagicMock(spec=GatewayContainer)
+        mock_container.deps = mock_deps
+
+        app = create_app(config=mock_config, container=mock_container, skip_db_check=True)
+        client = TestClient(app)
+
+        response = client.post(
+            "/memory/store",
+            json={
+                "payload_md": "# Test Memory\n\nCorrelation ID propagation test.",
+            },
+        )
+
+        assert response.status_code == 200, f"请求失败: {response.text}"
+        result = response.json()
+
+        # 验证: generate_correlation_id 只被调用一次
+        assert call_count == 1, (
+            f"generate_correlation_id 应只被调用一次，实际被调用 {call_count} 次。"
+            f"生成的 IDs: {generated_ids}"
+        )
+
+        # 验证: 响应中的 correlation_id 与生成的一致
+        assert result.get("correlation_id") == generated_ids[0], (
+            f"响应中的 correlation_id ({result.get('correlation_id')}) "
+            f"与生成的 ({generated_ids[0]}) 不一致"
+        )
+
+        # 验证: 格式合规
+        assert CORRELATION_ID_PATTERN.match(result["correlation_id"]), (
+            f"correlation_id 格式不合规: {result['correlation_id']}"
+        )
+
+    def test_memory_query_correlation_id_generated_once_and_propagated(self, monkeypatch):
+        """
+        验证 /memory/query 的 correlation_id "入口生成一次且透传一致"
+
+        通过 monkeypatch spy 验证:
+        1. generate_correlation_id() 在每个请求中只被调用一次
+        2. handler 接收到的 correlation_id 与响应中的一致
+        """
+        from unittest.mock import MagicMock
+
+        from fastapi.testclient import TestClient
+
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
+
+        # 记录 generate_correlation_id 调用
+        call_count = 0
+        generated_ids = []
+
+        # 获取原始函数
+        import engram.gateway.mcp_rpc as mcp_rpc_module
+
+        original_generate = mcp_rpc_module.generate_correlation_id
+
+        def spy_generate_correlation_id():
+            nonlocal call_count
+            call_count += 1
+            result = original_generate()
+            generated_ids.append(result)
+            return result
+
+        # 在创建应用前 patch（确保 from .mcp_rpc import 获取到 patched 版本）
+        monkeypatch.setattr(mcp_rpc_module, "generate_correlation_id", spy_generate_correlation_id)
+
+        # 现在创建应用（此时 import 会获取到 patched 的函数）
+        from engram.gateway.app import create_app
+        from engram.gateway.config import GatewayConfig
+        from engram.gateway.container import GatewayContainer
+        from engram.gateway.di import GatewayDeps
+
+        mock_config = GatewayConfig(
+            project_key="test-project",
+            postgres_dsn="postgresql://mock:mock@localhost/mock",
+            openmemory_base_url="http://mock:8080",
+        )
+
+        mock_db = MagicMock()
+        mock_db.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {"evidence_mode": "compat"},
+        }
+        mock_db.insert_audit.return_value = 1
+
+        mock_adapter = MagicMock()
+        mock_adapter.check_dedup.return_value = None
+
+        mock_client = MagicMock()
+        mock_search_result = MagicMock()
+        mock_search_result.success = True
+        mock_search_result.results = [{"id": "mem-1", "content": "test"}]
+        mock_search_result.error = None
+        mock_client.search.return_value = mock_search_result
+
+        mock_deps = GatewayDeps.for_testing(
+            config=mock_config,
+            db=mock_db,
+            logbook_adapter=mock_adapter,
+            openmemory_client=mock_client,
+        )
+
+        mock_container = MagicMock(spec=GatewayContainer)
+        mock_container.deps = mock_deps
+
+        app = create_app(config=mock_config, container=mock_container, skip_db_check=True)
+        client = TestClient(app)
+
+        response = client.post(
+            "/memory/query",
+            json={
+                "query": "correlation_id propagation test query",
+            },
+        )
+
+        assert response.status_code == 200, f"请求失败: {response.text}"
+        result = response.json()
+
+        # 验证: generate_correlation_id 只被调用一次
+        assert call_count == 1, (
+            f"generate_correlation_id 应只被调用一次，实际被调用 {call_count} 次。"
+            f"生成的 IDs: {generated_ids}"
+        )
+
+        # 验证: 响应中的 correlation_id 与生成的一致
+        assert result.get("correlation_id") == generated_ids[0], (
+            f"响应中的 correlation_id ({result.get('correlation_id')}) "
+            f"与生成的 ({generated_ids[0]}) 不一致"
+        )
+
+        # 验证: 格式合规
+        assert CORRELATION_ID_PATTERN.match(result["correlation_id"]), (
+            f"correlation_id 格式不合规: {result['correlation_id']}"
+        )
+
+    def test_multiple_requests_have_different_correlation_ids(self, client):
+        """
+        验证多次请求生成不同的 correlation_id
+
+        这确保每个请求都有唯一的追踪 ID
+        """
+        correlation_ids = set()
+
+        for i in range(5):
+            response = client.post(
+                "/memory/store",
+                json={
+                    "payload_md": f"# Test Memory {i}\n\nUnique correlation_id test.",
+                },
+            )
+            assert response.status_code == 200
+            result = response.json()
+            correlation_ids.add(result.get("correlation_id"))
+
+        # 验证: 5 次请求应生成 5 个不同的 correlation_id
+        assert len(correlation_ids) == 5, (
+            f"5 次请求应生成 5 个不同的 correlation_id，实际只有 {len(correlation_ids)} 个唯一值"
+        )
 
 
 # ======================== 运行入口 ========================

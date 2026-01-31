@@ -201,6 +201,7 @@ class TestValidateRefsConfig:
         """配置默认值应为 False（向后兼容）"""
         # 清理环境变量
         old_val = os.environ.pop("VALIDATE_EVIDENCE_REFS", None)
+        old_unknown_actor = os.environ.pop("UNKNOWN_ACTOR_POLICY", None)
 
         # 重新加载配置
         from engram.gateway.config import load_config, reset_config
@@ -219,11 +220,14 @@ class TestValidateRefsConfig:
             reset_config()
             if old_val is not None:
                 os.environ["VALIDATE_EVIDENCE_REFS"] = old_val
+            if old_unknown_actor is not None:
+                os.environ["UNKNOWN_ACTOR_POLICY"] = old_unknown_actor
 
     def test_config_validate_evidence_refs_true(self):
         """设置 VALIDATE_EVIDENCE_REFS=true 时应为 True"""
         # 保存并设置环境变量
         old_val = os.environ.get("VALIDATE_EVIDENCE_REFS")
+        old_unknown_actor = os.environ.pop("UNKNOWN_ACTOR_POLICY", None)
         os.environ["VALIDATE_EVIDENCE_REFS"] = "true"
 
         # 重新加载配置
@@ -245,6 +249,8 @@ class TestValidateRefsConfig:
                 os.environ["VALIDATE_EVIDENCE_REFS"] = old_val
             else:
                 os.environ.pop("VALIDATE_EVIDENCE_REFS", None)
+            if old_unknown_actor is not None:
+                os.environ["UNKNOWN_ACTOR_POLICY"] = old_unknown_actor
 
 
 # ===================== validate_refs 决策参数化矩阵测试 =====================
@@ -349,6 +355,9 @@ class TestResolveValidateRefsMatrix:
         """config 为 None 时使用全局配置"""
         from engram.gateway.config import reset_config, resolve_validate_refs
 
+        # 保存并清理可能污染的环境变量
+        old_unknown_actor = os.environ.pop("UNKNOWN_ACTOR_POLICY", None)
+
         # 设置环境变量
         os.environ.setdefault("PROJECT_KEY", "test_project")
         os.environ.setdefault("POSTGRES_DSN", "postgresql://localhost/test")
@@ -374,6 +383,8 @@ class TestResolveValidateRefsMatrix:
             reset_config()
             os.environ.pop("VALIDATE_EVIDENCE_REFS", None)
             os.environ.pop("STRICT_MODE_ENFORCE_VALIDATE_REFS", None)
+            if old_unknown_actor is not None:
+                os.environ["UNKNOWN_ACTOR_POLICY"] = old_unknown_actor
 
 
 class TestValidateRefsEnforceMatrix:
@@ -1475,7 +1486,7 @@ class TestStrictModeAuditValidationContract:
         # 构建审计事件
         gateway_event = build_gateway_audit_event(
             operation="memory_store",
-            correlation_id="corr-test123456789",
+            correlation_id="corr-0000000000000001",
             actor_user_id="test_user",
             requested_space="team:project",
             final_space=None,
@@ -1521,7 +1532,7 @@ class TestStrictModeAuditValidationContract:
 
         gateway_event = build_gateway_audit_event(
             operation="memory_store",
-            correlation_id="corr-policymode12345",
+            correlation_id="corr-0000000000000002",
             action="reject",
             reason="EVIDENCE_VALIDATION_FAILED:EVIDENCE_INVALID_SHA256",
             payload_sha="b" * 64,
@@ -1554,7 +1565,7 @@ class TestStrictModeAuditValidationContract:
 
         gateway_event = build_gateway_audit_event(
             operation="memory_store",
-            correlation_id="corr-decision1234567",
+            correlation_id="corr-0000000000000003",
             action="reject",
             reason="EVIDENCE_VALIDATION_FAILED:EVIDENCE_MISSING_SHA256",
             payload_sha="c" * 64,
@@ -1570,6 +1581,376 @@ class TestStrictModeAuditValidationContract:
         # 契约断言：reason 必须包含 EVIDENCE_VALIDATION_FAILED 前缀
         assert "EVIDENCE_VALIDATION_FAILED" in gateway_event["decision"]["reason"], (
             "reason 必须包含 EVIDENCE_VALIDATION_FAILED 前缀"
+        )
+
+
+class TestStrictModeObservableErrorCodes:
+    """
+    strict 模式 error_codes 可观测性契约测试
+
+    契约来源: docs/contracts/gateway_audit_evidence_correlation_contract.md §9.3.1
+
+    验证 strict 模式下：
+    1. 缺少 sha256 的 evidence 必须产生 EVIDENCE_MISSING_SHA256 error_code
+    2. error_codes 必须在 EvidenceValidationResult 中可观测
+    3. 校验失败时 is_valid=False，用于判断是否阻断
+    """
+
+    def test_strict_missing_sha256_produces_observable_error_code(self):
+        """
+        契约测试: strict 模式缺少 sha256 必须产生可观测的 EVIDENCE_MISSING_SHA256
+
+        验证:
+        - error_codes 包含 EVIDENCE_MISSING_SHA256
+        - is_valid=False 表示阻断
+        """
+        from engram.gateway.audit_event import validate_evidence_for_strict_mode
+
+        evidence = [
+            {
+                "uri": "memory://attachments/123/placeholder",
+                # sha256 缺失
+            }
+        ]
+
+        result = validate_evidence_for_strict_mode(evidence)
+
+        # 契约断言：error_codes 必须包含 EVIDENCE_MISSING_SHA256
+        assert any("EVIDENCE_MISSING_SHA256" in code for code in result.error_codes), (
+            f"缺少 sha256 时 error_codes 必须包含 EVIDENCE_MISSING_SHA256，实际: {result.error_codes}"
+        )
+
+        # 契约断言：is_valid=False 表示应阻断
+        assert result.is_valid is False, "缺少 sha256 时 is_valid 必须为 False（阻断）"
+
+    def test_strict_invalid_sha256_produces_observable_error_code(self):
+        """
+        契约测试: strict 模式 sha256 格式无效必须产生可观测的 EVIDENCE_INVALID_SHA256
+        """
+        from engram.gateway.audit_event import validate_evidence_for_strict_mode
+
+        evidence = [
+            {
+                "uri": "memory://attachments/123/placeholder",
+                "sha256": "not_a_valid_sha256_format",
+            }
+        ]
+
+        result = validate_evidence_for_strict_mode(evidence)
+
+        assert any("EVIDENCE_INVALID_SHA256" in code for code in result.error_codes), (
+            f"sha256 格式无效时 error_codes 必须包含 EVIDENCE_INVALID_SHA256，实际: {result.error_codes}"
+        )
+        assert result.is_valid is False
+
+    def test_strict_missing_uri_produces_observable_error_code(self):
+        """
+        契约测试: strict 模式缺少 uri 必须产生可观测的 EVIDENCE_MISSING_URI
+        """
+        from engram.gateway.audit_event import validate_evidence_for_strict_mode
+
+        evidence = [
+            {
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                # uri 缺失
+            }
+        ]
+
+        result = validate_evidence_for_strict_mode(evidence)
+
+        assert any("EVIDENCE_MISSING_URI" in code for code in result.error_codes), (
+            f"缺少 uri 时 error_codes 必须包含 EVIDENCE_MISSING_URI，实际: {result.error_codes}"
+        )
+        assert result.is_valid is False
+
+    def test_strict_error_codes_include_field_context(self):
+        """
+        契约测试: error_codes 必须包含字段上下文（evidence 索引和 URI）
+
+        验证 error_code 格式: ERROR_TYPE:evidence[idx]:uri_or_value
+        """
+        from engram.gateway.audit_event import validate_evidence_for_strict_mode
+
+        evidence = [
+            {"uri": "memory://test/1", "sha256": "valid64hex" + "0" * 54},  # 有效
+            {"uri": "memory://test/2"},  # 缺少 sha256
+            {"sha256": "valid64hex" + "0" * 54},  # 缺少 uri
+        ]
+
+        result = validate_evidence_for_strict_mode(evidence)
+
+        # 验证 error_codes 包含上下文
+        assert any("evidence[1]" in code for code in result.error_codes), (
+            "error_codes 必须包含 evidence 索引上下文"
+        )
+        assert any("evidence[2]" in code for code in result.error_codes), (
+            "error_codes 必须包含 evidence 索引上下文"
+        )
+
+
+class TestCompatModeLegacyEvidenceRefsMapping:
+    """
+    compat 模式 legacy evidence_refs 映射契约测试
+
+    契约来源: docs/contracts/gateway_audit_evidence_correlation_contract.md §9.2.2, §9.3.2
+
+    验证 compat 模式下：
+    1. legacy evidence_refs 正确映射为 v2 external 格式
+    2. 映射后的 external 不触发 validate_refs DB 校验失败
+    3. legacy 来源缺少 sha256 产生 compat_warnings 而非 error
+    """
+
+    def test_legacy_refs_mapped_to_external_with_source_marker(self):
+        """
+        契约测试: legacy evidence_refs 映射为 external 时必须带有 _source 标记
+
+        验证映射结构:
+        {
+            "uri": "原始 ref",
+            "sha256": "",
+            "_source": "evidence_refs_legacy"
+        }
+        """
+        from engram.gateway.audit_event import map_evidence_refs_to_v2_external
+
+        refs = [
+            "https://example.com/doc.md",
+            "git://repo/commit/abc123",
+        ]
+
+        result = map_evidence_refs_to_v2_external(refs)
+
+        assert len(result) == 2
+
+        for item in result:
+            # 契约断言：必须包含 _source 标记
+            assert item.get("_source") == "evidence_refs_legacy", (
+                f"映射结果必须包含 _source='evidence_refs_legacy'，实际: {item.get('_source')}"
+            )
+            # 契约断言：sha256 为空字符串（legacy 无法获取）
+            assert item.get("sha256") == "", (
+                f"legacy 映射的 sha256 必须为空字符串，实际: {item.get('sha256')}"
+            )
+
+    def test_legacy_source_missing_sha256_produces_warning_not_error(self):
+        """
+        契约测试: legacy 来源缺少 sha256 应产生 compat_warning 而非 error
+
+        验证:
+        - is_valid=True（不阻断）
+        - compat_warnings 包含 EVIDENCE_LEGACY_NO_SHA256
+        - error_codes 为空
+        """
+        from engram.gateway.audit_event import validate_evidence_for_strict_mode
+
+        # 模拟从 evidence_refs 映射的 legacy 证据
+        legacy_evidence = [
+            {
+                "uri": "https://example.com/doc.md",
+                "sha256": "",  # 空 sha256
+                "_source": "evidence_refs_legacy",  # legacy 来源标记
+            }
+        ]
+
+        result = validate_evidence_for_strict_mode(legacy_evidence)
+
+        # 契约断言：不应阻断
+        assert result.is_valid is True, (
+            "legacy 来源缺少 sha256 不应触发阻断（is_valid 应为 True）"
+        )
+
+        # 契约断言：error_codes 应为空
+        assert result.error_codes == [], (
+            f"legacy 来源缺少 sha256 不应产生 error_codes，实际: {result.error_codes}"
+        )
+
+        # 契约断言：应产生 compat_warning
+        assert any("EVIDENCE_LEGACY_NO_SHA256" in warn for warn in result.compat_warnings), (
+            f"legacy 来源缺少 sha256 应产生 EVIDENCE_LEGACY_NO_SHA256 警告，实际: {result.compat_warnings}"
+        )
+
+    def test_normalize_evidence_uses_v1_when_v2_empty(self):
+        """
+        契约测试: v2 evidence 为空时应回退使用 v1 evidence_refs
+
+        验证 normalize_evidence 的优先级规则
+        """
+        from engram.gateway.audit_event import normalize_evidence
+
+        v1_refs = ["https://example.com/doc.md"]
+
+        # v2 为空列表时回退
+        result, source = normalize_evidence([], v1_refs)
+
+        assert source == "v1_mapped", f"空 v2 列表时应回退到 v1_mapped，实际: {source}"
+        assert len(result) == 1
+        assert result[0]["_source"] == "evidence_refs_legacy"
+
+    def test_compat_mapped_external_does_not_trigger_validation_block(self):
+        """
+        契约测试: compat 模式下映射的 external 不应触发校验阻断
+
+        验证完整流程:
+        1. evidence_refs 映射为 external
+        2. 校验时 is_valid=True
+        """
+        from engram.gateway.audit_event import (
+            normalize_evidence,
+            validate_evidence_for_strict_mode,
+        )
+
+        # 模拟 compat 模式下的输入
+        evidence_refs = [
+            "https://example.com/doc.md",
+            "git://repo/commit/abc123",
+            "svn://repo/trunk@100",
+        ]
+
+        # 规范化
+        normalized, source = normalize_evidence(None, evidence_refs)
+        assert source == "v1_mapped"
+
+        # 校验
+        result = validate_evidence_for_strict_mode(normalized)
+
+        # 契约断言：不应阻断
+        assert result.is_valid is True, (
+            f"compat 模式映射的 external 不应触发阻断，error_codes: {result.error_codes}"
+        )
+
+        # 契约断言：应有 compat_warnings
+        assert len(result.compat_warnings) == len(evidence_refs), (
+            f"每个 legacy ref 应产生一个 compat_warning，期望 {len(evidence_refs)}，"
+            f"实际: {len(result.compat_warnings)}"
+        )
+
+
+class TestStrictCompatModeAuditFieldsContract:
+    """
+    strict/compat 模式审计字段契约测试
+
+    契约来源: docs/contracts/gateway_audit_evidence_correlation_contract.md §9.4
+
+    验证审计记录的 validation 和 policy 子结构
+    """
+
+    def test_validation_substructure_contains_required_fields(self):
+        """
+        契约测试: gateway_event.validation 必须包含所有必需字段
+
+        验证:
+        - validate_refs_effective (bool)
+        - validate_refs_reason (string)
+        - evidence_validation (object/null)
+        """
+        from engram.gateway.audit_event import (
+            build_gateway_audit_event,
+            validate_evidence_for_strict_mode,
+        )
+
+        evidence = [{"uri": "memory://test/123"}]  # 缺少 sha256
+        ev_validation = validate_evidence_for_strict_mode(evidence)
+
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-0000000000000001",
+            action="reject",
+            reason="EVIDENCE_VALIDATION_FAILED",
+            payload_sha="a" * 64,
+            policy_mode="strict",
+            validate_refs_effective=True,
+            validate_refs_reason="strict_enforced",
+            evidence_validation=ev_validation.to_dict(),
+        )
+
+        # 契约断言：必须包含 validation 子结构
+        assert "validation" in gateway_event, "gateway_event 必须包含 validation 子结构"
+
+        validation = gateway_event["validation"]
+
+        # 契约断言：必须包含所有必需字段
+        assert "validate_refs_effective" in validation
+        assert "validate_refs_reason" in validation
+        assert "evidence_validation" in validation
+
+        # 契约断言：字段类型正确
+        assert isinstance(validation["validate_refs_effective"], bool)
+        assert isinstance(validation["validate_refs_reason"], str)
+        assert isinstance(validation["evidence_validation"], dict)
+
+    def test_policy_substructure_contains_required_fields(self):
+        """
+        契约测试: gateway_event.policy 必须包含所有必需字段
+
+        验证:
+        - mode (string)
+        - mode_reason (string)
+        - policy_version (string)
+        - is_pointerized (bool)
+        - policy_source (string)
+        """
+        from engram.gateway.audit_event import build_gateway_audit_event
+
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-0000000000000002",
+            action="allow",
+            reason="policy_passed",
+            payload_sha="b" * 64,
+            policy_mode="strict",
+            policy_mode_reason="from_settings",
+            policy_version="v1",
+            policy_is_pointerized=False,
+            policy_source="settings",
+        )
+
+        # 契约断言：必须包含 policy 子结构
+        assert "policy" in gateway_event, "gateway_event 必须包含 policy 子结构"
+
+        policy = gateway_event["policy"]
+
+        # 契约断言：必须包含所有必需字段
+        assert "mode" in policy
+        assert "mode_reason" in policy
+        assert "policy_version" in policy
+        assert "is_pointerized" in policy
+        assert "policy_source" in policy
+
+    def test_evidence_validation_error_codes_in_audit(self):
+        """
+        契约测试: 审计记录中 evidence_validation.error_codes 必须包含具体错误码
+        """
+        from engram.gateway.audit_event import (
+            build_gateway_audit_event,
+            validate_evidence_for_strict_mode,
+        )
+
+        evidence = [
+            {"uri": "memory://test/1"},  # 缺少 sha256
+            {"uri": "memory://test/2", "sha256": "invalid"},  # 无效 sha256
+        ]
+        ev_validation = validate_evidence_for_strict_mode(evidence)
+
+        gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id="corr-0000000000000003",
+            action="reject",
+            reason="EVIDENCE_VALIDATION_FAILED",
+            payload_sha="c" * 64,
+            policy_mode="strict",
+            validate_refs_effective=True,
+            validate_refs_reason="strict_enforced",
+            evidence_validation=ev_validation.to_dict(),
+        )
+
+        ev_val = gateway_event["validation"]["evidence_validation"]
+
+        # 契约断言：error_codes 包含具体错误码
+        assert any("EVIDENCE_MISSING_SHA256" in code for code in ev_val["error_codes"]), (
+            "error_codes 必须包含 EVIDENCE_MISSING_SHA256"
+        )
+        assert any("EVIDENCE_INVALID_SHA256" in code for code in ev_val["error_codes"]), (
+            "error_codes 必须包含 EVIDENCE_INVALID_SHA256"
         )
 
 

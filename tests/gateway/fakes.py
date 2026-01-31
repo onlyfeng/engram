@@ -42,7 +42,7 @@ Gateway 测试用 Fake 依赖
     # 调用被测函数
     result = await memory_store_impl(
         payload_md="test",
-        correlation_id="corr-test1234567890",
+        correlation_id="corr-0e50123456789000",
         deps=deps,
     )
 
@@ -57,6 +57,13 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 # ============== OpenMemory Fake Client ==============
+# 导入真实的 OpenMemory 异常类型，让 fake 异常继承自它们
+# 这样 memory_store_impl 中的异常处理可以正确捕获 fake 异常
+from engram.gateway.openmemory_client import (
+    OpenMemoryAPIError,
+    OpenMemoryConnectionError,
+    OpenMemoryError,
+)
 
 
 @dataclass
@@ -78,40 +85,34 @@ class FakeSearchResult:
     error: Optional[str] = None
 
 
-class FakeOpenMemoryConnectionError(Exception):
-    """Fake OpenMemory 连接异常"""
+class FakeOpenMemoryConnectionError(OpenMemoryConnectionError):
+    """
+    Fake OpenMemory 连接异常
 
-    def __init__(
-        self, message: str, status_code: Optional[int] = None, response: Optional[Dict] = None
-    ):
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
-        self.response = response
+    继承自真实的 OpenMemoryConnectionError，确保被 memory_store_impl 正确捕获。
+    """
+
+    pass
 
 
-class FakeOpenMemoryAPIError(Exception):
-    """Fake OpenMemory API 异常"""
+class FakeOpenMemoryAPIError(OpenMemoryAPIError):
+    """
+    Fake OpenMemory API 异常
 
-    def __init__(
-        self, message: str, status_code: Optional[int] = None, response: Optional[Dict] = None
-    ):
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
-        self.response = response
+    继承自真实的 OpenMemoryAPIError，确保被 memory_store_impl 正确捕获。
+    """
+
+    pass
 
 
-class FakeOpenMemoryError(Exception):
-    """Fake OpenMemory 通用异常"""
+class FakeOpenMemoryError(OpenMemoryError):
+    """
+    Fake OpenMemory 通用异常
 
-    def __init__(
-        self, message: str, status_code: Optional[int] = None, response: Optional[Dict] = None
-    ):
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
-        self.response = response
+    继承自真实的 OpenMemoryError，确保被 memory_store_impl 正确捕获。
+    """
+
+    pass
 
 
 class FakeOpenMemoryClient:
@@ -638,6 +639,22 @@ class FakeLogbookAdapter:
             }
         )
         return self._knowledge_candidates
+
+    def upsert_settings(
+        self,
+        project_key: str,
+        team_write_enabled: Optional[bool] = None,
+        policy_json: Optional[Dict[str, Any]] = None,
+        updated_by: Optional[str] = None,
+    ) -> bool:
+        """
+        更新治理设置（用于 governance_update handler）
+
+        Returns:
+            bool: 成功返回 True
+        """
+        # 此方法为 governance_update_impl 所需
+        return True
 
     def reset_calls(self):
         """重置调用记录"""

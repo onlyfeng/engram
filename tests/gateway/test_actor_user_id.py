@@ -34,7 +34,7 @@ import pytest
 
 from engram.gateway.app import MemoryStoreRequest
 from engram.gateway.di import GatewayDeps
-from engram.gateway.handlers.memory_store import MemoryStoreResponse, memory_store_impl
+from engram.gateway.handlers.memory_store import memory_store_impl
 from engram.gateway.services.hash_utils import compute_payload_sha
 
 # 导入 Fake 依赖

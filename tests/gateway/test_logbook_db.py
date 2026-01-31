@@ -404,7 +404,9 @@ class TestLogbookDBCheck:
 
                     # 验证错误消息
                     assert "不完整" in str(exc_info.value.message)
-                    assert "db_migrate.py" in str(exc_info.value.message)
+                    # 验证修复指令包含 CLI 入口点
+                    assert "engram-migrate" in str(exc_info.value.message) or \
+                           "python -m engram.logbook.cli.db_migrate" in str(exc_info.value.message)
                     assert "AUTO_MIGRATE_ON_STARTUP" in str(exc_info.value.message)
 
                     # 验证错误码
@@ -433,7 +435,7 @@ class TestCheckLogbookDbOnStartup:
     def test_skip_check_when_disabled(self):
         """测试禁用检查时跳过"""
         from engram.gateway.config import GatewayConfig
-        from engram.gateway.main import check_logbook_db_on_startup
+        from engram.gateway.startup import check_logbook_db_on_startup
 
         config = GatewayConfig(
             project_key="test",
@@ -448,7 +450,7 @@ class TestCheckLogbookDbOnStartup:
     def test_skip_check_when_module_not_available(self):
         """测试模块不可用时跳过"""
         from engram.gateway.config import GatewayConfig
-        from engram.gateway.main import check_logbook_db_on_startup
+        from engram.gateway.startup import check_logbook_db_on_startup
 
         config = GatewayConfig(
             project_key="test",
@@ -457,7 +459,7 @@ class TestCheckLogbookDbOnStartup:
             logbook_check_on_startup=True,
         )
 
-        with patch("engram.gateway.main.is_db_migrate_available", return_value=False):
+        with patch("engram.gateway.startup.is_db_migrate_available", return_value=False):
             result = check_logbook_db_on_startup(config)
             assert result is True
 
@@ -465,7 +467,7 @@ class TestCheckLogbookDbOnStartup:
         """测试检查成功"""
         from engram.gateway.config import GatewayConfig
         from engram.gateway.logbook_adapter import LogbookDBCheckResult
-        from engram.gateway.main import check_logbook_db_on_startup
+        from engram.gateway.startup import check_logbook_db_on_startup
 
         config = GatewayConfig(
             project_key="test",
@@ -474,8 +476,8 @@ class TestCheckLogbookDbOnStartup:
             logbook_check_on_startup=True,
         )
 
-        with patch("engram.gateway.main.is_db_migrate_available", return_value=True):
-            with patch("engram.gateway.main.ensure_db_ready") as mock_ensure:
+        with patch("engram.gateway.startup.is_db_migrate_available", return_value=True):
+            with patch("engram.gateway.startup.ensure_db_ready") as mock_ensure:
                 mock_ensure.return_value = LogbookDBCheckResult(ok=True)
 
                 result = check_logbook_db_on_startup(config)
@@ -485,7 +487,7 @@ class TestCheckLogbookDbOnStartup:
         """测试检查失败且未启用自动迁移"""
         from engram.gateway.config import GatewayConfig
         from engram.gateway.logbook_adapter import LogbookDBCheckError, LogbookDBErrorCode
-        from engram.gateway.main import check_logbook_db_on_startup
+        from engram.gateway.startup import check_logbook_db_on_startup
 
         config = GatewayConfig(
             project_key="test",
@@ -495,8 +497,8 @@ class TestCheckLogbookDbOnStartup:
             auto_migrate_on_startup=False,
         )
 
-        with patch("engram.gateway.main.is_db_migrate_available", return_value=True):
-            with patch("engram.gateway.main.ensure_db_ready") as mock_ensure:
+        with patch("engram.gateway.startup.is_db_migrate_available", return_value=True):
+            with patch("engram.gateway.startup.ensure_db_ready") as mock_ensure:
                 mock_ensure.side_effect = LogbookDBCheckError(
                     message="DB 结构不完整",
                     code=LogbookDBErrorCode.SCHEMA_MISSING,
@@ -724,7 +726,9 @@ class TestLogbookDBErrorCode:
 
                     # 验证错误消息包含修复提示
                     error_msg = exc_info.value.message
-                    assert "db_migrate.py" in error_msg
+                    # 验证修复指令包含 CLI 入口点
+                    assert "engram-migrate" in error_msg or \
+                           "python -m engram.logbook.cli.db_migrate" in error_msg
                     assert "AUTO_MIGRATE_ON_STARTUP" in error_msg
 
     def test_run_migration_returns_correct_error_code_when_unavailable(self):
@@ -765,7 +769,7 @@ class TestCheckLogbookDbOnStartupWithErrorCode:
         """测试检查失败时日志包含错误码"""
         from engram.gateway.config import GatewayConfig
         from engram.gateway.logbook_adapter import LogbookDBCheckError, LogbookDBErrorCode
-        from engram.gateway.main import check_logbook_db_on_startup
+        from engram.gateway.startup import check_logbook_db_on_startup
 
         config = GatewayConfig(
             project_key="test",
@@ -775,8 +779,8 @@ class TestCheckLogbookDbOnStartupWithErrorCode:
             auto_migrate_on_startup=False,
         )
 
-        with patch("engram.gateway.main.is_db_migrate_available", return_value=True):
-            with patch("engram.gateway.main.ensure_db_ready") as mock_ensure:
+        with patch("engram.gateway.startup.is_db_migrate_available", return_value=True):
+            with patch("engram.gateway.startup.ensure_db_ready") as mock_ensure:
                 mock_ensure.side_effect = LogbookDBCheckError(
                     message="DB 结构不完整",
                     code=LogbookDBErrorCode.SCHEMA_MISSING,
@@ -798,7 +802,7 @@ class TestCheckLogbookDbOnStartupWithErrorCode:
         """测试启用自动迁移时传递正确的标志"""
         from engram.gateway.config import GatewayConfig
         from engram.gateway.logbook_adapter import LogbookDBCheckResult
-        from engram.gateway.main import check_logbook_db_on_startup
+        from engram.gateway.startup import check_logbook_db_on_startup
 
         config = GatewayConfig(
             project_key="test",
@@ -808,8 +812,8 @@ class TestCheckLogbookDbOnStartupWithErrorCode:
             auto_migrate_on_startup=True,  # 启用自动迁移
         )
 
-        with patch("engram.gateway.main.is_db_migrate_available", return_value=True):
-            with patch("engram.gateway.main.ensure_db_ready") as mock_ensure:
+        with patch("engram.gateway.startup.is_db_migrate_available", return_value=True):
+            with patch("engram.gateway.startup.ensure_db_ready") as mock_ensure:
                 mock_ensure.return_value = LogbookDBCheckResult(
                     ok=True,
                     message="DB 结构通过自动迁移修复",

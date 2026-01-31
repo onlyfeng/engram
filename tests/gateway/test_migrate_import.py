@@ -9,25 +9,18 @@ migrate 模块导入测试
 - run_all_checks / run_migrate 函数可调用
 - logbook_adapter 不再使用 sys.path 注入
 - Gateway 启动期 DB check 路径
+- 根目录 db_migrate.py 兼容入口源码验证
 """
 
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
-def _resolve_scripts_dir() -> Path:
-    repo_root = Path(__file__).resolve().parents[2]
-    candidates = [
-        repo_root / "logbook_postgres" / "scripts",
-        repo_root.parent / "logbook_postgres" / "scripts",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+def _get_repo_root() -> Path:
+    """获取仓库根目录路径"""
+    return Path(__file__).resolve().parents[2]
 
 
 class TestMigrateModuleImport:
@@ -35,12 +28,7 @@ class TestMigrateModuleImport:
 
     def test_import_migrate_module(self):
         """测试 engram_logbook.migrate 模块可以正常导入"""
-        # 确保 sys.path 中包含 logbook scripts 目录
-        scripts_dir = _resolve_scripts_dir()
-        if scripts_dir.exists() and str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-
-        # 导入模块
+        # 直接从 engram.logbook 导入，无需 sys.path 操作
         from engram.logbook import migrate
 
         # 验证核心函数存在
@@ -128,32 +116,43 @@ class TestLogbookAdapterNoSysPathInjection:
 
 
 class TestDbMigrateCliBackwardCompatibility:
-    """db_migrate.py CLI 向后兼容性测试"""
+    """db_migrate.py CLI 向后兼容性测试
+
+    通过源码分析验证根目录 db_migrate.py 兼容入口正确导入 engram.logbook.migrate。
+    注意: logbook_postgres/scripts/ 目录已在 v1.0 中移除，测试直接检查根目录入口。
+    """
 
     def test_db_migrate_imports_from_migrate_module(self):
-        """测试 db_migrate.py 从 engram_logbook.migrate 导入"""
-        scripts_dir = _resolve_scripts_dir()
-        db_migrate_path = scripts_dir / "db_migrate.py"
+        """测试根目录 db_migrate.py 从 engram.logbook.migrate 导入
 
-        assert db_migrate_path.exists(), f"db_migrate.py 不存在: {db_migrate_path}"
+        通过源码分析验证，避免 sys.path 注入。
+        """
+        repo_root = _get_repo_root()
+        db_migrate_path = repo_root / "db_migrate.py"
+
+        assert db_migrate_path.exists(), f"根目录 db_migrate.py 不存在: {db_migrate_path}"
 
         # 读取源代码
         source = db_migrate_path.read_text()
 
-        # 验证导入语句
-        assert "from engram.logbook.migrate import" in source
+        # 验证导入语句指向 engram.logbook.migrate
+        assert "from engram.logbook.migrate import" in source, (
+            "db_migrate.py 应从 engram.logbook.migrate 导入"
+        )
         assert "run_migrate" in source
         assert "run_all_checks" in source
+        assert "run_precheck" in source
 
     def test_db_migrate_exports_backward_compatible_names(self):
-        """测试 db_migrate.py 导出向后兼容的名称"""
-        scripts_dir = _resolve_scripts_dir()
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
+        """测试 engram.logbook.migrate 导出向后兼容的名称
 
-        import db_migrate
+        通过直接导入验证导出符号。
 
-        # 验证可以从 db_migrate 访问这些函数（向后兼容）
+        Migration target: python -m engram.logbook.cli.db_migrate
+        """
+        from engram.logbook import migrate as db_migrate
+
+        # 验证可以从 migrate 模块访问这些函数
         assert hasattr(db_migrate, "run_migrate")
         assert hasattr(db_migrate, "run_all_checks")
         assert hasattr(db_migrate, "run_precheck")
@@ -263,10 +262,10 @@ class TestGatewayDbCheckPath:
                         assert result.ok is True
 
     def test_main_check_logbook_db_on_startup(self):
-        """测试 main.py 的 check_logbook_db_on_startup 函数"""
+        """测试 startup.py 的 check_logbook_db_on_startup 函数"""
         from engram.gateway.config import GatewayConfig
         from engram.gateway.logbook_adapter import LogbookDBCheckResult
-        from engram.gateway.main import check_logbook_db_on_startup
+        from engram.gateway.startup import check_logbook_db_on_startup
 
         config = GatewayConfig(
             project_key="test",
@@ -276,8 +275,8 @@ class TestGatewayDbCheckPath:
             auto_migrate_on_startup=False,
         )
 
-        with patch("engram.gateway.main.is_db_migrate_available", return_value=True):
-            with patch("engram.gateway.main.ensure_db_ready") as mock_ensure:
+        with patch("engram.gateway.startup.is_db_migrate_available", return_value=True):
+            with patch("engram.gateway.startup.ensure_db_ready") as mock_ensure:
                 mock_ensure.return_value = LogbookDBCheckResult(
                     ok=True,
                     checks={"schemas": {"ok": True, "missing": []}},

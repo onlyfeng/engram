@@ -642,10 +642,10 @@ class TestFormatDBRepairCommands:
 
         result = format_db_repair_commands()
 
-        # 关键断言: 包含修复命令
+        # 关键断言: 包含修复命令（使用新的 CLI 入口点）
         assert "修复命令" in result
-        assert "db_bootstrap.py" in result
-        assert "db_migrate.py" in result
+        assert "engram-bootstrap-roles" in result
+        assert "engram-migrate" in result
         assert "docker compose" in result
 
     def test_format_with_error_code(self):
@@ -789,7 +789,7 @@ class TestConfigValidation:
 
         reset_config()
         self._saved_env = {}
-        for key in ["PROJECT_KEY", "POSTGRES_DSN", "GATEWAY_PORT"]:
+        for key in ["PROJECT_KEY", "POSTGRES_DSN", "GATEWAY_PORT", "UNKNOWN_ACTOR_POLICY"]:
             self._saved_env[key] = os.environ.get(key)
 
     def teardown_method(self):

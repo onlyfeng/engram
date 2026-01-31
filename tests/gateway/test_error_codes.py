@@ -204,7 +204,7 @@ class TestGatewayErrorCodes:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -291,7 +291,7 @@ class TestGatewayErrorCodes:
             target_space="team:test",
             payload_sha="test_sha",
             evidence_refs=None,
-            correlation_id="corr-test123456789ab",
+            correlation_id="corr-a1b2c3d4e5f60001",
             deps=deps,
         )
 
@@ -600,7 +600,7 @@ class TestOpenMemoryAPIErrorWithStatus:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -660,7 +660,7 @@ class TestOpenMemoryAPIErrorWithStatus:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -732,7 +732,7 @@ class TestUnknownExceptionErrorCodes:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1164,7 +1164,7 @@ class TestUnifiedResponseContract:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1234,7 +1234,7 @@ class TestUnifiedResponseContract:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1285,7 +1285,7 @@ class TestUnifiedResponseContract:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1384,7 +1384,7 @@ class TestCorrelationIdInErrorResponses:
             mock_create_engine.return_value.decide.return_value = mock_decision
 
             # 使用固定的 correlation_id
-            test_corr_id = "corr-test123456789ab"
+            test_corr_id = "corr-a1b2c3d4e5f60001"
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
@@ -1435,7 +1435,7 @@ class TestCorrelationIdInErrorResponses:
             mock_decision.final_space = "team:test"
             mock_create_engine.return_value.decide.return_value = mock_decision
 
-            test_corr_id = "corr-test123456789ab"
+            test_corr_id = "corr-a1b2c3d4e5f60001"
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
@@ -1479,7 +1479,7 @@ class TestCorrelationIdInErrorResponses:
             mock_decision.final_space = None
             mock_create_engine.return_value.decide.return_value = mock_decision
 
-            test_corr_id = "corr-test123456789ab"
+            test_corr_id = "corr-a1b2c3d4e5f60001"
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
@@ -1521,6 +1521,58 @@ class TestErrorDataCorrelationIdContract:
         assert len(d["correlation_id"]) == 21, (
             f"correlation_id 长度应为 21，实际: {len(d['correlation_id'])}"
         )
+
+    def test_error_data_strict_mode_raises_on_missing(self):
+        """验证 ErrorData.to_dict(strict=True) 在 correlation_id 缺失时抛出 AssertionError"""
+        from engram.gateway.mcp_rpc import ErrorCategory, ErrorData, ErrorReason
+
+        error_data = ErrorData(
+            category=ErrorCategory.VALIDATION,
+            reason=ErrorReason.MISSING_REQUIRED_PARAM,
+            retryable=False,
+            correlation_id=None,  # 不提供
+        )
+
+        with pytest.raises(AssertionError) as exc_info:
+            error_data.to_dict(strict=True)
+
+        assert "契约违反" in str(exc_info.value)
+        assert "correlation_id 必须已设置" in str(exc_info.value)
+
+    def test_error_data_strict_mode_raises_on_invalid_format(self):
+        """验证 ErrorData.to_dict(strict=True) 在 correlation_id 格式不合规时抛出 AssertionError"""
+        from engram.gateway.mcp_rpc import ErrorCategory, ErrorData, ErrorReason
+
+        error_data = ErrorData(
+            category=ErrorCategory.VALIDATION,
+            reason=ErrorReason.MISSING_REQUIRED_PARAM,
+            retryable=False,
+            correlation_id="invalid-format",  # 不合规格式
+        )
+
+        with pytest.raises(AssertionError) as exc_info:
+            error_data.to_dict(strict=True)
+
+        assert "契约违反" in str(exc_info.value)
+        assert "格式不合规" in str(exc_info.value)
+
+    def test_error_data_strict_mode_passes_with_valid_id(self):
+        """验证 ErrorData.to_dict(strict=True) 在 correlation_id 合规时正常返回"""
+        from engram.gateway.mcp_rpc import ErrorCategory, ErrorData, ErrorReason
+
+        valid_corr_id = "corr-a1b2c3d4e5f67890"
+        error_data = ErrorData(
+            category=ErrorCategory.VALIDATION,
+            reason=ErrorReason.MISSING_REQUIRED_PARAM,
+            retryable=False,
+            correlation_id=valid_corr_id,
+        )
+
+        d = error_data.to_dict(strict=True)
+
+        assert d["correlation_id"] == valid_corr_id
+        assert d["category"] == ErrorCategory.VALIDATION
+        assert d["reason"] == ErrorReason.MISSING_REQUIRED_PARAM
 
     def test_error_data_preserves_provided_correlation_id(self):
         """验证 ErrorData.to_dict() 保留提供的 correlation_id"""
@@ -1655,7 +1707,7 @@ class TestDeferredOutboxScenarios:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1736,7 +1788,7 @@ class TestDeferredOutboxScenarios:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1809,7 +1861,7 @@ class TestDeferredOutboxScenarios:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1882,7 +1934,7 @@ class TestDeferredOutboxScenarios:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -1945,7 +1997,7 @@ class TestDeferredOutboxScenarios:
             result = await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -2003,7 +2055,7 @@ class TestDeferredOutboxScenarios:
             await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",  # 原始请求空间
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -2078,7 +2130,7 @@ class TestOutboxAuditIntegrity:
             await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
@@ -2139,7 +2191,7 @@ class TestOutboxAuditIntegrity:
             await memory_store_impl(
                 payload_md="test content",
                 target_space="team:test",
-                correlation_id="corr-test123456789ab",
+                correlation_id="corr-a1b2c3d4e5f60001",
                 deps=deps,
             )
 
