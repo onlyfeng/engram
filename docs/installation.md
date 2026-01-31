@@ -5,19 +5,27 @@
 ## 系统要求
 
 - Python 3.10+
-- PostgreSQL 15+ (带 pgvector 扩展)
-- OpenMemory 服务 (可选，用于语义记忆功能)
+- PostgreSQL 18+（建议 18，Homebrew 默认版本较旧）
+- Node.js（需 >=18，建议最新 LTS）
+- OpenMemory 服务（Gateway 必需）
 
 ## 1. 安装 PostgreSQL
+
+### Windows
+
+1. 从 [PostgreSQL 官网](https://www.postgresql.org/download/windows/) 下载安装程序
+2. 运行安装程序，选择安装 PostgreSQL 18+
+3. 安装完成后，按 Windows 详细指南完成 pgvector 安装与服务托管  
+   参考：[`docs/gateway/01_openmemory_deploy_windows.md`](gateway/01_openmemory_deploy_windows.md)
 
 ### macOS (使用 Homebrew)
 
 ```bash
 # 安装 PostgreSQL
-brew install postgresql@15
+brew install postgresql@18
 
 # 启动服务
-brew services start postgresql@15
+brew services start postgresql@18
 
 # 安装 pgvector 扩展
 brew install pgvector
@@ -35,31 +43,40 @@ wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-
 
 # 安装 PostgreSQL
 sudo apt-get update
-sudo apt-get install postgresql-15
+sudo apt-get install postgresql-18
 
 # 安装 pgvector
-sudo apt-get install postgresql-15-pgvector
+sudo apt-get install postgresql-18-pgvector
 
 # 启动服务
 sudo systemctl start postgresql
 sudo systemctl enable postgresql
 ```
 
-### Windows
-
-1. 从 [PostgreSQL 官网](https://www.postgresql.org/download/windows/) 下载安装程序
-2. 运行安装程序，选择安装 PostgreSQL 15+
-3. 安装完成后，使用 Stack Builder 安装 pgvector 扩展
-
-## 2. 配置数据库
+## 2. 初始化数据库与角色（推荐）
 
 ```bash
-# 创建数据库用户和数据库
-createuser -U postgres engram_user
-createdb -U postgres -O engram_user engram
+# 创建数据库
+createdb engram
 
 # 连接数据库并启用 pgvector 扩展
-psql -U postgres -d engram -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql -d engram -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 配置服务账号密码（必填）
+export LOGBOOK_MIGRATOR_PASSWORD=changeme1
+export LOGBOOK_SVC_PASSWORD=changeme2
+export OPENMEMORY_MIGRATOR_PASSWORD=changeme3
+export OPENMEMORY_SVC_PASSWORD=changeme4
+
+# 初始化服务账号（需要 admin 权限）
+# macOS 默认管理员通常是当前用户，Linux/Windows 常用 postgres
+python logbook_postgres/scripts/db_bootstrap.py \
+  --dsn "postgresql://<admin_user>@localhost:5432/postgres"
+
+# 执行迁移与权限脚本（需要 admin 权限）
+python logbook_postgres/scripts/db_migrate.py \
+  --dsn "postgresql://<admin_user>@localhost:5432/engram" \
+  --apply-roles --apply-openmemory-grants
 ```
 
 ## 3. 安装 Engram
@@ -98,35 +115,78 @@ make install-full  # 安装完整依赖（包含 Gateway 和 SCM）
 make install-dev   # 安装开发依赖（推荐）
 ```
 
-## 4. 数据库迁移
-
-运行 SQL 迁移脚本初始化数据库：
+## 4. 数据库迁移（手动或开发场景）
 
 ```bash
-# 设置环境变量
-export POSTGRES_DSN="postgresql://engram_user:password@localhost:5432/engram"
+# 使用 CLI（推荐）
+export POSTGRES_DSN="postgresql://postgres@localhost:5432/engram"
+python logbook_postgres/scripts/db_migrate.py --dsn "$POSTGRES_DSN"
 
-# 方式一：使用 make
-make migrate
-
-# 方式二：手动执行
-for f in sql/*.sql; do
-    psql "$POSTGRES_DSN" -f "$f"
-done
+# 或使用 Makefile（开发场景）
+POSTGRES_DSN="$POSTGRES_DSN" make migrate
 ```
 
-## 5. 安装 OpenMemory（可选）
+## 4.1 统一栈 Docker Compose 快速开始（推荐）
+
+统一栈包含 Postgres + OpenMemory + Gateway + Worker，适合快速落地与联调。
+配置模板见 [`.env.example`](../.env.example)，编排入口见 [`docker-compose.unified.yml`](../docker-compose.unified.yml)。
+
+1) 复制并编辑环境变量：
+```bash
+# 在仓库根目录执行
+cp .env.example .env
+
+# 必填密码（统一栈强制要求）
+# LOGBOOK_MIGRATOR_PASSWORD / LOGBOOK_SVC_PASSWORD
+# OPENMEMORY_MIGRATOR_PASSWORD / OPENMEMORY_SVC_PASSWORD
+```
+
+2) 启动统一栈：
+```bash
+docker compose -f docker-compose.unified.yml up -d --build
+```
+
+3) 可选启用 profile：
+```bash
+# 管理看板（metabase/pgadmin）
+docker compose -f docker-compose.unified.yml --profile dashboard up -d
+
+# MinIO
+docker compose -f docker-compose.unified.yml --profile minio up -d
+```
+
+4) 验证：
+```bash
+make verify-unified
+```
+
+5) 安全与备份建议：
+- 最小安全清单：[`docs/guides/security_minimal.md`](guides/security_minimal.md)
+- Docker 备份脚本：[`scripts/ops/backup/docker/README.md`](../scripts/ops/backup/docker/README.md)
+
+## 5. 安装 OpenMemory（Gateway 必需）
 
 OpenMemory 是独立的语义记忆服务，Engram 通过 HTTP API 与其通信。
 
-### 使用 pip 安装
+### 使用 Node.js 后端（推荐）
 
+1) 获取 OpenMemory 后端源码（按上游 README）  
+2) 配置环境变量（示例）：
 ```bash
-# 安装 OpenMemory
-pip install openmemory
-
-# 启动服务
-openmemory serve --port 8080
+export OM_METADATA_BACKEND=postgres
+export OM_PG_HOST=localhost
+export OM_PG_PORT=5432
+export OM_PG_DB=engram
+export OM_PG_USER=openmemory_svc
+export OM_PG_PASSWORD=<your_openmemory_svc_password>
+export OM_PG_SCHEMA=openmemory
+export OM_API_KEY=<your_api_key>
+export OM_PORT=8080
+```
+3) 启动服务（以上游 README 为准）：
+```bash
+npm install
+npm run dev
 ```
 
 ### 验证 OpenMemory 连接
@@ -143,14 +203,14 @@ curl http://localhost:8080/health
 
 ```bash
 # PostgreSQL 连接（必填）
-export POSTGRES_DSN="postgresql://engram_user:password@localhost:5432/engram"
+export POSTGRES_DSN="postgresql://logbook_svc:password@localhost:5432/engram"
 
 # 项目标识
 export PROJECT_KEY="my_project"
 
-# OpenMemory 服务（使用 Gateway 时必填）
+# OpenMemory 服务（Gateway 必填）
 export OPENMEMORY_BASE_URL="http://localhost:8080"
-export OPENMEMORY_API_KEY="your-api-key"  # 可选
+export OM_API_KEY="your-api-key"  # 推荐
 
 # Gateway 端口
 export GATEWAY_PORT=8787
@@ -162,7 +222,7 @@ export GATEWAY_PORT=8787
 
 ```toml
 [postgres]
-dsn = "postgresql://engram_user:password@localhost:5432/engram"
+dsn = "postgresql://logbook_svc:password@localhost:5432/engram"
 
 [project]
 project_key = "my_project"
@@ -220,12 +280,8 @@ curl http://localhost:8787/health
 {
   "mcpServers": {
     "engram": {
-      "command": "engram-gateway",
-      "args": [],
-      "env": {
-        "POSTGRES_DSN": "postgresql://engram_user:password@localhost:5432/engram",
-        "OPENMEMORY_BASE_URL": "http://localhost:8080"
-      }
+      "type": "http",
+      "url": "http://localhost:8787/mcp"
     }
   }
 }
@@ -300,6 +356,480 @@ make gateway         # 5. 启动服务
 | CI/CD | `engram-xxx` | 已安装的 CLI 命令 |
 | 生产部署 | `engram-xxx` | 不依赖 Makefile |
 
+## macOS 本地详细部署
+
+> 以下步骤默认使用 PostgreSQL 18。请在不同终端执行带有“新终端”的步骤。
+
+```bash
+# Step 1: 安装依赖 + 启动 PostgreSQL 18
+brew install postgresql@18 pgvector node
+brew services start postgresql@18
+export PATH="$(brew --prefix postgresql@18)/bin:$PATH"
+
+# Step 2: 创建数据库 + 启用 pgvector
+createdb engram
+psql -d engram -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# Step 3: Python 环境与 Engram 安装
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[full]"
+
+# Step 4: 初始化服务账号与迁移（需要管理员 DSN）
+# 注意: 必须设置这 4 个密码环境变量，否则 bootstrap 会失败
+export LOGBOOK_MIGRATOR_PASSWORD=changeme1
+export LOGBOOK_SVC_PASSWORD=changeme2
+export OPENMEMORY_MIGRATOR_PASSWORD=changeme3
+export OPENMEMORY_SVC_PASSWORD=changeme4
+export OM_PG_SCHEMA=openmemory
+
+python logbook_postgres/scripts/db_bootstrap.py \
+  --dsn "postgresql://$USER@localhost:5432/postgres"
+
+python logbook_postgres/scripts/db_migrate.py \
+  --dsn "postgresql://$USER@localhost:5432/engram" \
+  --apply-roles --apply-openmemory-grants
+
+# 补充授权（OpenMemory 运行时需要完整权限）
+psql -d engram -c "
+GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
+"
+
+# Step 5: 安装并启动 OpenMemory（新终端）
+# OpenMemory 是独立的经验记忆引擎，Engram Gateway 通过 HTTP API 与其通信
+# 参考: https://github.com/CaviraOSS/OpenMemory
+#
+# 注意: Engram 需要 OpenMemory 的 HTTP API 服务（端口 8080），
+#       不能只用 Python SDK（pip install openmemory-py）的嵌入式模式
+
+git clone https://github.com/caviraoss/openmemory.git ~/openmemory
+cd ~/openmemory
+
+# 配置环境变量（连接到 Step 4 创建的 PostgreSQL）
+export OM_METADATA_BACKEND=postgres
+export OM_PG_HOST=localhost
+export OM_PG_PORT=5432
+export OM_PG_DB=engram
+export OM_PG_USER=openmemory_svc
+export OM_PG_PASSWORD=$OPENMEMORY_SVC_PASSWORD
+export OM_PG_SCHEMA=openmemory
+export OM_API_KEY=change_me
+export OM_PORT=8080
+export OM_VEC_DIM=1536          # vector 维度，需与 pgvector 列定义一致
+export OM_TIER=hybrid           # 可选: hybrid/fast/smart/deep
+
+# 构建并安装 opm CLI
+cd packages/openmemory-js
+npm install
+npm run build
+npm link   # 将 opm 添加到 PATH
+
+# 首次启动前：修复 pgvector 列维度（PostgreSQL 18 必需）
+psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);" 2>/dev/null || true
+
+# 启动 API 服务
+opm serve
+# 服务将在 http://localhost:8080 启动
+
+# Step 6: 启动 Gateway（新终端）
+cd /Users/a4399/Documents/ai/onlyfeng/engram
+source .venv/bin/activate
+export PROJECT_KEY=default
+export POSTGRES_DSN="postgresql://logbook_svc:$LOGBOOK_SVC_PASSWORD@localhost:5432/engram"
+export OPENMEMORY_BASE_URL="http://localhost:8080"
+export OM_API_KEY=change_me
+engram-gateway
+
+# Step 7: 启动 Outbox Worker + 验证（新终端）
+cd /Users/a4399/Documents/ai/onlyfeng/engram
+source .venv/bin/activate
+export PROJECT_KEY=default
+export POSTGRES_DSN="postgresql://logbook_svc:$LOGBOOK_SVC_PASSWORD@localhost:5432/engram"
+export OPENMEMORY_BASE_URL="http://localhost:8080"
+export OM_API_KEY=change_me
+python -m engram.gateway.outbox_worker --loop
+
+curl -sf http://localhost:8080/health && echo "OpenMemory OK"
+curl -sf http://localhost:8787/health && echo "Gateway OK"
+```
+
+### 常见问题排查
+
+<details>
+<summary><b>db_bootstrap 报错 "服务账号创建失败"</b></summary>
+
+确保设置了 4 个密码环境变量：
+```bash
+export LOGBOOK_MIGRATOR_PASSWORD=xxx
+export LOGBOOK_SVC_PASSWORD=xxx
+export OPENMEMORY_MIGRATOR_PASSWORD=xxx
+export OPENMEMORY_SVC_PASSWORD=xxx
+```
+</details>
+
+<details>
+<summary><b>OpenMemory 报错 "permission denied for schema openmemory"</b></summary>
+
+执行补充授权：
+```bash
+psql -d engram -c "
+GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openmemory TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
+"
+```
+</details>
+
+<details>
+<summary><b>OpenMemory 报错 "column does not have dimensions"（PostgreSQL 18）</b></summary>
+
+pgvector HNSW 索引要求 vector 列必须指定维度：
+```bash
+psql -d engram -c "DROP INDEX IF EXISTS openmemory.openmemory_vectors_v_idx;"
+psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);"
+```
+然后重启 `opm serve`。
+</details>
+
+<details>
+<summary><b>db_migrate 报错 "OPENMEMORY_SCHEMA_MISSING"</b></summary>
+
+确保迁移时带 `--apply-openmemory-grants` 参数，并且 `05_openmemory_roles_and_grants.sql` 存在于 `sql/` 目录。
+</details>
+
+## macOS launchd 服务托管（可选）
+
+以下示例使用用户级 LaunchAgents 持久化运行 Gateway / Outbox Worker / OpenMemory。  
+请将路径替换为你本机的实际路径（可用 `which engram-gateway` / `which python` / `which npm` 查询）。
+
+### 1) Gateway
+
+```xml
+<!-- ~/Library/LaunchAgents/ai.engram.gateway.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.engram.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/engram-gateway</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PROJECT_KEY</key><string>default</string>
+    <key>POSTGRES_DSN</key><string>postgresql://logbook_svc:***@localhost:5432/engram</string>
+    <key>OPENMEMORY_BASE_URL</key><string>http://localhost:8080</string>
+    <key>OM_API_KEY</key><string>change_me</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/your_user/Library/Logs/engram-gateway.log</string>
+  <key>StandardErrorPath</key><string>/Users/your_user/Library/Logs/engram-gateway.err.log</string>
+</dict>
+</plist>
+```
+
+### 2) Outbox Worker
+
+```xml
+<!-- ~/Library/LaunchAgents/ai.engram.outbox_worker.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.engram.outbox_worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/python</string>
+    <string>-m</string>
+    <string>engram.gateway.outbox_worker</string>
+    <string>--loop</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PROJECT_KEY</key><string>default</string>
+    <key>POSTGRES_DSN</key><string>postgresql://logbook_svc:***@localhost:5432/engram</string>
+    <key>OPENMEMORY_BASE_URL</key><string>http://localhost:8080</string>
+    <key>OM_API_KEY</key><string>change_me</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/your_user/Library/Logs/engram-outbox.log</string>
+  <key>StandardErrorPath</key><string>/Users/your_user/Library/Logs/engram-outbox.err.log</string>
+</dict>
+</plist>
+```
+
+### 3) OpenMemory（Node 后端）
+
+```xml
+<!-- ~/Library/LaunchAgents/ai.openmemory.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.openmemory</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/npm</string>
+    <string>run</string>
+    <string>start</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/openmemory/backend</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OM_METADATA_BACKEND</key><string>postgres</string>
+    <key>OM_PG_HOST</key><string>localhost</string>
+    <key>OM_PG_PORT</key><string>5432</string>
+    <key>OM_PG_DB</key><string>engram</string>
+    <key>OM_PG_USER</key><string>openmemory_svc</string>
+    <key>OM_PG_PASSWORD</key><string>***</string>
+    <key>OM_PG_SCHEMA</key><string>openmemory</string>
+    <key>OM_API_KEY</key><string>change_me</string>
+    <key>OM_PORT</key><string>8080</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/your_user/Library/Logs/openmemory.log</string>
+  <key>StandardErrorPath</key><string>/Users/your_user/Library/Logs/openmemory.err.log</string>
+</dict>
+</plist>
+```
+
+### 4) 启用与查看状态
+
+```bash
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openmemory.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.engram.gateway.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.engram.outbox_worker.plist
+
+launchctl kickstart -k gui/$UID/ai.openmemory
+launchctl kickstart -k gui/$UID/ai.engram.gateway
+launchctl kickstart -k gui/$UID/ai.engram.outbox_worker
+
+launchctl print gui/$UID/ai.engram.gateway
+```
+
+## macOS launchd 生产安全版本（LaunchDaemons）
+
+适用于：后台长期运行、分离用户权限、最小化权限与可控日志轮转。  
+以下示例使用系统级 LaunchDaemons（`/Library/LaunchDaemons`），并通过独立用户运行服务。
+
+### 1) 创建服务用户（示例）
+
+```bash
+# 选择未占用的 UID（示例使用 5020/5021/5022）
+dscl . -list /Users UniqueID | tail
+
+sudo dscl . -create /Users/engram_gateway
+sudo dscl . -create /Users/engram_gateway UserShell /usr/bin/false
+sudo dscl . -create /Users/engram_gateway NFSHomeDirectory /var/empty
+sudo dscl . -create /Users/engram_gateway UniqueID 5020
+sudo dscl . -create /Users/engram_gateway PrimaryGroupID 20
+sudo dscl . -create /Users/engram_gateway Password "*"
+
+sudo dscl . -create /Users/engram_outbox
+sudo dscl . -create /Users/engram_outbox UserShell /usr/bin/false
+sudo dscl . -create /Users/engram_outbox NFSHomeDirectory /var/empty
+sudo dscl . -create /Users/engram_outbox UniqueID 5021
+sudo dscl . -create /Users/engram_outbox PrimaryGroupID 20
+sudo dscl . -create /Users/engram_outbox Password "*"
+
+sudo dscl . -create /Users/openmemory
+sudo dscl . -create /Users/openmemory UserShell /usr/bin/false
+sudo dscl . -create /Users/openmemory NFSHomeDirectory /var/empty
+sudo dscl . -create /Users/openmemory UniqueID 5022
+sudo dscl . -create /Users/openmemory PrimaryGroupID 20
+sudo dscl . -create /Users/openmemory Password "*"
+```
+
+### 2) 目录与权限
+
+```bash
+sudo mkdir -p /var/db/engram/gateway /var/db/engram/outbox /var/db/engram/openmemory
+sudo mkdir -p /var/log/engram/gateway /var/log/engram/outbox /var/log/engram/openmemory
+
+sudo chown -R engram_gateway:staff /var/db/engram/gateway /var/log/engram/gateway
+sudo chown -R engram_outbox:staff /var/db/engram/outbox /var/log/engram/outbox
+sudo chown -R openmemory:staff /var/db/engram/openmemory /var/log/engram/openmemory
+
+sudo chmod 700 /var/db/engram/gateway /var/db/engram/outbox /var/db/engram/openmemory
+sudo chmod 750 /var/log/engram/gateway /var/log/engram/outbox /var/log/engram/openmemory
+```
+
+### 3) 环境文件（仅服务用户可读）
+
+```bash
+sudo tee /var/db/engram/gateway/env <<'EOF'
+PROJECT_KEY=default
+POSTGRES_DSN=postgresql://logbook_svc:***@localhost:5432/engram
+OPENMEMORY_BASE_URL=http://localhost:8080
+OM_API_KEY=change_me
+EOF
+sudo chown engram_gateway:staff /var/db/engram/gateway/env
+sudo chmod 600 /var/db/engram/gateway/env
+
+sudo tee /var/db/engram/outbox/env <<'EOF'
+PROJECT_KEY=default
+POSTGRES_DSN=postgresql://logbook_svc:***@localhost:5432/engram
+OPENMEMORY_BASE_URL=http://localhost:8080
+OM_API_KEY=change_me
+EOF
+sudo chown engram_outbox:staff /var/db/engram/outbox/env
+sudo chmod 600 /var/db/engram/outbox/env
+
+sudo tee /var/db/engram/openmemory/env <<'EOF'
+OM_METADATA_BACKEND=postgres
+OM_PG_HOST=localhost
+OM_PG_PORT=5432
+OM_PG_DB=engram
+OM_PG_USER=openmemory_svc
+OM_PG_PASSWORD=***
+OM_PG_SCHEMA=openmemory
+OM_API_KEY=change_me
+OM_PORT=8080
+EOF
+sudo chown openmemory:staff /var/db/engram/openmemory/env
+sudo chmod 600 /var/db/engram/openmemory/env
+```
+
+### 4) Wrapper 脚本（隔离 env 与可执行路径）
+
+```bash
+sudo mkdir -p /usr/local/engram/bin
+
+sudo tee /usr/local/engram/bin/engram-gateway.sh <<'EOF'
+#!/bin/zsh
+set -euo pipefail
+source /var/db/engram/gateway/env
+exec /path/to/engram-gateway
+EOF
+
+sudo tee /usr/local/engram/bin/engram-outbox.sh <<'EOF'
+#!/bin/zsh
+set -euo pipefail
+source /var/db/engram/outbox/env
+exec /path/to/python -m engram.gateway.outbox_worker --loop
+EOF
+
+sudo tee /usr/local/engram/bin/openmemory.sh <<'EOF'
+#!/bin/zsh
+set -euo pipefail
+source /var/db/engram/openmemory/env
+cd /path/to/openmemory/backend
+exec /path/to/npm run start
+EOF
+
+sudo chmod 755 /usr/local/engram/bin/*.sh
+sudo chown root:wheel /usr/local/engram/bin/*.sh
+```
+
+### 5) LaunchDaemon 配置（示例）
+
+```xml
+<!-- /Library/LaunchDaemons/ai.engram.gateway.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.engram.gateway</string>
+  <key>UserName</key><string>engram_gateway</string>
+  <key>GroupName</key><string>staff</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/engram/bin/engram-gateway.sh</string>
+  </array>
+  <key>Umask</key><integer>77</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/engram/gateway/gateway.log</string>
+  <key>StandardErrorPath</key><string>/var/log/engram/gateway/gateway.err.log</string>
+</dict>
+</plist>
+```
+
+```xml
+<!-- /Library/LaunchDaemons/ai.engram.outbox.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.engram.outbox</string>
+  <key>UserName</key><string>engram_outbox</string>
+  <key>GroupName</key><string>staff</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/engram/bin/engram-outbox.sh</string>
+  </array>
+  <key>Umask</key><integer>77</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/engram/outbox/outbox.log</string>
+  <key>StandardErrorPath</key><string>/var/log/engram/outbox/outbox.err.log</string>
+</dict>
+</plist>
+```
+
+```xml
+<!-- /Library/LaunchDaemons/ai.openmemory.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.openmemory</string>
+  <key>UserName</key><string>openmemory</string>
+  <key>GroupName</key><string>staff</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/engram/bin/openmemory.sh</string>
+  </array>
+  <key>Umask</key><integer>77</integer>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/engram/openmemory/openmemory.log</string>
+  <key>StandardErrorPath</key><string>/var/log/engram/openmemory/openmemory.err.log</string>
+</dict>
+</plist>
+```
+
+### 6) 启用与管理
+
+```bash
+sudo chown root:wheel /Library/LaunchDaemons/ai.*.plist
+sudo chmod 644 /Library/LaunchDaemons/ai.*.plist
+
+sudo launchctl bootstrap system /Library/LaunchDaemons/ai.openmemory.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/ai.engram.gateway.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/ai.engram.outbox.plist
+
+sudo launchctl kickstart -k system/ai.openmemory
+sudo launchctl kickstart -k system/ai.engram.gateway
+sudo launchctl kickstart -k system/ai.engram.outbox
+
+sudo launchctl print system/ai.engram.gateway
+```
+
+### 7) 日志轮转（newsyslog）
+
+```bash
+sudo tee /etc/newsyslog.d/engram.conf <<'EOF'
+/var/log/engram/gateway/gateway.log    640  10  1000  *  -
+/var/log/engram/gateway/gateway.err.log 640 10  1000  *  -
+/var/log/engram/outbox/outbox.log      640  10  1000  *  -
+/var/log/engram/outbox/outbox.err.log  640  10  1000  *  -
+/var/log/engram/openmemory/openmemory.log     640  10  1000  *  -
+/var/log/engram/openmemory/openmemory.err.log 640  10  1000  *  -
+EOF
+
+# 预检与手动触发
+sudo newsyslog -n -f /etc/newsyslog.d/engram.conf
+```
+
 ## 常见问题
 
 ### pgvector 安装失败
@@ -308,10 +838,10 @@ make gateway         # 5. 启动服务
 
 ```bash
 # macOS
-brew install postgresql@15
+brew install postgresql@18
 
 # Ubuntu
-sudo apt-get install postgresql-server-dev-15
+sudo apt-get install postgresql-server-dev-18
 ```
 
 ### 连接被拒绝

@@ -22,7 +22,7 @@
 
 | 入口 | 说明 | 文档 |
 |------|------|------|
-| **安装指南** | PostgreSQL + OpenMemory 本地安装 | [installation.md](installation.md) |
+| **安装指南** | 本地安装 | [installation.md](installation.md) |
 | **快速开始** | 最小部署示例 | [README.md](../README.md#快速开始) |
 | **环境配置** | 环境变量参考 | [环境变量参考](reference/environment_variables.md) |
 
@@ -48,6 +48,7 @@
 |------|------|
 | [环境变量参考](reference/environment_variables.md) | 按组件分类的环境变量、默认值 |
 | [集成指南](guides/integrate_existing_project.md) | 如何集成到现有项目 |
+| [最小安全清单](guides/security_minimal.md) | 内网部署的安全与备份基线 |
 
 ---
 
