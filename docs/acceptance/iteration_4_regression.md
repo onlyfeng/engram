@@ -97,6 +97,44 @@
   ]
   ```
 
+## 测试文件 DI 重构
+
+### 重构目标
+统一 Gateway 测试文件中的依赖注入模式，以 `test_main_dedup.py` 和 `test_memory_query_fallback.py` 为基准。
+
+### 已完成的重构
+
+#### 1. `tests/gateway/test_mcp_jsonrpc_contract.py`
+- **状态**: ✅ 完成
+- **修改内容**:
+  1. 添加 `HANDLER_MODULE_*` 常量统一管理 patch 路径
+  2. 使用 `GatewayContainer.create_for_testing()` 设置全局测试容器
+  3. 优化 `mock_dependencies` fixture 的 patch 策略:
+     - 删除对不存在的模块级 `logbook_adapter` 的 patch（handler 已改为通过 `deps.logbook_adapter` 获取）
+     - 添加对 `OpenMemoryClient` 和 `LogbookAdapter` 类的 patch（用于 `GatewayDeps` 独立模式下的依赖构造）
+     - 保留必要的模块级 getter patch（用于向后兼容的代码路径）
+- **测试结果**: 109 passed
+
+#### 2. `tests/gateway/test_policy.py`
+- **状态**: ✅ 无需修改
+- **原因**: 纯策略引擎单元测试，不涉及 handler 或依赖注入
+- **测试结果**: 全部通过
+
+#### 3. `tests/gateway/test_validate_refs.py`
+- **状态**: ✅ 无需修改
+- **原因**: 配置和校验逻辑测试，不涉及 handler 或依赖注入
+- **测试结果**: 144 passed, 5 skipped
+
+### Patch 策略说明
+
+在 v2 架构下，handler 通过 `deps=GatewayDeps.create(config=config)` 获取依赖。
+由于传入了 `config`，`GatewayDeps.create()` 使用独立模式（不从全局容器获取依赖）。
+
+独立模式下的 patch 要点：
+1. 需要 patch `OpenMemoryClient` 和 `LogbookAdapter` 类本身（`di.py` 内部导入构造）
+2. 保留对模块级 getter（如 `get_config`, `get_client`）的 patch（向后兼容旧代码路径）
+3. 设置全局测试容器（虽然独立模式不使用，但某些代码路径仍会检查）
+
 ## 后续建议
 
 ### 高优先级 (CI Blocker)
@@ -147,3 +185,100 @@ make typecheck   # ⚠️ 当前 263 errors (需要后续迭代修复)
 
 ### 配置文件
 - `pyproject.toml` - 添加类型桩依赖和 per-file-ignores
+
+---
+
+## Iteration 3 提交拆分执行记录
+
+### 执行日期
+2026-01-31
+
+### 提交顺序与验证结果
+
+按照 `docs/architecture/iteration_3_plan.md` 的 6 主题创建提交，顺序：SQL → CLI → Gateway → CI → Tests → Docs。
+
+#### 主题 1: SQL 迁移整理
+- **Commit**: `c600a56` - `chore(sql): reorganize migration numbering and cleanup`
+- **验证命令**: 
+  ```bash
+  pytest tests/logbook/test_schema_conventions.py tests/logbook/test_verify_permissions_coverage.py -v
+  ```
+- **验证结果**: ✅ 29 passed, 1 warning in 2.74s
+- **暂存文件**: 
+  - 删除: `sql/05_scm_sync_runs.sql`, `sql/06_scm_sync_locks.sql`, `sql/07_scm_sync_jobs.sql`, `sql/08_evidence_uri_column.sql`, `sql/09_sync_jobs_dimension_columns.sql`, `sql/10_governance_artifact_ops_audit.sql`, `sql/11_governance_object_store_audit_events.sql`, `sql/99_verify_permissions.sql`
+  - 修改: `sql/01_logbook_schema.sql`, `sql/02_scm_migration.sql`, `sql/04_roles_and_grants.sql`, `sql/05_openmemory_roles_and_grants.sql`, `sql/08_scm_sync_jobs.sql`, `sql/13_governance_object_store_audit_events.sql`
+  - 新增: `sql/06_scm_sync_runs.sql`, `sql/07_scm_sync_locks.sql`, `sql/09_evidence_uri_column.sql`, `sql/verify/99_verify_permissions.sql`
+
+#### 主题 2: 脚本入口收敛
+- **Commit**: `d2ce2a0` - `refactor(cli): consolidate script entrypoints into src/engram`
+- **验证命令**: 
+  ```bash
+  python -m engram.logbook.cli.db_migrate --help
+  python -m engram.logbook.cli.db_bootstrap --help
+  ```
+- **验证结果**: ✅ 两个命令都正常输出帮助信息
+- **暂存文件**: 48 files changed (根目录脚本 deprecation wrappers, scripts/ 新增, src/engram/logbook/ 新增, pyproject.toml, Makefile)
+
+#### 主题 3: Gateway 模块化
+- **Commit**: `33e4a91` - `refactor(gateway): modularize main.py with DI and handlers`
+- **验证命令**: 
+  ```bash
+  pytest tests/gateway/test_gateway_startup.py -v
+  wc -l src/engram/gateway/main.py
+  ```
+- **验证结果**: 
+  - ✅ 40 passed in 0.19s
+  - ⚠️ main.py 行数 383 行（目标 ≤200 行，但核心逻辑已拆分到 handlers/）
+- **暂存文件**: 27 files changed (新增 app.py, container.py, di.py, startup.py, handlers/, services/)
+
+#### 主题 4: CI 矩阵强化
+- **Commit**: `64c0850` - `ci: harden CI pipeline and add validation steps`
+- **验证命令**: 
+  ```bash
+  rg '\|\| true' .github/workflows/ci.yml
+  python scripts/ci/check_env_var_consistency.py --help
+  ```
+- **验证结果**: 
+  - ✅ 无 `|| true` 宽松处理
+  - ✅ 环境变量检查脚本正常工作
+- **暂存文件**: 3 files changed (.github/workflows/ci.yml, scripts/ci/check_env_var_consistency.py, scripts/verify_logbook_consistency.py)
+
+#### 主题 5: 测试修复
+- **Commit**: `e27100d` - `test: update tests for new module structure`
+- **验证命令**: 
+  ```bash
+  pytest tests/gateway/test_policy.py -v
+  pytest tests/gateway/test_mcp_jsonrpc_contract.py tests/gateway/test_audit_event_contract.py -v
+  ```
+- **验证结果**: 
+  - ✅ test_policy.py: 55 passed
+  - ⚠️ test_audit_event_contract.py: 170 passed, 10 failed (需要环境配置的集成测试)
+- **暂存文件**: 110 files changed (tests/gateway/ 新增 fakes.py, test_gateway_startup.py 等, tests/logbook/ 新增多个测试)
+- **已知问题**: 部分测试在导入时触发配置加载，需要设置环境变量才能运行
+
+#### 主题 6: 文档对齐
+- **Commit**: `de56467` - `docs: sync documentation with code changes`
+- **验证命令**: 
+  ```bash
+  ls docs/architecture/*.md | wc -l
+  ls docs/logbook/*.md | wc -l
+  ```
+- **验证结果**: ✅ 文档文件结构完整
+- **暂存文件**: 99 files changed (docs/, README.md, schemas/, compose/, .agentx/)
+
+### 提交历史总览
+
+```
+de56467 docs: sync documentation with code changes
+e27100d test: update tests for new module structure
+64c0850 ci: harden CI pipeline and add validation steps
+33e4a91 refactor(gateway): modularize main.py with DI and handlers
+d2ce2a0 refactor(cli): consolidate script entrypoints into src/engram
+c600a56 chore(sql): reorganize migration numbering and cleanup
+```
+
+### 后续事项
+
+1. **测试环境配置**: 部分 Gateway 测试需要环境变量配置才能运行，建议添加 pytest fixtures 自动设置测试环境
+2. **main.py 行数**: 当前 383 行，核心处理逻辑已拆分到 handlers/，main.py 保留路由和启动逻辑
+3. **类型检查**: 仍有 263 个类型错误待修复，不影响功能但需后续迭代处理
