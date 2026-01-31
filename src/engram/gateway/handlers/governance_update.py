@@ -8,30 +8,18 @@ governance_update handler - governance_update 工具核心实现
 4. 写入审计日志
 5. 返回更新后的设置
 
-依赖注入支持：
-- 推荐：通过 deps 参数传入 GatewayDeps (推荐)
-- [DEPRECATED v0.9] 函数签名包含可选的 _config, _db 参数（向后兼容）
-- [DEPRECATED v0.9] 如果不传入任何依赖参数，使用模块级函数获取（不推荐）
-
-弃用计划：
-- v0.9（当前）：兼容期，使用 legacy 参数时产生 DeprecationWarning
-- v1.0：移除 _config/_db 参数，deps 参数变为必需
+依赖注入（v1.0）：
+- deps 参数为必传，通过 GatewayDeps 容器提供所有依赖
+- 所有数据库操作统一使用 deps.db / deps.logbook_adapter
+- 配置统一使用 deps.config
 """
 
 import logging
-import warnings
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
-from ..config import GatewayConfig, get_config
-from ..di import GatewayDeps, GatewayDepsProtocol
-
-# NOTE: logbook_db.get_db 已弃用，新代码应通过 deps.db 或 deps.logbook_adapter 获取数据库操作
-
-if TYPE_CHECKING:
-    # LogbookDatabase 类型仅用于向后兼容，新代码应使用 LogbookAdapter
-    from ..logbook_db import LogbookDatabase
+from ..di import GatewayDepsProtocol
 
 # 导入统一错误码
 try:
@@ -65,18 +53,11 @@ async def governance_update_impl(
     policy_json: Optional[Dict[str, Any]] = None,
     admin_key: Optional[str] = None,
     actor_user_id: Optional[str] = None,
-    # 依赖注入参数（推荐方式）
-    deps: Optional[GatewayDepsProtocol] = None,
-    # [DEPRECATED v0.9 -> 移除于 v1.0] 以下参数已弃用，请使用 deps 参数
-    # 弃用计划：
-    #   - v0.9（当前）：兼容期，使用时产生 DeprecationWarning
-    #   - v1.0：移除这些参数
-    # 迁移指南：docs/architecture/adr_gateway_di_and_entry_boundary.md
-    _config: Optional[GatewayConfig] = None,
-    _db: Optional["LogbookDatabase"] = None,
+    *,
+    deps: GatewayDepsProtocol,
 ) -> GovernanceSettingsUpdateResponse:
     """
-    governance_update 核心实现
+    governance_update 核心实现（v1.0）
 
     鉴权方式（满足其一即可）：
     1. admin_key 与环境变量 GOVERNANCE_ADMIN_KEY 匹配
@@ -94,43 +75,10 @@ async def governance_update_impl(
         policy_json: 策略 JSON
         admin_key: 管理密钥
         actor_user_id: 执行操作的用户标识
-        deps: 可选的 GatewayDeps 依赖容器，优先使用其中的依赖
-        _config: 可选的 GatewayConfig 对象，用于向后兼容（推荐使用 deps.config）
-        _db: 可选的 LogbookDatabase 对象，用于向后兼容（推荐使用 deps.db）
+        deps: GatewayDeps 依赖容器（必传）
     """
-    # [DEPRECATED v0.9] 弃用警告：_config/_db 参数将在 v1.0 移除
-    # 弃用计划：
-    #   - v0.9（当前）：兼容期，使用时产生 DeprecationWarning
-    #   - v1.0：移除这些参数，强制使用 deps 参数
-    if _config is not None or _db is not None:
-        warnings.warn(
-            "[Gateway v0.9 弃用警告] governance_update_impl 的 _config/_db 参数已弃用，"
-            "将在 v1.0 移除。请使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...) 替代。"
-            "迁移指南：docs/architecture/adr_gateway_di_and_entry_boundary.md",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    # 获取配置（支持依赖注入）：deps 优先 > _config 参数 > 全局 getter
-    if deps is not None:
-        config = deps.config
-    elif _config is not None:
-        config = _config
-    else:
-        # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
-        config = get_config()
-
-    # 确保有可用的 deps 对象（用于后续依赖统一获取）
-    # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
-    if deps is None:
-        # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
-        deps = GatewayDeps.create(config=config)
-        # [DEPRECATED v0.9 -> 移除于 v1.0] 兼容分支：如果有显式传入的 _db，注入到 deps 中
-        # 此路径仅为向后兼容保留，将在 v1.0 移除，新代码应完全使用 deps 参数
-        if _db is not None:
-            deps._db = _db
-
-    # 获取 DB 实例（统一通过 deps 获取）
+    # 统一从 deps 获取配置和数据库实例
+    config = deps.config
     db = deps.db
 
     # 读取当前设置

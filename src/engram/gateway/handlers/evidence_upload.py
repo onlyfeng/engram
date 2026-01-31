@@ -7,16 +7,15 @@ evidence_upload handler - evidence_upload 工具核心实现
 3. 调用 upload_evidence
 4. 返回结果
 
-依赖注入支持：
-- 函数签名包含可选的 deps 参数
-- 如果不传入 deps，使用模块级函数获取（保持向后兼容）
-- 如果传入 deps，使用传入的依赖（用于测试或显式注入）
+依赖注入：
+- deps 参数为必传，调用方需显式传入 GatewayDeps 实例
+- 统一通过 deps.logbook_adapter 获取依赖，确保依赖来源单一可控
 """
 
 import logging
 from typing import Any, Dict, Optional
 
-from ..di import GatewayDeps, GatewayDepsProtocol
+from ..di import GatewayDepsProtocol
 from ..evidence_store import (
     ALLOWED_CONTENT_TYPES,
     EvidenceContentTypeError,
@@ -38,8 +37,8 @@ async def execute_evidence_upload(
     actor_user_id: Optional[str] = None,
     project_key: Optional[str] = None,
     item_id: Optional[int] = None,
-    # 依赖注入参数（推荐方式）
-    deps: Optional[GatewayDepsProtocol] = None,
+    *,
+    deps: GatewayDepsProtocol,
 ) -> Dict[str, Any]:
     """
     evidence_upload 工具执行函数
@@ -51,10 +50,13 @@ async def execute_evidence_upload(
         actor_user_id: 操作者用户 ID
         project_key: 项目标识
         item_id: 关联的 logbook.items.item_id
-        deps: 可选的 GatewayDeps 依赖容器，优先使用其中的依赖
+        deps: GatewayDeps 依赖容器（必传）
 
     Returns:
         执行结果 dict
+
+    Raises:
+        TypeError: 如果未提供 deps 参数
     """
     # 参数校验
     if not content:
@@ -75,16 +77,6 @@ async def execute_evidence_upload(
         }
 
     try:
-        # 确保有可用的 deps 对象（统一通过 deps.logbook_adapter 获取 adapter）
-        # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
-        if deps is None:
-            # [LEGACY] 无 deps 的兼容分支：创建默认 deps 容器
-            # 此路径仅为向后兼容保留，新代码应显式传入 deps=GatewayDeps.create()
-            # TODO: 后续版本将移除此兼容分支，届时 deps 参数将变为必需
-            # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
-            deps = GatewayDeps.create()
-            logger.debug("evidence_upload: 未提供 deps 参数，使用默认 GatewayDeps（legacy path）")
-
         # 获取 logbook_adapter（统一通过 deps 获取，确保使用同一实例）
         adapter = deps.logbook_adapter
 

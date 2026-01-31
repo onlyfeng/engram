@@ -248,6 +248,88 @@ services:
       - pgadmin-data:/var/lib/pgadmin
     networks: [engram_net]
 
+  # ===== SCM Sync 服务 (scm_sync profile) =====
+  # 启用方式: docker compose --profile scm_sync up -d
+  # 注意: 需要配置 GitLab/SVN 凭证，敏感变量不提供默认值
+
+  scm_scheduler:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    profiles: ["scm_sync"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      logbook_migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *postgres_app_env
+      ENGRAM_SCM_SYNC_ENABLED: ${ENGRAM_SCM_SYNC_ENABLED:-true}
+      # GitLab 凭证（敏感，无默认值）
+      GITLAB_URL: ${GITLAB_URL:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITLAB_PRIVATE_TOKEN: ${GITLAB_PRIVATE_TOKEN:-}
+      # SVN 凭证（敏感，无默认值）
+      SVN_USERNAME: ${SVN_USERNAME:-}
+      SVN_PASSWORD: ${SVN_PASSWORD:-}
+      # Scheduler 配置
+      SCM_SCHEDULER_GLOBAL_CONCURRENCY: ${SCM_SCHEDULER_GLOBAL_CONCURRENCY:-20}
+      SCM_SCHEDULER_MAX_RUNNING: ${SCM_SCHEDULER_MAX_RUNNING:-10}
+      SCM_SCHEDULER_SCAN_INTERVAL_SECONDS: ${SCM_SCHEDULER_SCAN_INTERVAL_SECONDS:-60}
+    command: ["engram-scm-scheduler", "--loop"]
+    restart: unless-stopped
+    networks: [engram_net]
+
+  scm_worker:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    profiles: ["scm_sync"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      logbook_migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *postgres_app_env
+      ENGRAM_SCM_SYNC_ENABLED: ${ENGRAM_SCM_SYNC_ENABLED:-true}
+      # GitLab 凭证（敏感，无默认值）
+      GITLAB_URL: ${GITLAB_URL:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITLAB_PRIVATE_TOKEN: ${GITLAB_PRIVATE_TOKEN:-}
+      # SVN 凭证（敏感，无默认值）
+      SVN_USERNAME: ${SVN_USERNAME:-}
+      SVN_PASSWORD: ${SVN_PASSWORD:-}
+      # Worker 配置
+      SCM_WORKER_LEASE_SECONDS: ${SCM_WORKER_LEASE_SECONDS:-300}
+      SCM_WORKER_POLL_INTERVAL: ${SCM_WORKER_POLL_INTERVAL:-10}
+      SCM_WORKER_PARALLELISM: ${SCM_WORKER_PARALLELISM:-2}
+    command: ["engram-scm-worker"]
+    restart: unless-stopped
+    # 支持多副本: docker compose --profile scm_sync up -d --scale scm_worker=3
+    networks: [engram_net]
+
+  scm_reaper:
+    build:
+      context: .
+      dockerfile: docker/engram.Dockerfile
+    profiles: ["scm_sync"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      logbook_migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *postgres_app_env
+      ENGRAM_SCM_SYNC_ENABLED: ${ENGRAM_SCM_SYNC_ENABLED:-true}
+      # Reaper 配置
+      SCM_REAPER_INTERVAL_SECONDS: ${SCM_REAPER_INTERVAL_SECONDS:-60}
+      SCM_REAPER_JOB_GRACE_SECONDS: ${SCM_REAPER_JOB_GRACE_SECONDS:-60}
+      SCM_REAPER_LOCK_GRACE_SECONDS: ${SCM_REAPER_LOCK_GRACE_SECONDS:-120}
+    command: ["engram-scm-reaper", "--loop"]
+    restart: unless-stopped
+    networks: [engram_net]
+
 networks:
   engram_net:
 
