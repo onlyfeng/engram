@@ -84,6 +84,7 @@ class DataFactory:
         # 测试结束后自动清理（使用 context manager）
         # 或手动调用 factory.cleanup()
     """
+    __test__ = False
     
     def __init__(self, conn: psycopg.Connection, scm_schema: str = "scm"):
         self.conn = conn

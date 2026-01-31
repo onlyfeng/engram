@@ -24,7 +24,7 @@ logbook_db - Logbook 数据库操作模块 (已弃用)
     from engram.gateway.logbook_adapter import LogbookAdapter, get_adapter
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 #
@@ -280,7 +280,7 @@ class LogbookDatabase:
         payload_sha = self._hashlib.sha256(payload_md.encode("utf-8")).hexdigest()
 
         if next_attempt_at is None:
-            next_attempt_at = datetime.utcnow() + self._timedelta(minutes=5)
+            next_attempt_at = datetime.now(timezone.utc) + self._timedelta(minutes=5)
 
         conn = self._get_connection()
         try:
@@ -324,7 +324,7 @@ class LogbookDatabase:
         
         # 回退实现
         if before_time is None:
-            before_time = datetime.utcnow()
+            before_time = datetime.now(timezone.utc)
 
         conn = self._get_connection()
         try:
@@ -429,7 +429,7 @@ class LogbookDatabase:
 
                 new_retry_count = row[0] + 1
                 if next_attempt_at is None:
-                    next_attempt_at = datetime.utcnow() + self._timedelta(minutes=5 * (2 ** row[0]))
+                    next_attempt_at = datetime.now(timezone.utc) + self._timedelta(minutes=5 * (2 ** row[0]))
 
                 cur.execute(
                     """

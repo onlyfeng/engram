@@ -22,7 +22,7 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -132,7 +132,7 @@ def render_markdown(
     lines = [
         "# 验收测试矩阵摘要（自动生成）",
         "",
-        f"> 生成时间: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        f"> 生成时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
         f"> 每组显示最近 {limit} 条记录",
         "",
         "## 概览",
@@ -260,7 +260,7 @@ def render_json(
 ) -> None:
     """Render acceptance matrix as JSON."""
     output: dict[str, Any] = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "limit_per_group": limit,
         "groups": [],
     }

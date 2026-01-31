@@ -83,6 +83,10 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 addopts = "--durations=20"
+markers = [
+    "unit: 单元测试",
+    "integration: 集成测试",
+]
 
 [tool.ruff]
 line-length = 100

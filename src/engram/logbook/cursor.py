@@ -388,7 +388,7 @@ def save_svn_cursor(
         version=CURSOR_VERSION,
         watermark={"last_rev": last_rev},
         stats={
-            "last_sync_at": datetime.utcnow().isoformat() + "Z",
+            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
             "last_sync_count": synced_count,
         },
     )
@@ -436,7 +436,7 @@ def save_gitlab_cursor(
             "last_commit_ts": last_commit_ts,
         },
         stats={
-            "last_sync_at": datetime.utcnow().isoformat() + "Z",
+            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
             "last_sync_count": synced_count,
         },
     )
@@ -492,7 +492,7 @@ def save_gitlab_mr_cursor(
             "last_mr_iid": last_mr_iid,
         },
         stats={
-            "last_sync_at": datetime.utcnow().isoformat() + "Z",
+            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
             "last_sync_count": synced_count,
         },
     )
@@ -558,7 +558,7 @@ def save_gitlab_reviews_cursor(
         version=CURSOR_VERSION,
         watermark=watermark,
         stats={
-            "last_sync_at": datetime.utcnow().isoformat() + "Z",
+            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
             "last_sync_mr_count": synced_mr_count,
             "last_sync_event_count": synced_event_count,
         },

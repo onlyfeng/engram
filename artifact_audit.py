@@ -11,7 +11,7 @@ import random
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -375,9 +375,9 @@ class ArtifactAuditor:
         fail_on_mismatch: bool = False,
     ) -> AuditSummary:
         summary = AuditSummary()
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         start_monotonic = time.monotonic()
-        summary.start_time = start_time.isoformat() + "Z"
+        summary.start_time = start_time.isoformat().replace("+00:00", "Z")
         max_cursor: Optional[datetime] = None
 
         for table in tables:
@@ -408,12 +408,12 @@ class ArtifactAuditor:
 
                 if fail_on_mismatch and result.status == "mismatch":
                     summary.next_cursor = max_cursor.isoformat() if max_cursor else None
-                    summary.end_time = datetime.utcnow().isoformat() + "Z"
+                    summary.end_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                     summary.duration_seconds = max(0.000001, time.monotonic() - start_monotonic)
                     return summary
 
         summary.next_cursor = max_cursor.isoformat() if max_cursor else None
-        summary.end_time = datetime.utcnow().isoformat() + "Z"
+        summary.end_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         summary.duration_seconds = max(0.000001, time.monotonic() - start_monotonic)
         return summary
 
