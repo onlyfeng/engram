@@ -13,18 +13,15 @@ test_sync_run_counts_schema.py - sync_runs.counts 字段契约测试
 - Schema 快照: 验证 build_counts 返回的字段集合
 """
 
-import pytest
-
 from engram.logbook.sync_run_counts import (
+    COUNTS_LIMITER_FIELDS,
+    COUNTS_OPTIONAL_FIELDS,
+    COUNTS_REQUIRED_FIELDS,
     SyncRunCounts,
     build_counts,
     build_counts_from_result,
     validate_counts_schema,
-    COUNTS_REQUIRED_FIELDS,
-    COUNTS_OPTIONAL_FIELDS,
-    COUNTS_LIMITER_FIELDS,
 )
-
 
 # ============ 契约定义测试 ============
 
@@ -85,15 +82,15 @@ class TestSyncRunCountsDataclass:
         """to_dict 包含所有字段"""
         counts = SyncRunCounts()
         d = counts.to_dict()
-        
+
         # 验证必需字段
         for field in COUNTS_REQUIRED_FIELDS:
             assert field in d, f"缺少必需字段: {field}"
-        
+
         # 验证可选字段
         for field in COUNTS_OPTIONAL_FIELDS:
             assert field in d, f"缺少可选字段: {field}"
-        
+
         # 验证 limiter 字段
         for field in COUNTS_LIMITER_FIELDS:
             assert field in d, f"缺少 limiter 字段: {field}"
@@ -102,12 +99,12 @@ class TestSyncRunCountsDataclass:
         """to_dict(include_zero=False) 排除值为 0 的字段"""
         counts = SyncRunCounts(synced_count=10, diff_count=5)
         d = counts.to_dict(include_zero=False)
-        
+
         assert "synced_count" in d
         assert "diff_count" in d
         assert d["synced_count"] == 10
         assert d["diff_count"] == 5
-        
+
         # 值为 0 的字段不应出现
         assert "bulk_count" not in d
 
@@ -145,7 +142,7 @@ class TestBuildCounts:
         """所有值都是 int 类型"""
         result = build_counts(
             synced_count=10.5,  # 会被转为 int
-            diff_count="20",    # 字符串也会被转为 int
+            diff_count="20",  # 字符串也会被转为 int
         )
         for key, value in result.items():
             assert isinstance(value, int), f"字段 {key} 类型不是 int: {type(value)}"
@@ -173,11 +170,18 @@ class TestBuildCounts:
             timeout_count=0,
             avg_wait_time_ms=150,
         )
-        
+
         # 验证关键字段存在
         expected_fields = {
-            "synced_count", "diff_count", "bulk_count", "degraded_count", "skipped_count",
-            "total_requests", "total_429_hits", "timeout_count", "avg_wait_time_ms",
+            "synced_count",
+            "diff_count",
+            "bulk_count",
+            "degraded_count",
+            "skipped_count",
+            "total_requests",
+            "total_429_hits",
+            "timeout_count",
+            "avg_wait_time_ms",
         }
         for field in expected_fields:
             assert field in result, f"GitLab Commits counts 缺少字段: {field}"
@@ -194,10 +198,16 @@ class TestBuildCounts:
             timeout_count=0,
             avg_wait_time_ms=100,
         )
-        
+
         expected_fields = {
-            "synced_count", "scanned_count", "inserted_count", "skipped_count",
-            "total_requests", "total_429_hits", "timeout_count", "avg_wait_time_ms",
+            "synced_count",
+            "scanned_count",
+            "inserted_count",
+            "skipped_count",
+            "total_requests",
+            "total_429_hits",
+            "timeout_count",
+            "avg_wait_time_ms",
         }
         for field in expected_fields:
             assert field in result, f"GitLab MRs counts 缺少字段: {field}"
@@ -213,10 +223,15 @@ class TestBuildCounts:
             timeout_count=0,
             avg_wait_time_ms=80,
         )
-        
+
         expected_fields = {
-            "synced_mr_count", "synced_event_count", "skipped_event_count",
-            "total_requests", "total_429_hits", "timeout_count", "avg_wait_time_ms",
+            "synced_mr_count",
+            "synced_event_count",
+            "skipped_event_count",
+            "total_requests",
+            "total_429_hits",
+            "timeout_count",
+            "avg_wait_time_ms",
         }
         for field in expected_fields:
             assert field in result, f"GitLab Reviews counts 缺少字段: {field}"
@@ -232,10 +247,15 @@ class TestBuildCounts:
             patch_failed=5,
             skipped_by_controller=10,
         )
-        
+
         expected_fields = {
-            "synced_count", "diff_count", "bulk_count", "degraded_count",
-            "patch_success", "patch_failed", "skipped_by_controller",
+            "synced_count",
+            "diff_count",
+            "bulk_count",
+            "degraded_count",
+            "patch_success",
+            "patch_failed",
+            "skipped_by_controller",
         }
         for field in expected_fields:
             assert field in result, f"SVN counts 缺少字段: {field}"
@@ -257,7 +277,7 @@ class TestBuildCountsFromResult:
                 "total_429_hits": 1,
             },
         }
-        
+
         counts = build_counts_from_result(result)
         assert counts["synced_count"] == 100
         assert counts["diff_count"] == 50
@@ -268,7 +288,7 @@ class TestBuildCountsFromResult:
         """缺失字段默认为 0"""
         result = {"synced_count": 10}
         counts = build_counts_from_result(result)
-        
+
         assert counts["synced_count"] == 10
         assert counts["diff_count"] == 0
         assert counts["total_requests"] == 0
@@ -283,7 +303,7 @@ class TestBuildCountsFromResult:
                 "skipped_by_controller": 5,
             },
         }
-        
+
         counts = build_counts_from_result(result)
         assert counts["patch_success"] == 90
         assert counts["patch_failed"] == 5
@@ -295,7 +315,7 @@ class TestBuildCountsFromResult:
             "synced_count": 10,
             "diff_none_count": 10,
         }
-        
+
         counts = build_counts_from_result(result)
         assert counts["diff_none_count"] == 10
 
@@ -310,7 +330,7 @@ class TestValidateCountsSchema:
         """有效的 counts 通过验证"""
         counts = build_counts(synced_count=100)
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
         assert len(errors) == 0
 
@@ -318,7 +338,7 @@ class TestValidateCountsSchema:
         """缺少必需字段验证失败"""
         counts = {"diff_count": 10}  # 缺少 synced_count
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("synced_count" in e for e in errors)
 
@@ -326,7 +346,7 @@ class TestValidateCountsSchema:
         """类型错误验证失败"""
         counts = {"synced_count": "not_a_number"}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
 
@@ -334,9 +354,9 @@ class TestValidateCountsSchema:
         """未知字段产生警告"""
         counts = build_counts(synced_count=100)
         counts["unknown_field"] = 10
-        
+
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid  # 未知字段不影响有效性
         assert any("unknown_field" in w for w in warnings)
 
@@ -353,7 +373,7 @@ class TestValidateCountsSchemaConsistency:
         """空字典缺少所有必需字段"""
         counts = {}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         # 应该报告缺少 synced_count
         assert any("synced_count" in e for e in errors)
@@ -366,7 +386,7 @@ class TestValidateCountsSchemaConsistency:
             "total_requests": 100,
         }
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("synced_count" in e for e in errors)
 
@@ -375,7 +395,7 @@ class TestValidateCountsSchemaConsistency:
         # COUNTS_REQUIRED_FIELDS 目前只有 synced_count
         counts = {"synced_count": 0}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
         assert len(errors) == 0
 
@@ -385,7 +405,7 @@ class TestValidateCountsSchemaConsistency:
         """字符串值类型错误"""
         counts = {"synced_count": "100"}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
 
@@ -393,7 +413,7 @@ class TestValidateCountsSchemaConsistency:
         """列表值类型错误"""
         counts = {"synced_count": [1, 2, 3]}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
 
@@ -401,7 +421,7 @@ class TestValidateCountsSchemaConsistency:
         """字典值类型错误"""
         counts = {"synced_count": {"nested": 10}}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
 
@@ -409,7 +429,7 @@ class TestValidateCountsSchemaConsistency:
         """None 值类型错误"""
         counts = {"synced_count": None}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
 
@@ -417,7 +437,7 @@ class TestValidateCountsSchemaConsistency:
         """浮点数值验证失败（契约要求 integer 且 minimum=0）"""
         counts = {"synced_count": 100.0}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
 
@@ -425,7 +445,7 @@ class TestValidateCountsSchemaConsistency:
         """负整数验证失败（契约要求 minimum=0）"""
         counts = {"synced_count": -1}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("不能为负数" in e for e in errors)
 
@@ -437,7 +457,7 @@ class TestValidateCountsSchemaConsistency:
             "bulk_count": [1, 2],
         }
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         # 应该报告所有三个类型错误
         assert len([e for e in errors if "类型错误" in e]) >= 3
@@ -448,7 +468,7 @@ class TestValidateCountsSchemaConsistency:
         """单个未知字段产生警告"""
         counts = {"synced_count": 100, "custom_metric": 50}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid  # 不影响有效性
         assert len(warnings) == 1
         assert "custom_metric" in warnings[0]
@@ -462,7 +482,7 @@ class TestValidateCountsSchemaConsistency:
             "future_metric": 30,
         }
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
         assert len(warnings) == 3
         warned_fields = " ".join(warnings)
@@ -480,7 +500,7 @@ class TestValidateCountsSchemaConsistency:
             "total_requests": 300,
         }
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
         assert len(warnings) == 0
 
@@ -494,7 +514,7 @@ class TestValidateCountsSchemaConsistency:
             "avg_wait_time_ms": 150,
         }
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
         assert len(warnings) == 0
 
@@ -504,7 +524,7 @@ class TestValidateCountsSchemaConsistency:
         """同时缺少必需字段和类型错误"""
         counts = {"diff_count": "not_a_number"}  # 缺少 synced_count，且 diff_count 类型错误
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("synced_count" in e for e in errors)
         assert any("类型错误" in e for e in errors)
@@ -513,7 +533,7 @@ class TestValidateCountsSchemaConsistency:
         """同时缺少必需字段和有未知字段"""
         counts = {"unknown_field": 100}  # 缺少 synced_count，有未知字段
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("synced_count" in e for e in errors)
         assert any("unknown_field" in w for w in warnings)
@@ -525,7 +545,7 @@ class TestValidateCountsSchemaConsistency:
             "unknown_field": 100,
         }
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
         assert any("unknown_field" in w for w in warnings)
@@ -534,9 +554,9 @@ class TestValidateCountsSchemaConsistency:
         """有效 counts 加未知字段"""
         counts = build_counts(synced_count=100, diff_count=50)
         counts["custom_metric"] = 25
-        
+
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
         assert len(errors) == 0
         assert len(warnings) == 1
@@ -547,21 +567,21 @@ class TestValidateCountsSchemaConsistency:
         """零值通过验证"""
         counts = {"synced_count": 0}
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
 
     def test_large_value_passes(self):
         """大数值通过验证"""
         counts = {"synced_count": 10**12}  # 1 万亿
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
 
     def test_all_fields_zero_passes(self):
         """所有字段为零通过验证"""
         counts = build_counts()  # 所有字段默认为 0
         is_valid, errors, warnings = validate_counts_schema(counts)
-        
+
         assert is_valid
         assert len(errors) == 0
         assert len(warnings) == 0
@@ -576,25 +596,25 @@ class TestCountsSchemaIntegrity:
     def test_build_counts_returns_all_known_fields(self):
         """build_counts 返回所有已知字段"""
         counts = build_counts()
-        
+
         all_known_fields = COUNTS_REQUIRED_FIELDS | COUNTS_OPTIONAL_FIELDS | COUNTS_LIMITER_FIELDS
-        
+
         for field in all_known_fields:
             assert field in counts, f"build_counts 缺少字段: {field}"
 
     def test_build_counts_no_extra_unknown_fields(self):
         """build_counts 不返回未知字段"""
         counts = build_counts()
-        
+
         all_known_fields = COUNTS_REQUIRED_FIELDS | COUNTS_OPTIONAL_FIELDS | COUNTS_LIMITER_FIELDS
-        
+
         for field in counts:
             assert field in all_known_fields, f"build_counts 返回了未知字段: {field}"
 
     def test_counts_field_names_are_snake_case(self):
         """所有字段名使用 snake_case"""
         counts = build_counts()
-        
+
         for field in counts:
             assert "_" in field or field.islower(), f"字段名不符合 snake_case: {field}"
             # 不应包含大写字母（camelCase）

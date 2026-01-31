@@ -104,13 +104,11 @@ import os
 import secrets
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -144,13 +142,11 @@ def should_skip_migrate() -> bool:
 
 # pytest marker: 集成测试需要设置环境变量才能运行
 integration_test = pytest.mark.skipif(
-    not should_run_integration_tests(),
-    reason=f"统一栈集成测试需要设置 {INTEGRATION_TEST_VAR}=1"
+    not should_run_integration_tests(), reason=f"统一栈集成测试需要设置 {INTEGRATION_TEST_VAR}=1"
 )
 
 migrate_test = pytest.mark.skipif(
-    should_skip_migrate(),
-    reason=f"迁移测试已被 {SKIP_MIGRATE_VAR}=1 跳过"
+    should_skip_migrate(), reason=f"迁移测试已被 {SKIP_MIGRATE_VAR}=1 跳过"
 )
 
 
@@ -161,10 +157,7 @@ migrate_test = pytest.mark.skipif(
 
 def get_postgres_dsn() -> str:
     """获取 PostgreSQL DSN"""
-    return os.environ.get(
-        "POSTGRES_DSN",
-        "postgresql://postgres:postgres@localhost:5432/engram"
-    )
+    return os.environ.get("POSTGRES_DSN", "postgresql://postgres:postgres@localhost:5432/engram")
 
 
 def get_minio_config() -> Dict[str, str]:
@@ -245,12 +238,12 @@ def ensure_minio_bucket(config: Dict[str, str]) -> bool:
         from botocore.config import Config as BotoConfig
 
         client = boto3.client(
-            's3',
+            "s3",
             endpoint_url=config["endpoint"],
             aws_access_key_id=config["access_key"],
             aws_secret_access_key=config["secret_key"],
             region_name=config.get("region", "us-east-1"),
-            config=BotoConfig(signature_version='s3v4'),
+            config=BotoConfig(signature_version="s3v4"),
         )
 
         bucket = config["bucket"]
@@ -460,16 +453,19 @@ def insert_patch_blob_reference(
     # 生成唯一的 source_id，格式: <随机前缀>:<sha256前8位>
     unique_prefix = secrets.token_hex(4)
     source_id = f"{unique_prefix}:{sha256[:8]}"
-    
+
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO scm.patch_blobs (
                 source_type, source_id, uri, sha256, size_bytes, format
             ) VALUES (
                 %s, %s, %s, %s, %s, 'diff'
             )
             RETURNING blob_id
-        """, (source_type, source_id, uri, sha256, size_bytes))
+        """,
+            (source_type, source_id, uri, sha256, size_bytes),
+        )
         result = cur.fetchone()
         return result[0]
 
@@ -514,15 +510,18 @@ def insert_attachment_reference(
                 RETURNING item_id
             """)
             item_id = cur.fetchone()[0]
-        
-        cur.execute("""
+
+        cur.execute(
+            """
             INSERT INTO logbook.attachments (
                 item_id, kind, uri, sha256, size_bytes
             ) VALUES (
                 %s, %s, %s, %s, %s
             )
             RETURNING attachment_id
-        """, (item_id, kind, uri, sha256, size_bytes))
+        """,
+            (item_id, kind, uri, sha256, size_bytes),
+        )
         attachment_id = cur.fetchone()[0]
         return (attachment_id, item_id)
 
@@ -530,23 +529,23 @@ def insert_attachment_reference(
 def delete_attachment_reference(conn, attachment_id: int, item_id: Optional[int] = None) -> bool:
     """
     删除 attachment 引用记录
-    
+
     Args:
         conn: 数据库连接
         attachment_id: 附件 ID
         item_id: 可选的 item_id，如果提供则同时删除关联的 item 记录
-    
+
     Returns:
         是否成功删除
     """
     with conn.cursor() as cur:
         cur.execute("DELETE FROM logbook.attachments WHERE attachment_id = %s", (attachment_id,))
         deleted = cur.rowcount > 0
-        
+
         # 如果提供了 item_id，同时清理创建的 item 记录
         if item_id is not None:
             cur.execute("DELETE FROM logbook.items WHERE item_id = %s", (item_id,))
-        
+
         return deleted
 
 
@@ -652,7 +651,7 @@ class TestAuditWithDbReferences:
         from artifact_audit import ArtifactAuditor
 
         conn = migrated_database["conn"]
-        dsn = migrated_database["dsn"]
+        migrated_database["dsn"]
 
         # 创建测试制品
         uri = f"{unique_prefix}/audit_test.bin"
@@ -811,7 +810,7 @@ class TestGarbageCollection:
         # 创建未被引用的制品
         uri_orphan = f"scm/{unique_prefix}/orphan.bin"
         content2 = secrets.token_bytes(512)
-        result2 = local_store.put(uri_orphan, content2)
+        local_store.put(uri_orphan, content2)
 
         # 只为 referenced 插入 DB 引用
         blob_id = insert_patch_blob_reference(
@@ -869,7 +868,7 @@ class TestGarbageCollection:
         # 创建未被引用的制品
         uri_orphan = f"scm/{unique_prefix}/delete_me.bin"
         content2 = secrets.token_bytes(256)
-        result2 = local_store.put(uri_orphan, content2)
+        local_store.put(uri_orphan, content2)
 
         # 只为 referenced 插入 DB 引用
         blob_id = insert_patch_blob_reference(
@@ -980,31 +979,30 @@ class TestGarbageCollection:
     ):
         """
         GC 保护含 s3:// 引用的制品
-        
+
         场景:
         - 在 ObjectStore 中创建制品
         - 在 DB 中使用 s3:// URI 引用该制品
         - GC dry-run 应该保护该制品，不列为候选
-        
+
         这是确保 GC 正确解析 s3:// 物理 URI 的回归测试。
         """
         from artifact_gc import run_gc
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
-        minio_config = object_store
 
         # 创建测试制品
         artifact_key = f"scm/{unique_prefix}/s3_referenced.diff"
         cleanup_artifacts.append(artifact_key)
-        
+
         content = secrets.token_bytes(512)
         result = object_store.put(artifact_key, content)
-        
+
         # 构建 s3:// URI
         # 格式: s3://<bucket>/<prefix>/<artifact_key>
         s3_uri = object_store.resolve(artifact_key)
-        
+
         # 验证 s3_uri 格式正确
         assert s3_uri.startswith("s3://"), f"resolve 应返回 s3:// URI, got: {s3_uri}"
         assert object_store.bucket in s3_uri
@@ -1035,19 +1033,17 @@ class TestGarbageCollection:
             # 验证：s3:// 引用的对象应该被保护
             # 该对象不应出现在 candidates 中
             candidate_uris = {c.uri for c in gc_result.candidates}
-            
+
             # 检查 artifact_key 是否在候选中
             # 如果 GC 正确解析了 s3:// 引用，artifact_key 不应在候选中
             is_in_candidates = any(
-                artifact_key in uri or f"s3_referenced.diff" in uri
-                for uri in candidate_uris
+                artifact_key in uri or "s3_referenced.diff" in uri for uri in candidate_uris
             )
-            
+
             assert not is_in_candidates, (
-                f"s3:// 引用的对象应被保护，不应在 candidates 中。"
-                f"candidates: {candidate_uris}"
+                f"s3:// 引用的对象应被保护，不应在 candidates 中。candidates: {candidate_uris}"
             )
-            
+
             # 验证 protected_count 至少为 1
             assert gc_result.protected_count >= 1, (
                 f"应至少有 1 个被保护的对象。protected_count={gc_result.protected_count}"
@@ -1066,7 +1062,7 @@ class TestGarbageCollection:
     ):
         """
         测试同时使用 s3:// URI 和 artifact key 引用时的 GC 保护
-        
+
         场景:
         - 创建两个制品
         - 一个使用 s3:// URI 引用
@@ -1095,7 +1091,7 @@ class TestGarbageCollection:
         artifact_key_3 = f"scm/{unique_prefix}/orphan_object.diff"
         cleanup_artifacts.append(artifact_key_3)
         content3 = secrets.token_bytes(256)
-        result3 = object_store.put(artifact_key_3, content3)
+        object_store.put(artifact_key_3, content3)
 
         # 插入 DB 引用
         blob_id_1 = insert_patch_blob_reference(
@@ -1104,7 +1100,7 @@ class TestGarbageCollection:
             sha256=result1["sha256"],
             size_bytes=result1["size_bytes"],
         )
-        
+
         blob_id_2 = insert_patch_blob_reference(
             conn,
             uri=artifact_key_2,  # artifact key
@@ -1276,7 +1272,7 @@ class TestArtifactMigration:
         expected_sha256 = hashlib.sha256(content).hexdigest()
 
         # 在 local 创建
-        local_result = local_store.put(uri, content)
+        local_store.put(uri, content)
 
         # 迁移到 object
         cleanup_artifacts.append(uri)
@@ -1340,11 +1336,13 @@ class TestEndToEndFlow:
             uri = f"scm/{unique_prefix}/file_{i}.bin"
             content = secrets.token_bytes(256 + i * 100)
             result = local_store.put(uri, content)
-            artifacts.append({
-                "uri": uri,
-                "sha256": result["sha256"],
-                "size_bytes": result["size_bytes"],
-            })
+            artifacts.append(
+                {
+                    "uri": uri,
+                    "sha256": result["sha256"],
+                    "size_bytes": result["size_bytes"],
+                }
+            )
 
         # 2. 为前两个创建 DB 引用
         blob_ids = []
@@ -1496,47 +1494,47 @@ class TestEndToEndFlow:
 class TestOpenMemoryRolePermissions:
     """
     OpenMemory 角色权限验证测试
-    
+
     测试场景：
     1. openmemory_svc (继承 openmemory_app) 在 OM_PG_SCHEMA 内:
        - CREATE TABLE 应失败（无 DDL 权限）
        - SELECT/INSERT/UPDATE/DELETE 应成功（有 DML 权限）
-    
+
     2. openmemory_migrator_login (继承 openmemory_migrator):
        - 应有 DDL 权限，可创建/修改表
-    
+
     注意：
     - 这些测试需要在统一栈环境中运行
     - 需要 superuser 权限来创建测试用的登录角色
     - 测试使用临时表名避免影响真实数据
     """
-    
+
     # 测试用密码（仅用于测试环境）
     TEST_PASSWORD = "test_password_12345"
-    
+
     @pytest.fixture(scope="class")
     def om_schema(self, migrated_database):
         """获取 OpenMemory 目标 schema（默认 openmemory）"""
         return os.environ.get("OM_PG_SCHEMA", "openmemory")
-    
+
     @pytest.fixture(scope="class")
     def setup_test_roles(self, migrated_database):
         """
         创建测试用的登录角色（如果不存在）
-        
+
         创建:
         - openmemory_svc: 继承 openmemory_app
         - openmemory_migrator_login: 继承 openmemory_migrator
         """
-        import psycopg
-        
+
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
-        
+
         # 使用 superuser 连接创建测试角色
         with conn.cursor() as cur:
             # 创建 openmemory_svc 登录角色
-            cur.execute("""
+            cur.execute(
+                """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_svc') THEN
@@ -1546,16 +1544,19 @@ class TestOpenMemoryRolePermissions:
                         ALTER ROLE openmemory_svc WITH LOGIN PASSWORD %s;
                         RAISE NOTICE 'Updated test role: openmemory_svc';
                     END IF;
-                    
+
                     -- 确保继承 openmemory_app
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_app') THEN
                         GRANT openmemory_app TO openmemory_svc;
                     END IF;
                 END $$;
-            """, (self.TEST_PASSWORD, self.TEST_PASSWORD))
-            
+            """,
+                (self.TEST_PASSWORD, self.TEST_PASSWORD),
+            )
+
             # 创建 openmemory_migrator_login 登录角色
-            cur.execute("""
+            cur.execute(
+                """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_migrator_login') THEN
@@ -1565,18 +1566,21 @@ class TestOpenMemoryRolePermissions:
                         ALTER ROLE openmemory_migrator_login WITH LOGIN PASSWORD %s;
                         RAISE NOTICE 'Updated test role: openmemory_migrator_login';
                     END IF;
-                    
+
                     -- 确保继承 openmemory_migrator
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_migrator') THEN
                         GRANT openmemory_migrator TO openmemory_migrator_login;
                     END IF;
                 END $$;
-            """, (self.TEST_PASSWORD, self.TEST_PASSWORD))
-        
+            """,
+                (self.TEST_PASSWORD, self.TEST_PASSWORD),
+            )
+
         # 解析 DSN 获取连接参数
         from urllib.parse import urlparse
+
         parsed = urlparse(dsn)
-        
+
         return {
             "host": parsed.hostname or "localhost",
             "port": parsed.port or 5432,
@@ -1585,16 +1589,16 @@ class TestOpenMemoryRolePermissions:
             "migrator_user": "openmemory_migrator_login",
             "password": self.TEST_PASSWORD,
         }
-    
+
     @pytest.fixture(scope="class")
     def svc_connection(self, setup_test_roles, om_schema):
         """
         使用 openmemory_svc 角色建立的数据库连接
         """
         import psycopg
-        
+
         config = setup_test_roles
-        
+
         try:
             conn = psycopg.connect(
                 host=config["host"],
@@ -1609,16 +1613,16 @@ class TestOpenMemoryRolePermissions:
             conn.close()
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 openmemory_svc 连接: {e}")
-    
+
     @pytest.fixture(scope="class")
     def migrator_connection(self, setup_test_roles, om_schema):
         """
         使用 openmemory_migrator_login 角色建立的数据库连接
         """
         import psycopg
-        
+
         config = setup_test_roles
-        
+
         try:
             conn = psycopg.connect(
                 host=config["host"],
@@ -1633,23 +1637,23 @@ class TestOpenMemoryRolePermissions:
             conn.close()
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 openmemory_migrator_login 连接: {e}")
-    
+
     @pytest.fixture
     def test_table_name(self):
         """生成唯一的测试表名"""
         unique_id = secrets.token_hex(4)
         return f"_test_perm_{unique_id}"
-    
+
     def test_svc_cannot_create_table_in_schema(
         self, svc_connection, om_schema, test_table_name, migrated_database
     ):
         """
         验证 openmemory_svc 无法在 OM_PG_SCHEMA 内执行 CREATE TABLE
-        
+
         预期: 抛出权限错误 (42501 - insufficient_privilege)
         """
         import psycopg
-        
+
         with svc_connection.cursor() as cur:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 cur.execute(f"""
@@ -1658,20 +1662,19 @@ class TestOpenMemoryRolePermissions:
                         name TEXT
                     )
                 """)
-    
+
     def test_svc_can_select_from_existing_table(
         self, svc_connection, migrator_connection, om_schema, test_table_name, migrated_database
     ):
         """
         验证 openmemory_svc 可以执行 SELECT
-        
+
         步骤:
         1. 使用 migrator 创建测试表
         2. 使用 svc 执行 SELECT
         3. 清理测试表
         """
-        import psycopg
-        
+
         # 1. 使用 migrator 创建测试表
         with migrator_connection.cursor() as cur:
             cur.execute(f"""
@@ -1685,28 +1688,27 @@ class TestOpenMemoryRolePermissions:
             cur.execute(f"""
                 INSERT INTO {om_schema}.{test_table_name} (name) VALUES ('test_row')
             """)
-        
+
         try:
             # 2. 使用 svc 执行 SELECT
             with svc_connection.cursor() as cur:
                 cur.execute(f"SELECT id, name FROM {om_schema}.{test_table_name}")
                 rows = cur.fetchall()
-                
+
                 assert len(rows) == 1
                 assert rows[0][1] == "test_row"
         finally:
             # 3. 清理测试表
             with migrator_connection.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{test_table_name}")
-    
+
     def test_svc_can_insert_update_delete(
         self, svc_connection, migrator_connection, om_schema, test_table_name
     ):
         """
         验证 openmemory_svc 可以执行 INSERT/UPDATE/DELETE
         """
-        import psycopg
-        
+
         # 使用 migrator 创建测试表
         with migrator_connection.cursor() as cur:
             cur.execute(f"""
@@ -1716,39 +1718,39 @@ class TestOpenMemoryRolePermissions:
                     value INTEGER DEFAULT 0
                 )
             """)
-        
+
         try:
             with svc_connection.cursor() as cur:
                 # INSERT
                 cur.execute(f"""
-                    INSERT INTO {om_schema}.{test_table_name} (name, value) 
+                    INSERT INTO {om_schema}.{test_table_name} (name, value)
                     VALUES ('row1', 10), ('row2', 20)
                     RETURNING id
                 """)
                 inserted_ids = [row[0] for row in cur.fetchall()]
                 assert len(inserted_ids) == 2
-                
+
                 # UPDATE
                 cur.execute(f"""
-                    UPDATE {om_schema}.{test_table_name} 
-                    SET value = value + 100 
+                    UPDATE {om_schema}.{test_table_name}
+                    SET value = value + 100
                     WHERE name = 'row1'
                 """)
                 assert cur.rowcount == 1
-                
+
                 # 验证 UPDATE 结果
                 cur.execute(f"""
                     SELECT value FROM {om_schema}.{test_table_name} WHERE name = 'row1'
                 """)
                 value = cur.fetchone()[0]
                 assert value == 110
-                
+
                 # DELETE
                 cur.execute(f"""
                     DELETE FROM {om_schema}.{test_table_name} WHERE name = 'row2'
                 """)
                 assert cur.rowcount == 1
-                
+
                 # 验证 DELETE 结果
                 cur.execute(f"SELECT COUNT(*) FROM {om_schema}.{test_table_name}")
                 count = cur.fetchone()[0]
@@ -1757,7 +1759,7 @@ class TestOpenMemoryRolePermissions:
             # 清理测试表
             with migrator_connection.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{test_table_name}")
-    
+
     def test_svc_cannot_alter_table(
         self, svc_connection, migrator_connection, om_schema, test_table_name
     ):
@@ -1765,7 +1767,7 @@ class TestOpenMemoryRolePermissions:
         验证 openmemory_svc 无法执行 ALTER TABLE
         """
         import psycopg
-        
+
         # 使用 migrator 创建测试表
         with migrator_connection.cursor() as cur:
             cur.execute(f"""
@@ -1774,20 +1776,20 @@ class TestOpenMemoryRolePermissions:
                     name TEXT
                 )
             """)
-        
+
         try:
             # 尝试使用 svc 执行 ALTER TABLE
             with svc_connection.cursor() as cur:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     cur.execute(f"""
-                        ALTER TABLE {om_schema}.{test_table_name} 
+                        ALTER TABLE {om_schema}.{test_table_name}
                         ADD COLUMN new_col TEXT
                     """)
         finally:
             # 清理测试表
             with migrator_connection.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{test_table_name}")
-    
+
     def test_svc_cannot_drop_table(
         self, svc_connection, migrator_connection, om_schema, test_table_name
     ):
@@ -1795,7 +1797,7 @@ class TestOpenMemoryRolePermissions:
         验证 openmemory_svc 无法执行 DROP TABLE
         """
         import psycopg
-        
+
         # 使用 migrator 创建测试表
         with migrator_connection.cursor() as cur:
             cur.execute(f"""
@@ -1803,7 +1805,7 @@ class TestOpenMemoryRolePermissions:
                     id SERIAL PRIMARY KEY
                 )
             """)
-        
+
         try:
             # 尝试使用 svc 执行 DROP TABLE
             with svc_connection.cursor() as cur:
@@ -1813,10 +1815,8 @@ class TestOpenMemoryRolePermissions:
             # 使用 migrator 清理
             with migrator_connection.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{test_table_name}")
-    
-    def test_migrator_can_create_table(
-        self, migrator_connection, om_schema, test_table_name
-    ):
+
+    def test_migrator_can_create_table(self, migrator_connection, om_schema, test_table_name):
         """
         验证 openmemory_migrator_login 可以在 OM_PG_SCHEMA 内执行 CREATE TABLE
         """
@@ -1830,23 +1830,24 @@ class TestOpenMemoryRolePermissions:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            
+
             # 验证表存在
-            cur.execute(f"""
+            cur.execute(
+                """
                 SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
+                    SELECT 1 FROM information_schema.tables
                     WHERE table_schema = %s AND table_name = %s
                 )
-            """, (om_schema, test_table_name))
+            """,
+                (om_schema, test_table_name),
+            )
             exists = cur.fetchone()[0]
             assert exists is True
-            
+
             # 清理
             cur.execute(f"DROP TABLE {om_schema}.{test_table_name}")
-    
-    def test_migrator_can_create_index(
-        self, migrator_connection, om_schema, test_table_name
-    ):
+
+    def test_migrator_can_create_index(self, migrator_connection, om_schema, test_table_name):
         """
         验证 openmemory_migrator_login 可以创建索引
         """
@@ -1859,26 +1860,29 @@ class TestOpenMemoryRolePermissions:
                     category TEXT
                 )
             """)
-            
+
             # 创建索引应成功
             index_name = f"idx_{test_table_name}_category"
             cur.execute(f"""
                 CREATE INDEX {index_name} ON {om_schema}.{test_table_name} (category)
             """)
-            
+
             # 验证索引存在
-            cur.execute(f"""
+            cur.execute(
+                """
                 SELECT EXISTS (
-                    SELECT 1 FROM pg_indexes 
+                    SELECT 1 FROM pg_indexes
                     WHERE schemaname = %s AND indexname = %s
                 )
-            """, (om_schema, index_name))
+            """,
+                (om_schema, index_name),
+            )
             exists = cur.fetchone()[0]
             assert exists is True
-            
+
             # 清理
             cur.execute(f"DROP TABLE {om_schema}.{test_table_name}")
-    
+
     def test_migrator_can_alter_and_drop_table(
         self, migrator_connection, om_schema, test_table_name
     ):
@@ -1893,47 +1897,51 @@ class TestOpenMemoryRolePermissions:
                     name TEXT
                 )
             """)
-            
+
             # ALTER TABLE 应成功
             cur.execute(f"""
-                ALTER TABLE {om_schema}.{test_table_name} 
+                ALTER TABLE {om_schema}.{test_table_name}
                 ADD COLUMN description TEXT
             """)
-            
+
             # 验证列存在
-            cur.execute(f"""
+            cur.execute(
+                """
                 SELECT EXISTS (
-                    SELECT 1 FROM information_schema.columns 
-                    WHERE table_schema = %s 
-                      AND table_name = %s 
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = %s
+                      AND table_name = %s
                       AND column_name = 'description'
                 )
-            """, (om_schema, test_table_name))
+            """,
+                (om_schema, test_table_name),
+            )
             exists = cur.fetchone()[0]
             assert exists is True
-            
+
             # DROP TABLE 应成功
             cur.execute(f"DROP TABLE {om_schema}.{test_table_name}")
-            
+
             # 验证表不存在
-            cur.execute(f"""
+            cur.execute(
+                """
                 SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
+                    SELECT 1 FROM information_schema.tables
                     WHERE table_schema = %s AND table_name = %s
                 )
-            """, (om_schema, test_table_name))
+            """,
+                (om_schema, test_table_name),
+            )
             exists = cur.fetchone()[0]
             assert exists is False
-    
-    def test_migrator_cannot_create_in_public_schema(
-        self, migrator_connection, test_table_name
-    ):
+
+    def test_migrator_cannot_create_in_public_schema(self, migrator_connection, test_table_name):
         """
         验证 openmemory_migrator_login 无法在 public schema 创建表
         （strict 策略下 public schema 的 CREATE 权限被撤销）
         """
         import psycopg
-        
+
         with migrator_connection.cursor() as cur:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 cur.execute(f"""
@@ -1947,39 +1955,39 @@ class TestOpenMemoryRolePermissions:
 class TestLogbookRolePermissions:
     """
     Logbook 角色权限验证测试
-    
+
     测试场景：
     1. logbook_svc (继承 engram_app_readwrite) 在 Logbook schema (logbook, scm, analysis 等):
        - CREATE TABLE 应失败（无 DDL 权限）
        - SELECT/INSERT/UPDATE/DELETE 应成功（有 DML 权限）
-    
+
     2. logbook_migrator (继承 engram_migrator):
        - 应有 DDL 权限，可创建/修改表
-    
+
     3. SET ROLE 功能验证:
        - 通过连接 options 设置 role 或显式 SET ROLE 时权限正确
     """
-    
+
     TEST_PASSWORD = "test_password_12345"
     LOGBOOK_SCHEMAS = ["logbook", "scm", "analysis", "governance"]
-    
+
     @pytest.fixture(scope="class")
     def setup_logbook_test_roles(self, migrated_database):
         """
         创建/更新 Logbook 测试用的登录角色
-        
+
         创建:
         - logbook_svc: 继承 engram_app_readwrite
         - logbook_migrator: 继承 engram_migrator
         """
-        import psycopg
-        
+
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
-        
+
         with conn.cursor() as cur:
             # 创建 logbook_svc 登录角色
-            cur.execute("""
+            cur.execute(
+                """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'logbook_svc') THEN
@@ -1989,15 +1997,18 @@ class TestLogbookRolePermissions:
                         ALTER ROLE logbook_svc WITH LOGIN PASSWORD %s;
                         RAISE NOTICE 'Updated test role: logbook_svc';
                     END IF;
-                    
+
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'engram_app_readwrite') THEN
                         GRANT engram_app_readwrite TO logbook_svc;
                     END IF;
                 END $$;
-            """, (self.TEST_PASSWORD, self.TEST_PASSWORD))
-            
+            """,
+                (self.TEST_PASSWORD, self.TEST_PASSWORD),
+            )
+
             # 创建 logbook_migrator 登录角色
-            cur.execute("""
+            cur.execute(
+                """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'logbook_migrator') THEN
@@ -2007,16 +2018,19 @@ class TestLogbookRolePermissions:
                         ALTER ROLE logbook_migrator WITH LOGIN PASSWORD %s;
                         RAISE NOTICE 'Updated test role: logbook_migrator';
                     END IF;
-                    
+
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'engram_migrator') THEN
                         GRANT engram_migrator TO logbook_migrator;
                     END IF;
                 END $$;
-            """, (self.TEST_PASSWORD, self.TEST_PASSWORD))
-        
+            """,
+                (self.TEST_PASSWORD, self.TEST_PASSWORD),
+            )
+
         from urllib.parse import urlparse
+
         parsed = urlparse(dsn)
-        
+
         return {
             "host": parsed.hostname or "localhost",
             "port": parsed.port or 5432,
@@ -2025,14 +2039,14 @@ class TestLogbookRolePermissions:
             "migrator_user": "logbook_migrator",
             "password": self.TEST_PASSWORD,
         }
-    
+
     @pytest.fixture(scope="class")
     def svc_connection(self, setup_logbook_test_roles):
         """使用 logbook_svc 角色建立的数据库连接"""
         import psycopg
-        
+
         config = setup_logbook_test_roles
-        
+
         try:
             conn = psycopg.connect(
                 host=config["host"],
@@ -2046,14 +2060,14 @@ class TestLogbookRolePermissions:
             conn.close()
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 logbook_svc 连接: {e}")
-    
+
     @pytest.fixture(scope="class")
     def migrator_connection(self, setup_logbook_test_roles):
         """使用 logbook_migrator 角色建立的数据库连接"""
         import psycopg
-        
+
         config = setup_logbook_test_roles
-        
+
         try:
             conn = psycopg.connect(
                 host=config["host"],
@@ -2067,23 +2081,21 @@ class TestLogbookRolePermissions:
             conn.close()
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 logbook_migrator 连接: {e}")
-    
+
     @pytest.fixture
     def test_table_name(self):
         """生成唯一的测试表名"""
         unique_id = secrets.token_hex(4)
         return f"_test_logbook_perm_{unique_id}"
-    
-    def test_svc_cannot_create_table_in_logbook_schemas(
-        self, svc_connection, test_table_name
-    ):
+
+    def test_svc_cannot_create_table_in_logbook_schemas(self, svc_connection, test_table_name):
         """
         验证 logbook_svc 无法在 Logbook schema 内执行 CREATE TABLE
-        
+
         预期: 抛出权限错误 (42501 - insufficient_privilege)
         """
         import psycopg
-        
+
         for schema in self.LOGBOOK_SCHEMAS:
             with svc_connection.cursor() as cur:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -2093,18 +2105,17 @@ class TestLogbookRolePermissions:
                             name TEXT
                         )
                     """)
-    
+
     def test_svc_can_crud_on_existing_tables(
         self, svc_connection, migrator_connection, test_table_name
     ):
         """
         验证 logbook_svc 可以对 migrator 创建的表执行 SELECT/INSERT/UPDATE/DELETE
         """
-        import psycopg
-        
+
         # 使用 logbook schema 测试
         schema = "logbook"
-        
+
         # 使用 migrator 创建测试表
         with migrator_connection.cursor() as cur:
             cur.execute(f"""
@@ -2114,44 +2125,44 @@ class TestLogbookRolePermissions:
                     value INTEGER DEFAULT 0
                 )
             """)
-        
+
         try:
             with svc_connection.cursor() as cur:
                 # INSERT
                 cur.execute(f"""
-                    INSERT INTO {schema}.{test_table_name} (name, value) 
+                    INSERT INTO {schema}.{test_table_name} (name, value)
                     VALUES ('row1', 10), ('row2', 20)
                     RETURNING id
                 """)
                 inserted_ids = [row[0] for row in cur.fetchall()]
                 assert len(inserted_ids) == 2
-                
+
                 # SELECT
                 cur.execute(f"SELECT id, name, value FROM {schema}.{test_table_name}")
                 rows = cur.fetchall()
                 assert len(rows) == 2
-                
+
                 # UPDATE
                 cur.execute(f"""
-                    UPDATE {schema}.{test_table_name} 
-                    SET value = value + 100 
+                    UPDATE {schema}.{test_table_name}
+                    SET value = value + 100
                     WHERE name = 'row1'
                 """)
                 assert cur.rowcount == 1
-                
+
                 # 验证 UPDATE 结果
                 cur.execute(f"""
                     SELECT value FROM {schema}.{test_table_name} WHERE name = 'row1'
                 """)
                 value = cur.fetchone()[0]
                 assert value == 110
-                
+
                 # DELETE
                 cur.execute(f"""
                     DELETE FROM {schema}.{test_table_name} WHERE name = 'row2'
                 """)
                 assert cur.rowcount == 1
-                
+
                 # 验证 DELETE 结果
                 cur.execute(f"SELECT COUNT(*) FROM {schema}.{test_table_name}")
                 count = cur.fetchone()[0]
@@ -2160,7 +2171,7 @@ class TestLogbookRolePermissions:
             # 清理测试表
             with migrator_connection.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {schema}.{test_table_name}")
-    
+
     def test_migrator_can_create_tables_in_all_logbook_schemas(
         self, migrator_connection, test_table_name
     ):
@@ -2178,20 +2189,23 @@ class TestLogbookRolePermissions:
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 # 验证表存在
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT EXISTS (
-                        SELECT 1 FROM information_schema.tables 
+                        SELECT 1 FROM information_schema.tables
                         WHERE table_schema = %s AND table_name = %s
                     )
-                """, (schema, test_table_name))
+                """,
+                    (schema, test_table_name),
+                )
                 exists = cur.fetchone()[0]
                 assert exists is True, f"表 {schema}.{test_table_name} 应已创建"
-                
+
                 # 清理
                 cur.execute(f"DROP TABLE {schema}.{test_table_name}")
-    
+
     def test_svc_cannot_alter_or_drop_table(
         self, svc_connection, migrator_connection, test_table_name
     ):
@@ -2199,9 +2213,9 @@ class TestLogbookRolePermissions:
         验证 logbook_svc 无法执行 ALTER TABLE 和 DROP TABLE
         """
         import psycopg
-        
+
         schema = "logbook"
-        
+
         # 使用 migrator 创建测试表
         with migrator_connection.cursor() as cur:
             cur.execute(f"""
@@ -2210,16 +2224,16 @@ class TestLogbookRolePermissions:
                     name TEXT
                 )
             """)
-        
+
         try:
             # 尝试使用 svc 执行 ALTER TABLE
             with svc_connection.cursor() as cur:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     cur.execute(f"""
-                        ALTER TABLE {schema}.{test_table_name} 
+                        ALTER TABLE {schema}.{test_table_name}
                         ADD COLUMN new_col TEXT
                     """)
-            
+
             # 尝试使用 svc 执行 DROP TABLE
             with svc_connection.cursor() as cur:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -2234,21 +2248,20 @@ class TestLogbookRolePermissions:
 class TestSetRolePermissions:
     """
     SET ROLE 功能权限验证测试
-    
+
     验证通过连接 options 设置 role 或显式 SET ROLE 时权限正确工作。
     这对于使用 OM_PG_SET_ROLE 等环境变量切换角色的场景至关重要。
     """
-    
+
     TEST_PASSWORD = "test_password_12345"
-    
+
     @pytest.fixture(scope="class")
     def setup_set_role_test(self, migrated_database):
         """设置 SET ROLE 测试所需的角色"""
-        import psycopg
-        
+
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
-        
+
         with conn.cursor() as cur:
             # 确保测试角色存在并有正确的继承关系
             for login_role, inherit_role in [
@@ -2257,7 +2270,8 @@ class TestSetRolePermissions:
                 ("openmemory_svc", "openmemory_app"),
                 ("openmemory_migrator_login", "openmemory_migrator"),
             ]:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     DO $$
                     BEGIN
                         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{login_role}') THEN
@@ -2265,36 +2279,37 @@ class TestSetRolePermissions:
                         ELSE
                             ALTER ROLE {login_role} WITH LOGIN PASSWORD %s;
                         END IF;
-                        
+
                         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{inherit_role}') THEN
                             GRANT {inherit_role} TO {login_role};
                         END IF;
                     END $$;
-                """, (self.TEST_PASSWORD, self.TEST_PASSWORD))
-        
+                """,
+                    (self.TEST_PASSWORD, self.TEST_PASSWORD),
+                )
+
         from urllib.parse import urlparse
+
         parsed = urlparse(dsn)
-        
+
         return {
             "host": parsed.hostname or "localhost",
             "port": parsed.port or 5432,
             "dbname": parsed.path.lstrip("/") or "engram",
             "password": self.TEST_PASSWORD,
         }
-    
-    def test_set_role_via_connection_options(
-        self, setup_set_role_test, migrated_database
-    ):
+
+    def test_set_role_via_connection_options(self, setup_set_role_test, migrated_database):
         """
         验证通过连接 options 设置 role（-c role=xxx）时权限正确
-        
+
         模拟 OM_PG_SET_ROLE 的行为
         """
         import psycopg
-        
+
         config = setup_set_role_test
         om_schema = os.environ.get("OM_PG_SCHEMA", "openmemory")
-        
+
         # 使用 openmemory_migrator_login 登录，通过 options 设置 role 为 openmemory_migrator
         try:
             conn = psycopg.connect(
@@ -2308,17 +2323,17 @@ class TestSetRolePermissions:
             )
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 openmemory_migrator_login 连接: {e}")
-        
+
         try:
             with conn.cursor() as cur:
                 # 验证当前角色
                 cur.execute("SELECT current_user, session_user, current_setting('role')")
                 current_user, session_user, role_setting = cur.fetchone()
-                
+
                 # current_user 应该是 openmemory_migrator（SET ROLE 后）
                 # session_user 应该是 openmemory_migrator_login（登录用户）
                 assert session_user == "openmemory_migrator_login"
-                
+
                 # 验证有 DDL 权限（可以创建表）
                 test_table = f"_test_set_role_{secrets.token_hex(4)}"
                 cur.execute(f"""
@@ -2327,33 +2342,34 @@ class TestSetRolePermissions:
                         data TEXT
                     )
                 """)
-                
+
                 # 验证表已创建
-                cur.execute(f"""
+                cur.execute(
+                    """
                     SELECT EXISTS (
-                        SELECT 1 FROM information_schema.tables 
+                        SELECT 1 FROM information_schema.tables
                         WHERE table_schema = %s AND table_name = %s
                     )
-                """, (om_schema, test_table))
+                """,
+                    (om_schema, test_table),
+                )
                 exists = cur.fetchone()[0]
                 assert exists is True, "使用 SET ROLE 后应有 DDL 权限"
-                
+
                 # 清理
                 cur.execute(f"DROP TABLE {om_schema}.{test_table}")
         finally:
             conn.close()
-    
-    def test_explicit_set_role_in_session(
-        self, setup_set_role_test, migrated_database
-    ):
+
+    def test_explicit_set_role_in_session(self, setup_set_role_test, migrated_database):
         """
         验证显式 SET ROLE 命令正确切换权限
         """
         import psycopg
-        
+
         config = setup_set_role_test
         om_schema = os.environ.get("OM_PG_SCHEMA", "openmemory")
-        
+
         # 使用 openmemory_svc 登录（只有 DML 权限）
         try:
             conn = psycopg.connect(
@@ -2366,9 +2382,9 @@ class TestSetRolePermissions:
             )
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 openmemory_svc 连接: {e}")
-        
+
         test_table = f"_test_explicit_set_role_{secrets.token_hex(4)}"
-        
+
         try:
             with conn.cursor() as cur:
                 # 尝试创建表应失败（openmemory_svc 无 DDL 权限）
@@ -2376,14 +2392,14 @@ class TestSetRolePermissions:
                     cur.execute(f"""
                         CREATE TABLE {om_schema}.{test_table} (id SERIAL PRIMARY KEY)
                     """)
-            
+
             # 注意: openmemory_svc 无法 SET ROLE 到 openmemory_migrator
             # 因为没有被授予 openmemory_migrator 角色
             # 这是正确的行为 - 最小权限原则
-            
+
         finally:
             conn.close()
-    
+
     def test_set_role_logbook_migrator_to_engram_migrator(
         self, setup_set_role_test, migrated_database
     ):
@@ -2391,9 +2407,9 @@ class TestSetRolePermissions:
         验证 logbook_migrator 通过 SET ROLE 到 engram_migrator 时权限正确
         """
         import psycopg
-        
+
         config = setup_set_role_test
-        
+
         try:
             conn = psycopg.connect(
                 host=config["host"],
@@ -2406,16 +2422,16 @@ class TestSetRolePermissions:
             )
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 logbook_migrator 连接: {e}")
-        
+
         test_table = f"_test_logbook_set_role_{secrets.token_hex(4)}"
-        
+
         try:
             with conn.cursor() as cur:
                 # 验证当前角色设置
                 cur.execute("SELECT session_user, current_setting('role', true)")
                 session_user, role_setting = cur.fetchone()
                 assert session_user == "logbook_migrator"
-                
+
                 # 验证可以在 logbook schema 创建表
                 cur.execute(f"""
                     CREATE TABLE logbook.{test_table} (
@@ -2423,33 +2439,34 @@ class TestSetRolePermissions:
                         content TEXT
                     )
                 """)
-                
+
                 # 验证表存在
-                cur.execute(f"""
+                cur.execute(
+                    """
                     SELECT EXISTS (
-                        SELECT 1 FROM information_schema.tables 
+                        SELECT 1 FROM information_schema.tables
                         WHERE table_schema = 'logbook' AND table_name = %s
                     )
-                """, (test_table,))
+                """,
+                    (test_table,),
+                )
                 exists = cur.fetchone()[0]
                 assert exists is True
-                
+
                 # 清理
                 cur.execute(f"DROP TABLE logbook.{test_table}")
         finally:
             conn.close()
-    
-    def test_logbook_svc_dml_with_set_role(
-        self, setup_set_role_test, migrated_database
-    ):
+
+    def test_logbook_svc_dml_with_set_role(self, setup_set_role_test, migrated_database):
         """
         验证 logbook_svc 通过 SET ROLE 到 engram_app_readwrite 时 DML 权限正确
         """
         import psycopg
-        
+
         config = setup_set_role_test
         conn = migrated_database["conn"]
-        
+
         # 先用 superuser 创建测试表
         test_table = f"_test_svc_set_role_{secrets.token_hex(4)}"
         with conn.cursor() as cur:
@@ -2460,9 +2477,13 @@ class TestSetRolePermissions:
                 )
             """)
             # 授予权限
-            cur.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON logbook.{test_table} TO engram_app_readwrite")
-            cur.execute(f"GRANT USAGE ON SEQUENCE logbook.{test_table}_id_seq TO engram_app_readwrite")
-        
+            cur.execute(
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON logbook.{test_table} TO engram_app_readwrite"
+            )
+            cur.execute(
+                f"GRANT USAGE ON SEQUENCE logbook.{test_table}_id_seq TO engram_app_readwrite"
+            )
+
         try:
             # 使用 logbook_svc 连接并设置 role
             svc_conn = psycopg.connect(
@@ -2479,7 +2500,7 @@ class TestSetRolePermissions:
             with conn.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS logbook.{test_table}")
             pytest.skip(f"无法使用 logbook_svc 连接: {e}")
-        
+
         try:
             with svc_conn.cursor() as cur:
                 # INSERT
@@ -2489,16 +2510,18 @@ class TestSetRolePermissions:
                 """)
                 row_id = cur.fetchone()[0]
                 assert row_id is not None
-                
+
                 # SELECT
                 cur.execute(f"SELECT name FROM logbook.{test_table} WHERE id = %s", (row_id,))
                 name = cur.fetchone()[0]
                 assert name == "test_row"
-                
+
                 # UPDATE
-                cur.execute(f"UPDATE logbook.{test_table} SET name = 'updated' WHERE id = %s", (row_id,))
+                cur.execute(
+                    f"UPDATE logbook.{test_table} SET name = 'updated' WHERE id = %s", (row_id,)
+                )
                 assert cur.rowcount == 1
-                
+
                 # DELETE
                 cur.execute(f"DELETE FROM logbook.{test_table} WHERE id = %s", (row_id,))
                 assert cur.rowcount == 1
@@ -2513,20 +2536,19 @@ class TestSetRolePermissions:
 class TestCrossSchemaPermissions:
     """
     跨 Schema 权限验证测试
-    
+
     验证 migrator 创建表后 svc 能正确 CRUD，同时覆盖 OpenMemory 与 Logbook schema。
     """
-    
+
     TEST_PASSWORD = "test_password_12345"
-    
+
     @pytest.fixture(scope="class")
     def setup_cross_schema_test(self, migrated_database):
         """设置跨 Schema 测试所需的角色"""
-        import psycopg
-        
+
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
-        
+
         with conn.cursor() as cur:
             # 确保所有测试角色存在
             for login_role, inherit_role in [
@@ -2535,7 +2557,8 @@ class TestCrossSchemaPermissions:
                 ("openmemory_svc", "openmemory_app"),
                 ("openmemory_migrator_login", "openmemory_migrator"),
             ]:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     DO $$
                     BEGIN
                         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{login_role}') THEN
@@ -2543,16 +2566,19 @@ class TestCrossSchemaPermissions:
                         ELSE
                             ALTER ROLE {login_role} WITH LOGIN PASSWORD %s;
                         END IF;
-                        
+
                         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{inherit_role}') THEN
                             GRANT {inherit_role} TO {login_role};
                         END IF;
                     END $$;
-                """, (self.TEST_PASSWORD, self.TEST_PASSWORD))
-        
+                """,
+                    (self.TEST_PASSWORD, self.TEST_PASSWORD),
+                )
+
         from urllib.parse import urlparse
+
         parsed = urlparse(dsn)
-        
+
         return {
             "host": parsed.hostname or "localhost",
             "port": parsed.port or 5432,
@@ -2560,19 +2586,17 @@ class TestCrossSchemaPermissions:
             "password": self.TEST_PASSWORD,
             "superuser_conn": conn,
         }
-    
-    def test_migrator_creates_svc_can_crud_logbook_schema(
-        self, setup_cross_schema_test
-    ):
+
+    def test_migrator_creates_svc_can_crud_logbook_schema(self, setup_cross_schema_test):
         """
         验证 Logbook: migrator 创建表 -> svc 能 SELECT/INSERT/UPDATE/DELETE
         """
         import psycopg
-        
+
         config = setup_cross_schema_test
         test_table = f"_test_cross_logbook_{secrets.token_hex(4)}"
         schema = "logbook"
-        
+
         # 使用 logbook_migrator 连接创建表
         try:
             migrator_conn = psycopg.connect(
@@ -2585,7 +2609,7 @@ class TestCrossSchemaPermissions:
             )
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 logbook_migrator 连接: {e}")
-        
+
         try:
             with migrator_conn.cursor() as cur:
                 # migrator 创建表
@@ -2597,7 +2621,7 @@ class TestCrossSchemaPermissions:
                     )
                 """)
             migrator_conn.close()
-            
+
             # 使用 logbook_svc 连接执行 CRUD
             try:
                 svc_conn = psycopg.connect(
@@ -2610,31 +2634,34 @@ class TestCrossSchemaPermissions:
                 )
             except psycopg.OperationalError as e:
                 pytest.skip(f"无法使用 logbook_svc 连接: {e}")
-            
+
             try:
                 with svc_conn.cursor() as cur:
                     # INSERT
                     cur.execute(f"""
-                        INSERT INTO {schema}.{test_table} (content) 
+                        INSERT INTO {schema}.{test_table} (content)
                         VALUES ('test content 1'), ('test content 2')
                         RETURNING id
                     """)
                     ids = [row[0] for row in cur.fetchall()]
                     assert len(ids) == 2, "svc 应能 INSERT"
-                    
+
                     # SELECT
                     cur.execute(f"SELECT id, content FROM {schema}.{test_table}")
                     rows = cur.fetchall()
                     assert len(rows) == 2, "svc 应能 SELECT"
-                    
+
                     # UPDATE
-                    cur.execute(f"""
-                        UPDATE {schema}.{test_table} 
-                        SET content = 'updated content' 
+                    cur.execute(
+                        f"""
+                        UPDATE {schema}.{test_table}
+                        SET content = 'updated content'
                         WHERE id = %s
-                    """, (ids[0],))
+                    """,
+                        (ids[0],),
+                    )
                     assert cur.rowcount == 1, "svc 应能 UPDATE"
-                    
+
                     # DELETE
                     cur.execute(f"DELETE FROM {schema}.{test_table} WHERE id = %s", (ids[1],))
                     assert cur.rowcount == 1, "svc 应能 DELETE"
@@ -2645,19 +2672,17 @@ class TestCrossSchemaPermissions:
             superuser_conn = config["superuser_conn"]
             with superuser_conn.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {schema}.{test_table}")
-    
-    def test_migrator_creates_svc_can_crud_openmemory_schema(
-        self, setup_cross_schema_test
-    ):
+
+    def test_migrator_creates_svc_can_crud_openmemory_schema(self, setup_cross_schema_test):
         """
         验证 OpenMemory: migrator 创建表 -> svc 能 SELECT/INSERT/UPDATE/DELETE
         """
         import psycopg
-        
+
         config = setup_cross_schema_test
         om_schema = os.environ.get("OM_PG_SCHEMA", "openmemory")
         test_table = f"_test_cross_om_{secrets.token_hex(4)}"
-        
+
         # 使用 openmemory_migrator_login 连接创建表
         try:
             migrator_conn = psycopg.connect(
@@ -2671,7 +2696,7 @@ class TestCrossSchemaPermissions:
             )
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 openmemory_migrator_login 连接: {e}")
-        
+
         try:
             with migrator_conn.cursor() as cur:
                 # migrator 创建表
@@ -2685,7 +2710,7 @@ class TestCrossSchemaPermissions:
                     )
                 """)
             migrator_conn.close()
-            
+
             # 使用 openmemory_svc 连接执行 CRUD
             try:
                 svc_conn = psycopg.connect(
@@ -2699,34 +2724,34 @@ class TestCrossSchemaPermissions:
                 )
             except psycopg.OperationalError as e:
                 pytest.skip(f"无法使用 openmemory_svc 连接: {e}")
-            
+
             try:
                 with svc_conn.cursor() as cur:
                     # INSERT
                     cur.execute(f"""
-                        INSERT INTO {om_schema}.{test_table} (id, user_id, content) 
+                        INSERT INTO {om_schema}.{test_table} (id, user_id, content)
                         VALUES ('mem_1', 'user_1', 'test memory 1'),
                                ('mem_2', 'user_1', 'test memory 2')
                     """)
-                    
+
                     # SELECT
                     cur.execute(f"SELECT id, content FROM {om_schema}.{test_table}")
                     rows = cur.fetchall()
                     assert len(rows) == 2, "svc 应能 SELECT"
-                    
+
                     # UPDATE
                     cur.execute(f"""
-                        UPDATE {om_schema}.{test_table} 
-                        SET content = 'updated memory', 
-                            metadata = '{{"updated": true}}'::jsonb 
+                        UPDATE {om_schema}.{test_table}
+                        SET content = 'updated memory',
+                            metadata = '{{"updated": true}}'::jsonb
                         WHERE id = 'mem_1'
                     """)
                     assert cur.rowcount == 1, "svc 应能 UPDATE"
-                    
+
                     # DELETE
                     cur.execute(f"DELETE FROM {om_schema}.{test_table} WHERE id = 'mem_2'")
                     assert cur.rowcount == 1, "svc 应能 DELETE"
-                    
+
                     # 验证最终状态
                     cur.execute(f"SELECT COUNT(*) FROM {om_schema}.{test_table}")
                     count = cur.fetchone()[0]
@@ -2738,22 +2763,20 @@ class TestCrossSchemaPermissions:
             superuser_conn = config["superuser_conn"]
             with superuser_conn.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{test_table}")
-    
-    def test_both_schemas_in_single_transaction(
-        self, setup_cross_schema_test
-    ):
+
+    def test_both_schemas_in_single_transaction(self, setup_cross_schema_test):
         """
         验证可以在同一事务中操作 Logbook 和 OpenMemory schema（使用有权限的连接）
         """
         import psycopg
-        
+
         config = setup_cross_schema_test
         superuser_conn = config["superuser_conn"]
         om_schema = os.environ.get("OM_PG_SCHEMA", "openmemory")
-        
+
         test_table_logbook = f"_test_both_logbook_{secrets.token_hex(4)}"
         test_table_om = f"_test_both_om_{secrets.token_hex(4)}"
-        
+
         try:
             with superuser_conn.cursor() as cur:
                 # 创建两个 schema 的表
@@ -2769,12 +2792,18 @@ class TestCrossSchemaPermissions:
                         logbook_id INTEGER
                     )
                 """)
-                
+
                 # 授予 logbook_svc 权限
-                cur.execute(f"GRANT SELECT, INSERT ON logbook.{test_table_logbook} TO engram_app_readwrite")
-                cur.execute(f"GRANT USAGE ON SEQUENCE logbook.{test_table_logbook}_id_seq TO engram_app_readwrite")
-                cur.execute(f"GRANT SELECT, INSERT ON {om_schema}.{test_table_om} TO engram_app_readwrite")
-            
+                cur.execute(
+                    f"GRANT SELECT, INSERT ON logbook.{test_table_logbook} TO engram_app_readwrite"
+                )
+                cur.execute(
+                    f"GRANT USAGE ON SEQUENCE logbook.{test_table_logbook}_id_seq TO engram_app_readwrite"
+                )
+                cur.execute(
+                    f"GRANT SELECT, INSERT ON {om_schema}.{test_table_om} TO engram_app_readwrite"
+                )
+
             # 使用 logbook_svc 在两个 schema 中操作
             try:
                 svc_conn = psycopg.connect(
@@ -2787,30 +2816,33 @@ class TestCrossSchemaPermissions:
                 )
             except psycopg.OperationalError as e:
                 pytest.skip(f"无法使用 logbook_svc 连接: {e}")
-            
+
             try:
                 with svc_conn.cursor() as cur:
                     # 在 Logbook schema 插入
                     cur.execute(f"""
-                        INSERT INTO logbook.{test_table_logbook} (ref_id) 
+                        INSERT INTO logbook.{test_table_logbook} (ref_id)
                         VALUES ('ref_123')
                         RETURNING id
                     """)
                     logbook_id = cur.fetchone()[0]
-                    
+
                     # 在 OpenMemory schema 插入，引用 Logbook 的 id
-                    cur.execute(f"""
-                        INSERT INTO {om_schema}.{test_table_om} (id, logbook_id) 
+                    cur.execute(
+                        f"""
+                        INSERT INTO {om_schema}.{test_table_om} (id, logbook_id)
                         VALUES ('mem_linked', %s)
-                    """, (logbook_id,))
-                    
+                    """,
+                        (logbook_id,),
+                    )
+
                     # 提交事务
                     svc_conn.commit()
-                    
+
                     # 验证两边都有数据
                     cur.execute(f"SELECT COUNT(*) FROM logbook.{test_table_logbook}")
                     assert cur.fetchone()[0] == 1
-                    
+
                     cur.execute(f"SELECT COUNT(*) FROM {om_schema}.{test_table_om}")
                     assert cur.fetchone()[0] == 1
             finally:
@@ -2826,49 +2858,52 @@ class TestCrossSchemaPermissions:
 class TestOpenMemoryMigration:
     """
     OpenMemory 迁移能力测试
-    
+
     验证 openmemory_migrator_login 可以成功执行类似 `npm run migrate` 的操作，
     包括创建表、索引、约束等 DDL 操作。
-    
+
     注意：这是模拟测试，不实际运行 npm，而是验证等效的 SQL DDL 能力。
     """
-    
+
     TEST_PASSWORD = "test_password_12345"
-    
+
     @pytest.fixture(scope="class")
     def om_schema(self, migrated_database):
         """获取 OpenMemory 目标 schema"""
         return os.environ.get("OM_PG_SCHEMA", "openmemory")
-    
+
     @pytest.fixture(scope="class")
     def migrator_dsn(self, migrated_database):
         """构建 migrator 用户的 DSN"""
         from urllib.parse import urlparse, urlunparse
-        
+
         dsn = migrated_database["dsn"]
         parsed = urlparse(dsn)
-        
+
         # 替换用户名和密码
         new_netloc = f"openmemory_migrator_login:{self.TEST_PASSWORD}@{parsed.hostname}"
         if parsed.port:
             new_netloc += f":{parsed.port}"
-        
-        return urlunparse((
-            parsed.scheme,
-            new_netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        ))
-    
+
+        return urlunparse(
+            (
+                parsed.scheme,
+                new_netloc,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+
     @pytest.fixture(scope="class")
     def setup_migrator_role(self, migrated_database):
         """确保 migrator 登录角色存在"""
         conn = migrated_database["conn"]
-        
+
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_migrator_login') THEN
@@ -2876,36 +2911,39 @@ class TestOpenMemoryMigration:
                     ELSE
                         ALTER ROLE openmemory_migrator_login WITH LOGIN PASSWORD %s;
                     END IF;
-                    
+
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_migrator') THEN
                         GRANT openmemory_migrator TO openmemory_migrator_login;
                     END IF;
                 END $$;
-            """, (self.TEST_PASSWORD, self.TEST_PASSWORD))
-        
+            """,
+                (self.TEST_PASSWORD, self.TEST_PASSWORD),
+            )
+
         return True
-    
+
     def test_can_simulate_openmemory_migration(
         self, setup_migrator_role, migrated_database, om_schema
     ):
         """
         模拟 OpenMemory npm run migrate 的 DDL 操作
-        
+
         创建类似 OpenMemory 迁移的表结构：
         - memories 表
         - vectors 表
         - 相关索引和约束
         """
-        import psycopg
         from urllib.parse import urlparse
-        
+
+        import psycopg
+
         dsn = migrated_database["dsn"]
         parsed = urlparse(dsn)
-        
+
         unique_suffix = secrets.token_hex(4)
         memories_table = f"_test_memories_{unique_suffix}"
         vectors_table = f"_test_vectors_{unique_suffix}"
-        
+
         # 使用 migrator 连接
         try:
             conn = psycopg.connect(
@@ -2919,7 +2957,7 @@ class TestOpenMemoryMigration:
             )
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 openmemory_migrator_login 连接: {e}")
-        
+
         try:
             with conn.cursor() as cur:
                 # 1. 创建 memories 表（模拟 OpenMemory 迁移）
@@ -2935,7 +2973,7 @@ class TestOpenMemoryMigration:
                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
                 """)
-                
+
                 # 2. 创建 vectors 表
                 cur.execute(f"""
                     CREATE TABLE {om_schema}.{vectors_table} (
@@ -2945,69 +2983,74 @@ class TestOpenMemoryMigration:
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
                 """)
-                
+
                 # 3. 创建索引
                 cur.execute(f"""
-                    CREATE INDEX idx_{memories_table}_user_id 
+                    CREATE INDEX idx_{memories_table}_user_id
                     ON {om_schema}.{memories_table} (user_id)
                 """)
-                
+
                 cur.execute(f"""
-                    CREATE INDEX idx_{memories_table}_hash 
+                    CREATE INDEX idx_{memories_table}_hash
                     ON {om_schema}.{memories_table} (hash)
                 """)
-                
+
                 cur.execute(f"""
-                    CREATE INDEX idx_{memories_table}_created_at 
+                    CREATE INDEX idx_{memories_table}_created_at
                     ON {om_schema}.{memories_table} (created_at DESC)
                 """)
-                
+
                 cur.execute(f"""
-                    CREATE INDEX idx_{vectors_table}_memory_id 
+                    CREATE INDEX idx_{vectors_table}_memory_id
                     ON {om_schema}.{vectors_table} (memory_id)
                 """)
-                
+
                 # 4. 验证表和索引都创建成功
-                cur.execute("""
-                    SELECT table_name FROM information_schema.tables 
+                cur.execute(
+                    """
+                    SELECT table_name FROM information_schema.tables
                     WHERE table_schema = %s AND table_name IN (%s, %s)
-                """, (om_schema, memories_table, vectors_table))
+                """,
+                    (om_schema, memories_table, vectors_table),
+                )
                 tables = [row[0] for row in cur.fetchall()]
-                
+
                 assert memories_table in tables, "memories 表应已创建"
                 assert vectors_table in tables, "vectors 表应已创建"
-                
-                cur.execute("""
-                    SELECT indexname FROM pg_indexes 
+
+                cur.execute(
+                    """
+                    SELECT indexname FROM pg_indexes
                     WHERE schemaname = %s AND tablename = %s
-                """, (om_schema, memories_table))
+                """,
+                    (om_schema, memories_table),
+                )
                 indexes = [row[0] for row in cur.fetchall()]
-                
+
                 assert len(indexes) >= 3, f"应至少有 3 个索引，实际: {indexes}"
-                
+
                 # 5. 清理
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{vectors_table}")
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{memories_table}")
-                
+
         finally:
             conn.close()
-    
-    def test_migrator_can_run_transactions(
-        self, setup_migrator_role, migrated_database, om_schema
-    ):
+
+    def test_migrator_can_run_transactions(self, setup_migrator_role, migrated_database, om_schema):
         """
         验证 migrator 可以在事务中执行迁移
         """
-        import psycopg
         from urllib.parse import urlparse
-        
+
+        import psycopg
+
         dsn = migrated_database["dsn"]
         parsed = urlparse(dsn)
-        
+
         unique_suffix = secrets.token_hex(4)
         table1 = f"_test_txn1_{unique_suffix}"
         table2 = f"_test_txn2_{unique_suffix}"
-        
+
         try:
             conn = psycopg.connect(
                 host=parsed.hostname or "localhost",
@@ -3020,7 +3063,7 @@ class TestOpenMemoryMigration:
             )
         except psycopg.OperationalError as e:
             pytest.skip(f"无法使用 openmemory_migrator_login 连接: {e}")
-        
+
         try:
             with conn.cursor() as cur:
                 # 开始事务
@@ -3033,23 +3076,26 @@ class TestOpenMemoryMigration:
                         ref_id INTEGER REFERENCES {om_schema}.{table1}(id)
                     )
                 """)
-                
+
                 # 提交事务
                 conn.commit()
-                
+
                 # 验证表存在
-                cur.execute("""
-                    SELECT COUNT(*) FROM information_schema.tables 
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM information_schema.tables
                     WHERE table_schema = %s AND table_name IN (%s, %s)
-                """, (om_schema, table1, table2))
+                """,
+                    (om_schema, table1, table2),
+                )
                 count = cur.fetchone()[0]
                 assert count == 2, "两个表都应已创建"
-                
+
                 # 清理
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{table2}")
                 cur.execute(f"DROP TABLE IF EXISTS {om_schema}.{table1}")
                 conn.commit()
-                
+
         finally:
             conn.close()
 
@@ -3063,28 +3109,28 @@ class TestOpenMemoryMigration:
 class TestMinioAuditWebhookIntegration:
     """
     MinIO Audit Webhook 集成测试
-    
+
     测试场景：
     1. 向 MinIO put 一个对象
     2. 断言 governance.object_store_audit_events 表收到 s3:PutObject 事件
     3. 从 MinIO delete 该对象
     4. 断言 governance.object_store_audit_events 表收到 s3:DeleteObject 事件
-    
+
     前置条件：
     - MinIO 服务可用并配置了 audit webhook 指向 gateway
     - Gateway 服务可用
     - PostgreSQL 服务可用且已执行迁移
-    
+
     注意：
     - 此测试依赖 MinIO audit webhook 配置，默认在 minio profile 启用时自动配置
     - Webhook 事件是异步推送的，测试使用轮询等待方式验证
     """
-    
+
     @pytest.fixture(scope="class")
     def minio_client(self):
         """
         创建 MinIO 客户端
-        
+
         如果 MinIO 不可用或未配置，跳过测试
         """
         try:
@@ -3092,34 +3138,34 @@ class TestMinioAuditWebhookIntegration:
             from botocore.config import Config
         except ImportError:
             pytest.skip("boto3 未安装")
-        
+
         config = get_minio_config()
-        
+
         # 检查必要配置
         if not config.get("endpoint"):
             pytest.skip("ENGRAM_S3_ENDPOINT 未配置")
-        
+
         # 创建 S3 客户端
         s3_config = Config(
-            signature_version='s3v4',
-            s3={'addressing_style': 'path'},
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
         )
-        
+
         client = boto3.client(
-            's3',
+            "s3",
             endpoint_url=config["endpoint"],
             aws_access_key_id=config["access_key"],
             aws_secret_access_key=config["secret_key"],
             region_name=config["region"],
             config=s3_config,
         )
-        
+
         # 验证连接
         try:
             client.list_buckets()
         except Exception as e:
             pytest.skip(f"无法连接 MinIO: {e}")
-        
+
         # 确保 bucket 存在
         bucket = config["bucket"]
         try:
@@ -3129,26 +3175,26 @@ class TestMinioAuditWebhookIntegration:
                 client.create_bucket(Bucket=bucket)
             except Exception as e:
                 pytest.skip(f"无法创建 bucket {bucket}: {e}")
-        
+
         return {"client": client, "bucket": bucket}
-    
+
     @pytest.fixture(scope="class")
     def db_connection(self):
         """
         创建数据库连接
         """
         import psycopg
-        
+
         dsn = get_postgres_dsn()
         try:
             conn = psycopg.connect(dsn)
         except Exception as e:
             pytest.skip(f"无法连接 PostgreSQL: {e}")
-        
+
         yield conn
-        
+
         conn.close()
-    
+
     def _wait_for_audit_event(
         self,
         conn,
@@ -3160,7 +3206,7 @@ class TestMinioAuditWebhookIntegration:
     ) -> Optional[Dict[str, Any]]:
         """
         等待审计事件出现在数据库中
-        
+
         Args:
             conn: 数据库连接
             bucket: 存储桶名称
@@ -3168,23 +3214,23 @@ class TestMinioAuditWebhookIntegration:
             operation: 操作类型（如 s3:PutObject）
             timeout_seconds: 超时秒数
             poll_interval: 轮询间隔秒数
-        
+
         Returns:
             审计事件记录（如果找到），否则返回 None
         """
         import time
-        
+
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout_seconds:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT event_id, provider, event_ts, bucket, object_key, 
+                    SELECT event_id, provider, event_ts, bucket, object_key,
                            operation, status_code, request_id, principal
                     FROM governance.object_store_audit_events
-                    WHERE bucket = %s 
-                      AND object_key = %s 
+                    WHERE bucket = %s
+                      AND object_key = %s
                       AND operation = %s
                     ORDER BY event_ts DESC
                     LIMIT 1
@@ -3204,11 +3250,11 @@ class TestMinioAuditWebhookIntegration:
                         "request_id": row[7],
                         "principal": row[8],
                     }
-            
+
             time.sleep(poll_interval)
-        
+
         return None
-    
+
     def _cleanup_test_objects(self, client, bucket: str, prefix: str):
         """
         清理测试对象
@@ -3219,7 +3265,7 @@ class TestMinioAuditWebhookIntegration:
                 client.delete_object(Bucket=bucket, Key=obj["Key"])
         except Exception:
             pass  # 忽略清理错误
-    
+
     def test_put_object_generates_audit_event(
         self,
         minio_client,
@@ -3227,7 +3273,7 @@ class TestMinioAuditWebhookIntegration:
     ):
         """
         测试 PUT 对象操作生成审计事件
-        
+
         步骤：
         1. 向 MinIO put 一个测试对象
         2. 等待 audit webhook 将事件推送到 gateway
@@ -3236,11 +3282,11 @@ class TestMinioAuditWebhookIntegration:
         client = minio_client["client"]
         bucket = minio_client["bucket"]
         conn = db_connection
-        
+
         # 生成唯一的测试对象键
         test_key = f"test-audit-webhook/{uuid.uuid4()}/test-object.txt"
         test_content = b"Hello, MinIO Audit Webhook Test!"
-        
+
         try:
             # 1. PUT 对象
             client.put_object(
@@ -3249,7 +3295,7 @@ class TestMinioAuditWebhookIntegration:
                 Body=test_content,
                 ContentType="text/plain",
             )
-            
+
             # 2. 等待审计事件
             event = self._wait_for_audit_event(
                 conn=conn,
@@ -3258,7 +3304,7 @@ class TestMinioAuditWebhookIntegration:
                 operation="s3:PutObject",
                 timeout_seconds=30,
             )
-            
+
             # 3. 验证事件
             if event is None:
                 # 如果没有收到事件，可能是 audit webhook 未配置
@@ -3268,22 +3314,28 @@ class TestMinioAuditWebhookIntegration:
                     "请确保 MinIO audit webhook 已配置指向 gateway。"
                     "检查: MINIO_AUDIT_WEBHOOK_ENDPOINT 环境变量"
                 )
-            
+
             assert event["provider"] == "minio", f"期望 provider=minio，实际={event['provider']}"
             assert event["bucket"] == bucket, f"期望 bucket={bucket}，实际={event['bucket']}"
-            assert event["object_key"] == test_key, f"期望 object_key={test_key}，实际={event['object_key']}"
-            assert event["operation"] == "s3:PutObject", f"期望 operation=s3:PutObject，实际={event['operation']}"
+            assert event["object_key"] == test_key, (
+                f"期望 object_key={test_key}，实际={event['object_key']}"
+            )
+            assert event["operation"] == "s3:PutObject", (
+                f"期望 operation=s3:PutObject，实际={event['operation']}"
+            )
             # status_code 应该是 200（成功）
             if event["status_code"] is not None:
-                assert event["status_code"] == 200, f"期望 status_code=200，实际={event['status_code']}"
-            
+                assert event["status_code"] == 200, (
+                    f"期望 status_code=200，实际={event['status_code']}"
+                )
+
         finally:
             # 清理测试对象
             try:
                 client.delete_object(Bucket=bucket, Key=test_key)
             except Exception:
                 pass
-    
+
     def test_delete_object_generates_audit_event(
         self,
         minio_client,
@@ -3291,7 +3343,7 @@ class TestMinioAuditWebhookIntegration:
     ):
         """
         测试 DELETE 对象操作生成审计事件
-        
+
         步骤：
         1. 先 PUT 一个测试对象
         2. 然后 DELETE 该对象
@@ -3300,11 +3352,11 @@ class TestMinioAuditWebhookIntegration:
         client = minio_client["client"]
         bucket = minio_client["bucket"]
         conn = db_connection
-        
+
         # 生成唯一的测试对象键
         test_key = f"test-audit-webhook/{uuid.uuid4()}/test-delete-object.txt"
         test_content = b"This object will be deleted for audit test."
-        
+
         # 1. 先 PUT 对象
         client.put_object(
             Bucket=bucket,
@@ -3312,13 +3364,13 @@ class TestMinioAuditWebhookIntegration:
             Body=test_content,
             ContentType="text/plain",
         )
-        
+
         # 短暂等待确保对象已创建
         time.sleep(1)
-        
+
         # 2. DELETE 对象
         client.delete_object(Bucket=bucket, Key=test_key)
-        
+
         # 3. 等待审计事件
         event = self._wait_for_audit_event(
             conn=conn,
@@ -3327,19 +3379,22 @@ class TestMinioAuditWebhookIntegration:
             operation="s3:DeleteObject",
             timeout_seconds=30,
         )
-        
+
         # 4. 验证事件
         if event is None:
             pytest.skip(
-                "未收到 MinIO delete audit 事件。"
-                "请确保 MinIO audit webhook 已配置指向 gateway。"
+                "未收到 MinIO delete audit 事件。请确保 MinIO audit webhook 已配置指向 gateway。"
             )
-        
+
         assert event["provider"] == "minio", f"期望 provider=minio，实际={event['provider']}"
         assert event["bucket"] == bucket, f"期望 bucket={bucket}，实际={event['bucket']}"
-        assert event["object_key"] == test_key, f"期望 object_key={test_key}，实际={event['object_key']}"
-        assert event["operation"] == "s3:DeleteObject", f"期望 operation=s3:DeleteObject，实际={event['operation']}"
-    
+        assert event["object_key"] == test_key, (
+            f"期望 object_key={test_key}，实际={event['object_key']}"
+        )
+        assert event["operation"] == "s3:DeleteObject", (
+            f"期望 operation=s3:DeleteObject，实际={event['operation']}"
+        )
+
     def test_audit_events_contain_required_fields(
         self,
         minio_client,
@@ -3347,7 +3402,7 @@ class TestMinioAuditWebhookIntegration:
     ):
         """
         测试审计事件包含必要字段
-        
+
         验证 object_store_audit_events 表中的事件记录包含：
         - provider (必填)
         - event_ts (必填)
@@ -3359,11 +3414,11 @@ class TestMinioAuditWebhookIntegration:
         client = minio_client["client"]
         bucket = minio_client["bucket"]
         conn = db_connection
-        
+
         # 生成唯一的测试对象键
         test_key = f"test-audit-webhook/{uuid.uuid4()}/test-fields.txt"
         test_content = b"Test required fields in audit events."
-        
+
         try:
             # PUT 对象
             client.put_object(
@@ -3371,7 +3426,7 @@ class TestMinioAuditWebhookIntegration:
                 Key=test_key,
                 Body=test_content,
             )
-            
+
             # 等待审计事件
             event = self._wait_for_audit_event(
                 conn=conn,
@@ -3380,24 +3435,24 @@ class TestMinioAuditWebhookIntegration:
                 operation="s3:PutObject",
                 timeout_seconds=30,
             )
-            
+
             if event is None:
                 pytest.skip("未收到 MinIO audit 事件，跳过字段验证测试")
-            
+
             # 验证必填字段
             assert event["provider"] is not None, "provider 字段不应为空"
             assert event["event_ts"] is not None, "event_ts 字段不应为空"
             assert event["bucket"] is not None, "bucket 字段不应为空"
             assert event["operation"] is not None, "operation 字段不应为空"
-            
+
             # 验证对象操作应该有 object_key
             assert event["object_key"] is not None, "对于对象操作，object_key 字段不应为空"
-            
+
             # request_id 用于追踪，应该有值
             # 注意：某些配置下可能没有 request_id，所以这里只做日志记录
             if event["request_id"] is None:
-                print(f"[INFO] request_id 为空，这可能是正常的（取决于 MinIO 配置）")
-            
+                print("[INFO] request_id 为空，这可能是正常的（取决于 MinIO 配置）")
+
         finally:
             # 清理测试对象
             try:
@@ -3415,7 +3470,7 @@ class TestMinioAuditWebhookIntegration:
 class TestScmSyncStackIntegration:
     """
     SCM 同步栈集成测试
-    
+
     测试场景：
     1. 启动依赖 DB（假设已就绪）
     2. 插入少量 repo/游标/模拟 job
@@ -3425,10 +3480,10 @@ class TestScmSyncStackIntegration:
        - scm_sync_reaper.py scan
        - scm_sync_status.py summary --format prometheus
     4. 断言关键输出字段存在且不包含敏感信息
-    
+
     这是一个可重复的本地验证流程，用于验证 SCM 同步栈各组件的协作。
     """
-    
+
     # 敏感信息关键词列表（用于检测泄露）
     SENSITIVE_KEYWORDS = [
         "password",
@@ -3441,25 +3496,25 @@ class TestScmSyncStackIntegration:
         "auth_header",
         # 常见的 token 格式
         "glpat-",  # GitLab Personal Access Token
-        "ghp_",    # GitHub Personal Access Token
-        "sk-",     # OpenAI API Key
+        "ghp_",  # GitHub Personal Access Token
+        "sk-",  # OpenAI API Key
     ]
-    
+
     @pytest.fixture(scope="class")
     def test_repo_id(self, migrated_database):
         """
         创建测试用 repo 并返回 repo_id
-        
+
         测试结束后会自动清理
         """
         import db as scm_db
-        
+
         conn = migrated_database["conn"]
-        
+
         # 创建测试仓库（使用唯一的 URL 避免冲突）
         unique_suffix = secrets.token_hex(4)
         test_url = f"https://gitlab.test.local/test-group/test-project-{unique_suffix}"
-        
+
         repo_id = scm_db.upsert_repo(
             conn,
             repo_type="git",
@@ -3468,9 +3523,9 @@ class TestScmSyncStackIntegration:
             default_branch="main",
         )
         conn.commit()
-        
+
         yield repo_id
-        
+
         # 清理：删除测试数据
         try:
             with conn.cursor() as cur:
@@ -3483,7 +3538,7 @@ class TestScmSyncStackIntegration:
                 # 删除游标
                 cur.execute(
                     "DELETE FROM logbook.kv WHERE namespace = 'scm.sync' AND key LIKE %s",
-                    (f"%:{repo_id}",)
+                    (f"%:{repo_id}",),
                 )
                 # 删除 repo 本身
                 cur.execute("DELETE FROM scm.repos WHERE repo_id = %s", (repo_id,))
@@ -3491,38 +3546,38 @@ class TestScmSyncStackIntegration:
         except Exception as e:
             print(f"[WARN] 清理测试数据时出错: {e}")
             conn.rollback()
-    
+
     @pytest.fixture(scope="class")
     def setup_test_cursor(self, test_repo_id, migrated_database):
         """
         为测试仓库设置游标
         """
-        from engram.logbook.cursor import Cursor, save_cursor, CURSOR_VERSION
         from engram.logbook.config import get_config
-        
+        from engram.logbook.cursor import CURSOR_VERSION, Cursor, save_cursor
+
         config = get_config()
-        
+
         # 创建一个简单的 gitlab 游标
         cursor = Cursor(
             version=CURSOR_VERSION,
             watermark={"updated_at": datetime.now(timezone.utc).isoformat()},
             stats={"synced_count": 0},
         )
-        
+
         # 保存游标
         save_cursor("gitlab", test_repo_id, cursor, config=config)
-        
+
         return cursor
-    
+
     @pytest.fixture(scope="class")
     def setup_test_job(self, test_repo_id, migrated_database):
         """
         为测试仓库创建模拟 sync_job
         """
         import db as scm_db
-        
+
         conn = migrated_database["conn"]
-        
+
         # 创建一个 pending 状态的 job
         job_id = scm_db.enqueue_sync_job(
             conn,
@@ -3537,31 +3592,31 @@ class TestScmSyncStackIntegration:
             },
         )
         conn.commit()
-        
+
         yield job_id
-        
+
         # 清理在 test_repo_id fixture 中进行
-    
+
     def _check_no_sensitive_info(self, output: str, context: str = "") -> List[str]:
         """
         检查输出中是否包含敏感信息
-        
+
         Args:
             output: 要检查的输出字符串
             context: 上下文描述（用于错误消息）
-        
+
         Returns:
             发现的敏感信息关键词列表（空列表表示安全）
         """
         found_sensitive = []
         output_lower = output.lower()
-        
+
         for keyword in self.SENSITIVE_KEYWORDS:
             if keyword.lower() in output_lower:
                 found_sensitive.append(keyword)
-        
+
         return found_sensitive
-    
+
     def test_scheduler_scan(
         self,
         test_repo_id,
@@ -3570,39 +3625,38 @@ class TestScmSyncStackIntegration:
     ):
         """
         测试 scm_sync_scheduler.py scan 命令
-        
+
         验证：
         1. 命令能够正常执行
         2. 输出包含关键字段（scanned_repos, candidates_found）
         3. 输出不包含敏感信息
         """
+
         import scm_sync_scheduler as scheduler
-        from io import StringIO
-        import sys
-        
+
         # 创建调度器实例
         sched = scheduler.SyncScheduler()
-        
+
         # 执行扫描
         result = sched.scan_and_enqueue()
-        
+
         # 验证结果对象存在关键字段
         assert hasattr(result, "scanned_repos"), "结果应包含 scanned_repos 字段"
         assert hasattr(result, "candidates_found"), "结果应包含 candidates_found 字段"
         assert hasattr(result, "jobs_enqueued"), "结果应包含 jobs_enqueued 字段"
         assert hasattr(result, "jobs_skipped"), "结果应包含 jobs_skipped 字段"
         assert hasattr(result, "scan_duration_seconds"), "结果应包含 scan_duration_seconds 字段"
-        
+
         # 验证数值合理
         assert result.scanned_repos >= 0, "scanned_repos 应 >= 0"
         assert result.candidates_found >= 0, "candidates_found 应 >= 0"
         assert result.scan_duration_seconds >= 0, "scan_duration_seconds 应 >= 0"
-        
+
         # 检查 JSON 输出不包含敏感信息
         json_output = result.to_json()
         sensitive_found = self._check_no_sensitive_info(json_output, "scheduler scan output")
         assert not sensitive_found, f"Scheduler 输出包含敏感信息: {sensitive_found}"
-    
+
     def test_worker_once(
         self,
         test_repo_id,
@@ -3611,20 +3665,20 @@ class TestScmSyncStackIntegration:
     ):
         """
         测试 scm_sync_worker.py --once 命令
-        
+
         验证：
         1. 命令能够正常执行（即使没有可处理的任务）
         2. 不抛出异常
         3. 不泄露敏感信息
-        
+
         注意：由于测试环境可能没有 GitLab 连接，worker 可能会失败，
         但这是预期行为，我们只验证流程不崩溃。
         """
         import scm_sync_worker as worker
-        
+
         # 生成测试 worker ID
         worker_id = f"test-worker-{secrets.token_hex(4)}"
-        
+
         # 尝试执行单次处理
         # 注意：这可能返回 False（无任务）或 True（处理了任务但可能失败）
         # 两种情况都是预期行为
@@ -3632,19 +3686,19 @@ class TestScmSyncStackIntegration:
             result = worker.run_once(
                 worker_id=worker_id,
                 job_types=["gitlab_commits"],  # 只处理我们创建的测试任务类型
-                enable_circuit_breaker=False,   # 测试中禁用熔断
+                enable_circuit_breaker=False,  # 测试中禁用熔断
             )
-            
+
             # 结果应该是布尔值
             assert isinstance(result, bool), "run_once 应返回布尔值"
-            
+
         except Exception as e:
             # 如果因为缺少 GitLab token 等原因失败，这是预期的
             # 但错误消息不应包含敏感信息
             error_msg = str(e)
             sensitive_found = self._check_no_sensitive_info(error_msg, "worker error message")
             assert not sensitive_found, f"Worker 错误消息包含敏感信息: {sensitive_found}"
-    
+
     def test_reaper_scan(
         self,
         test_repo_id,
@@ -3653,49 +3707,50 @@ class TestScmSyncStackIntegration:
     ):
         """
         测试 scm_sync_reaper.py scan 命令
-        
+
         验证：
         1. 命令能够正常执行
         2. 输出为结构化 JSON 日志
         3. 输出不包含敏感信息
         """
-        import scm_sync_reaper as reaper
-        from io import StringIO
         import sys
-        
+        from io import StringIO
+
+        import scm_sync_reaper as reaper
+
         # 捕获 stdout（reaper 使用 print 输出 JSON 日志）
         old_stdout = sys.stdout
         captured_output = StringIO()
         sys.stdout = captured_output
-        
+
         try:
             # 获取数据库连接
             conn = reaper.get_connection()
-            
+
             try:
                 # 扫描过期任务
                 jobs = reaper.scan_expired_jobs(conn, grace_seconds=60, limit=100)
                 runs = reaper.scan_expired_runs(conn, max_duration_seconds=1800, limit=100)
                 locks = reaper.scan_expired_locks(conn, grace_seconds=0, limit=100)
-                
+
                 # 验证返回类型
                 assert isinstance(jobs, list), "scan_expired_jobs 应返回列表"
                 assert isinstance(runs, list), "scan_expired_runs 应返回列表"
                 assert isinstance(locks, list), "scan_expired_locks 应返回列表"
-                
+
             finally:
                 conn.close()
-                
+
         finally:
             sys.stdout = old_stdout
-        
+
         # 获取捕获的输出
         output = captured_output.getvalue()
-        
+
         # 检查输出不包含敏感信息
         sensitive_found = self._check_no_sensitive_info(output, "reaper scan output")
         assert not sensitive_found, f"Reaper 输出包含敏感信息: {sensitive_found}"
-    
+
     def test_status_summary_prometheus(
         self,
         test_repo_id,
@@ -3705,12 +3760,12 @@ class TestScmSyncStackIntegration:
     ):
         """
         测试 scm_sync_status.py summary --format prometheus 命令
-        
+
         验证：
         1. 命令能够正常执行
         2. 输出包含 Prometheus 格式的关键指标
         3. 输出不包含敏感信息
-        
+
         关键指标：
         - scm_repos_total
         - scm_jobs_total
@@ -3719,59 +3774,66 @@ class TestScmSyncStackIntegration:
         - scm_window_rate_limit_rate
         """
         import scm_sync_status as status
-        
+
         # 获取数据库连接
         conn = status.get_connection()
-        
+
         try:
             # 获取摘要
             summary = status.get_sync_summary(conn, window_minutes=60, top_lag_limit=10)
-            
+
             # 验证摘要包含关键字段
             assert "repos_count" in summary, "摘要应包含 repos_count"
             assert "jobs" in summary, "摘要应包含 jobs"
             assert "expired_locks" in summary, "摘要应包含 expired_locks"
             assert "window_stats" in summary, "摘要应包含 window_stats"
-            
+
             # 验证 jobs 字段结构
             jobs = summary["jobs"]
             assert "pending" in jobs, "jobs 应包含 pending"
             assert "running" in jobs, "jobs 应包含 running"
             assert "failed" in jobs, "jobs 应包含 failed"
             assert "dead" in jobs, "jobs 应包含 dead"
-            
+
             # 验证 window_stats 字段结构
             window_stats = summary["window_stats"]
             assert "failed_rate" in window_stats, "window_stats 应包含 failed_rate"
             assert "rate_limit_rate" in window_stats, "window_stats 应包含 rate_limit_rate"
-            
+
             # 生成 Prometheus 格式输出
             prometheus_output = status.format_prometheus_metrics(summary)
-            
+
             # 验证 Prometheus 输出包含关键指标
             assert "scm_repos_total" in prometheus_output, "Prometheus 输出应包含 scm_repos_total"
             assert "scm_jobs_total" in prometheus_output, "Prometheus 输出应包含 scm_jobs_total"
-            assert "scm_expired_locks" in prometheus_output, "Prometheus 输出应包含 scm_expired_locks"
-            assert "scm_window_failed_rate" in prometheus_output, "Prometheus 输出应包含 scm_window_failed_rate"
-            assert "scm_window_rate_limit_rate" in prometheus_output, "Prometheus 输出应包含 scm_window_rate_limit_rate"
-            
+            assert "scm_expired_locks" in prometheus_output, (
+                "Prometheus 输出应包含 scm_expired_locks"
+            )
+            assert "scm_window_failed_rate" in prometheus_output, (
+                "Prometheus 输出应包含 scm_window_failed_rate"
+            )
+            assert "scm_window_rate_limit_rate" in prometheus_output, (
+                "Prometheus 输出应包含 scm_window_rate_limit_rate"
+            )
+
             # 验证 Prometheus 输出格式正确（包含 # HELP 和 # TYPE）
             assert "# HELP" in prometheus_output, "Prometheus 输出应包含 HELP 注释"
             assert "# TYPE" in prometheus_output, "Prometheus 输出应包含 TYPE 注释"
-            
+
             # 检查输出不包含敏感信息
             sensitive_found = self._check_no_sensitive_info(prometheus_output, "prometheus output")
             assert not sensitive_found, f"Prometheus 输出包含敏感信息: {sensitive_found}"
-            
+
             # 检查 JSON 摘要不包含敏感信息
             import json
+
             json_output = json.dumps(summary, ensure_ascii=False, default=str)
             sensitive_found = self._check_no_sensitive_info(json_output, "status summary json")
             assert not sensitive_found, f"Status 摘要包含敏感信息: {sensitive_found}"
-            
+
         finally:
             conn.close()
-    
+
     def test_full_scm_sync_flow(
         self,
         test_repo_id,
@@ -3780,30 +3842,26 @@ class TestScmSyncStackIntegration:
     ):
         """
         完整的 SCM 同步流程测试
-        
+
         流程：
         1. scheduler scan -> 入队任务
         2. status summary -> 验证队列状态
         3. reaper scan -> 验证无过期任务
         4. 清理测试数据
-        
+
         这是一个端到端的验证流程。
         """
         import db as scm_db
-        import scm_sync_scheduler as scheduler
-        import scm_sync_status as status
         import scm_sync_reaper as reaper
-        
+        import scm_sync_status as status
+
         conn = migrated_database["conn"]
-        
+
         # 1. 清理之前的测试任务
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM scm.sync_jobs WHERE repo_id = %s",
-                (test_repo_id,)
-            )
+            cur.execute("DELETE FROM scm.sync_jobs WHERE repo_id = %s", (test_repo_id,))
             conn.commit()
-        
+
         # 2. 手动入队一个测试任务
         job_id = scm_db.enqueue_sync_job(
             conn,
@@ -3814,20 +3872,20 @@ class TestScmSyncStackIntegration:
             payload_json={"reason": "integration_test"},
         )
         conn.commit()
-        
+
         assert job_id is not None, "应成功入队测试任务"
-        
+
         # 3. 验证 status 能看到这个任务
         status_conn = status.get_connection()
         try:
             summary = status.get_sync_summary(status_conn)
-            
+
             # 验证 pending 任务数 >= 1
             assert summary["jobs"]["pending"] >= 1, "应至少有 1 个 pending 任务"
-            
+
         finally:
             status_conn.close()
-        
+
         # 4. reaper scan 应该不会标记我们的新任务为过期
         reaper_conn = reaper.get_connection()
         try:
@@ -3836,22 +3894,19 @@ class TestScmSyncStackIntegration:
                 grace_seconds=60,
                 limit=100,
             )
-            
+
             # 我们刚创建的任务不应该在过期列表中
             expired_job_ids = [str(j.get("job_id", "")) for j in expired_jobs]
             assert job_id not in expired_job_ids, "新创建的任务不应被标记为过期"
-            
+
         finally:
             reaper_conn.close()
-        
+
         # 5. 清理测试任务
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM scm.sync_jobs WHERE job_id = %s::uuid",
-                (job_id,)
-            )
+            cur.execute("DELETE FROM scm.sync_jobs WHERE job_id = %s::uuid", (job_id,))
             conn.commit()
-    
+
     def test_status_output_no_sensitive_info_comprehensive(
         self,
         test_repo_id,
@@ -3859,17 +3914,18 @@ class TestScmSyncStackIntegration:
     ):
         """
         全面检查 status 输出不包含敏感信息
-        
+
         检查所有输出格式：
         - JSON
         - Table
         - Prometheus
         """
-        import scm_sync_status as status
         import json
-        
+
+        import scm_sync_status as status
+
         conn = status.get_connection()
-        
+
         try:
             # 获取各种查询结果
             repos = status.query_repos(conn, limit=10)
@@ -3878,7 +3934,7 @@ class TestScmSyncStackIntegration:
             jobs = status.query_sync_jobs(conn, limit=10)
             locks = status.query_sync_locks(conn)
             summary = status.get_sync_summary(conn)
-            
+
             # 序列化所有数据为 JSON
             all_data = {
                 "repos": repos,
@@ -3888,18 +3944,20 @@ class TestScmSyncStackIntegration:
                 "locks": locks,
                 "summary": summary,
             }
-            
+
             json_output = json.dumps(all_data, ensure_ascii=False, default=str)
-            
+
             # 检查 JSON 输出不包含敏感信息
-            sensitive_found = self._check_no_sensitive_info(json_output, "comprehensive status output")
+            sensitive_found = self._check_no_sensitive_info(
+                json_output, "comprehensive status output"
+            )
             assert not sensitive_found, f"Status 综合输出包含敏感信息: {sensitive_found}"
-            
+
             # 检查 Prometheus 输出
             prometheus_output = status.format_prometheus_metrics(summary)
             sensitive_found = self._check_no_sensitive_info(prometheus_output, "prometheus metrics")
             assert not sensitive_found, f"Prometheus 指标包含敏感信息: {sensitive_found}"
-            
+
         finally:
             conn.close()
 

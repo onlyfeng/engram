@@ -15,29 +15,19 @@ test_artifact_audit.py - 制品审计工具测试
 10. 增量游标测试
 """
 
-import hashlib
 import json
 import os
 import sys
-import time
 import threading
+import time
 from datetime import datetime
-from pathlib import Path
 from typing import List, Tuple
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 # 添加 scripts 目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from engram.logbook.artifact_store import (
-    LocalArtifactsStore,
-    FileUriStore,
-    ObjectStore,
-    get_artifact_store_from_config,
-)
-from engram.logbook.hashing import sha256 as compute_sha256
 
 from artifact_audit import (
     ArtifactAuditor,
@@ -46,7 +36,12 @@ from artifact_audit import (
     RateLimiter,
     parse_args,
 )
-
+from engram.logbook.artifact_store import (
+    FileUriStore,
+    LocalArtifactsStore,
+    ObjectStore,
+)
+from engram.logbook.hashing import sha256 as compute_sha256
 
 # =============================================================================
 # Fixtures
@@ -73,12 +68,14 @@ def sample_artifacts(tmp_artifacts):
         content = f"test content {i}".encode()
         uri = f"test/file_{i}.txt"
         result = store.put(uri, content)
-        files.append({
-            "uri": uri,
-            "sha256": result["sha256"],
-            "size_bytes": result["size_bytes"],
-            "content": content,
-        })
+        files.append(
+            {
+                "uri": uri,
+                "sha256": result["sha256"],
+                "size_bytes": result["size_bytes"],
+                "content": content,
+            }
+        )
 
     return artifacts_root, store, files
 
@@ -136,7 +133,7 @@ class MockCursor:
                     self._results.append(row)
         else:
             self._results = []
-        
+
         # 处理 prefix 过滤
         if params and "uri LIKE" in query:
             # 找到 LIKE 参数的位置
@@ -147,7 +144,7 @@ class MockCursor:
                     break
             if prefix:
                 self._results = [r for r in self._results if r[1].startswith(prefix)]
-        
+
         self._index = 0
 
     def __iter__(self):
@@ -368,10 +365,7 @@ class TestArtifactAuditor:
         artifacts_root, store, files = sample_artifacts
 
         # 创建模拟连接
-        patch_blobs = [
-            (i + 1, f["uri"], f["sha256"])
-            for i, f in enumerate(files)
-        ]
+        patch_blobs = [(i + 1, f["uri"], f["sha256"]) for i, f in enumerate(files)]
         mock_conn = MockConnection(patch_blobs=patch_blobs)
 
         auditor = ArtifactAuditor(
@@ -418,10 +412,7 @@ class TestArtifactAuditor:
         """测试采样率功能"""
         artifacts_root, store, files = sample_artifacts
 
-        patch_blobs = [
-            (i + 1, f["uri"], f["sha256"])
-            for i, f in enumerate(files)
-        ]
+        patch_blobs = [(i + 1, f["uri"], f["sha256"]) for i, f in enumerate(files)]
         mock_conn = MockConnection(patch_blobs=patch_blobs)
 
         # 设置 0% 采样率（全部跳过）
@@ -442,14 +433,8 @@ class TestArtifactAuditor:
         """测试完整审计运行"""
         artifacts_root, store, files = sample_artifacts
 
-        patch_blobs = [
-            (i + 1, f["uri"], f["sha256"])
-            for i, f in enumerate(files[:3])
-        ]
-        attachments = [
-            (i + 1, f["uri"], f["sha256"])
-            for i, f in enumerate(files[3:])
-        ]
+        patch_blobs = [(i + 1, f["uri"], f["sha256"]) for i, f in enumerate(files[:3])]
+        attachments = [(i + 1, f["uri"], f["sha256"]) for i, f in enumerate(files[3:])]
         mock_conn = MockConnection(
             patch_blobs=patch_blobs,
             attachments=attachments,
@@ -661,15 +646,21 @@ class TestCLI:
 
     def test_custom_args(self):
         """测试自定义参数"""
-        args = parse_args([
-            "--table", "patch_blobs",
-            "--limit", "100",
-            "--sample-rate", "0.5",
-            "--max-bytes-per-sec", "1048576",
-            "--json",
-            "--fail-on-mismatch",
-            "--verbose",
-        ])
+        args = parse_args(
+            [
+                "--table",
+                "patch_blobs",
+                "--limit",
+                "100",
+                "--sample-rate",
+                "0.5",
+                "--max-bytes-per-sec",
+                "1048576",
+                "--json",
+                "--fail-on-mismatch",
+                "--verbose",
+            ]
+        )
         assert args.table == "patch_blobs"
         assert args.limit == 100
         assert args.sample_rate == 0.5
@@ -680,40 +671,56 @@ class TestCLI:
 
     def test_since_arg(self):
         """测试 since 参数"""
-        args = parse_args([
-            "--since", "2024-01-01T00:00:00",
-        ])
+        args = parse_args(
+            [
+                "--since",
+                "2024-01-01T00:00:00",
+            ]
+        )
         assert args.since == "2024-01-01T00:00:00"
 
     def test_prefix_arg(self):
         """测试 prefix 参数"""
-        args = parse_args([
-            "--prefix", "scm/patches/",
-        ])
+        args = parse_args(
+            [
+                "--prefix",
+                "scm/patches/",
+            ]
+        )
         assert args.prefix == "scm/patches/"
 
     def test_head_only_arg(self):
         """测试 head-only 参数"""
-        args = parse_args([
-            "--head-only",
-        ])
+        args = parse_args(
+            [
+                "--head-only",
+            ]
+        )
         assert args.head_only is True
 
     def test_workers_arg(self):
         """测试 workers 参数"""
-        args = parse_args([
-            "--workers", "4",
-        ])
+        args = parse_args(
+            [
+                "--workers",
+                "4",
+            ]
+        )
         assert args.workers == 4
 
     def test_combined_new_args(self):
         """测试组合新参数"""
-        args = parse_args([
-            "--prefix", "attachments/",
-            "--head-only",
-            "--workers", "8",
-            "--since", "2024-06-01T00:00:00",
-        ])
+        args = parse_args(
+            [
+                "--prefix",
+                "attachments/",
+                "--head-only",
+                "--workers",
+                "8",
+                "--since",
+                "2024-06-01T00:00:00",
+            ]
+        )
         assert args.prefix == "attachments/"
         assert args.head_only is True
         assert args.workers == 8
@@ -868,10 +875,7 @@ class TestReportFormat:
         """测试汇总统计"""
         artifacts_root, store, files = sample_artifacts
 
-        patch_blobs = [
-            (i + 1, f["uri"], f["sha256"])
-            for i, f in enumerate(files)
-        ]
+        patch_blobs = [(i + 1, f["uri"], f["sha256"]) for i, f in enumerate(files)]
         mock_conn = MockConnection(patch_blobs=patch_blobs)
 
         auditor = ArtifactAuditor(
@@ -971,7 +975,7 @@ class TestStoreSelection:
         # Mock ObjectStore
         mock_object_store = MagicMock(spec=ObjectStore)
 
-        with patch("artifact_audit.get_app_config") as mock_get_config:
+        with patch("artifact_audit.get_app_config"):
             with patch(
                 "artifact_audit.get_artifact_store_from_config",
                 return_value=mock_object_store,
@@ -1069,7 +1073,7 @@ class TestHeadOnlyMode:
         mock_object_store = MagicMock(spec=ObjectStore)
         mock_object_store.bucket = "test-bucket"
         expected_sha256 = "abc123def456" + "0" * 52
-        
+
         # Mock S3 client
         mock_client = MagicMock()
         mock_client.head_object.return_value = {
@@ -1113,7 +1117,7 @@ class TestHeadOnlyMode:
         mock_object_store = MagicMock(spec=ObjectStore)
         mock_object_store.bucket = "test-bucket"
         expected_sha256 = "abc123def456" + "0" * 52
-        
+
         # Mock S3 client - 没有 sha256 metadata
         mock_client = MagicMock()
         mock_client.head_object.return_value = {
@@ -1245,10 +1249,7 @@ class TestConcurrentAudit:
         """测试基本并发审计"""
         artifacts_root, store, files = sample_artifacts
 
-        patch_blobs = [
-            (i + 1, f["uri"], f["sha256"])
-            for i, f in enumerate(files)
-        ]
+        patch_blobs = [(i + 1, f["uri"], f["sha256"]) for i, f in enumerate(files)]
         mock_conn = MockConnection(patch_blobs=patch_blobs)
 
         auditor = ArtifactAuditor(
@@ -1303,7 +1304,7 @@ class TestIncrementalCursor:
         artifacts_root, store, files = sample_artifacts
 
         # 创建带 created_at 的记录
-        now = datetime.now()
+        datetime.now()
         patch_blobs = [
             (1, files[0]["uri"], files[0]["sha256"], datetime(2024, 1, 1, 10, 0, 0)),
             (2, files[1]["uri"], files[1]["sha256"], datetime(2024, 1, 2, 10, 0, 0)),

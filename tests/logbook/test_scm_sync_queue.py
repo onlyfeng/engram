@@ -12,12 +12,9 @@ SCM Sync Queue 任务队列模块单元测试
 """
 
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import pytest
 import psycopg
 
 
@@ -42,7 +39,7 @@ class TestEnqueue:
                 """)
                 repo_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -58,9 +55,9 @@ class TestEnqueue:
                     priority=50,
                     payload={"page": 1},
                 )
-                
+
                 assert job_id is not None
-                
+
                 # 验证任务状态
                 job = get_job(job_id)
                 assert job is not None
@@ -71,18 +68,22 @@ class TestEnqueue:
                 assert job["payload"] == {"page": 1}
                 assert job["status"] == "pending"
                 assert job["attempts"] == 0
-                
+
         finally:
             if job_id or repo_id:
                 with conn.cursor() as cur:
                     if job_id:
-                        cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE job_id = %s", (job_id,))
+                        cur.execute(
+                            f"DELETE FROM {scm_schema}.sync_jobs WHERE job_id = %s", (job_id,)
+                        )
                     if repo_id:
-                        cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+                        cur.execute(
+                            f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,)
+                        )
             conn.close()
 
     def test_enqueue_duplicate_returns_none(self, migrated_db):
-        """重复入队返回 None"""
+        """相同 (repo_id, job_type, mode) 重复入队返回 None"""
         dsn = migrated_db["dsn"]
         scm_schema = migrated_db["schemas"]["scm"]
 
@@ -98,7 +99,7 @@ class TestEnqueue:
                 """)
                 repo_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -117,7 +118,9 @@ class TestEnqueue:
         finally:
             if job_id or repo_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -138,7 +141,7 @@ class TestEnqueue:
                 """)
                 repo_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -152,6 +155,49 @@ class TestEnqueue:
                     job_ids.append(job_id)
 
                 assert len(job_ids) == 3
+
+        finally:
+            with conn.cursor() as cur:
+                cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_enqueue_different_modes_allowed(self, migrated_db):
+        """同一 (repo_id, job_type) 不同 mode 可以同时入队"""
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_id = None
+        job_ids = []
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                    VALUES ('git', 'https://example.com/test_diff_modes.git')
+                    RETURNING repo_id
+                """)
+                repo_id = cur.fetchone()[0]
+
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram.logbook.scm_sync_queue import enqueue
+
+                # incremental 模式入队
+                job_id1 = enqueue(repo_id=repo_id, job_type="gitlab_commits", mode="incremental")
+                assert job_id1 is not None, "incremental 模式入队应成功"
+                job_ids.append(job_id1)
+
+                # backfill 模式入队（同一 repo_id, job_type，不同 mode）
+                job_id2 = enqueue(repo_id=repo_id, job_type="gitlab_commits", mode="backfill")
+                assert job_id2 is not None, "不同 mode 应能同时入队"
+                job_ids.append(job_id2)
+
+                assert job_id1 != job_id2, "应该是两个不同的任务"
 
         finally:
             with conn.cursor() as cur:
@@ -178,15 +224,18 @@ class TestClaim:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, priority, status
                     )
                     VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending')
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -196,7 +245,7 @@ class TestClaim:
 
                 # claim 任务
                 job = claim(worker_id="worker-1")
-                
+
                 assert job is not None
                 assert job["repo_id"] == repo_id
                 assert job["job_type"] == "gitlab_commits"
@@ -232,15 +281,18 @@ class TestClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending')
-                    """, (repo_id, priority))
+                    """,
+                        (repo_id, priority),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -250,14 +302,16 @@ class TestClaim:
 
                 # claim 应该获取优先级最高（数值最小）的任务
                 job = claim(worker_id="worker-1")
-                
+
                 assert job is not None
                 assert job["priority"] == 50
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -276,17 +330,20 @@ class TestClaim:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个 not_before 在未来的任务
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, priority, status, not_before
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending',
                             now() + interval '1 hour')
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -319,18 +376,21 @@ class TestClaim:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个锁已过期的 running 任务
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, priority, status,
                         locked_by, locked_at, lease_seconds, attempts
                     )
                     VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running',
                             'dead-worker', now() - interval '10 minutes', 300, 1)
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -340,7 +400,7 @@ class TestClaim:
 
                 # 应该能获取这个过期任务
                 job = claim(worker_id="worker-2")
-                
+
                 assert job is not None
                 assert job["attempts"] == 2  # 从 1 增加到 2
 
@@ -369,13 +429,16 @@ class TestClaim:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, priority, status
                     )
                     VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending')
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
             results = []
 
@@ -384,9 +447,12 @@ class TestClaim:
                     test_conn = psycopg.connect(dsn, autocommit=False)
                     with test_conn.cursor() as cur:
                         cur.execute(f"SET search_path TO {scm_schema}")
-                    
-                    with patch('engram_logbook.scm_sync_queue.get_connection', return_value=test_conn):
+
+                    with patch(
+                        "engram_logbook.scm_sync_queue.get_connection", return_value=test_conn
+                    ):
                         from engram.logbook.scm_sync_queue import claim
+
                         job = claim(worker_id=worker_id)
                         return (worker_id, job is not None)
                 except Exception as e:
@@ -402,7 +468,7 @@ class TestClaim:
             # 只有一个成功
             successful = [r for r in results if r[1] is True]
             failed = [r for r in results if r[1] is False]
-            
+
             assert len(successful) == 1
             assert len(failed) == num_workers - 1
 
@@ -430,15 +496,18 @@ class TestClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status
                         )
                         VALUES (%s, %s, 'incremental', 100, 'pending')
-                    """, (repo_id, job_type))
+                    """,
+                        (repo_id, job_type),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -448,14 +517,16 @@ class TestClaim:
 
                 # 只 claim gitlab 相关任务
                 job = claim(worker_id="worker-1", job_types=["gitlab_commits", "gitlab_mrs"])
-                
+
                 assert job is not None
                 assert job["job_type"] in ["gitlab_commits", "gitlab_mrs"]
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -479,18 +550,21 @@ class TestAck:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now())
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -530,18 +604,21 @@ class TestAck:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now())
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -581,19 +658,22 @@ class TestFailRetry:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at,
                         attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now(), 1, 3)
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -633,20 +713,23 @@ class TestFailRetry:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 已尝试 3 次，max_attempts = 3
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at,
                         attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now(), 3, 3)
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -689,24 +772,27 @@ class TestMarkDead:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now())
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import mark_dead, get_job
+                from engram.logbook.scm_sync_queue import get_job, mark_dead
 
                 result = mark_dead(job_id, "worker-1", "Unrecoverable error")
                 assert result is True
@@ -743,27 +829,30 @@ class TestRenewLease:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at,
                         lease_seconds
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now() - interval '2 minutes', 300)
                     RETURNING job_id, locked_at
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 row = cur.fetchone()
                 job_id = str(row[0])
                 old_locked_at = row[1]
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import renew_lease, get_job
+                from engram.logbook.scm_sync_queue import get_job, renew_lease
 
                 result = renew_lease(job_id, "worker-1")
                 assert result is True
@@ -795,18 +884,21 @@ class TestRenewLease:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now())
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -847,15 +939,18 @@ class TestListAndCount:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, status
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s)
-                    """, (repo_id, status))
+                    """,
+                        (repo_id, status),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -865,14 +960,16 @@ class TestListAndCount:
 
                 pending_jobs = list_jobs_by_status("pending")
                 assert len(pending_jobs) >= 2
-                
+
                 for job in pending_jobs:
                     assert job["status"] == "pending"
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -893,15 +990,18 @@ class TestListAndCount:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, status
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s)
-                    """, (repo_id, status))
+                    """,
+                        (repo_id, status),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -916,7 +1016,9 @@ class TestListAndCount:
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -939,17 +1041,20 @@ class TestCleanupAndReset:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个旧的已完成任务
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, updated_at
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'completed', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'completed',
                             now() - interval '10 days')
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -982,23 +1087,26 @@ class TestCleanupAndReset:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, attempts, last_error
                     )
                     VALUES (%s, 'gitlab_commits', 'incremental', 'dead', 3, 'Some error')
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import reset_dead_jobs, get_job
+                from engram.logbook.scm_sync_queue import get_job, reset_dead_jobs
 
                 reset = reset_dead_jobs(repo_id=repo_id)
                 assert reset >= 1
@@ -1036,31 +1144,32 @@ class TestRequeueWithoutPenalty:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个 running 状态的任务，attempts = 1
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at,
                         attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now(), 1, 3)
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import requeue_without_penalty, get_job
+                from engram.logbook.scm_sync_queue import get_job, requeue_without_penalty
 
                 result = requeue_without_penalty(
-                    job_id, "worker-1", 
-                    reason="resource_locked",
-                    jitter_seconds=1
+                    job_id, "worker-1", reason="resource_locked", jitter_seconds=1
                 )
                 assert result is True
 
@@ -1095,19 +1204,22 @@ class TestRequeueWithoutPenalty:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, status, locked_by, locked_at,
                         attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'running',
                             'worker-1', now(), 1, 3)
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -1143,15 +1255,19 @@ class TestRequeueWithoutPenalty:
                 """)
                 repo_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.scm_sync_queue import (
-                    enqueue, claim, requeue_without_penalty, get_job,
-                    STATUS_PENDING, STATUS_DEAD,
+                    STATUS_DEAD,
+                    STATUS_PENDING,
+                    claim,
+                    enqueue,
+                    get_job,
+                    requeue_without_penalty,
                 )
 
                 # 入队，max_attempts = 2（很小的值，容易触发 dead）
@@ -1169,28 +1285,36 @@ class TestRequeueWithoutPenalty:
                     if job is None:
                         # 需要等待 not_before，直接更新
                         with mock_conn.cursor() as cur:
-                            cur.execute(f"""
-                                UPDATE {scm_schema}.sync_jobs 
+                            cur.execute(
+                                f"""
+                                UPDATE {scm_schema}.sync_jobs
                                 SET not_before = now() - interval '1 second'
                                 WHERE job_id = %s
-                            """, (job_id,))
+                            """,
+                                (job_id,),
+                            )
                             mock_conn.commit()
                         job = claim(worker_id=f"worker-{i}")
-                    
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     # 使用 requeue_without_penalty（模拟 locked/skipped）
                     result = requeue_without_penalty(
-                        job_id, f"worker-{i}",
+                        job_id,
+                        f"worker-{i}",
                         reason=f"locked_skipped_{i}",
-                        jitter_seconds=0  # 立即可调度
+                        jitter_seconds=0,  # 立即可调度
                     )
-                    assert result is True, f"第 {i+1} 次 requeue 失败"
+                    assert result is True, f"第 {i + 1} 次 requeue 失败"
 
                     # 验证没有变成 dead
                     job_info = get_job(job_id)
-                    assert job_info["status"] != STATUS_DEAD, f"第 {i+1} 次后任务不应该是 dead 状态"
-                    assert job_info["status"] == STATUS_PENDING, f"第 {i+1} 次后任务应该是 pending 状态"
+                    assert job_info["status"] != STATUS_DEAD, (
+                        f"第 {i + 1} 次后任务不应该是 dead 状态"
+                    )
+                    assert job_info["status"] == STATUS_PENDING, (
+                        f"第 {i + 1} 次后任务应该是 pending 状态"
+                    )
 
                 # 最终状态验证
                 final_job = get_job(job_id)
@@ -1207,7 +1331,7 @@ class TestRequeueWithoutPenalty:
 
 class TestRequeueAttemptsSemantics:
     """requeue/attempts 语义测试
-    
+
     验证:
     - claim 增加 attempts
     - requeue_without_penalty 回退 attempts
@@ -1230,26 +1354,29 @@ class TestRequeueAttemptsSemantics:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, priority, status, attempts
                     )
                     VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending', 0)
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, get_job
+                from engram.logbook.scm_sync_queue import claim
 
                 # claim 前 attempts = 0
                 job = claim(worker_id="worker-1")
                 assert job is not None
-                
+
                 # claim 后 attempts = 1
                 assert job["attempts"] == 1, "claim 应该增加 attempts"
 
@@ -1274,32 +1401,39 @@ class TestRequeueAttemptsSemantics:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个 running 任务，attempts = 2
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
-                        repo_id, job_type, mode, priority, status, 
+                        repo_id, job_type, mode, priority, status,
                         locked_by, locked_at, attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running',
                             'worker-1', now(), 2, 5)
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import requeue_without_penalty, get_job
+                from engram.logbook.scm_sync_queue import get_job, requeue_without_penalty
 
                 # 获取 job_id
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SELECT job_id FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"SELECT job_id FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     job_id = str(cur.fetchone()[0])
 
                 # requeue 前 attempts = 2
-                result = requeue_without_penalty(job_id, "worker-1", reason="test", jitter_seconds=0)
+                result = requeue_without_penalty(
+                    job_id, "worker-1", reason="test", jitter_seconds=0
+                )
                 assert result is True
 
                 # requeue 后 attempts = 1
@@ -1328,30 +1462,37 @@ class TestRequeueAttemptsSemantics:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个 running 任务，attempts = 0（边界情况）
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
-                        repo_id, job_type, mode, priority, status, 
+                        repo_id, job_type, mode, priority, status,
                         locked_by, locked_at, attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running',
                             'worker-1', now(), 0, 5)
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import requeue_without_penalty, get_job
+                from engram.logbook.scm_sync_queue import get_job, requeue_without_penalty
 
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SELECT job_id FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"SELECT job_id FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     job_id = str(cur.fetchone()[0])
 
-                result = requeue_without_penalty(job_id, "worker-1", reason="test", jitter_seconds=0)
+                result = requeue_without_penalty(
+                    job_id, "worker-1", reason="test", jitter_seconds=0
+                )
                 assert result is True
 
                 job = get_job(job_id)
@@ -1378,38 +1519,43 @@ class TestRequeueAttemptsSemantics:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, priority, status, attempts, max_attempts
                     )
                     VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending', 0, 5)
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, requeue_without_penalty, get_job
+                from engram.logbook.scm_sync_queue import claim, get_job, requeue_without_penalty
 
                 # 执行 3 次 claim + requeue 循环
                 for i in range(3):
                     job = claim(worker_id=f"worker-{i}")
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
                     job_id = job["job_id"]
-                    
+
                     # claim 后 attempts 应为 1
-                    assert job["attempts"] == 1, f"第 {i+1} 次 claim 后 attempts 应为 1"
-                    
+                    assert job["attempts"] == 1, f"第 {i + 1} 次 claim 后 attempts 应为 1"
+
                     # requeue
-                    result = requeue_without_penalty(job_id, f"worker-{i}", reason=f"test_{i}", jitter_seconds=0)
-                    assert result is True, f"第 {i+1} 次 requeue 失败"
-                    
+                    result = requeue_without_penalty(
+                        job_id, f"worker-{i}", reason=f"test_{i}", jitter_seconds=0
+                    )
+                    assert result is True, f"第 {i + 1} 次 requeue 失败"
+
                     # requeue 后 attempts 应为 0
                     job_info = get_job(job_id)
-                    assert job_info["attempts"] == 0, f"第 {i+1} 次 requeue 后 attempts 应为 0"
+                    assert job_info["attempts"] == 0, f"第 {i + 1} 次 requeue 后 attempts 应为 0"
 
         finally:
             with conn.cursor() as cur:
@@ -1432,20 +1578,23 @@ class TestRequeueAttemptsSemantics:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个 running 任务，attempts = 3
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
-                        repo_id, job_type, mode, priority, status, 
+                        repo_id, job_type, mode, priority, status,
                         locked_by, locked_at, attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running',
                             'worker-1', now(), 3, 5)
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -1481,20 +1630,23 @@ class TestRequeueAttemptsSemantics:
                     RETURNING repo_id
                 """)
                 repo_id = cur.fetchone()[0]
-                
+
                 # 创建一个 running 任务，attempts = 2
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
-                        repo_id, job_type, mode, priority, status, 
+                        repo_id, job_type, mode, priority, status,
                         locked_by, locked_at, attempts, max_attempts
                     )
-                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running', 
+                    VALUES (%s, 'gitlab_commits', 'incremental', 100, 'running',
                             'worker-1', now(), 2, 5)
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = str(cur.fetchone()[0])
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
@@ -1518,7 +1670,7 @@ class TestRequeueAttemptsSemantics:
 
 class TestTenantFairClaim:
     """租户公平调度测试
-    
+
     验证:
     - enable_tenant_fair_claim=True 时，不会长期只 claim 单一 tenant 的任务
     - 多 tenant 混合队列中，各 tenant 都能公平获得执行机会
@@ -1549,23 +1701,26 @@ class TestTenantFairClaim:
                         """)
                         repo_id = cur.fetchone()[0]
                         repo_ids.append(repo_id)
-                        
-                        cur.execute(f"""
+
+                        cur.execute(
+                            f"""
                             INSERT INTO {scm_schema}.sync_jobs (
                                 repo_id, job_type, mode, priority, status,
                                 payload_json
                             )
                             VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                     %s::jsonb)
-                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+                        """,
+                            (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'),
+                        )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 启用公平调度，连续 claim 9 个任务
                 claimed_tenants = []
@@ -1574,11 +1729,11 @@ class TestTenantFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     tenant_id = job["payload"].get("tenant_id", "")
                     claimed_tenants.append(tenant_id)
-                    
+
                     # 立即 ack，释放任务
                     ack(job["job_id"], f"worker-{i}")
 
@@ -1587,10 +1742,12 @@ class TestTenantFairClaim:
                 tenant_counts = {}
                 for t in claimed_tenants:
                     tenant_counts[t] = tenant_counts.get(t, 0) + 1
-                
+
                 # 应该有 3 个不同的 tenant
-                assert len(tenant_counts) == 3, f"应该从 3 个 tenant claim 任务，实际: {tenant_counts}"
-                
+                assert len(tenant_counts) == 3, (
+                    f"应该从 3 个 tenant claim 任务，实际: {tenant_counts}"
+                )
+
                 # 每个 tenant 应该至少被 claim 2 次（公平分布）
                 for tenant_id, count in tenant_counts.items():
                     assert count >= 2, f"tenant {tenant_id} 只被 claim {count} 次，公平调度失败"
@@ -1598,7 +1755,9 @@ class TestTenantFairClaim:
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -1626,23 +1785,26 @@ class TestTenantFairClaim:
                         """)
                         repo_id = cur.fetchone()[0]
                         repo_ids.append(repo_id)
-                        
-                        cur.execute(f"""
+
+                        cur.execute(
+                            f"""
                             INSERT INTO {scm_schema}.sync_jobs (
                                 repo_id, job_type, mode, priority, status,
                                 payload_json
                             )
                             VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                     %s::jsonb)
-                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+                        """,
+                            (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'),
+                        )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 不启用公平调度，连续 claim 9 个任务
                 claimed_tenants = []
@@ -1652,30 +1814,34 @@ class TestTenantFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=False,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     tenant_id = job["payload"].get("tenant_id", "")
                     claimed_tenants.append(tenant_id)
                     claimed_priorities.append(job["priority"])
-                    
+
                     # 立即 ack，释放任务
                     ack(job["job_id"], f"worker-{i}")
 
                 # 验证：按严格优先级顺序 claim
                 # 预期顺序: 10, 11, 12, 20, 21, 22, 30, 31, 32
                 expected_priorities = [10, 11, 12, 20, 21, 22, 30, 31, 32]
-                assert claimed_priorities == expected_priorities, \
+                assert claimed_priorities == expected_priorities, (
                     f"优先级顺序不符，期望 {expected_priorities}，实际 {claimed_priorities}"
-                
+                )
+
                 # 验证：tenant 按优先级交替出现
                 expected_tenants = ["tenant_a", "tenant_b", "tenant_c"] * 3
-                assert claimed_tenants == expected_tenants, \
+                assert claimed_tenants == expected_tenants, (
                     f"tenant 顺序不符，期望 {expected_tenants}，实际 {claimed_tenants}"
+                )
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -1698,23 +1864,26 @@ class TestTenantFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "only_tenant"}'::jsonb)
-                    """, (repo_id, priority))
+                    """,
+                        (repo_id, priority),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 启用公平调度
                 claimed_priorities = []
@@ -1723,7 +1892,7 @@ class TestTenantFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
                     assert job["payload"].get("tenant_id") == "only_tenant"
                     claimed_priorities.append(job["priority"])
                     ack(job["job_id"], f"worker-{i}")
@@ -1734,7 +1903,9 @@ class TestTenantFairClaim:
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -1749,7 +1920,7 @@ class TestTenantFairClaim:
             # 创建混合任务：有 tenant_id 和无 tenant_id
             # tenant_a: priority 10, 20
             # 无 tenant: priority 15, 25 (payload_json 为空或无 tenant_id)
-            
+
             # tenant_a 任务
             for i in range(2):
                 with conn.cursor() as cur:
@@ -1761,16 +1932,19 @@ class TestTenantFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "tenant_a"}'::jsonb)
-                    """, (repo_id, priority))
-            
+                    """,
+                        (repo_id, priority),
+                    )
+
             # 无 tenant_id 的任务
             for i in range(2):
                 with conn.cursor() as cur:
@@ -1782,23 +1956,26 @@ class TestTenantFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{{}}'::jsonb)
-                    """, (repo_id, priority))
+                    """,
+                        (repo_id, priority),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 启用公平调度
                 claimed_jobs = []
@@ -1807,25 +1984,29 @@ class TestTenantFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    claimed_jobs.append({
-                        "tenant_id": job["payload"].get("tenant_id"),
-                        "priority": job["priority"],
-                    })
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+                    claimed_jobs.append(
+                        {
+                            "tenant_id": job["payload"].get("tenant_id"),
+                            "priority": job["priority"],
+                        }
+                    )
                     ack(job["job_id"], f"worker-{i}")
 
                 # 验证：公平调度应该在两个"tenant 组"（有 tenant_id 和无 tenant_id）间分配
                 # 具体顺序取决于实现，但应该两组都有任务被 claim
                 tenant_a_count = sum(1 for j in claimed_jobs if j["tenant_id"] == "tenant_a")
                 no_tenant_count = sum(1 for j in claimed_jobs if j["tenant_id"] is None)
-                
+
                 assert tenant_a_count == 2, f"tenant_a 应该有 2 个任务，实际 {tenant_a_count}"
                 assert no_tenant_count == 2, f"无 tenant 应该有 2 个任务，实际 {no_tenant_count}"
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -1840,7 +2021,7 @@ class TestTenantFairClaim:
             # 模拟极端场景：tenant_a 有 10 个高优先级任务，tenant_b 只有 1 个低优先级任务
             # tenant_a: priority 1-10
             # tenant_b: priority 100
-            
+
             # tenant_a 任务
             for i in range(10):
                 with conn.cursor() as cur:
@@ -1852,16 +2033,19 @@ class TestTenantFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "tenant_a"}'::jsonb)
-                    """, (repo_id, priority))
-            
+                    """,
+                        (repo_id, priority),
+                    )
+
             # tenant_b 只有 1 个低优先级任务
             with conn.cursor() as cur:
                 cur.execute(f"""
@@ -1871,23 +2055,26 @@ class TestTenantFairClaim:
                 """)
                 repo_id = cur.fetchone()[0]
                 repo_ids.append(repo_id)
-                
-                cur.execute(f"""
+
+                cur.execute(
+                    f"""
                     INSERT INTO {scm_schema}.sync_jobs (
                         repo_id, job_type, mode, priority, status,
                         payload_json
                     )
                     VALUES (%s, 'gitlab_commits', 'incremental', 100, 'pending',
                             '{"tenant_id": "tenant_b"}'::jsonb)
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 启用公平调度，claim 前 5 个任务
                 tenant_b_found = False
@@ -1896,22 +2083,25 @@ class TestTenantFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     if job["payload"].get("tenant_id") == "tenant_b":
                         tenant_b_found = True
-                    
+
                     ack(job["job_id"], f"worker-{i}")
-                
+
                 # 核心验证：在前 5 次 claim 中，tenant_b 应该至少出现一次
                 # 这证明公平调度防止了 tenant_b 被 tenant_a 完全压制
-                assert tenant_b_found, \
+                assert tenant_b_found, (
                     "公平调度失败：tenant_b 应该在前 5 次 claim 中出现，但被 tenant_a 完全压制"
+                )
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -1935,15 +2125,20 @@ class TestIntegration:
                 """)
                 repo_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.scm_sync_queue import (
-                    enqueue, claim, ack, get_job,
-                    STATUS_PENDING, STATUS_RUNNING, STATUS_COMPLETED,
+                    STATUS_COMPLETED,
+                    STATUS_PENDING,
+                    STATUS_RUNNING,
+                    ack,
+                    claim,
+                    enqueue,
+                    get_job,
                 )
 
                 # 1. 入队
@@ -1997,15 +2192,19 @@ class TestIntegration:
                 """)
                 repo_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.scm_sync_queue import (
-                    enqueue, claim, fail_retry, get_job,
-                    STATUS_FAILED, STATUS_DEAD,
+                    STATUS_DEAD,
+                    STATUS_FAILED,
+                    claim,
+                    enqueue,
+                    fail_retry,
+                    get_job,
                 )
 
                 # 入队，max_attempts = 2
@@ -2040,7 +2239,7 @@ class TestIntegration:
 
 class TestMultiTenantMultiRepoFairClaim:
     """多租户多仓库公平调度 claim 测试
-    
+
     测试场景:
     - 多个 tenant 各有多个 repo 的 pending 任务
     - 开启 fairness 开关后，断言 claim 序列中 tenant 交替出现
@@ -2062,7 +2261,7 @@ class TestMultiTenantMultiRepoFairClaim:
             # tenant_c: priority 12, 22, 32, 42
             tenants = ["tenant_a", "tenant_b", "tenant_c"]
             repos_per_tenant = 4
-            
+
             for t_idx, tenant_id in enumerate(tenants):
                 for r_idx in range(repos_per_tenant):
                     with conn.cursor() as cur:
@@ -2074,23 +2273,26 @@ class TestMultiTenantMultiRepoFairClaim:
                         """)
                         repo_id = cur.fetchone()[0]
                         repo_ids.append(repo_id)
-                        
-                        cur.execute(f"""
+
+                        cur.execute(
+                            f"""
                             INSERT INTO {scm_schema}.sync_jobs (
                                 repo_id, job_type, mode, priority, status,
                                 payload_json
                             )
                             VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                     %s::jsonb)
-                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+                        """,
+                            (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'),
+                        )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 启用公平调度，连续 claim 12 个任务
                 claimed_tenants = []
@@ -2099,21 +2301,22 @@ class TestMultiTenantMultiRepoFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     tenant_id = job["payload"].get("tenant_id", "")
                     claimed_tenants.append(tenant_id)
-                    
+
                     # 立即 ack，释放任务
                     ack(job["job_id"], f"worker-{i}")
 
                 # 验证：每 3 个连续 claim 应来自 3 个不同 tenant
                 # 因为公平调度会轮询 tenant
                 for round_start in range(0, 12, 3):
-                    round_tenants = claimed_tenants[round_start:round_start + 3]
+                    round_tenants = claimed_tenants[round_start : round_start + 3]
                     unique_tenants = set(round_tenants)
-                    assert len(unique_tenants) == 3, \
+                    assert len(unique_tenants) == 3, (
                         f"轮次 {round_start // 3}: 应有 3 个不同 tenant，实际: {round_tenants}"
+                    )
 
                 # 验证每个 tenant 被 claim 4 次
                 for tenant_id in tenants:
@@ -2123,7 +2326,9 @@ class TestMultiTenantMultiRepoFairClaim:
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -2138,7 +2343,7 @@ class TestMultiTenantMultiRepoFairClaim:
             # 构造场景：tenant_a 有高优先级任务，tenant_b 有低优先级任务
             # tenant_a: priority 1, 2, 3, 4, 5 (高优先级)
             # tenant_b: priority 101, 102, 103, 104, 105 (低优先级)
-            
+
             # tenant_a 高优先级任务
             for i in range(5):
                 with conn.cursor() as cur:
@@ -2150,16 +2355,19 @@ class TestMultiTenantMultiRepoFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "tenant_a"}'::jsonb)
-                    """, (repo_id, priority))
-            
+                    """,
+                        (repo_id, priority),
+                    )
+
             # tenant_b 低优先级任务
             for i in range(5):
                 with conn.cursor() as cur:
@@ -2171,23 +2379,26 @@ class TestMultiTenantMultiRepoFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "tenant_b"}'::jsonb)
-                    """, (repo_id, priority))
+                    """,
+                        (repo_id, priority),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 关闭公平调度
                 claimed_tenants = []
@@ -2197,31 +2408,36 @@ class TestMultiTenantMultiRepoFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=False,  # 关闭公平调度
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     tenant_id = job["payload"].get("tenant_id", "")
                     claimed_tenants.append(tenant_id)
                     claimed_priorities.append(job["priority"])
-                    
+
                     ack(job["job_id"], f"worker-{i}")
 
                 # 验证：关闭 fairness 时，严格按优先级排序
                 # 前 5 个应全是 tenant_a
-                assert claimed_tenants[:5] == ["tenant_a"] * 5, \
+                assert claimed_tenants[:5] == ["tenant_a"] * 5, (
                     f"前 5 个应全是 tenant_a，实际: {claimed_tenants[:5]}"
-                
+                )
+
                 # 后 5 个应全是 tenant_b
-                assert claimed_tenants[5:] == ["tenant_b"] * 5, \
+                assert claimed_tenants[5:] == ["tenant_b"] * 5, (
                     f"后 5 个应全是 tenant_b，实际: {claimed_tenants[5:]}"
-                
+                )
+
                 # 优先级应该递增
-                assert claimed_priorities == sorted(claimed_priorities), \
+                assert claimed_priorities == sorted(claimed_priorities), (
                     f"优先级应递增，实际: {claimed_priorities}"
+                )
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -2235,7 +2451,7 @@ class TestMultiTenantMultiRepoFairClaim:
         try:
             # tenant_a: 15 个高优先级任务 (大 backlog)
             # tenant_b: 3 个低优先级任务 (小 backlog)
-            
+
             for i in range(15):
                 with conn.cursor() as cur:
                     priority = i + 1  # 1-15
@@ -2246,16 +2462,19 @@ class TestMultiTenantMultiRepoFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "tenant_a"}'::jsonb)
-                    """, (repo_id, priority))
-            
+                    """,
+                        (repo_id, priority),
+                    )
+
             for i in range(3):
                 with conn.cursor() as cur:
                     priority = 100 + i  # 100-102 (低优先级)
@@ -2266,54 +2485,59 @@ class TestMultiTenantMultiRepoFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "tenant_b"}'::jsonb)
-                    """, (repo_id, priority))
+                    """,
+                        (repo_id, priority),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 # 启用公平调度，claim 前 6 个任务
                 tenant_b_found_in_first_6 = False
                 tenant_b_count = 0
-                
+
                 for i in range(6):
                     job = claim(
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     if job["payload"].get("tenant_id") == "tenant_b":
                         tenant_b_found_in_first_6 = True
                         tenant_b_count += 1
-                    
+
                     ack(job["job_id"], f"worker-{i}")
 
                 # 核心验证：在前 6 次 claim 中，tenant_b 应该至少出现一次
                 # 这证明公平调度防止了 tenant_b 被 tenant_a 完全压制
-                assert tenant_b_found_in_first_6, \
-                    "公平调度失败：tenant_b 应在前 6 次 claim 中出现"
-                
+                assert tenant_b_found_in_first_6, "公平调度失败：tenant_b 应在前 6 次 claim 中出现"
+
                 # 更严格的验证：tenant_b 应该出现约 3 次（6 次中两个 tenant 轮流）
-                assert tenant_b_count >= 2, \
+                assert tenant_b_count >= 2, (
                     f"公平调度失败：tenant_b 应在前 6 次中出现至少 2 次，实际 {tenant_b_count}"
+                )
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -2327,7 +2551,7 @@ class TestMultiTenantMultiRepoFairClaim:
         try:
             # 4 个 tenant 各 3 个任务
             tenants = ["tenant_a", "tenant_b", "tenant_c", "tenant_d"]
-            
+
             for t_idx, tenant_id in enumerate(tenants):
                 for r_idx in range(3):
                     with conn.cursor() as cur:
@@ -2339,23 +2563,26 @@ class TestMultiTenantMultiRepoFairClaim:
                         """)
                         repo_id = cur.fetchone()[0]
                         repo_ids.append(repo_id)
-                        
-                        cur.execute(f"""
+
+                        cur.execute(
+                            f"""
                             INSERT INTO {scm_schema}.sync_jobs (
                                 repo_id, job_type, mode, priority, status,
                                 payload_json
                             )
                             VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                     %s::jsonb)
-                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+                        """,
+                            (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'),
+                        )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 claimed_tenants = []
                 for i in range(12):
@@ -2363,8 +2590,8 @@ class TestMultiTenantMultiRepoFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+
                     tenant_id = job["payload"].get("tenant_id", "")
                     claimed_tenants.append(tenant_id)
                     ack(job["job_id"], f"worker-{i}")
@@ -2383,7 +2610,9 @@ class TestMultiTenantMultiRepoFairClaim:
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -2406,16 +2635,19 @@ class TestMultiTenantMultiRepoFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{"tenant_id": "tenant_a"}'::jsonb)
-                    """, (repo_id, priority))
-            
+                    """,
+                        (repo_id, priority),
+                    )
+
             # 无 tenant_id: 3 个任务
             for i in range(3):
                 with conn.cursor() as cur:
@@ -2427,23 +2659,26 @@ class TestMultiTenantMultiRepoFairClaim:
                     """)
                     repo_id = cur.fetchone()[0]
                     repo_ids.append(repo_id)
-                    
-                    cur.execute(f"""
+
+                    cur.execute(
+                        f"""
                         INSERT INTO {scm_schema}.sync_jobs (
                             repo_id, job_type, mode, priority, status,
                             payload_json
                         )
                         VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                 '{{}}'::jsonb)
-                    """, (repo_id, priority))
+                    """,
+                        (repo_id, priority),
+                    )
 
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack
+                from engram.logbook.scm_sync_queue import ack, claim
 
                 claimed_jobs = []
                 for i in range(6):
@@ -2451,33 +2686,39 @@ class TestMultiTenantMultiRepoFairClaim:
                         worker_id=f"worker-{i}",
                         enable_tenant_fair_claim=True,
                     )
-                    assert job is not None, f"第 {i+1} 次 claim 失败"
-                    claimed_jobs.append({
-                        "tenant_id": job["payload"].get("tenant_id"),
-                        "priority": job["priority"],
-                    })
+                    assert job is not None, f"第 {i + 1} 次 claim 失败"
+                    claimed_jobs.append(
+                        {
+                            "tenant_id": job["payload"].get("tenant_id"),
+                            "priority": job["priority"],
+                        }
+                    )
                     ack(job["job_id"], f"worker-{i}")
 
                 # 验证：两个组（有 tenant_id 和无 tenant_id）都应有任务被 claim
                 tenant_a_count = sum(1 for j in claimed_jobs if j["tenant_id"] == "tenant_a")
                 no_tenant_count = sum(1 for j in claimed_jobs if j["tenant_id"] is None)
-                
+
                 assert tenant_a_count == 3, f"tenant_a 应有 3 个任务，实际 {tenant_a_count}"
                 assert no_tenant_count == 3, f"无 tenant 应有 3 个任务，实际 {no_tenant_count}"
-                
+
                 # 验证交替模式：前 4 个应该是交替的
                 first_four_tenants = [j["tenant_id"] for j in claimed_jobs[:4]]
                 for i in range(3):
                     if first_four_tenants[i] == first_four_tenants[i + 1]:
                         # 允许在一边用完后连续
-                        before_count = first_four_tenants[:i+1].count(first_four_tenants[i])
+                        before_count = first_four_tenants[: i + 1].count(first_four_tenants[i])
                         if before_count < 3:  # 还没用完
-                            assert False, f"位置 {i} 和 {i+1} 不应连续相同 ({first_four_tenants[i]})"
+                            assert False, (
+                                f"位置 {i} 和 {i + 1} 不应连续相同 ({first_four_tenants[i]})"
+                            )
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()
 
@@ -2504,62 +2745,459 @@ class TestMultiTenantMultiRepoFairClaim:
                         """)
                         repo_id = cur.fetchone()[0]
                         repo_ids.append(repo_id)
-                        
-                        cur.execute(f"""
+
+                        cur.execute(
+                            f"""
                             INSERT INTO {scm_schema}.sync_jobs (
                                 repo_id, job_type, mode, priority, status,
                                 payload_json
                             )
                             VALUES (%s, 'gitlab_commits', 'incremental', %s, 'pending',
                                     %s::jsonb)
-                        """, (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'))
+                        """,
+                            (repo_id, priority, f'{{"tenant_id": "{tenant_id}"}}'),
+                        )
 
             # 测试 1：开启 fairness
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn.return_value = mock_conn
 
-                from engram.logbook.scm_sync_queue import claim, ack, requeue_without_penalty
+                from engram.logbook.scm_sync_queue import claim, requeue_without_penalty
 
                 # 开启 fairness 时 claim
                 job1 = claim(worker_id="w1", enable_tenant_fair_claim=True)
                 job2 = claim(worker_id="w2", enable_tenant_fair_claim=True)
-                
+
                 # 应该来自不同 tenant
                 t1 = job1["payload"].get("tenant_id")
                 t2 = job2["payload"].get("tenant_id")
                 assert t1 != t2, f"开启 fairness 时前 2 个应来自不同 tenant，实际: {t1}, {t2}"
-                
+
                 # 归还任务
                 requeue_without_penalty(job1["job_id"], "w1", reason="test", jitter_seconds=0)
                 requeue_without_penalty(job2["job_id"], "w2", reason="test", jitter_seconds=0)
-                
+
             # 测试 2：关闭 fairness（使用新连接）
-            with patch('engram_logbook.scm_sync_queue.get_connection') as mock_get_conn2:
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_get_conn2:
                 mock_conn2 = psycopg.connect(dsn, autocommit=False)
                 with mock_conn2.cursor() as cur:
                     cur.execute(f"SET search_path TO {scm_schema}")
                 mock_get_conn2.return_value = mock_conn2
 
-                from engram.logbook.scm_sync_queue import claim as claim2, ack as ack2
+                from engram.logbook.scm_sync_queue import ack as ack2
+                from engram.logbook.scm_sync_queue import claim as claim2
 
                 # 关闭 fairness 时 claim
                 job1 = claim2(worker_id="w3", enable_tenant_fair_claim=False)
                 job2 = claim2(worker_id="w4", enable_tenant_fair_claim=False)
-                
+
                 # 应该按严格优先级，前 2 个可能来自同一 tenant（取决于优先级）
                 p1 = job1["priority"]
                 p2 = job2["priority"]
                 assert p1 <= p2, f"关闭 fairness 时应按优先级顺序，实际: {p1}, {p2}"
-                
+
                 ack2(job1["job_id"], "w3")
                 ack2(job2["job_id"], "w4")
 
         finally:
             for repo_id in repo_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,)
+                    )
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+
+class TestWorkerLockQueueIntegration:
+    """
+    Worker 锁与队列集成测试
+
+    测试并发场景下锁与队列的交互：
+    - 同 (repo_id, job_type) 只有一个 worker 能执行
+    - 锁获取失败时正确触发 requeue_without_penalty
+    """
+
+    def test_concurrent_claim_same_repo_job_only_one_lock_acquired(self, migrated_db):
+        """
+        并发 claim 同一 (repo_id, job_type) 任务时，只有一个 worker 能获取锁
+        """
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_id = None
+        job_id = None
+
+        try:
+            # 创建测试仓库和任务
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                    VALUES ('git', 'https://example.com/test_concurrent_lock.git')
+                    RETURNING repo_id
+                """)
+                repo_id = cur.fetchone()[0]
+
+                cur.execute(
+                    f"""
+                    INSERT INTO {scm_schema}.sync_jobs
+                    (repo_id, job_type, mode, status, priority, payload_json)
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'pending', 100, '{{}}')
+                    RETURNING job_id
+                """,
+                    (repo_id,),
+                )
+                job_id = str(cur.fetchone()[0])
+
+            lock_results = []
+
+            def try_claim_and_lock(worker_id: str):
+                """尝试 claim 任务并获取锁"""
+                try:
+                    test_conn = psycopg.connect(dsn, autocommit=False)
+                    with test_conn.cursor() as cur:
+                        cur.execute(f"SET search_path TO {scm_schema}")
+
+                    with patch(
+                        "engram_logbook.scm_sync_lock.get_connection", return_value=test_conn
+                    ):
+                        from engram.logbook import scm_sync_lock
+
+                        # 尝试获取锁
+                        lock_acquired = scm_sync_lock.claim(
+                            repo_id=repo_id,
+                            job_type="gitlab_commits",
+                            worker_id=worker_id,
+                            lease_seconds=60,
+                        )
+
+                        if lock_acquired:
+                            # 持有锁一段时间模拟执行
+                            time.sleep(0.5)
+                            # 释放锁
+                            scm_sync_lock.release(
+                                repo_id=repo_id,
+                                job_type="gitlab_commits",
+                                worker_id=worker_id,
+                            )
+
+                        return {
+                            "worker_id": worker_id,
+                            "lock_acquired": lock_acquired,
+                        }
+                except Exception as e:
+                    return {"worker_id": worker_id, "error": str(e)}
+
+            # 并发尝试获取锁
+            num_workers = 5
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = [
+                    executor.submit(try_claim_and_lock, f"worker-{i}") for i in range(num_workers)
+                ]
+                for future in as_completed(futures):
+                    lock_results.append(future.result())
+
+            # 验证：只有一个 worker 成功获取锁
+            successful = [r for r in lock_results if r.get("lock_acquired")]
+            failed = [r for r in lock_results if r.get("lock_acquired") is False]
+            errors = [r for r in lock_results if "error" in r]
+
+            assert len(successful) == 1, f"应该只有一个 worker 成功获取锁，实际: {len(successful)}"
+            assert len(failed) == num_workers - 1, f"应该有 {num_workers - 1} 个 worker 获取锁失败"
+            assert len(errors) == 0, f"不应该有错误: {errors}"
+
+        finally:
+            with conn.cursor() as cur:
+                if job_id:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE job_id = %s", (job_id,))
+                if repo_id:
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_locks WHERE repo_id = %s", (repo_id,)
+                    )
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_lock_held_job_requeued_without_penalty(self, migrated_db):
+        """
+        锁被持有时，任务应该被 requeue_without_penalty，attempts 不增加
+        """
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_id = None
+        job_id = None
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                    VALUES ('git', 'https://example.com/test_lock_requeue.git')
+                    RETURNING repo_id
+                """)
+                repo_id = cur.fetchone()[0]
+
+                # 创建一个被其他 worker 持有的锁（长租约确保不过期）
+                cur.execute(
+                    f"""
+                    INSERT INTO {scm_schema}.sync_locks
+                    (repo_id, job_type, locked_by, locked_at, lease_seconds)
+                    VALUES (%s, 'gitlab_commits', 'holder-worker', now(), 3600)
+                """,
+                    (repo_id,),
+                )
+
+                # 创建待处理任务
+                cur.execute(
+                    f"""
+                    INSERT INTO {scm_schema}.sync_jobs
+                    (repo_id, job_type, mode, status, priority, payload_json, attempts)
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'pending', 100, '{{}}', 0)
+                    RETURNING job_id
+                """,
+                    (repo_id,),
+                )
+                job_id = str(cur.fetchone()[0])
+
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_queue_conn:
+                with patch("engram_logbook.scm_sync_lock.get_connection") as mock_lock_conn:
+                    test_conn = psycopg.connect(dsn, autocommit=False)
+                    with test_conn.cursor() as cur:
+                        cur.execute(f"SET search_path TO {scm_schema}")
+
+                    mock_queue_conn.return_value = test_conn
+                    mock_lock_conn.return_value = test_conn
+
+                    from engram.logbook import scm_sync_lock
+                    from engram.logbook.scm_sync_queue import (
+                        claim,
+                        get_job,
+                        requeue_without_penalty,
+                    )
+
+                    # Worker claim 任务
+                    job = claim(worker_id="test-worker", lease_seconds=60)
+                    assert job is not None
+
+                    # 验证 claim 后 attempts 增加
+                    job_after_claim = get_job(job_id)
+                    assert job_after_claim["attempts"] == 1
+                    assert job_after_claim["status"] == "running"
+
+                    # 尝试获取分布式锁（应该失败）
+                    lock_acquired = scm_sync_lock.claim(
+                        repo_id=repo_id,
+                        job_type="gitlab_commits",
+                        worker_id="test-worker",
+                        lease_seconds=60,
+                    )
+                    assert lock_acquired is False, "锁被 holder-worker 持有，应该获取失败"
+
+                    # 模拟 worker 处理锁获取失败：requeue_without_penalty
+                    requeue_result = requeue_without_penalty(
+                        job_id=job_id,
+                        worker_id="test-worker",
+                        reason="lock_held: locked by another worker",
+                        jitter_seconds=0,
+                    )
+                    assert requeue_result is True
+
+                    # 验证任务状态
+                    job_after_requeue = get_job(job_id)
+                    assert job_after_requeue["status"] == "pending", "应回到 pending 状态"
+                    assert job_after_requeue["attempts"] == 0, "attempts 应回退到 0"
+                    assert job_after_requeue["locked_by"] is None, "任务锁应释放"
+                    assert "lock_held" in (job_after_requeue["last_error"] or ""), (
+                        "last_error 应记录 lock_held"
+                    )
+
+        finally:
+            with conn.cursor() as cur:
+                if job_id:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE job_id = %s", (job_id,))
+                if repo_id:
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_locks WHERE repo_id = %s", (repo_id,)
+                    )
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_different_job_types_independent_locks(self, migrated_db):
+        """
+        不同 job_type 的锁是独立的，同一 repo 可以同时执行不同类型任务
+        """
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_id = None
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                    VALUES ('git', 'https://example.com/test_diff_job_types.git')
+                    RETURNING repo_id
+                """)
+                repo_id = cur.fetchone()[0]
+
+            with patch("engram_logbook.scm_sync_lock.get_connection") as mock_lock_conn:
+                test_conn = psycopg.connect(dsn, autocommit=False)
+                with test_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {scm_schema}")
+                mock_lock_conn.return_value = test_conn
+
+                from engram.logbook import scm_sync_lock
+
+                # Worker-1 获取 gitlab_commits 锁
+                lock1 = scm_sync_lock.claim(
+                    repo_id=repo_id,
+                    job_type="gitlab_commits",
+                    worker_id="worker-1",
+                    lease_seconds=60,
+                )
+                assert lock1 is True
+
+                # Worker-2 获取 gitlab_mrs 锁（同一 repo，不同 job_type）
+                lock2 = scm_sync_lock.claim(
+                    repo_id=repo_id,
+                    job_type="gitlab_mrs",
+                    worker_id="worker-2",
+                    lease_seconds=60,
+                )
+                assert lock2 is True, "不同 job_type 应该能同时获取锁"
+
+                # Worker-3 尝试获取 gitlab_commits 锁（应该失败）
+                lock3 = scm_sync_lock.claim(
+                    repo_id=repo_id,
+                    job_type="gitlab_commits",
+                    worker_id="worker-3",
+                    lease_seconds=60,
+                )
+                assert lock3 is False, "同一 job_type 锁被持有时应获取失败"
+
+                # 验证锁状态
+                lock_info1 = scm_sync_lock.get(repo_id, "gitlab_commits")
+                lock_info2 = scm_sync_lock.get(repo_id, "gitlab_mrs")
+
+                assert lock_info1["locked_by"] == "worker-1"
+                assert lock_info2["locked_by"] == "worker-2"
+
+                # 释放锁
+                scm_sync_lock.release(repo_id, "gitlab_commits", "worker-1")
+                scm_sync_lock.release(repo_id, "gitlab_mrs", "worker-2")
+
+        finally:
+            with conn.cursor() as cur:
+                if repo_id:
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_locks WHERE repo_id = %s", (repo_id,)
+                    )
+                    cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+            conn.close()
+
+    def test_lock_claim_queue_claim_full_flow(self, migrated_db):
+        """
+        完整流程测试：queue.claim -> lock.claim -> execute -> ack -> lock.release
+        """
+        dsn = migrated_db["dsn"]
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        repo_id = None
+        job_id = None
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                    VALUES ('git', 'https://example.com/test_full_flow.git')
+                    RETURNING repo_id
+                """)
+                repo_id = cur.fetchone()[0]
+
+                cur.execute(
+                    f"""
+                    INSERT INTO {scm_schema}.sync_jobs
+                    (repo_id, job_type, mode, status, priority, payload_json)
+                    VALUES (%s, 'gitlab_commits', 'incremental', 'pending', 100, '{{}}')
+                    RETURNING job_id
+                """,
+                    (repo_id,),
+                )
+                job_id = str(cur.fetchone()[0])
+
+            with patch("engram_logbook.scm_sync_queue.get_connection") as mock_queue_conn:
+                with patch("engram_logbook.scm_sync_lock.get_connection") as mock_lock_conn:
+                    test_conn = psycopg.connect(dsn, autocommit=False)
+                    with test_conn.cursor() as cur:
+                        cur.execute(f"SET search_path TO {scm_schema}")
+
+                    mock_queue_conn.return_value = test_conn
+                    mock_lock_conn.return_value = test_conn
+
+                    from engram.logbook import scm_sync_lock
+                    from engram.logbook.scm_sync_queue import ack, get_job
+                    from engram.logbook.scm_sync_queue import claim as queue_claim
+
+                    worker_id = "full-flow-worker"
+
+                    # Step 1: Queue claim
+                    job = queue_claim(worker_id=worker_id, lease_seconds=60)
+                    assert job is not None
+                    assert job["job_id"] == job_id
+
+                    # Step 2: Lock claim
+                    lock_acquired = scm_sync_lock.claim(
+                        repo_id=repo_id,
+                        job_type="gitlab_commits",
+                        worker_id=worker_id,
+                        lease_seconds=60,
+                    )
+                    assert lock_acquired is True
+
+                    # 验证任务和锁状态
+                    job_status = get_job(job_id)
+                    assert job_status["status"] == "running"
+                    assert job_status["locked_by"] == worker_id
+
+                    lock_info = scm_sync_lock.get(repo_id, "gitlab_commits")
+                    assert lock_info["locked_by"] == worker_id
+
+                    # Step 3: Execute (模拟)
+                    # ... 执行同步逻辑 ...
+
+                    # Step 4: Ack
+                    ack_result = ack(job_id=job_id, worker_id=worker_id)
+                    assert ack_result is True
+
+                    # Step 5: Lock release
+                    release_result = scm_sync_lock.release(
+                        repo_id=repo_id,
+                        job_type="gitlab_commits",
+                        worker_id=worker_id,
+                    )
+                    assert release_result is True
+
+                    # 验证最终状态
+                    final_job = get_job(job_id)
+                    assert final_job["status"] == "completed"
+                    assert final_job["locked_by"] is None
+
+                    final_lock = scm_sync_lock.get(repo_id, "gitlab_commits")
+                    assert final_lock["locked_by"] is None
+
+        finally:
+            with conn.cursor() as cur:
+                if job_id:
+                    cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE job_id = %s", (job_id,))
+                if repo_id:
+                    cur.execute(
+                        f"DELETE FROM {scm_schema}.sync_locks WHERE repo_id = %s", (repo_id,)
+                    )
                     cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
             conn.close()

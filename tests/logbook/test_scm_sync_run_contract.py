@@ -19,56 +19,56 @@ test_scm_sync_run_contract.py - sync_runs 记录构建器模块测试
 import json
 import os
 from pathlib import Path
+
 import pytest
-import traceback
 
 # 尝试导入 jsonschema
 try:
     import jsonschema
     from jsonschema import Draft202012Validator, ValidationError
+
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
     Draft202012Validator = None
     ValidationError = Exception
 
+from engram.logbook.scm_sync_errors import (
+    TRANSIENT_ERROR_BACKOFF,
+    BackoffSource,
+    ErrorCategory,
+    resolve_backoff,
+)
 from engram.logbook.scm_sync_run_contract import (
-    # 状态枚举
-    RunStatus,
+    # 默认值常量
+    DEFAULT_COUNTS,
+    DEFAULT_DEGRADATION_SNAPSHOT,
+    DEFAULT_ERROR_SUMMARY,
+    DEFAULT_REQUEST_STATS,
+    DegradationSnapshot,
+    ErrorSummary,
+    RequestStats,
     # 数据结构
     RunCounts,
-    ErrorSummary,
-    DegradationSnapshot,
-    RequestStats,
     RunFinishPayload,
-    # 构建函数
-    build_run_finish_payload,
-    build_run_finish_payload_from_result,
+    # 结构化错误
+    RunPayloadValidationError,
+    # 状态枚举
+    RunStatus,
     build_error_summary_from_exception,
-    # 便捷函数
-    build_payload_for_success,
-    build_payload_for_no_data,
     build_payload_for_exception,
     build_payload_for_lease_lost,
     build_payload_for_mark_dead,
+    build_payload_for_no_data,
+    # 便捷函数
+    build_payload_for_success,
+    # 构建函数
+    build_run_finish_payload,
+    build_run_finish_payload_from_result,
+    validate_and_build_error_summary,
     # 验证函数
     validate_run_finish_payload,
-    validate_and_build_error_summary,
-    # 默认值常量
-    DEFAULT_COUNTS,
-    DEFAULT_ERROR_SUMMARY,
-    DEFAULT_DEGRADATION_SNAPSHOT,
-    DEFAULT_REQUEST_STATS,
-    # 结构化错误
-    RunPayloadValidationError,
 )
-from engram.logbook.scm_sync_errors import (
-    ErrorCategory,
-    resolve_backoff,
-    BackoffSource,
-    TRANSIENT_ERROR_BACKOFF,
-)
-
 
 # ============ RunStatus 枚举测试 ============
 
@@ -108,7 +108,7 @@ class TestRunCounts:
         """to_dict 包含所有字段"""
         counts = RunCounts()
         d = counts.to_dict()
-        
+
         assert "synced_count" in d
         assert "diff_count" in d
         assert "total_requests" in d
@@ -118,7 +118,7 @@ class TestRunCounts:
         """to_dict(include_zero=False) 排除值为 0 的字段"""
         counts = RunCounts(synced_count=10, diff_count=5)
         d = counts.to_dict(include_zero=False)
-        
+
         assert d["synced_count"] == 10
         assert d["diff_count"] == 5
         assert "bulk_count" not in d
@@ -127,7 +127,7 @@ class TestRunCounts:
         """from_dict 基本功能"""
         data = {"synced_count": 100, "diff_count": 50}
         counts = RunCounts.from_dict(data)
-        
+
         assert counts.synced_count == 100
         assert counts.diff_count == 50
         assert counts.bulk_count == 0  # 默认值
@@ -141,7 +141,7 @@ class TestRunCounts:
         """from_dict 忽略未知字段"""
         data = {"synced_count": 10, "unknown_field": 999}
         counts = RunCounts.from_dict(data)
-        
+
         assert counts.synced_count == 10
         assert not hasattr(counts, "unknown_field")
 
@@ -166,7 +166,7 @@ class TestErrorSummary:
             error_message="Request timed out",
         )
         d = summary.to_dict()
-        
+
         assert d["error_category"] == "timeout"
         assert d["error_message"] == "Request timed out"
         assert "stack_trace" not in d  # 空字符串被排除
@@ -179,7 +179,7 @@ class TestErrorSummary:
             context={"job_id": "123", "worker_id": "w1"},
         )
         d = summary.to_dict()
-        
+
         assert d["context"]["job_id"] == "123"
         assert d["context"]["worker_id"] == "w1"
 
@@ -191,7 +191,7 @@ class TestErrorSummary:
             "attempts": 3,
         }
         summary = ErrorSummary.from_dict(data)
-        
+
         assert summary.error_category == "auth_error"
         assert summary.error_message == "401 Unauthorized"
         assert summary.attempts == 3
@@ -200,7 +200,7 @@ class TestErrorSummary:
         """from_dict 处理 error 字段（向后兼容）"""
         data = {"error": "Something went wrong"}
         summary = ErrorSummary.from_dict(data)
-        
+
         assert summary.error_message == "Something went wrong"
 
 
@@ -221,7 +221,7 @@ class TestDegradationSnapshot:
         """to_dict 排除默认值"""
         snapshot = DegradationSnapshot()
         d = snapshot.to_dict()
-        
+
         assert d == {}  # 全是默认值，应该为空
 
     def test_to_dict_includes_degradation_info(self):
@@ -232,7 +232,7 @@ class TestDegradationSnapshot:
             circuit_state="half_open",
         )
         d = snapshot.to_dict()
-        
+
         assert d["is_degraded"] is True
         assert d["degraded_reasons"]["timeout"] == 5
         assert d["circuit_state"] == "half_open"
@@ -245,7 +245,7 @@ class TestDegradationSnapshot:
             "suggested_diff_mode": "none",
         }
         snapshot = DegradationSnapshot.from_dict(data)
-        
+
         assert snapshot.is_degraded is True
         assert snapshot.suggested_batch_size == 50
         assert snapshot.suggested_diff_mode == "none"
@@ -269,7 +269,7 @@ class TestRequestStats:
         """to_dict 返回所有字段"""
         stats = RequestStats(total_requests=100, success_count=95)
         d = stats.to_dict()
-        
+
         assert d["total_requests"] == 100
         assert d["success_count"] == 95
         assert d["failure_count"] == 0
@@ -278,7 +278,7 @@ class TestRequestStats:
         """from_dict 基本功能"""
         data = {"total_requests": 200, "total_429_hits": 5}
         stats = RequestStats.from_dict(data)
-        
+
         assert stats.total_requests == 200
         assert stats.total_429_hits == 5
 
@@ -303,7 +303,7 @@ class TestRunFinishPayload:
             counts=RunCounts(synced_count=100),
         )
         d = payload.to_dict()
-        
+
         assert d["status"] == "completed"
         assert d["counts"]["synced_count"] == 100
 
@@ -317,7 +317,7 @@ class TestRunFinishPayload:
             ),
         )
         d = payload.to_dict()
-        
+
         assert d["status"] == "failed"
         assert d["error_summary_json"]["error_category"] == "timeout"
 
@@ -384,7 +384,7 @@ class TestBuildRunFinishPayloadFromResult:
             "diff_count": 50,
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.COMPLETED.value
         assert payload.counts.synced_count == 100
         assert payload.counts.diff_count == 50
@@ -397,7 +397,7 @@ class TestBuildRunFinishPayloadFromResult:
             "error_category": "connection",
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.FAILED.value
         assert payload.error_summary is not None
         assert payload.error_summary.error_category == "connection"
@@ -410,7 +410,7 @@ class TestBuildRunFinishPayloadFromResult:
             # 无 error 字段
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.NO_DATA.value
 
     def test_extracts_request_stats(self):
@@ -424,7 +424,7 @@ class TestBuildRunFinishPayloadFromResult:
             },
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.counts.total_requests == 200
         assert payload.counts.total_429_hits == 5
 
@@ -440,7 +440,7 @@ class TestBuildRunFinishPayloadFromResult:
             },
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.counts.patch_success == 45
         assert payload.counts.patch_failed == 3
         assert payload.counts.skipped_by_controller == 2
@@ -455,7 +455,7 @@ class TestBuildRunFinishPayloadFromResult:
             "suggested_batch_size": 50,
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.degradation is not None
         assert payload.degradation.is_degraded is True
         assert payload.degradation.circuit_state == "half_open"
@@ -470,7 +470,7 @@ class TestBuildRunFinishPayloadFromResult:
             # 无 error 或 error_category 字段
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.NO_DATA.value
         assert payload.error_summary is None
 
@@ -483,7 +483,7 @@ class TestBuildRunFinishPayloadFromResult:
             "error_category": "connection",
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.FAILED.value
         assert payload.error_summary is not None
         assert payload.error_summary.error_category == "connection"
@@ -497,7 +497,7 @@ class TestBuildRunFinishPayloadFromResult:
             # 明确标记为成功，即使没有同步任何数据
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.NO_DATA.value
         assert payload.counts.synced_count == 0
         assert payload.error_summary is None
@@ -511,7 +511,7 @@ class TestBuildRunFinishPayloadFromResult:
             # 无 error 字段
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.FAILED.value
         assert payload.error_summary is not None
         assert payload.error_summary.error_category == "timeout"
@@ -525,7 +525,7 @@ class TestBuildRunFinishPayloadFromResult:
             "error_category": "timeout",
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.FAILED.value
         assert payload.counts.synced_count == 50
         assert payload.error_summary is not None
@@ -541,7 +541,7 @@ class TestBuildErrorSummaryFromException:
         """超时异常"""
         exc = TimeoutError("Connection timed out")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.exception_type == "TimeoutError"
         assert summary.error_category == ErrorCategory.TIMEOUT.value
         assert "timed out" in summary.error_message
@@ -550,7 +550,7 @@ class TestBuildErrorSummaryFromException:
         """连接异常"""
         exc = ConnectionError("Connection refused")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.exception_type == "ConnectionError"
         assert summary.error_category == ErrorCategory.CONNECTION.value
 
@@ -561,7 +561,7 @@ class TestBuildErrorSummaryFromException:
             exc,
             error_category="auth_error",
         )
-        
+
         assert summary.error_category == "auth_error"
 
     def test_context_preserved(self):
@@ -571,35 +571,35 @@ class TestBuildErrorSummaryFromException:
             exc,
             context={"job_id": "123"},
         )
-        
+
         assert summary.context["job_id"] == "123"
 
     def test_error_message_truncated(self):
         """长错误消息被截断"""
         exc = Exception("x" * 2000)
         summary = build_error_summary_from_exception(exc)
-        
+
         assert len(summary.error_message) <= 1003  # 1000 + "..."
 
     def test_http_401_detected(self):
         """检测 HTTP 401"""
         exc = Exception("HTTP 401 Unauthorized")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.AUTH_ERROR.value
 
     def test_http_429_detected(self):
         """检测 HTTP 429"""
         exc = Exception("HTTP 429 Too Many Requests")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.RATE_LIMIT.value
 
     def test_http_5xx_detected(self):
         """检测 HTTP 5xx"""
         exc = Exception("HTTP 502 Bad Gateway")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.SERVER_ERROR.value
 
 
@@ -643,14 +643,14 @@ class TestBuildPayloadForException:
         """状态是 failed"""
         exc = Exception("Test error")
         payload = build_payload_for_exception(exc)
-        
+
         assert payload.status == RunStatus.FAILED.value
 
     def test_error_summary_populated(self):
         """error_summary 被填充"""
         exc = TimeoutError("Request timed out")
         payload = build_payload_for_exception(exc)
-        
+
         assert payload.error_summary is not None
         assert payload.error_summary.exception_type == "TimeoutError"
 
@@ -661,7 +661,7 @@ class TestBuildPayloadForException:
             exc,
             counts={"synced_count": 50},
         )
-        
+
         assert payload.counts.synced_count == 50
 
 
@@ -676,7 +676,7 @@ class TestBuildPayloadForLeaseLost:
             failure_count=3,
             max_failures=3,
         )
-        
+
         assert payload.status == RunStatus.FAILED.value
 
     def test_error_category_is_lease_lost(self):
@@ -687,7 +687,7 @@ class TestBuildPayloadForLeaseLost:
             failure_count=3,
             max_failures=3,
         )
-        
+
         assert payload.error_summary.error_category == ErrorCategory.LEASE_LOST.value
 
     def test_context_includes_job_info(self):
@@ -698,7 +698,7 @@ class TestBuildPayloadForLeaseLost:
             failure_count=3,
             max_failures=3,
         )
-        
+
         context = payload.error_summary.context
         assert context["job_id"] == "job-123"
         assert context["worker_id"] == "worker-1"
@@ -714,7 +714,7 @@ class TestBuildPayloadForMarkDead:
             error="Repository not found",
             error_category=ErrorCategory.REPO_NOT_FOUND.value,
         )
-        
+
         assert payload.status == RunStatus.FAILED.value
 
     def test_error_info_preserved(self):
@@ -725,7 +725,7 @@ class TestBuildPayloadForMarkDead:
             attempts=5,
             max_attempts=5,
         )
-        
+
         assert payload.error_summary.error_category == ErrorCategory.AUTH_ERROR.value
         assert payload.error_summary.error_message == "401 Unauthorized"
         assert payload.error_summary.attempts == 5
@@ -744,7 +744,7 @@ class TestValidateRunFinishPayload:
             counts={"synced_count": 100},
         )
         is_valid, errors, warnings = validate_run_finish_payload(payload)
-        
+
         assert is_valid
         assert len(errors) == 0
 
@@ -755,7 +755,7 @@ class TestValidateRunFinishPayload:
             "counts": {"synced_count": 0},
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         assert not is_valid
         assert any("status" in e for e in errors)
 
@@ -766,7 +766,7 @@ class TestValidateRunFinishPayload:
             "counts": {},  # 缺少 synced_count
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         assert not is_valid
         assert any("synced_count" in e for e in errors)
 
@@ -778,7 +778,7 @@ class TestValidateRunFinishPayload:
             # 缺少 error_summary_json
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         # 根据 schema 规定，这是错误而非警告
         assert not is_valid
         assert any("error_summary_json" in e for e in errors)
@@ -792,7 +792,7 @@ class TestValidateRunFinishPayload:
             "counts": {"synced_count": "not_a_number"},
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         assert not is_valid
         assert any("类型错误" in e for e in errors)
 
@@ -803,7 +803,7 @@ class TestValidateRunFinishPayload:
             "counts": "not_a_dict",
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         assert not is_valid
         assert any("counts" in e and "字典" in e for e in errors)
 
@@ -815,7 +815,7 @@ class TestValidateRunFinishPayload:
             "error_summary_json": "not_a_dict",
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         assert not is_valid
         assert any("error_summary_json" in e and "字典" in e for e in errors)
 
@@ -828,7 +828,7 @@ class TestValidateRunFinishPayload:
             "counts": {"synced_count": 100, "unknown_field": 50},
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         assert is_valid  # 未知字段不影响有效性
         assert any("unknown_field" in w for w in warnings)
 
@@ -843,7 +843,7 @@ class TestValidateRunFinishPayload:
             },
         }
         is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
-        
+
         assert is_valid
         assert any("custom_field_1" in w for w in warnings)
         assert any("custom_field_2" in w for w in warnings)
@@ -856,10 +856,10 @@ class TestValidateRunFinishPayload:
             "status": "completed",
             "counts": {},  # 缺少 synced_count
         }
-        
+
         with pytest.raises(RunPayloadValidationError) as exc_info:
             validate_run_finish_payload(payload_dict, raise_on_error=True)
-        
+
         assert "synced_count" in str(exc_info.value)
         assert len(exc_info.value.errors) > 0
 
@@ -869,11 +869,9 @@ class TestValidateRunFinishPayload:
             "status": "completed",
             "counts": {"synced_count": 100},
         }
-        
+
         # 不应该抛出异常
-        is_valid, errors, warnings = validate_run_finish_payload(
-            payload_dict, raise_on_error=True
-        )
+        is_valid, errors, warnings = validate_run_finish_payload(payload_dict, raise_on_error=True)
         assert is_valid
 
     def test_raise_on_error_exception_contains_payload(self):
@@ -882,10 +880,10 @@ class TestValidateRunFinishPayload:
             "status": "invalid",
             "counts": {},
         }
-        
+
         with pytest.raises(RunPayloadValidationError) as exc_info:
             validate_run_finish_payload(payload_dict, raise_on_error=True)
-        
+
         assert exc_info.value.payload == payload_dict
 
 
@@ -902,7 +900,7 @@ class TestRunPayloadValidationError:
             errors=["error1", "error2"],
             warnings=["warning1"],
         )
-        
+
         assert error.message == "Validation failed"
         assert len(error.errors) == 2
         assert len(error.warnings) == 1
@@ -914,9 +912,9 @@ class TestRunPayloadValidationError:
             errors=["缺少必需字段: synced_count"],
             warnings=["未知字段: custom_field"],
         )
-        
+
         summary = error.to_error_summary()
-        
+
         # 实际实现使用 validation_error 类别
         assert summary.error_category == "validation_error"
         assert "Validation failed" in summary.error_message
@@ -930,9 +928,9 @@ class TestRunPayloadValidationError:
             errors=["error1"],
             warnings=["warning1"],
         )
-        
+
         d = error.to_dict()
-        
+
         assert d["error_type"] == "RunPayloadValidationError"
         assert d["message"] == "Test message"
         assert d["errors"] == ["error1"]
@@ -944,7 +942,7 @@ class TestRunPayloadValidationError:
             message="Test error",
             errors=["error1"],
         )
-        
+
         assert "Test error" in str(error)
 
 
@@ -960,7 +958,7 @@ class TestValidateAndBuildErrorSummary:
             status=RunStatus.COMPLETED.value,
             counts={"synced_count": 100},
         )
-        
+
         result = validate_and_build_error_summary(payload)
         assert result is None
 
@@ -970,9 +968,9 @@ class TestValidateAndBuildErrorSummary:
             "status": "completed",
             "counts": {},  # 缺少 synced_count
         }
-        
+
         result = validate_and_build_error_summary(payload_dict)
-        
+
         assert result is not None
         assert isinstance(result, ErrorSummary)
         # 实际实现使用 validation_error 类别
@@ -985,9 +983,9 @@ class TestValidateAndBuildErrorSummary:
             "status": "invalid_status",
             "counts": {},  # 缺少 synced_count
         }
-        
+
         result = validate_and_build_error_summary(payload_dict)
-        
+
         assert result is not None
         errors = result.context.get("validation_errors", [])
         assert len(errors) >= 2  # 至少有 status 和 synced_count 两个错误
@@ -999,9 +997,9 @@ class TestValidateAndBuildErrorSummary:
             "status": "completed",
             "counts": {"unknown_field": 10},  # 缺少 synced_count，有未知字段
         }
-        
+
         result = validate_and_build_error_summary(payload_dict)
-        
+
         assert result is not None
         warnings = result.context.get("validation_warnings", [])
         # 未知字段应该产生警告
@@ -1042,27 +1040,27 @@ class TestContractConsistency:
 
     def test_all_exit_paths_produce_valid_payload(self):
         """所有退出路径都产生有效的 payload"""
-        
+
         # 成功退出
         p1 = build_payload_for_success(counts={"synced_count": 100})
         is_valid, errors, _ = validate_run_finish_payload(p1)
         assert is_valid, f"Success payload invalid: {errors}"
-        
+
         # 无数据退出
         p2 = build_payload_for_no_data()
         is_valid, errors, _ = validate_run_finish_payload(p2)
         assert is_valid, f"No data payload invalid: {errors}"
-        
+
         # 异常退出
         p3 = build_payload_for_exception(TimeoutError("timeout"))
         is_valid, errors, _ = validate_run_finish_payload(p3)
         assert is_valid, f"Exception payload invalid: {errors}"
-        
+
         # 租约丢失退出
         p4 = build_payload_for_lease_lost("job-1", "worker-1", 3, 3)
         is_valid, errors, _ = validate_run_finish_payload(p4)
         assert is_valid, f"Lease lost payload invalid: {errors}"
-        
+
         # mark_dead 退出
         p5 = build_payload_for_mark_dead("error", "auth_error")
         is_valid, errors, _ = validate_run_finish_payload(p5)
@@ -1073,7 +1071,7 @@ class TestContractConsistency:
         # 从不同来源构建的 counts 应该有相同的 key 集合
         counts1 = RunCounts().to_dict()
         counts2 = build_run_finish_payload().counts.to_dict()
-        
+
         assert set(counts1.keys()) == set(counts2.keys())
 
     def test_to_dict_and_from_dict_round_trip(self):
@@ -1081,7 +1079,7 @@ class TestContractConsistency:
         original = RunCounts(synced_count=100, diff_count=50, total_requests=200)
         d = original.to_dict()
         restored = RunCounts.from_dict(d)
-        
+
         assert restored.synced_count == original.synced_count
         assert restored.diff_count == original.diff_count
         assert restored.total_requests == original.total_requests
@@ -1096,7 +1094,7 @@ class TestEdgeCases:
     def test_empty_result_dict(self):
         """空结果字典"""
         payload = build_run_finish_payload_from_result({})
-        
+
         assert payload.status == RunStatus.NO_DATA.value
         assert payload.counts.synced_count == 0
 
@@ -1108,7 +1106,7 @@ class TestEdgeCases:
             "diff_count": None,
         }
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.counts.synced_count == 0
         assert payload.counts.diff_count == 0
 
@@ -1121,14 +1119,14 @@ class TestEdgeCases:
         """非常大的计数"""
         counts = RunCounts(synced_count=10**9)
         d = counts.to_dict()
-        
+
         assert d["synced_count"] == 10**9
 
     def test_special_characters_in_error_message(self):
         """错误消息中的特殊字符"""
         exc = Exception("Error with 'quotes' and \"double quotes\" and <tags>")
         summary = build_error_summary_from_exception(exc)
-        
+
         # 应该能正常处理
         assert "quotes" in summary.error_message
 
@@ -1156,7 +1154,7 @@ def run_schema():
     """加载 run schema"""
     if not os.path.exists(RUN_SCHEMA_PATH):
         pytest.skip(f"Schema file not found: {RUN_SCHEMA_PATH}")
-    
+
     with open(RUN_SCHEMA_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -1166,7 +1164,7 @@ def schema_validator(run_schema):
     """创建 schema validator"""
     if not HAS_JSONSCHEMA:
         pytest.skip("jsonschema not installed")
-    
+
     return Draft202012Validator(run_schema)
 
 
@@ -1190,7 +1188,7 @@ class TestRunSchemaFile:
                 schema = json.load(f)
             except json.JSONDecodeError as e:
                 pytest.fail(f"Schema is not valid JSON: {e}")
-        
+
         assert schema is not None
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
@@ -1217,12 +1215,7 @@ class TestMinimalRunPayload:
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_minimal_completed_payload(self, schema_validator):
         """最小成功 payload 应该有效"""
-        payload = {
-            "status": "completed",
-            "counts": {
-                "synced_count": 0
-            }
-        }
+        payload = {"status": "completed", "counts": {"synced_count": 0}}
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Minimal completed payload invalid: {errors}"
 
@@ -1231,35 +1224,28 @@ class TestMinimalRunPayload:
         """使用构建器创建的最小 payload 应该有效"""
         payload = build_run_finish_payload()
         payload_dict = payload.to_dict()
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload_dict)
         assert is_valid, f"Builder minimal payload invalid: {errors}"
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_missing_status_rejected(self, schema_validator):
         """缺少 status 应该被拒绝"""
-        payload = {
-            "counts": {"synced_count": 0}
-        }
+        payload = {"counts": {"synced_count": 0}}
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert not is_valid, "Missing status should be rejected"
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_missing_counts_rejected(self, schema_validator):
         """缺少 counts 应该被拒绝"""
-        payload = {
-            "status": "completed"
-        }
+        payload = {"status": "completed"}
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert not is_valid, "Missing counts should be rejected"
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_missing_synced_count_rejected(self, schema_validator):
         """缺少 synced_count 应该被拒绝"""
-        payload = {
-            "status": "completed",
-            "counts": {}
-        }
+        payload = {"status": "completed", "counts": {}}
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert not is_valid, "Missing synced_count should be rejected"
 
@@ -1288,7 +1274,7 @@ class TestUnknownFieldsInRun:
                 "synced_count": 100,
                 "custom_count": 50,
                 "future_metric": 25,
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Unknown counts fields should be allowed: {errors}"
@@ -1303,7 +1289,7 @@ class TestUnknownFieldsInRun:
                 "error_category": "timeout",
                 "error_message": "Timed out",
                 "custom_error_field": "custom_value",
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Unknown error_summary fields should be allowed: {errors}"
@@ -1322,7 +1308,7 @@ class TestFailedRunPayload:
                 "error_category": "timeout",
                 "error_message": "Request timed out after 30 seconds",
                 "exception_type": "TimeoutError",
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Failed payload with error_summary invalid: {errors}"
@@ -1343,8 +1329,8 @@ class TestFailedRunPayload:
                 "context": {
                     "job_id": "job-123",
                     "worker_id": "worker-1",
-                }
-            }
+                },
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Failed payload with full error_summary invalid: {errors}"
@@ -1355,7 +1341,7 @@ class TestFailedRunPayload:
         exc = TimeoutError("Connection timed out")
         payload = build_payload_for_exception(exc)
         payload_dict = payload.to_dict()
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload_dict)
         assert is_valid, f"Exception payload invalid: {errors}"
         assert payload_dict["status"] == "failed"
@@ -1372,7 +1358,7 @@ class TestFailedRunPayload:
             last_error="renew_lease returned False",
         )
         payload_dict = payload.to_dict()
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload_dict)
         assert is_valid, f"Lease lost payload invalid: {errors}"
 
@@ -1386,7 +1372,7 @@ class TestFailedRunPayload:
             max_attempts=5,
         )
         payload_dict = payload.to_dict()
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload_dict)
         assert is_valid, f"Mark dead payload invalid: {errors}"
 
@@ -1399,7 +1385,7 @@ class TestFailedRunPayload:
             "error_summary_json": {
                 "error_category": "invalid_category",
                 "error_message": "Some error",
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert not is_valid, "Invalid error_category should be rejected"
@@ -1416,7 +1402,7 @@ class TestDegradedRunPayload:
             "counts": {"synced_count": 100, "degraded_count": 10},
             "degradation_json": {
                 "is_degraded": True,
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Minimal degraded payload invalid: {errors}"
@@ -1443,7 +1429,7 @@ class TestDegradedRunPayload:
                 "suggested_batch_size": 50,
                 "suggested_diff_mode": "none",
                 "degraded_at": "2024-01-15T10:30:00Z",
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Full degraded payload invalid: {errors}"
@@ -1461,7 +1447,7 @@ class TestDegradedRunPayload:
         }
         payload = build_run_finish_payload_from_result(result)
         payload_dict = payload.to_dict()
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload_dict)
         assert is_valid, f"Degraded result payload invalid: {errors}"
         assert payload_dict.get("degradation_json") is not None
@@ -1475,7 +1461,7 @@ class TestDegradedRunPayload:
             "degradation_json": {
                 "is_degraded": True,
                 "circuit_state": "invalid_state",
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert not is_valid, "Invalid circuit_state should be rejected"
@@ -1487,10 +1473,7 @@ class TestNoDataRunPayload:
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_no_data_minimal(self, schema_validator):
         """最小无数据 payload"""
-        payload = {
-            "status": "no_data",
-            "counts": {"synced_count": 0}
-        }
+        payload = {"status": "no_data", "counts": {"synced_count": 0}}
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Minimal no_data payload invalid: {errors}"
 
@@ -1499,7 +1482,7 @@ class TestNoDataRunPayload:
         """使用 build_payload_for_no_data 创建的 payload 应该有效"""
         payload = build_payload_for_no_data()
         payload_dict = payload.to_dict()
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload_dict)
         assert is_valid, f"No data builder payload invalid: {errors}"
         assert payload_dict["status"] == "no_data"
@@ -1515,7 +1498,7 @@ class TestNoDataRunPayload:
                 "diff_count": 0,
                 "bulk_count": 0,
                 "scanned_count": 0,
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"No data with all zero counts invalid: {errors}"
@@ -1524,19 +1507,12 @@ class TestNoDataRunPayload:
     def test_no_data_cursor_not_advanced(self, schema_validator):
         """无数据时 cursor 不推进（cursor_after 为 null 或不存在）"""
         # cursor_after 不存在
-        payload1 = {
-            "status": "no_data",
-            "counts": {"synced_count": 0}
-        }
+        payload1 = {"status": "no_data", "counts": {"synced_count": 0}}
         is_valid, errors = validate_against_run_schema(schema_validator, payload1)
         assert is_valid, f"No data without cursor_after invalid: {errors}"
-        
+
         # cursor_after 为 null
-        payload2 = {
-            "status": "no_data",
-            "counts": {"synced_count": 0},
-            "cursor_after": None
-        }
+        payload2 = {"status": "no_data", "counts": {"synced_count": 0}, "cursor_after": None}
         is_valid, errors = validate_against_run_schema(schema_validator, payload2)
         assert is_valid, f"No data with null cursor_after invalid: {errors}"
 
@@ -1550,7 +1526,7 @@ class TestNoDataRunPayload:
                 "total_requests": 5,
                 "success_count": 5,
                 "failure_count": 0,
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"No data with request_stats invalid: {errors}"
@@ -1568,7 +1544,7 @@ class TestCompletedRunPayload:
             "cursor_after": {
                 "commit_sha": "abc123",
                 "timestamp": "2024-01-15T10:00:00Z",
-            }
+            },
         }
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Completed with cursor invalid: {errors}"
@@ -1611,7 +1587,7 @@ class TestCompletedRunPayload:
             logbook_item_id=12345,
         )
         payload_dict = payload.to_dict()
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload_dict)
         assert is_valid, f"Success builder payload invalid: {errors}"
 
@@ -1622,10 +1598,7 @@ class TestInvalidStatus:
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_invalid_status_rejected(self, schema_validator):
         """无效状态应该被拒绝"""
-        payload = {
-            "status": "invalid_status",
-            "counts": {"synced_count": 0}
-        }
+        payload = {"status": "invalid_status", "counts": {"synced_count": 0}}
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert not is_valid, "Invalid status should be rejected"
 
@@ -1633,10 +1606,7 @@ class TestInvalidStatus:
     def test_all_valid_statuses_accepted(self, schema_validator):
         """所有有效状态应该被接受"""
         for status in ["running", "completed", "failed", "no_data"]:
-            payload = {
-                "status": status,
-                "counts": {"synced_count": 0}
-            }
+            payload = {"status": status, "counts": {"synced_count": 0}}
             # failed 状态需要 error_summary_json（schema 强制要求）
             if status == "failed":
                 payload["error_summary_json"] = {
@@ -1661,7 +1631,7 @@ class TestResolveBackoffPriority:
             retry_after=300,
             error_category="rate_limit",
         )
-        
+
         assert backoff == 300
         assert source == BackoffSource.RETRY_AFTER.value
         # 确认没有使用 rate_limit 的默认 120 秒
@@ -1674,7 +1644,7 @@ class TestResolveBackoffPriority:
             error_category=None,
             error_message=None,
         )
-        
+
         assert backoff == 60
         assert source == BackoffSource.RETRY_AFTER.value
 
@@ -1685,7 +1655,7 @@ class TestResolveBackoffPriority:
             retry_after=None,
             error_category="rate_limit",
         )
-        
+
         assert backoff == TRANSIENT_ERROR_BACKOFF["rate_limit"]
         assert source == BackoffSource.ERROR_CATEGORY.value
 
@@ -1697,7 +1667,7 @@ class TestResolveBackoffPriority:
             error_message=None,
             default_backoff=60,
         )
-        
+
         assert backoff == 60
         assert source == BackoffSource.DEFAULT.value
 
@@ -1705,7 +1675,7 @@ class TestResolveBackoffPriority:
         """
         429 场景：即使 error_category=rate_limit，
         当服务端返回 retry_after 时应使用该值而非分类默认 backoff
-        
+
         这是核心契约测试：验证 worker 不会覆盖服务端指定的 retry_after
         """
         # 模拟 429 响应，服务端返回 Retry-After: 180
@@ -1714,7 +1684,7 @@ class TestResolveBackoffPriority:
             error_category="rate_limit",  # 429 对应的分类
             error_message="429 Too Many Requests",
         )
-        
+
         # 应该使用服务端指定的 180 秒，而非 rate_limit 分类默认的 120 秒
         assert backoff == 180
         assert source == BackoffSource.RETRY_AFTER.value
@@ -1726,7 +1696,7 @@ class TestResolveBackoffPriority:
             retry_after=0,
             error_category="rate_limit",
         )
-        
+
         # 0 被视为无效值，回退到分类 backoff
         assert backoff == TRANSIENT_ERROR_BACKOFF["rate_limit"]
         assert source == BackoffSource.ERROR_CATEGORY.value
@@ -1737,7 +1707,7 @@ class TestResolveBackoffPriority:
             retry_after=-1,
             error_category="timeout",
         )
-        
+
         assert backoff == TRANSIENT_ERROR_BACKOFF["timeout"]
         assert source == BackoffSource.ERROR_CATEGORY.value
 
@@ -1748,7 +1718,7 @@ class TestResolveBackoffPriority:
             error_category=None,
             error_message="HTTP 429 Too Many Requests",
         )
-        
+
         # 从消息推断为 rate_limit
         assert backoff == TRANSIENT_ERROR_BACKOFF["rate_limit"]
         assert source == BackoffSource.ERROR_CATEGORY.value
@@ -1766,9 +1736,9 @@ class TestErrorSummaryBackoffFields:
             backoff_source=BackoffSource.ERROR_CATEGORY.value,
             retry_after=None,
         )
-        
+
         d = summary.to_dict()
-        
+
         assert d["backoff_seconds"] == 120
         assert d["backoff_source"] == "error_category"
         assert "retry_after" not in d  # None 不输出
@@ -1782,9 +1752,9 @@ class TestErrorSummaryBackoffFields:
             backoff_source=BackoffSource.RETRY_AFTER.value,
             retry_after=300,
         )
-        
+
         d = summary.to_dict()
-        
+
         assert d["retry_after"] == 300
         assert d["backoff_seconds"] == 300
         assert d["backoff_source"] == "retry_after"
@@ -1798,9 +1768,9 @@ class TestErrorSummaryBackoffFields:
             "backoff_source": "retry_after",
             "retry_after": 180,
         }
-        
+
         summary = ErrorSummary.from_dict(data)
-        
+
         assert summary.backoff_seconds == 180
         assert summary.backoff_source == "retry_after"
         assert summary.retry_after == 180
@@ -1817,9 +1787,9 @@ class TestBuildPayloadWithRetryAfter:
             "error_category": "rate_limit",
             "retry_after": 300,  # 服务端指定
         }
-        
+
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.status == RunStatus.FAILED.value
         assert payload.error_summary is not None
         assert payload.error_summary.backoff_seconds == 300
@@ -1834,9 +1804,9 @@ class TestBuildPayloadWithRetryAfter:
             "error_category": "rate_limit",
             # 无 retry_after
         }
-        
+
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.error_summary is not None
         assert payload.error_summary.backoff_seconds == TRANSIENT_ERROR_BACKOFF["rate_limit"]
         assert payload.error_summary.backoff_source == BackoffSource.ERROR_CATEGORY.value
@@ -1845,7 +1815,7 @@ class TestBuildPayloadWithRetryAfter:
     def test_result_retry_after_not_overridden_by_category(self):
         """
         核心契约测试：retry_after 不会被 error_category 覆盖
-        
+
         当 429 响应包含 Retry-After 头时，worker 必须使用该值，
         而不是使用 rate_limit 分类的默认 backoff（120秒）。
         """
@@ -1856,9 +1826,9 @@ class TestBuildPayloadWithRetryAfter:
             "error_category": "rate_limit",
             "retry_after": 600,  # GitLab 指定等待 10 分钟
         }
-        
+
         payload = build_run_finish_payload_from_result(result)
-        
+
         # 必须使用 600 秒，而非 rate_limit 默认的 120 秒
         assert payload.error_summary.backoff_seconds == 600
         assert payload.error_summary.backoff_source == BackoffSource.RETRY_AFTER.value
@@ -1876,22 +1846,22 @@ class TestSchemaAndBuilderConsistency:
         p1 = build_payload_for_success(counts={"synced_count": 100})
         is_valid, errors = validate_against_run_schema(schema_validator, p1.to_dict())
         assert is_valid, f"Success path invalid: {errors}"
-        
+
         # 无数据
         p2 = build_payload_for_no_data()
         is_valid, errors = validate_against_run_schema(schema_validator, p2.to_dict())
         assert is_valid, f"No data path invalid: {errors}"
-        
+
         # 异常
         p3 = build_payload_for_exception(TimeoutError("timeout"))
         is_valid, errors = validate_against_run_schema(schema_validator, p3.to_dict())
         assert is_valid, f"Exception path invalid: {errors}"
-        
+
         # 租约丢失
         p4 = build_payload_for_lease_lost("job-1", "worker-1", 3, 3)
         is_valid, errors = validate_against_run_schema(schema_validator, p4.to_dict())
         assert is_valid, f"Lease lost path invalid: {errors}"
-        
+
         # Mark dead
         p5 = build_payload_for_mark_dead("error", "auth_error")
         is_valid, errors = validate_against_run_schema(schema_validator, p5.to_dict())
@@ -1905,13 +1875,13 @@ class TestSchemaAndBuilderConsistency:
         p1 = build_run_finish_payload_from_result(result1)
         is_valid, errors = validate_against_run_schema(schema_validator, p1.to_dict())
         assert is_valid, f"Success result invalid: {errors}"
-        
+
         # 失败结果
         result2 = {"success": False, "error": "Connection failed", "error_category": "connection"}
         p2 = build_run_finish_payload_from_result(result2)
         is_valid, errors = validate_against_run_schema(schema_validator, p2.to_dict())
         assert is_valid, f"Failed result invalid: {errors}"
-        
+
         # 空结果
         result3 = {}
         p3 = build_run_finish_payload_from_result(result3)
@@ -1929,16 +1899,16 @@ class TestCursorBeforeAfterRules:
         """成功路径应该可以同时包含 cursor_before 和 cursor_after"""
         cursor_before = {"commit_sha": "abc123", "timestamp": "2025-01-01T00:00:00Z"}
         cursor_after = {"commit_sha": "xyz789", "timestamp": "2025-01-01T01:00:00Z"}
-        
+
         payload = build_payload_for_success(
             counts={"synced_count": 100},
             cursor_before=cursor_before,
             cursor_after=cursor_after,
         )
-        
+
         assert payload.cursor_before == cursor_before
         assert payload.cursor_after == cursor_after
-        
+
         d = payload.to_dict()
         assert d["cursor_before"] == cursor_before
         assert d["cursor_after"] == cursor_after
@@ -1946,9 +1916,9 @@ class TestCursorBeforeAfterRules:
     def test_no_data_path_cursor_before_preserved(self):
         """no_data 状态下 cursor_before 应该被保留（用于审计）"""
         cursor_before = {"commit_sha": "abc123"}
-        
+
         payload = build_payload_for_no_data(cursor_before=cursor_before)
-        
+
         assert payload.status == RunStatus.NO_DATA.value
         assert payload.cursor_before == cursor_before
         assert payload.cursor_after is None  # 无数据时游标不推进
@@ -1956,22 +1926,22 @@ class TestCursorBeforeAfterRules:
     def test_no_data_path_cursor_after_none_is_valid(self):
         """no_data 状态下 cursor_after 为 None 是有效的（游标不推进）"""
         payload = build_payload_for_no_data()
-        
+
         assert payload.status == RunStatus.NO_DATA.value
         assert payload.cursor_after is None
-        
+
         d = payload.to_dict()
         assert "cursor_after" not in d  # None 值不输出
 
     def test_failed_path_cursor_before_preserved_for_audit(self):
         """失败路径应该保留 cursor_before（用于审计和问题排查）"""
         cursor_before = {"commit_sha": "abc123", "timestamp": "2025-01-01T00:00:00Z"}
-        
+
         payload = build_payload_for_exception(
             TimeoutError("Connection timed out"),
             cursor_before=cursor_before,
         )
-        
+
         assert payload.status == RunStatus.FAILED.value
         assert payload.cursor_before == cursor_before
         assert payload.cursor_after is None  # 失败时通常不推进游标
@@ -1979,7 +1949,7 @@ class TestCursorBeforeAfterRules:
     def test_lease_lost_cursor_before_preserved(self):
         """租约丢失时应该保留 cursor_before"""
         cursor_before = {"commit_sha": "abc123"}
-        
+
         payload = build_payload_for_lease_lost(
             job_id="job-123",
             worker_id="worker-1",
@@ -1987,19 +1957,19 @@ class TestCursorBeforeAfterRules:
             max_failures=3,
             cursor_before=cursor_before,
         )
-        
+
         assert payload.cursor_before == cursor_before
 
     def test_mark_dead_cursor_before_preserved(self):
         """永久错误时应该保留 cursor_before"""
         cursor_before = {"commit_sha": "abc123"}
-        
+
         payload = build_payload_for_mark_dead(
             error="401 Unauthorized",
             error_category=ErrorCategory.AUTH_ERROR.value,
             cursor_before=cursor_before,
         )
-        
+
         assert payload.cursor_before == cursor_before
 
     def test_from_result_extracts_both_cursors(self):
@@ -2010,23 +1980,23 @@ class TestCursorBeforeAfterRules:
             "cursor_before": {"commit_sha": "abc123"},
             "cursor_after": {"commit_sha": "xyz789"},
         }
-        
+
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.cursor_before == {"commit_sha": "abc123"}
         assert payload.cursor_after == {"commit_sha": "xyz789"}
 
     def test_cursor_before_equals_cursor_after_valid_when_no_progress(self):
         """当没有实际进展时，cursor_before 和 cursor_after 可以相同"""
         cursor = {"commit_sha": "abc123", "timestamp": "2025-01-01T00:00:00Z"}
-        
+
         # 这种情况可能发生在：扫描了数据但所有记录都已存在（幂等）
         payload = build_payload_for_success(
             counts={"synced_count": 0, "skipped_count": 10},
             cursor_before=cursor,
             cursor_after=cursor,  # 游标未推进
         )
-        
+
         assert payload.cursor_before == cursor
         assert payload.cursor_after == cursor
 
@@ -2039,7 +2009,7 @@ class TestCursorBeforeAfterRules:
             "cursor_before": {"commit_sha": "abc123", "timestamp": "2025-01-01T00:00:00Z"},
             "cursor_after": {"commit_sha": "xyz789", "timestamp": "2025-01-01T01:00:00Z"},
         }
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Payload with cursor_before invalid: {errors}"
 
@@ -2052,7 +2022,7 @@ class TestCursorBeforeAfterRules:
             "cursor_before": None,
             "cursor_after": {"commit_sha": "xyz789"},
         }
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Payload with null cursor_before invalid: {errors}"
 
@@ -2066,17 +2036,17 @@ class TestCursorBeforeAfterRules:
 class TestWorkerToRunContractConsistency:
     """
     测试 worker 从子脚本 JSON 解析到 sync_runs 的映射一致性
-    
+
     验证:
     1. SyncResult 字段与 RunCounts 字段的对应关系
     2. legacy 字段映射后能正确构建 payload
     3. 所有计数字段都被正确提取
     """
-    
+
     def test_sync_result_fields_map_to_run_counts(self):
         """SyncResult 字段应该正确映射到 RunCounts"""
         from engram.logbook.sync_result import SyncResult
-        
+
         # 构建完整的 SyncResult
         sync_result = SyncResult(
             success=True,
@@ -2087,58 +2057,58 @@ class TestWorkerToRunContractConsistency:
             bulk_count=3,
             diff_none_count=2,
         )
-        
+
         # 转换为 dict
         result_dict = sync_result.to_dict()
-        
+
         # 使用 build_run_finish_payload_from_result 构建 payload
         payload = build_run_finish_payload_from_result(result_dict)
-        
+
         # 验证映射一致性
         assert payload.counts.synced_count == sync_result.synced_count
         assert payload.counts.diff_count == sync_result.diff_count
         assert payload.counts.degraded_count == sync_result.degraded_count
         assert payload.counts.bulk_count == sync_result.bulk_count
-    
+
     def test_legacy_ok_count_fields_build_valid_payload(self):
         """legacy 字段 ok/count 应该能构建有效的 payload"""
         from engram.logbook.sync_result import normalize_sync_result
-        
+
         # 模拟旧脚本返回的 legacy 格式
         legacy_result = {
             "ok": True,
             "count": 50,
             "diff_count": 45,
         }
-        
+
         # 规范化
         normalized = normalize_sync_result(legacy_result)
-        
+
         # 构建 payload
         payload = build_run_finish_payload_from_result(normalized)
-        
+
         # 验证
         assert payload.status == RunStatus.COMPLETED.value
         assert payload.counts.synced_count == 50
         assert payload.counts.diff_count == 45
-    
+
     def test_legacy_ok_false_builds_failed_payload(self):
         """legacy ok=False 应该构建 failed payload"""
         from engram.logbook.sync_result import normalize_sync_result
-        
+
         legacy_result = {
             "ok": False,
             "error": "Connection failed",
             "error_category": "connection",
         }
-        
+
         normalized = normalize_sync_result(legacy_result)
         payload = build_run_finish_payload_from_result(normalized)
-        
+
         assert payload.status == RunStatus.FAILED.value
         assert payload.error_summary is not None
         assert payload.error_summary.error_category == "connection"
-    
+
     def test_all_count_fields_extracted(self):
         """验证所有计数字段都被正确提取"""
         # 完整的同步结果
@@ -2166,19 +2136,19 @@ class TestWorkerToRunContractConsistency:
                 "total_429_hits": 2,
             },
         }
-        
+
         payload = build_run_finish_payload_from_result(full_result)
-        
+
         # 验证主要计数字段
         assert payload.counts.synced_count == 100
         assert payload.counts.diff_count == 95
         assert payload.counts.degraded_count == 5
         assert payload.counts.bulk_count == 3
-        
+
         # 验证请求统计被提取
         assert payload.counts.total_requests == 200
         assert payload.counts.total_429_hits == 2
-    
+
     def test_svn_patch_stats_extracted(self):
         """SVN patch_stats 应该被正确提取"""
         svn_result = {
@@ -2190,17 +2160,17 @@ class TestWorkerToRunContractConsistency:
                 "skipped_by_controller": 2,
             },
         }
-        
+
         payload = build_run_finish_payload_from_result(svn_result)
-        
+
         assert payload.counts.patch_success == 45
         assert payload.counts.patch_failed == 3
         assert payload.counts.skipped_by_controller == 2
-    
+
     def test_locked_skipped_fields_preserved(self):
         """locked/skipped 字段应该被保留（用于 lock_held 场景）"""
         from engram.logbook.sync_result import SyncResult
-        
+
         # 模拟 lock_held 场景（不带 error_category，因为 worker 处理 lock_held 时直接 requeue）
         lock_result = SyncResult(
             success=True,
@@ -2208,22 +2178,22 @@ class TestWorkerToRunContractConsistency:
             skipped=True,
             message="Watermark lock held by another worker",
         )
-        
+
         result_dict = lock_result.to_dict()
-        
+
         # 验证字段被保留
         assert result_dict["locked"] is True
         assert result_dict["skipped"] is True
-        
+
         # 构建 payload（lock_held 场景通常不走 run-contract，worker 直接 requeue）
         # 但如果走 run-contract，success=True 且 synced_count=0 应该是 no_data
         payload = build_run_finish_payload_from_result(result_dict)
         assert payload.status == RunStatus.NO_DATA.value  # success=True 且 synced_count=0
-    
+
     def test_locked_skipped_with_error_category(self):
         """locked/skipped 场景带 error_category 时的状态"""
         from engram.logbook.sync_result import SyncResult
-        
+
         # 模拟 lock_held 场景（带 error_category，这种情况会被标记为 failed）
         lock_result = SyncResult(
             success=False,  # 有 error_category 时通常 success=False
@@ -2232,13 +2202,13 @@ class TestWorkerToRunContractConsistency:
             error_category="lock_held",
             message="Watermark lock held by another worker",
         )
-        
+
         result_dict = lock_result.to_dict()
-        
+
         # 验证字段被保留
         assert result_dict["locked"] is True
         assert result_dict["skipped"] is True
-        
+
         # 当有 error_category 时，payload 构建器会标记为 failed
         payload = build_run_finish_payload_from_result(result_dict)
         assert payload.status == RunStatus.FAILED.value
@@ -2249,62 +2219,45 @@ class TestWorkerToRunContractConsistency:
 class TestSyncResultToRunContractFieldMapping:
     """
     测试 SyncResult 字段到 RunContract 字段的完整映射
-    
+
     确保两个模块之间的字段名称和语义一致
     """
-    
+
     def test_count_field_names_consistent(self):
         """验证计数字段名称在两个模块间一致"""
-        from engram.logbook.sync_result import SyncResult
-        
+
         # SyncResult 的计数字段
-        sync_result_count_fields = {
-            "synced_count",
-            "skipped_count", 
-            "diff_count",
-            "degraded_count",
-            "bulk_count",
-            "diff_none_count",
-            "scanned_count",
-            "inserted_count",
-            "synced_mr_count",
-            "synced_event_count",
-            "skipped_event_count",
-            "patch_success",
-            "patch_failed",
-            "skipped_by_controller",
-        }
-        
+
         # RunCounts 的字段
         run_counts_fields = set(RunCounts().to_dict().keys())
-        
+
         # 验证 SyncResult 的关键计数字段在 RunCounts 中都存在
         key_fields = {"synced_count", "diff_count", "degraded_count", "bulk_count"}
         for field in key_fields:
             assert field in run_counts_fields, f"字段 {field} 应该在 RunCounts 中存在"
-    
+
     def test_status_determination_rules_consistent(self):
         """验证状态判断规则一致"""
         # success=True, synced_count > 0 -> completed
         result1 = {"success": True, "synced_count": 100}
         payload1 = build_run_finish_payload_from_result(result1)
         assert payload1.status == RunStatus.COMPLETED.value
-        
+
         # success=True, synced_count = 0 -> no_data
         result2 = {"success": True, "synced_count": 0}
         payload2 = build_run_finish_payload_from_result(result2)
         assert payload2.status == RunStatus.NO_DATA.value
-        
+
         # success=False, has error -> failed
         result3 = {"success": False, "error": "Some error", "error_category": "timeout"}
         payload3 = build_run_finish_payload_from_result(result3)
         assert payload3.status == RunStatus.FAILED.value
-        
+
         # success=False, no error, synced_count=0 -> no_data
         result4 = {"success": False, "synced_count": 0}
         payload4 = build_run_finish_payload_from_result(result4)
         assert payload4.status == RunStatus.NO_DATA.value
-    
+
     def test_degradation_info_extracted(self):
         """验证降级信息被正确提取"""
         degraded_result = {
@@ -2317,9 +2270,9 @@ class TestSyncResultToRunContractFieldMapping:
             "suggested_batch_size": 50,
             "suggested_diff_mode": "none",
         }
-        
+
         payload = build_run_finish_payload_from_result(degraded_result)
-        
+
         # 验证降级信息
         assert payload.degradation is not None
         assert payload.degradation.is_degraded is True
@@ -2335,96 +2288,96 @@ class TestExceptionCategoryInference:
         """TimeoutError 类异常应该推断为 timeout"""
         exc = TimeoutError("Connection timed out")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.TIMEOUT.value
 
     def test_connection_error_class(self):
         """ConnectionError 类异常应该推断为 connection"""
         exc = ConnectionError("Connection refused")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.CONNECTION.value
 
     def test_timeout_in_message(self):
         """消息中包含 timeout 应该推断为 timeout"""
         exc = Exception("Request timed out after 30 seconds")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.TIMEOUT.value
 
     def test_http_401_in_message(self):
         """消息中包含 401 应该推断为 auth_error"""
         exc = Exception("HTTP 401 Unauthorized")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.AUTH_ERROR.value
 
     def test_http_403_in_message(self):
         """消息中包含 403 应该推断为 permission_denied"""
         exc = Exception("HTTP 403 Forbidden")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.PERMISSION_DENIED.value
 
     def test_http_404_in_message(self):
         """消息中包含 404 应该推断为 repo_not_found"""
         exc = Exception("HTTP 404 Not Found")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.REPO_NOT_FOUND.value
 
     def test_http_429_in_message(self):
         """消息中包含 429 应该推断为 rate_limit"""
         exc = Exception("HTTP 429 Too Many Requests")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.RATE_LIMIT.value
 
     def test_rate_limit_keyword_in_message(self):
         """消息中包含 rate limit 关键字应该推断为 rate_limit"""
         exc = Exception("API rate limit exceeded, please wait")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.RATE_LIMIT.value
 
     def test_http_502_in_message(self):
         """消息中包含 502 应该推断为 server_error"""
         exc = Exception("HTTP 502 Bad Gateway")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.SERVER_ERROR.value
 
     def test_http_503_in_message(self):
         """消息中包含 503 应该推断为 server_error"""
         exc = Exception("HTTP 503 Service Unavailable")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.SERVER_ERROR.value
 
     def test_http_504_in_message(self):
         """消息中包含 504 但同时包含 Timeout 关键字时，优先匹配 timeout
-        
+
         注意：当前推断逻辑先检查 timeout 关键字，因此 "504 Gateway Timeout"
         会被推断为 timeout 而不是 server_error。这是合理的，因为 504 本质上是超时。
         """
         exc = Exception("HTTP 504 Gateway Timeout")
         summary = build_error_summary_from_exception(exc)
-        
+
         # 因为消息中包含 "Timeout" 关键字，先被匹配为 timeout
         assert summary.error_category == ErrorCategory.TIMEOUT.value
-    
+
     def test_http_502_503_without_timeout_keyword(self):
         """502/503 不包含 timeout 关键字时应该推断为 server_error"""
         exc = Exception("HTTP 502 Bad Gateway - Server unavailable")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.SERVER_ERROR.value
 
     def test_unknown_exception_defaults_to_exception(self):
         """未知异常应该推断为 exception"""
         exc = Exception("Some random error occurred")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.EXCEPTION.value
 
     def test_explicit_category_overrides_inference(self):
@@ -2434,28 +2387,28 @@ class TestExceptionCategoryInference:
             exc,
             error_category="lease_lost",  # 显式指定
         )
-        
+
         assert summary.error_category == "lease_lost"
 
     def test_unauthorized_keyword_in_message(self):
         """消息中包含 unauthorized 关键字应该推断为 auth_error"""
         exc = Exception("Access denied: unauthorized")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.AUTH_ERROR.value
 
     def test_forbidden_keyword_in_message(self):
         """消息中包含 forbidden 关键字应该推断为 permission_denied"""
         exc = Exception("Operation forbidden")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.PERMISSION_DENIED.value
 
     def test_not_found_keyword_in_message(self):
         """消息中包含 not found 关键字应该推断为 repo_not_found"""
         exc = Exception("Repository not found")
         summary = build_error_summary_from_exception(exc)
-        
+
         assert summary.error_category == ErrorCategory.REPO_NOT_FOUND.value
 
 
@@ -2467,7 +2420,7 @@ class TestRetryAfterPriorityEdgeCases:
 
     def test_retry_after_string_number_not_supported(self):
         """retry_after 不支持字符串类型，应该回退到 error_category backoff
-        
+
         注意：resolve_backoff 期望 retry_after 是 int 或 None。
         如果传入字符串会导致类型错误，调用方应该在传入前进行类型转换。
         """
@@ -2477,7 +2430,7 @@ class TestRetryAfterPriorityEdgeCases:
             retry_after=300,  # 正确的 int 类型
             error_category="rate_limit",
         )
-        
+
         assert backoff == 300
         assert source == BackoffSource.RETRY_AFTER.value
 
@@ -2488,7 +2441,7 @@ class TestRetryAfterPriorityEdgeCases:
             retry_after=3600,  # 1 小时
             error_category="rate_limit",
         )
-        
+
         assert backoff == 3600
         assert source == BackoffSource.RETRY_AFTER.value
 
@@ -2498,7 +2451,7 @@ class TestRetryAfterPriorityEdgeCases:
             retry_after=1,
             error_category="rate_limit",
         )
-        
+
         assert backoff == 1
         assert source == BackoffSource.RETRY_AFTER.value
 
@@ -2508,12 +2461,12 @@ class TestRetryAfterPriorityEdgeCases:
             retry_after=None,
             error_category="rate_limit",
         )
-        
+
         backoff_timeout, _ = resolve_backoff(
             retry_after=None,
             error_category="timeout",
         )
-        
+
         # rate_limit 和 timeout 可能有不同的默认 backoff
         # 这个测试验证它们是独立配置的
         assert backoff_rate_limit == TRANSIENT_ERROR_BACKOFF["rate_limit"]
@@ -2526,7 +2479,7 @@ class TestRetryAfterPriorityEdgeCases:
             error_category="some_unknown_category",
             default_backoff=30,
         )
-        
+
         # 未知分类应该使用 default_backoff
         assert backoff == 30 or source == BackoffSource.DEFAULT.value
 
@@ -2539,9 +2492,9 @@ class TestRetryAfterPriorityEdgeCases:
             backoff_source=BackoffSource.ERROR_CATEGORY.value,
             retry_after=0,  # 无效值
         )
-        
+
         d = summary.to_dict()
-        
+
         # retry_after=0 应该被输出还是不输出取决于契约
         # 当前实现：有值时输出
         # 这个测试记录当前行为
@@ -2556,9 +2509,9 @@ class TestRetryAfterPriorityEdgeCases:
             "error_category": "rate_limit",
             "retry_after": None,  # 显式 None
         }
-        
+
         payload = build_run_finish_payload_from_result(result)
-        
+
         assert payload.error_summary is not None
         assert payload.error_summary.retry_after is None
         assert payload.error_summary.backoff_source == BackoffSource.ERROR_CATEGORY.value
@@ -2581,9 +2534,9 @@ class TestBackoffFieldsSchemaValidation:
                 "error_message": "429 Too Many Requests",
                 "backoff_seconds": 120,
                 "backoff_source": "error_category",
-            }
+            },
         }
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Payload with backoff fields invalid: {errors}"
 
@@ -2599,9 +2552,9 @@ class TestBackoffFieldsSchemaValidation:
                 "backoff_seconds": 300,
                 "backoff_source": "retry_after",
                 "retry_after": 300,
-            }
+            },
         }
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Payload with retry_after invalid: {errors}"
 
@@ -2617,9 +2570,9 @@ class TestBackoffFieldsSchemaValidation:
                 "backoff_seconds": 60,
                 "backoff_source": "error_category",
                 "retry_after": None,
-            }
+            },
         }
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Payload with null retry_after invalid: {errors}"
 
@@ -2634,9 +2587,365 @@ class TestBackoffFieldsSchemaValidation:
                 "error_message": "Payload validation failed",
                 "context": {
                     "validation_errors": ["缺少必需字段: synced_count"],
-                }
-            }
+                },
+            },
         }
-        
+
         is_valid, errors = validate_against_run_schema(schema_validator, payload)
         assert is_valid, f"Payload with validation_error category invalid: {errors}"
+
+
+# ============ 失败必须包含 error_summary_json 契约测试 ============
+
+
+class TestFailedMustIncludeErrorSummary:
+    """
+    核心契约测试：failed 状态必须包含 error_summary_json
+
+    根据 scm_sync_run_v1.schema.json 的 allOf 规则：
+    当 status = "failed" 时，error_summary_json 是必需字段。
+    """
+
+    @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
+    def test_failed_without_error_summary_rejected_by_schema(self, schema_validator):
+        """Schema 验证：failed 状态缺少 error_summary_json 应该被拒绝"""
+        payload = {
+            "status": "failed",
+            "counts": {"synced_count": 0},
+            # 缺少 error_summary_json
+        }
+
+        is_valid, errors = validate_against_run_schema(schema_validator, payload)
+        assert not is_valid, "failed without error_summary_json should be rejected by schema"
+
+    def test_failed_without_error_summary_rejected_by_validator(self):
+        """validate_run_finish_payload：failed 状态缺少 error_summary_json 应该失败"""
+        payload_dict = {
+            "status": "failed",
+            "counts": {"synced_count": 0},
+            # 缺少 error_summary_json
+        }
+
+        is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
+
+        assert not is_valid, "failed without error_summary_json should fail validation"
+        assert any("error_summary_json" in e for e in errors), (
+            f"Error should mention error_summary_json, got: {errors}"
+        )
+
+    def test_failed_with_empty_error_summary_rejected(self):
+        """validate_run_finish_payload：failed 状态 error_summary_json 不是字典应该失败"""
+        payload_dict = {
+            "status": "failed",
+            "counts": {"synced_count": 0},
+            "error_summary_json": "not a dict",  # 类型错误
+        }
+
+        is_valid, errors, warnings = validate_run_finish_payload(payload_dict)
+
+        assert not is_valid, "failed with non-dict error_summary_json should fail"
+        assert any("error_summary_json" in e and "字典" in e for e in errors), (
+            f"Error should mention error_summary_json type error, got: {errors}"
+        )
+
+    def test_all_failed_builders_include_error_summary(self):
+        """所有构建失败 payload 的函数都必须包含 error_summary_json"""
+        # 测试 build_payload_for_exception
+        exc_payload = build_payload_for_exception(TimeoutError("timeout"))
+        assert exc_payload.status == RunStatus.FAILED.value
+        assert exc_payload.error_summary is not None, (
+            "build_payload_for_exception must include error_summary"
+        )
+
+        payload_dict = exc_payload.to_dict()
+        is_valid, errors, _ = validate_run_finish_payload(payload_dict)
+        assert is_valid, f"Exception payload should be valid: {errors}"
+        assert "error_summary_json" in payload_dict
+
+        # 测试 build_payload_for_lease_lost
+        lease_payload = build_payload_for_lease_lost(
+            job_id="job-1",
+            worker_id="worker-1",
+            failure_count=3,
+            max_failures=3,
+        )
+        assert lease_payload.status == RunStatus.FAILED.value
+        assert lease_payload.error_summary is not None, (
+            "build_payload_for_lease_lost must include error_summary"
+        )
+
+        payload_dict = lease_payload.to_dict()
+        is_valid, errors, _ = validate_run_finish_payload(payload_dict)
+        assert is_valid, f"Lease lost payload should be valid: {errors}"
+        assert "error_summary_json" in payload_dict
+
+        # 测试 build_payload_for_mark_dead
+        dead_payload = build_payload_for_mark_dead(
+            error="401 Unauthorized",
+            error_category="auth_error",
+        )
+        assert dead_payload.status == RunStatus.FAILED.value
+        assert dead_payload.error_summary is not None, (
+            "build_payload_for_mark_dead must include error_summary"
+        )
+
+        payload_dict = dead_payload.to_dict()
+        is_valid, errors, _ = validate_run_finish_payload(payload_dict)
+        assert is_valid, f"Mark dead payload should be valid: {errors}"
+        assert "error_summary_json" in payload_dict
+
+    def test_build_from_result_failed_includes_error_summary(self):
+        """build_run_finish_payload_from_result 对失败结果必须生成 error_summary_json"""
+        # 有 error 字段的失败结果
+        result_with_error = {
+            "success": False,
+            "error": "Connection refused",
+            "error_category": "connection",
+            "synced_count": 0,
+        }
+
+        payload = build_run_finish_payload_from_result(result_with_error)
+
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.error_summary is not None, "Failed result with error must have error_summary"
+
+        payload_dict = payload.to_dict()
+        is_valid, errors, _ = validate_run_finish_payload(payload_dict)
+        assert is_valid, f"Failed result payload should be valid: {errors}"
+        assert "error_summary_json" in payload_dict
+        assert payload_dict["error_summary_json"]["error_category"] == "connection"
+
+    def test_build_from_result_with_only_error_category(self):
+        """只有 error_category（无 error message）的失败结果也必须有 error_summary_json"""
+        result = {
+            "success": False,
+            "error_category": "timeout",
+            "synced_count": 0,
+            # 无 error 字段
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.error_summary is not None, (
+            "Failed result with error_category must have error_summary"
+        )
+
+        payload_dict = payload.to_dict()
+        is_valid, errors, _ = validate_run_finish_payload(payload_dict)
+        assert is_valid, f"Failed result with error_category should be valid: {errors}"
+
+    def test_raise_on_error_includes_error_info(self):
+        """raise_on_error=True 时抛出的异常包含完整错误信息"""
+        payload_dict = {
+            "status": "failed",
+            "counts": {"synced_count": 0},
+            # 缺少 error_summary_json
+        }
+
+        with pytest.raises(RunPayloadValidationError) as exc_info:
+            validate_run_finish_payload(payload_dict, raise_on_error=True)
+
+        # 异常应包含详细信息
+        assert "error_summary_json" in str(exc_info.value)
+        assert len(exc_info.value.errors) > 0
+
+        # 异常可以转换为 ErrorSummary（用于写入数据库）
+        error_summary = exc_info.value.to_error_summary()
+        assert error_summary.error_category == "validation_error"
+        assert "validation_errors" in error_summary.context
+
+    @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
+    def test_schema_enforces_error_summary_for_failed(self, schema_validator):
+        """Schema 的 allOf 条件强制 failed 状态必须有 error_summary_json"""
+        # 有 error_summary_json 的 failed payload 应该通过
+        valid_failed = {
+            "status": "failed",
+            "counts": {"synced_count": 0},
+            "error_summary_json": {
+                "error_category": "timeout",
+                "error_message": "Request timed out",
+            },
+        }
+        is_valid, _ = validate_against_run_schema(schema_validator, valid_failed)
+        assert is_valid, "Valid failed payload should pass"
+
+        # 缺少 error_summary_json 的 failed payload 应该失败
+        invalid_failed = {
+            "status": "failed",
+            "counts": {"synced_count": 0},
+        }
+        is_valid, errors = validate_against_run_schema(schema_validator, invalid_failed)
+        assert not is_valid, "Failed without error_summary_json should fail schema validation"
+
+
+class TestWorkerRunContractIntegration:
+    """
+    Worker 与 RunContract 的集成测试
+
+    验证 worker 在各种场景下生成的 payload 都符合契约。
+    """
+
+    def test_success_scenario_payload_valid(self):
+        """成功场景：payload 有效"""
+        result = {
+            "success": True,
+            "synced_count": 100,
+            "diff_count": 95,
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        assert payload.status == RunStatus.COMPLETED.value
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Success payload should be valid: {errors}"
+
+    def test_no_data_scenario_payload_valid(self):
+        """无数据场景：payload 有效"""
+        result = {
+            "success": True,
+            "synced_count": 0,
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        assert payload.status == RunStatus.NO_DATA.value
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"No data payload should be valid: {errors}"
+
+    def test_timeout_error_scenario_payload_valid(self):
+        """超时错误场景：payload 有效且包含 error_summary"""
+        result = {
+            "success": False,
+            "error": "Request timed out after 30 seconds",
+            "error_category": "timeout",
+            "synced_count": 0,
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.error_summary is not None
+        assert payload.error_summary.error_category == "timeout"
+
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Timeout error payload should be valid: {errors}"
+
+        payload_dict = payload.to_dict()
+        assert "error_summary_json" in payload_dict
+
+    def test_rate_limit_with_retry_after_scenario(self):
+        """429 限流场景：payload 包含 retry_after 信息"""
+        result = {
+            "success": False,
+            "error": "429 Too Many Requests",
+            "error_category": "rate_limit",
+            "retry_after": 300,
+            "synced_count": 50,  # 部分成功
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.error_summary is not None
+        assert payload.error_summary.retry_after == 300
+        assert payload.error_summary.backoff_seconds == 300
+        assert payload.error_summary.backoff_source == "retry_after"
+
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Rate limit payload should be valid: {errors}"
+
+    def test_auth_error_permanent_scenario(self):
+        """永久性认证错误场景：payload 有效"""
+        result = {
+            "success": False,
+            "error": "401 Unauthorized: Invalid token",
+            "error_category": "auth_error",
+            "synced_count": 0,
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.error_summary is not None
+        assert payload.error_summary.error_category == "auth_error"
+
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Auth error payload should be valid: {errors}"
+
+    def test_degraded_scenario_payload_valid(self):
+        """降级场景：payload 包含降级信息"""
+        result = {
+            "success": True,
+            "synced_count": 100,
+            "degraded_count": 10,
+            "is_backfill_only": True,
+            "circuit_state": "half_open",
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        assert payload.status == RunStatus.COMPLETED.value
+        assert payload.degradation is not None
+        assert payload.degradation.is_degraded is True
+        assert payload.degradation.circuit_state == "half_open"
+
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Degraded payload should be valid: {errors}"
+
+    def test_exception_in_handler_scenario(self):
+        """Handler 异常场景：payload 有效"""
+        exc = ConnectionError("Connection refused")
+
+        payload = build_payload_for_exception(exc)
+
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.error_summary is not None
+        assert payload.error_summary.exception_type == "ConnectionError"
+        assert payload.error_summary.error_category == "connection"
+
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Exception payload should be valid: {errors}"
+
+        payload_dict = payload.to_dict()
+        assert "error_summary_json" in payload_dict
+
+    def test_lease_lost_scenario(self):
+        """租约丢失场景：payload 有效"""
+        payload = build_payload_for_lease_lost(
+            job_id="job-123",
+            worker_id="worker-1",
+            failure_count=3,
+            max_failures=3,
+            last_error="renew_lease returned False",
+        )
+
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.error_summary is not None
+        assert payload.error_summary.error_category == "lease_lost"
+
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Lease lost payload should be valid: {errors}"
+
+        # 验证上下文信息
+        assert payload.error_summary.context["job_id"] == "job-123"
+        assert payload.error_summary.context["worker_id"] == "worker-1"
+
+    def test_partial_success_then_error_scenario(self):
+        """部分成功后出错场景：synced_count > 0 但有 error"""
+        result = {
+            "success": False,
+            "synced_count": 50,  # 已同步 50 条
+            "error": "Timeout after processing 50 commits",
+            "error_category": "timeout",
+        }
+
+        payload = build_run_finish_payload_from_result(result)
+
+        # 有 error 应该是 failed 状态
+        assert payload.status == RunStatus.FAILED.value
+        assert payload.counts.synced_count == 50
+        assert payload.error_summary is not None
+
+        is_valid, errors, _ = validate_run_finish_payload(payload)
+        assert is_valid, f"Partial success with error payload should be valid: {errors}"

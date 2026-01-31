@@ -20,8 +20,7 @@ db_bootstrap.py 单元测试和集成测试
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from urllib.parse import urlparse, urlunparse
+from unittest.mock import patch
 
 import pytest
 
@@ -31,22 +30,22 @@ if str(scripts_dir) not in sys.path:
     sys.path.insert(0, str(scripts_dir))
 
 from db_bootstrap import (
-    BootstrapErrorCode,
-    DEFAULT_OM_SCHEMA,
-    check_om_schema_not_public,
-    check_admin_privileges,
-    run_precheck,
-    create_or_update_login_role,
-    create_all_login_roles,
-    mask_password_in_dsn,
-    parse_db_from_dsn,
-    LOGIN_ROLES,
     ENV_LOGBOOK_MIGRATOR_PASSWORD,
     ENV_LOGBOOK_SVC_PASSWORD,
     ENV_OPENMEMORY_MIGRATOR_PASSWORD,
     ENV_OPENMEMORY_SVC_PASSWORD,
+    LOGIN_ROLES,
+    SERVICE_ACCOUNT_PASSWORD_ENVS,
+    BootstrapErrorCode,
+    check_admin_privileges,
+    check_om_schema_not_public,
+    create_all_login_roles,
+    create_or_update_login_role,
+    detect_deployment_mode,
+    mask_password_in_dsn,
+    parse_db_from_dsn,
+    run_precheck,
 )
-
 
 # ============================================================================
 # 标记定义
@@ -66,33 +65,34 @@ def should_skip_integration_tests() -> bool:
 # 配置级检查测试（单元测试，不需要数据库）
 # ============================================================================
 
+
 class TestSchemaValidation:
     """OM_PG_SCHEMA 配置验证测试"""
-    
+
     def test_schema_public_rejected(self):
         """测试 public schema 被正确拒绝"""
         result = check_om_schema_not_public("public")
-        
+
         assert result["ok"] is False
         assert result["code"] == BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC
         assert "public" in result["message"].lower()
         assert result["remediation"]  # 应有修复命令
-    
+
     def test_schema_public_case_insensitive(self):
         """测试 public schema 检查不区分大小写"""
         for variant in ["PUBLIC", "Public", "pUbLiC"]:
             result = check_om_schema_not_public(variant)
             assert result["ok"] is False, f"应拒绝 '{variant}'"
             assert result["code"] == BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC
-    
+
     def test_schema_openmemory_accepted(self):
         """测试默认 openmemory schema 被接受"""
         result = check_om_schema_not_public("openmemory")
-        
+
         assert result["ok"] is True
         assert result["code"] == ""
         assert result["value"] == "openmemory"
-    
+
     def test_schema_custom_accepted(self):
         """测试自定义 schema 名称被接受"""
         custom_schemas = [
@@ -108,7 +108,7 @@ class TestSchemaValidation:
 
 class TestPrecheckConfigOnly:
     """预检配置级测试（不需要数据库连接）"""
-    
+
     def test_precheck_schema_public_fails_without_dsn(self):
         """测试：无 DSN 时仍能检测到 public schema 错误"""
         result = run_precheck(
@@ -117,12 +117,12 @@ class TestPrecheckConfigOnly:
             quiet=True,
             skip_db_check=True,
         )
-        
+
         assert result["ok"] is False
         assert BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC in result.get("failed_codes", [])
         assert "om_schema_not_public" in result["checks"]
         assert result["checks"]["om_schema_not_public"]["ok"] is False
-    
+
     def test_precheck_valid_schema_passes_config_check(self):
         """测试：有效 schema 配置通过配置级检查"""
         result = run_precheck(
@@ -131,12 +131,12 @@ class TestPrecheckConfigOnly:
             quiet=True,
             skip_db_check=True,
         )
-        
+
         assert result["ok"] is True
         assert result["checks"]["om_schema_not_public"]["ok"] is True
         # 数据库检查被跳过
         assert result["checks"]["admin_privileges"].get("skipped") is True
-    
+
     def test_precheck_returns_failed_codes(self):
         """测试：预检返回失败的错误码列表"""
         result = run_precheck(
@@ -145,7 +145,7 @@ class TestPrecheckConfigOnly:
             quiet=True,
             skip_db_check=True,
         )
-        
+
         assert "failed_codes" in result
         assert isinstance(result["failed_codes"], list)
         assert len(result["failed_codes"]) > 0
@@ -153,7 +153,7 @@ class TestPrecheckConfigOnly:
 
 class TestErrorCodeFormat:
     """错误码格式测试"""
-    
+
     def test_error_codes_follow_naming_convention(self):
         """测试错误码遵循命名规范"""
         # 所有错误码应以 BOOTSTRAP_ 开头
@@ -161,17 +161,17 @@ class TestErrorCodeFormat:
             if not attr_name.startswith("_"):
                 code = getattr(BootstrapErrorCode, attr_name)
                 assert code.startswith("BOOTSTRAP_"), f"错误码 {attr_name} 应以 BOOTSTRAP_ 开头"
-    
+
     def test_error_code_categories(self):
         """测试错误码分类"""
         # 配置错误
         assert "CONFIG" in BootstrapErrorCode.CONFIG_MISSING_DSN
         assert "CONFIG" in BootstrapErrorCode.CONFIG_INVALID_SCHEMA
-        
+
         # 预检错误
         assert "PRECHECK" in BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC
         assert "PRECHECK" in BootstrapErrorCode.PRECHECK_NO_CREATEROLE
-        
+
         # 角色错误
         assert "ROLE" in BootstrapErrorCode.ROLE_CREATION_MISSING_PASSWORD
         assert "ROLE" in BootstrapErrorCode.ROLE_CREATION_FAILED
@@ -179,27 +179,27 @@ class TestErrorCodeFormat:
 
 class TestDSNParsing:
     """DSN 解析测试"""
-    
+
     def test_parse_db_from_dsn_basic(self):
         """测试基本 DSN 解析"""
         dsn = "postgresql://postgres:password@localhost:5432/mydb"
         assert parse_db_from_dsn(dsn) == "mydb"
-    
+
     def test_parse_db_from_dsn_no_port(self):
         """测试无端口的 DSN 解析"""
         dsn = "postgresql://postgres:password@localhost/mydb"
         assert parse_db_from_dsn(dsn) == "mydb"
-    
+
     def test_parse_db_from_dsn_empty(self):
         """测试空数据库名"""
         dsn = "postgresql://postgres:password@localhost:5432/"
         assert parse_db_from_dsn(dsn) is None
-    
+
     def test_mask_password_in_dsn(self):
         """测试密码遮蔽"""
         dsn = "postgresql://postgres:secret123@localhost:5432/mydb"
         masked = mask_password_in_dsn(dsn)
-        
+
         assert "secret123" not in masked
         assert "***" in masked
         assert "postgres:" in masked
@@ -207,7 +207,7 @@ class TestDSNParsing:
 
 class TestLoginRolesDefinition:
     """LOGIN_ROLES 定义测试"""
-    
+
     def test_login_roles_structure(self):
         """测试 LOGIN_ROLES 结构正确"""
         for role_name, env_var, inherit_role in LOGIN_ROLES:
@@ -217,7 +217,7 @@ class TestLoginRolesDefinition:
             assert role_name  # 非空
             assert env_var  # 非空
             assert inherit_role  # 非空
-    
+
     def test_login_roles_env_vars(self):
         """测试 LOGIN_ROLES 环境变量名正确"""
         expected_env_vars = {
@@ -226,12 +226,12 @@ class TestLoginRolesDefinition:
             ENV_OPENMEMORY_MIGRATOR_PASSWORD,
             ENV_OPENMEMORY_SVC_PASSWORD,
         }
-        
+
         actual_env_vars = {env_var for _, env_var, _ in LOGIN_ROLES}
-        
+
         # 至少包含这些必需的环境变量
         assert expected_env_vars.issubset(actual_env_vars)
-    
+
     def test_login_roles_inheritance_mapping(self):
         """测试 LOGIN_ROLES 继承关系正确"""
         expected_mappings = {
@@ -240,40 +240,225 @@ class TestLoginRolesDefinition:
             "openmemory_migrator_login": "openmemory_migrator",
             "openmemory_svc": "openmemory_app",
         }
-        
+
         for role_name, _, inherit_role in LOGIN_ROLES:
             if role_name in expected_mappings:
-                assert inherit_role == expected_mappings[role_name], \
+                assert inherit_role == expected_mappings[role_name], (
                     f"{role_name} 应继承 {expected_mappings[role_name]}，实际为 {inherit_role}"
+                )
+
+
+# ============================================================================
+# 部署模式检测测试（SKIP 模式）
+# ============================================================================
+
+
+class TestDeploymentModeDetection:
+    """部署模式检测测试：logbook-only vs unified-stack"""
+
+    def test_logbook_only_mode_no_passwords(self):
+        """测试：无密码环境变量时进入 logbook-only 模式"""
+        # 清除所有密码环境变量
+        with patch.dict(os.environ, {}, clear=True):
+            # 确保密码变量不存在
+            for env_var in SERVICE_ACCOUNT_PASSWORD_ENVS:
+                os.environ.pop(env_var, None)
+
+            result = detect_deployment_mode()
+
+            assert result["mode"] == "logbook-only"
+            assert result["skip_roles"] is True
+            assert result["code"] == BootstrapErrorCode.SKIP_MODE_ACTIVE
+            assert len(result["set_passwords"]) == 0
+            assert len(result["missing_passwords"]) == 4
+
+    def test_unified_stack_mode_all_passwords(self):
+        """测试：全部密码环境变量设置时进入 unified-stack 模式"""
+        env_override = {
+            ENV_LOGBOOK_MIGRATOR_PASSWORD: "test_pwd_1",
+            ENV_LOGBOOK_SVC_PASSWORD: "test_pwd_2",
+            ENV_OPENMEMORY_MIGRATOR_PASSWORD: "test_pwd_3",
+            ENV_OPENMEMORY_SVC_PASSWORD: "test_pwd_4",
+        }
+
+        with patch.dict(os.environ, env_override, clear=False):
+            result = detect_deployment_mode()
+
+            assert result["mode"] == "unified-stack"
+            assert result["skip_roles"] is False
+            assert result["code"] == ""
+            assert len(result["set_passwords"]) == 4
+            assert len(result["missing_passwords"]) == 0
+
+    def test_invalid_mode_partial_passwords(self):
+        """测试：部分密码环境变量设置时返回 invalid 模式"""
+        # 只设置 2 个密码
+        env_override = {
+            ENV_LOGBOOK_MIGRATOR_PASSWORD: "test_pwd_1",
+            ENV_LOGBOOK_SVC_PASSWORD: "test_pwd_2",
+        }
+
+        # 清除其他密码变量
+        with patch.dict(os.environ, env_override, clear=False):
+            # 确保其他密码变量不存在
+            os.environ.pop(ENV_OPENMEMORY_MIGRATOR_PASSWORD, None)
+            os.environ.pop(ENV_OPENMEMORY_SVC_PASSWORD, None)
+
+            result = detect_deployment_mode()
+
+            assert result["mode"] == "invalid"
+            assert result["skip_roles"] is False
+            assert result["code"] == BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD
+            assert len(result["set_passwords"]) == 2
+            assert len(result["missing_passwords"]) == 2
+
+    def test_invalid_mode_single_password(self):
+        """测试：只设置 1 个密码环境变量时返回 invalid 模式"""
+        # 清除所有密码变量后只设置 1 个
+        with patch.dict(os.environ, {ENV_LOGBOOK_MIGRATOR_PASSWORD: "test_pwd"}, clear=False):
+            os.environ.pop(ENV_LOGBOOK_SVC_PASSWORD, None)
+            os.environ.pop(ENV_OPENMEMORY_MIGRATOR_PASSWORD, None)
+            os.environ.pop(ENV_OPENMEMORY_SVC_PASSWORD, None)
+
+            result = detect_deployment_mode()
+
+            assert result["mode"] == "invalid"
+            assert result["skip_roles"] is False
+            assert result["code"] == BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD
+            assert len(result["set_passwords"]) == 1
+            assert len(result["missing_passwords"]) == 3
+
+    def test_empty_string_password_treated_as_unset(self):
+        """测试：空字符串密码被视为未设置"""
+        # 设置空字符串密码
+        env_override = {
+            ENV_LOGBOOK_MIGRATOR_PASSWORD: "",
+            ENV_LOGBOOK_SVC_PASSWORD: "",
+            ENV_OPENMEMORY_MIGRATOR_PASSWORD: "",
+            ENV_OPENMEMORY_SVC_PASSWORD: "",
+        }
+
+        with patch.dict(os.environ, env_override, clear=False):
+            result = detect_deployment_mode()
+
+            # 空字符串应被视为未设置，进入 logbook-only 模式
+            assert result["mode"] == "logbook-only"
+            assert result["skip_roles"] is True
+
+    def test_whitespace_only_password_treated_as_unset(self):
+        """测试：只有空白字符的密码被视为未设置"""
+        # 设置只有空白的密码
+        env_override = {
+            ENV_LOGBOOK_MIGRATOR_PASSWORD: "   ",
+            ENV_LOGBOOK_SVC_PASSWORD: "\t",
+            ENV_OPENMEMORY_MIGRATOR_PASSWORD: "\n",
+            ENV_OPENMEMORY_SVC_PASSWORD: "  \t  ",
+        }
+
+        with patch.dict(os.environ, env_override, clear=False):
+            result = detect_deployment_mode()
+
+            # 只有空白字符应被视为未设置，进入 logbook-only 模式
+            assert result["mode"] == "logbook-only"
+            assert result["skip_roles"] is True
+
+
+class TestDeploymentModeErrorCodes:
+    """部署模式错误码测试"""
+
+    def test_skip_mode_has_valid_error_code(self):
+        """测试：SKIP 模式有有效的错误码"""
+        assert hasattr(BootstrapErrorCode, "SKIP_MODE_ACTIVE")
+        assert BootstrapErrorCode.SKIP_MODE_ACTIVE.startswith("BOOTSTRAP_")
+
+    def test_partial_password_has_valid_error_code(self):
+        """测试：部分密码配置有有效的错误码"""
+        assert hasattr(BootstrapErrorCode, "CONFIG_PARTIAL_PASSWORD")
+        assert BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD.startswith("BOOTSTRAP_")
+
+    def test_error_codes_have_remediation(self):
+        """测试：新错误码有对应的修复命令"""
+        from db_bootstrap import REMEDIATION_COMMANDS
+
+        assert BootstrapErrorCode.SKIP_MODE_ACTIVE in REMEDIATION_COMMANDS
+        assert BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD in REMEDIATION_COMMANDS
+
+        # 修复命令应非空
+        assert REMEDIATION_COMMANDS[BootstrapErrorCode.SKIP_MODE_ACTIVE]
+        assert REMEDIATION_COMMANDS[BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD]
+
+
+class TestDeploymentModeIntegration:
+    """部署模式集成测试：验证模式检测影响脚本行为"""
+
+    def test_logbook_only_mode_message_contains_skip(self):
+        """测试：logbook-only 模式消息包含 SKIP 相关提示"""
+        with patch.dict(os.environ, {}, clear=False):
+            for env_var in SERVICE_ACCOUNT_PASSWORD_ENVS:
+                os.environ.pop(env_var, None)
+
+            result = detect_deployment_mode()
+
+            assert "logbook-only" in result["message"].lower() or "跳过" in result["message"]
+
+    def test_unified_stack_mode_message_contains_all_set(self):
+        """测试：unified-stack 模式消息表明已设置全部密码"""
+        env_override = {
+            ENV_LOGBOOK_MIGRATOR_PASSWORD: "pwd1",
+            ENV_LOGBOOK_SVC_PASSWORD: "pwd2",
+            ENV_OPENMEMORY_MIGRATOR_PASSWORD: "pwd3",
+            ENV_OPENMEMORY_SVC_PASSWORD: "pwd4",
+        }
+
+        with patch.dict(os.environ, env_override, clear=False):
+            result = detect_deployment_mode()
+
+            assert "unified-stack" in result["message"].lower() or "全部" in result["message"]
+
+    def test_invalid_mode_message_contains_missing_list(self):
+        """测试：invalid 模式消息包含缺失的密码列表"""
+        # 只设置 1 个密码
+        with patch.dict(os.environ, {ENV_LOGBOOK_MIGRATOR_PASSWORD: "pwd"}, clear=False):
+            os.environ.pop(ENV_LOGBOOK_SVC_PASSWORD, None)
+            os.environ.pop(ENV_OPENMEMORY_MIGRATOR_PASSWORD, None)
+            os.environ.pop(ENV_OPENMEMORY_SVC_PASSWORD, None)
+
+            result = detect_deployment_mode()
+
+            # 消息应包含缺失的变量名
+            assert "缺失" in result["message"] or "missing" in result["message"].lower()
+            # 至少提及一个缺失的变量
+            for missing_var in result["missing_passwords"]:
+                assert missing_var in result["message"]
 
 
 # ============================================================================
 # 集成测试（需要数据库连接）
 # ============================================================================
 
+
 @pytest.fixture(scope="module")
 def bootstrap_test_db(test_db_info: dict):
     """
     Bootstrap 测试专用 fixture
-    
+
     在测试数据库中准备 bootstrap 测试所需的环境：
     1. 执行基础迁移（创建 schema）
     2. 返回连接信息
     """
     if should_skip_integration_tests():
         pytest.skip("Bootstrap 集成测试已通过环境变量禁用")
-    
-    import psycopg
+
     from db_migrate import run_migrate
-    
+
     dsn = test_db_info["dsn"]
     admin_dsn = test_db_info.get("admin_dsn", dsn)
-    
+
     # 执行基础迁移
     result = run_migrate(dsn=dsn, quiet=True)
     if not result.get("ok"):
         pytest.fail(f"迁移失败: {result.get('message')}")
-    
+
     yield {
         "dsn": dsn,
         "admin_dsn": admin_dsn,
@@ -284,17 +469,17 @@ def bootstrap_test_db(test_db_info: dict):
 @pytest.mark.integration
 class TestAdminPrivilegesCheck:
     """管理员权限检查测试（需要数据库）"""
-    
+
     def test_superuser_has_all_privileges(self, bootstrap_test_db: dict):
         """测试 superuser 拥有所有权限"""
         import psycopg
-        
+
         admin_dsn = bootstrap_test_db["admin_dsn"]
-        
+
         conn = psycopg.connect(admin_dsn, autocommit=True)
         try:
             result = check_admin_privileges(conn)
-            
+
             # superuser 应该通过所有检查
             assert result["ok"] is True
             details = result.get("details", {})
@@ -306,19 +491,19 @@ class TestAdminPrivilegesCheck:
 @pytest.mark.integration
 class TestRoleCreation:
     """角色创建测试（需要数据库）"""
-    
+
     def test_create_role_missing_password_returns_error(self, bootstrap_test_db: dict):
         """测试：缺少密码时返回正确的错误码"""
         import psycopg
-        
+
         admin_dsn = bootstrap_test_db["admin_dsn"]
-        
+
         conn = psycopg.connect(admin_dsn, autocommit=True)
         try:
             # 先确保角色不存在
             with conn.cursor() as cur:
                 cur.execute("DROP ROLE IF EXISTS test_bootstrap_role")
-            
+
             # 尝试创建角色但不提供密码
             result = create_or_update_login_role(
                 conn,
@@ -327,7 +512,7 @@ class TestRoleCreation:
                 inherit_role="engram_app_readwrite",
                 quiet=True,
             )
-            
+
             assert result["ok"] is False
             assert result["code"] == BootstrapErrorCode.ROLE_CREATION_MISSING_PASSWORD
             assert result["remediation"]  # 应有修复命令
@@ -336,19 +521,19 @@ class TestRoleCreation:
             with conn.cursor() as cur:
                 cur.execute("DROP ROLE IF EXISTS test_bootstrap_role")
             conn.close()
-    
+
     def test_create_role_with_password_succeeds(self, bootstrap_test_db: dict):
         """测试：提供密码时角色创建成功"""
         import psycopg
-        
+
         admin_dsn = bootstrap_test_db["admin_dsn"]
-        
+
         conn = psycopg.connect(admin_dsn, autocommit=True)
         try:
             # 先确保角色不存在
             with conn.cursor() as cur:
                 cur.execute("DROP ROLE IF EXISTS test_bootstrap_role")
-            
+
             # 创建角色
             result = create_or_update_login_role(
                 conn,
@@ -357,10 +542,10 @@ class TestRoleCreation:
                 inherit_role="engram_app_readwrite",
                 quiet=True,
             )
-            
+
             assert result["ok"] is True
             assert result["created"] is True
-            
+
             # 验证角色存在
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'test_bootstrap_role'")
@@ -370,20 +555,20 @@ class TestRoleCreation:
             with conn.cursor() as cur:
                 cur.execute("DROP ROLE IF EXISTS test_bootstrap_role")
             conn.close()
-    
+
     def test_update_existing_role_password(self, bootstrap_test_db: dict):
         """测试：更新已存在角色的密码"""
         import psycopg
-        
+
         admin_dsn = bootstrap_test_db["admin_dsn"]
-        
+
         conn = psycopg.connect(admin_dsn, autocommit=True)
         try:
             # 先创建角色
             with conn.cursor() as cur:
                 cur.execute("DROP ROLE IF EXISTS test_bootstrap_role")
                 cur.execute("CREATE ROLE test_bootstrap_role LOGIN PASSWORD 'old_password'")
-            
+
             # 更新密码
             result = create_or_update_login_role(
                 conn,
@@ -392,7 +577,7 @@ class TestRoleCreation:
                 inherit_role="engram_app_readwrite",
                 quiet=True,
             )
-            
+
             assert result["ok"] is True
             assert result["created"] is False
             assert result["updated"] is True
@@ -406,31 +591,31 @@ class TestRoleCreation:
 @pytest.mark.integration
 class TestFullPrecheck:
     """完整预检测试（需要数据库）"""
-    
+
     def test_precheck_with_valid_config_passes(self, bootstrap_test_db: dict):
         """测试：有效配置通过完整预检"""
         admin_dsn = bootstrap_test_db["admin_dsn"]
-        
+
         result = run_precheck(
             admin_dsn=admin_dsn,
             om_schema="openmemory",
             quiet=True,
         )
-        
+
         assert result["ok"] is True
         assert result["checks"]["om_schema_not_public"]["ok"] is True
         assert result["checks"]["admin_privileges"]["ok"] is True
-    
+
     def test_precheck_with_public_schema_fails(self, bootstrap_test_db: dict):
         """测试：public schema 配置导致预检失败"""
         admin_dsn = bootstrap_test_db["admin_dsn"]
-        
+
         result = run_precheck(
             admin_dsn=admin_dsn,
             om_schema="public",
             quiet=True,
         )
-        
+
         assert result["ok"] is False
         assert BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC in result.get("failed_codes", [])
 
@@ -438,27 +623,27 @@ class TestFullPrecheck:
 @pytest.mark.integration
 class TestCreateAllLoginRoles:
     """批量角色创建测试（需要数据库）"""
-    
+
     def test_create_all_roles_with_missing_passwords(self, bootstrap_test_db: dict):
         """测试：缺少密码时批量创建返回详细错误"""
         import psycopg
-        
+
         admin_dsn = bootstrap_test_db["admin_dsn"]
-        
+
         conn = psycopg.connect(admin_dsn, autocommit=True)
         try:
             # 先删除可能存在的角色
             for role_name, _, _ in LOGIN_ROLES:
                 with conn.cursor() as cur:
                     cur.execute(f"DROP ROLE IF EXISTS {role_name}")
-            
+
             # 尝试创建但不提供任何密码
             result = create_all_login_roles(
                 conn,
                 passwords={},  # 空密码字典
                 quiet=True,
             )
-            
+
             # 应该失败（新角色需要密码）
             assert result["ok"] is False
             assert len(result.get("failed_codes", [])) > 0
@@ -475,29 +660,30 @@ class TestCreateAllLoginRoles:
 # 幂等性测试（单元测试）
 # ============================================================================
 
+
 class TestIdempotency:
     """幂等性测试：验证 bootstrap 操作的幂等行为"""
-    
+
     def test_schema_check_is_idempotent(self):
         """测试 schema 检查函数多次调用结果一致"""
         # 同样的输入应该返回同样的结果
         result1 = check_om_schema_not_public("openmemory")
         result2 = check_om_schema_not_public("openmemory")
-        
+
         assert result1 == result2
         assert result1["ok"] is True
-    
+
     def test_schema_public_rejection_is_idempotent(self):
         """测试 public schema 拒绝行为幂等"""
         result1 = check_om_schema_not_public("public")
         result2 = check_om_schema_not_public("PUBLIC")
-        
+
         # 两者都应失败，错误码一致
         assert result1["ok"] is False
         assert result2["ok"] is False
         assert result1["code"] == result2["code"]
         assert result1["code"] == BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC
-    
+
     def test_precheck_config_only_is_idempotent(self):
         """测试配置级预检幂等性"""
         result1 = run_precheck(
@@ -512,7 +698,7 @@ class TestIdempotency:
             quiet=True,
             skip_db_check=True,
         )
-        
+
         # 结构应一致
         assert result1["ok"] == result2["ok"]
         assert set(result1["checks"].keys()) == set(result2["checks"].keys())
@@ -522,23 +708,24 @@ class TestIdempotency:
 # 缺失项报错结构测试（单元测试）
 # ============================================================================
 
+
 class TestMissingItemsErrorStructure:
     """缺失项报错结构测试：验证错误返回包含必要的诊断信息"""
-    
+
     def test_missing_password_error_contains_env_var_hint(self):
         """测试缺少密码错误包含环境变量提示"""
         result = check_om_schema_not_public("public")
-        
+
         # 错误结构应包含必要字段
         assert "ok" in result
         assert "code" in result
         assert "message" in result
         assert "remediation" in result
-        
+
         # remediation 应包含可操作的修复命令
         assert result["remediation"]  # 非空
         assert "OM_PG_SCHEMA" in result["remediation"]
-    
+
     def test_precheck_failure_returns_failed_codes_list(self):
         """测试预检失败返回 failed_codes 列表"""
         result = run_precheck(
@@ -547,18 +734,18 @@ class TestMissingItemsErrorStructure:
             quiet=True,
             skip_db_check=True,
         )
-        
+
         assert result["ok"] is False
-        
+
         # 必须包含 failed_codes 列表
         assert "failed_codes" in result
         assert isinstance(result["failed_codes"], list)
         assert len(result["failed_codes"]) > 0
-        
+
         # 每个错误码应符合 BOOTSTRAP_ 前缀规范
         for code in result["failed_codes"]:
             assert code.startswith("BOOTSTRAP_"), f"错误码 {code} 应以 BOOTSTRAP_ 开头"
-    
+
     def test_precheck_checks_dict_structure(self):
         """测试预检 checks 字典结构完整"""
         result = run_precheck(
@@ -567,23 +754,23 @@ class TestMissingItemsErrorStructure:
             quiet=True,
             skip_db_check=True,
         )
-        
+
         # checks 应是字典
         assert "checks" in result
         assert isinstance(result["checks"], dict)
-        
+
         # 应包含 om_schema_not_public 检查项
         assert "om_schema_not_public" in result["checks"]
-        
+
         # 每个检查项应有 ok 字段
         for check_name, check_result in result["checks"].items():
             assert "ok" in check_result, f"检查项 {check_name} 缺少 ok 字段"
-    
+
     def test_error_code_remediation_mapping(self):
         """测试错误码与修复命令映射"""
         # 从 db_bootstrap 导入 REMEDIATION_COMMANDS
         from db_bootstrap import REMEDIATION_COMMANDS
-        
+
         # 验证关键错误码有对应的修复命令
         key_error_codes = [
             BootstrapErrorCode.CONFIG_MISSING_DSN,
@@ -592,7 +779,7 @@ class TestMissingItemsErrorStructure:
             BootstrapErrorCode.PRECHECK_NO_CREATEROLE,
             BootstrapErrorCode.ROLE_CREATION_MISSING_PASSWORD,
         ]
-        
+
         for code in key_error_codes:
             assert code in REMEDIATION_COMMANDS, f"错误码 {code} 缺少修复命令映射"
             assert REMEDIATION_COMMANDS[code], f"错误码 {code} 的修复命令不应为空"
@@ -602,10 +789,11 @@ class TestMissingItemsErrorStructure:
 # 脚本职责边界测试（文档化测试）
 # ============================================================================
 
+
 class TestScriptResponsibilities:
     """
     脚本职责边界测试
-    
+
     db_bootstrap.py 职责：
     1. 预检配置安全性（OM_PG_SCHEMA 不能是 public）
     2. 预检管理员权限（CREATEROLE, CREATE SCHEMA）
@@ -614,7 +802,7 @@ class TestScriptResponsibilities:
     5. 应用 05_openmemory_roles_and_grants.sql（OpenMemory schema）
     6. 数据库级硬化配置
     7. 执行 99_verify_permissions.sql 验收
-    
+
     db_migrate.py 职责：
     1. 预检 OM_PG_SCHEMA 配置
     2. 自动创建数据库（如果不存在）
@@ -624,7 +812,7 @@ class TestScriptResponsibilities:
     6. 可选执行迁移后回填（--post-backfill）
     7. 自检验证（schema/表/索引/触发器/物化视图）
     """
-    
+
     def test_bootstrap_handles_login_roles(self):
         """验证 bootstrap 负责 LOGIN 角色创建"""
         # LOGIN_ROLES 定义应包含登录角色
@@ -634,12 +822,13 @@ class TestScriptResponsibilities:
             "openmemory_migrator_login",
             "openmemory_svc",
         }
-        
+
         actual_roles = {role_name for role_name, _, _ in LOGIN_ROLES}
-        
-        assert expected_login_roles.issubset(actual_roles), \
+
+        assert expected_login_roles.issubset(actual_roles), (
             f"LOGIN_ROLES 应包含所有登录角色: {expected_login_roles - actual_roles}"
-    
+        )
+
     def test_bootstrap_error_codes_distinct_from_migrate(self):
         """验证 bootstrap 错误码与 migrate 模块不冲突"""
         # bootstrap 错误码应以 BOOTSTRAP_ 开头
@@ -649,12 +838,13 @@ class TestScriptResponsibilities:
                 code = getattr(BootstrapErrorCode, attr_name)
                 if isinstance(code, str):
                     bootstrap_codes.append(code)
-        
+
         # 所有 bootstrap 错误码应以 BOOTSTRAP_ 开头
         for code in bootstrap_codes:
-            assert code.startswith("BOOTSTRAP_"), \
+            assert code.startswith("BOOTSTRAP_"), (
                 f"Bootstrap 错误码 {code} 应以 BOOTSTRAP_ 开头以避免冲突"
-    
+            )
+
     def test_precheck_available_without_db_connection(self):
         """验证预检可在无数据库连接时执行"""
         # 配置级预检不应依赖数据库连接
@@ -664,10 +854,10 @@ class TestScriptResponsibilities:
             quiet=True,
             skip_db_check=True,
         )
-        
+
         # 应成功执行配置级检查
         assert "checks" in result
         assert "om_schema_not_public" in result["checks"]
-        
+
         # 数据库检查应被跳过
         assert result["checks"].get("admin_privileges", {}).get("skipped") is True

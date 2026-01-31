@@ -10,7 +10,6 @@
 - 配置优先级
 """
 
-import os
 import pytest
 
 
@@ -21,18 +20,19 @@ class TestPostgresDSNConfig:
         """POSTGRES_DSN 环境变量正确读取"""
         test_dsn = "postgresql://test_user:test_pass@test_host:5432/test_db"
         monkeypatch.setenv("POSTGRES_DSN", test_dsn)
-        
+
         from engram.logbook.config import Config
-        
+
         # 清除可能的缓存
         try:
             from engram.logbook import db
+
             db.reset_database()
         except Exception:
             pass
-        
+
         config = Config.from_env()
-        
+
         # 验证 DSN 被正确读取
         assert config.postgres_dsn is not None
         assert "test_host" in config.postgres_dsn or config.postgres_dsn == test_dsn
@@ -42,9 +42,9 @@ class TestPostgresDSNConfig:
         # 清除环境变量
         monkeypatch.delenv("POSTGRES_DSN", raising=False)
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        
+
         from engram.logbook.config import Config
-        
+
         try:
             config = Config.from_env()
             # 如果没有报错，应该有默认值或 None
@@ -52,7 +52,11 @@ class TestPostgresDSNConfig:
             assert config is not None
         except Exception as e:
             # 缺失时报错也是合理的行为
-            assert "dsn" in str(e).lower() or "postgres" in str(e).lower() or "required" in str(e).lower()
+            assert (
+                "dsn" in str(e).lower()
+                or "postgres" in str(e).lower()
+                or "required" in str(e).lower()
+            )
 
 
 class TestProjectKeyConfig:
@@ -62,11 +66,11 @@ class TestProjectKeyConfig:
         """PROJECT_KEY 环境变量正确读取"""
         monkeypatch.setenv("PROJECT_KEY", "my_test_project")
         monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/test")
-        
+
         from engram.logbook.config import Config
-        
+
         config = Config.from_env()
-        
+
         # 检查 project_key 是否被设置
         if hasattr(config, "project_key"):
             assert config.project_key == "my_test_project"
@@ -75,11 +79,11 @@ class TestProjectKeyConfig:
         """PROJECT_KEY 缺失时使用默认值"""
         monkeypatch.delenv("PROJECT_KEY", raising=False)
         monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/test")
-        
+
         from engram.logbook.config import Config
-        
+
         config = Config.from_env()
-        
+
         # project_key 应该有默认值
         if hasattr(config, "project_key"):
             assert config.project_key is not None
@@ -91,10 +95,10 @@ class TestGatewayConfig:
     def test_gateway_port_from_env(self, monkeypatch):
         """GATEWAY_PORT 环境变量正确读取"""
         monkeypatch.setenv("GATEWAY_PORT", "9000")
-        
+
         try:
-            from engram.gateway.config import get_gateway_port, GatewayConfig
-            
+            from engram.gateway.config import GatewayConfig, get_gateway_port
+
             port = get_gateway_port()
             assert port == 9000
         except ImportError:
@@ -113,10 +117,10 @@ class TestGatewayConfig:
     def test_gateway_port_default(self, monkeypatch):
         """GATEWAY_PORT 缺失时使用默认值 8787"""
         monkeypatch.delenv("GATEWAY_PORT", raising=False)
-        
+
         try:
-            from engram.gateway.config import get_gateway_port, GatewayConfig
-            
+            from engram.gateway.config import get_gateway_port
+
             port = get_gateway_port()
             assert port == 8787  # 默认端口
         except ImportError:
@@ -127,10 +131,10 @@ class TestGatewayConfig:
     def test_openmemory_base_url_from_env(self, monkeypatch):
         """OPENMEMORY_BASE_URL 环境变量正确读取"""
         monkeypatch.setenv("OPENMEMORY_BASE_URL", "http://custom-openmemory:9000")
-        
+
         try:
             from engram.gateway.config import GatewayConfig
-            
+
             config = GatewayConfig()
             if hasattr(config, "openmemory_base_url"):
                 assert "custom-openmemory" in config.openmemory_base_url
@@ -145,11 +149,11 @@ class TestConfigPriority:
         """环境变量覆盖默认值"""
         custom_dsn = "postgresql://custom:custom@custom_host:5432/custom_db"
         monkeypatch.setenv("POSTGRES_DSN", custom_dsn)
-        
+
         from engram.logbook.config import Config
-        
+
         config = Config.from_env()
-        
+
         # 环境变量应该覆盖默认值
         assert config.postgres_dsn == custom_dsn
 
@@ -164,12 +168,12 @@ dsn = "postgresql://file:file@localhost/file_db"
 [project]
 project_key = "file_project"
 """)
-        
+
         monkeypatch.setenv("ENGRAM_LOGBOOK_CONFIG", str(config_file))
         monkeypatch.delenv("POSTGRES_DSN", raising=False)
-        
+
         from engram.logbook.config import Config
-        
+
         try:
             config = Config.from_file(str(config_file))
             # 验证从文件读取
@@ -186,9 +190,9 @@ class TestConfigValidation:
     def test_invalid_dsn_format(self, monkeypatch):
         """无效 DSN 格式处理"""
         monkeypatch.setenv("POSTGRES_DSN", "not_a_valid_dsn")
-        
+
         from engram.logbook.config import Config
-        
+
         try:
             config = Config.from_env()
             # 如果允许无效格式，后续连接时应该失败
@@ -201,9 +205,9 @@ class TestConfigValidation:
     def test_empty_dsn(self, monkeypatch):
         """空 DSN 处理"""
         monkeypatch.setenv("POSTGRES_DSN", "")
-        
+
         from engram.logbook.config import Config
-        
+
         try:
             config = Config.from_env()
             # 空字符串可能被当作缺失处理
@@ -222,15 +226,15 @@ class TestMultipleEnvVars:
         monkeypatch.setenv("PROJECT_KEY", "combined_test")
         monkeypatch.setenv("GATEWAY_PORT", "9999")
         monkeypatch.setenv("OPENMEMORY_BASE_URL", "http://memory:8080")
-        
+
         from engram.logbook.config import Config
-        
+
         config = Config.from_env()
-        
+
         # 基本验证
         assert config is not None
         assert config.postgres_dsn is not None
-        
+
         if hasattr(config, "project_key"):
             assert config.project_key == "combined_test"
 
@@ -241,13 +245,13 @@ class TestConfigIsolation:
     def test_config_instances_independent(self, monkeypatch):
         """多个 Config 实例相互独立"""
         from engram.logbook.config import Config
-        
+
         monkeypatch.setenv("POSTGRES_DSN", "postgresql://first:first@localhost/first")
         config1 = Config.from_env()
-        
+
         monkeypatch.setenv("POSTGRES_DSN", "postgresql://second:second@localhost/second")
         config2 = Config.from_env()
-        
+
         # 两个实例应该有不同的值（如果 from_env 每次都读取环境变量）
         # 或者都是同一个值（如果有缓存）
         # 这里只验证不会相互干扰导致错误

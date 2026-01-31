@@ -10,24 +10,26 @@ test_bucket_governance_drift.py - Bucket 治理策略校验单元测试
 """
 
 import json
-import pytest
-from pathlib import Path
 
 # 导入被测模块
 import sys
+from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "ops"))
 from verify_bucket_governance import (
+    DEFAULT_EXPECTED_LIFECYCLE_RULES,
     CheckResult,
     GovernanceReport,
-    DEFAULT_EXPECTED_LIFECYCLE_RULES,
     verify_lifecycle_rule_ids,
     verify_policy_actions_from_statements,
 )
 
-
 # ============================================================================
 # 生命周期规则 ID 校验测试
 # ============================================================================
+
 
 class TestVerifyLifecycleRuleIds:
     """生命周期规则 ID 校验测试"""
@@ -127,6 +129,7 @@ class TestVerifyLifecycleRuleIds:
 # ============================================================================
 # Policy Actions 校验测试
 # ============================================================================
+
 
 class TestVerifyPolicyActionsFromStatements:
     """Policy Actions 校验测试"""
@@ -326,6 +329,7 @@ class TestVerifyPolicyActionsFromStatements:
 # CheckResult 数据结构测试
 # ============================================================================
 
+
 class TestCheckResult:
     """CheckResult 数据结构测试"""
 
@@ -357,6 +361,7 @@ class TestCheckResult:
 # ============================================================================
 # GovernanceReport 数据结构测试
 # ============================================================================
+
 
 class TestGovernanceReport:
     """GovernanceReport 数据结构测试"""
@@ -409,6 +414,7 @@ class TestGovernanceReport:
 # ============================================================================
 # 与模板文件的一致性测试
 # ============================================================================
+
 
 class TestLifecycleTemplateConsistency:
     """生命周期模板一致性测试"""
@@ -473,6 +479,7 @@ class TestPolicyTemplateConsistency:
 # generate_s3_policy.py 生成策略一致性测试
 # ============================================================================
 
+
 class TestGeneratedPolicyConsistency:
     """generate_s3_policy.py 生成策略一致性测试"""
 
@@ -484,6 +491,7 @@ class TestGeneratedPolicyConsistency:
             pytest.skip(f"generate_s3_policy.py 不存在: {generate_path}")
 
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("generate_s3_policy", generate_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

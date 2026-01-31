@@ -9,13 +9,11 @@ test_scm_sync_keys.py - SCM 同步键名规范化模块单元测试
 - 边界情况：空值、None、特殊字符
 """
 
-import pytest
-
 from engram.logbook.scm_sync_keys import (
-    normalize_instance_key,
-    extract_tenant_id,
-    extract_instance_key,
     extract_instance_and_tenant,
+    extract_instance_key,
+    extract_tenant_id,
+    normalize_instance_key,
 )
 
 
@@ -23,21 +21,24 @@ class TestNormalizeInstanceKey:
     """normalize_instance_key 函数测试"""
 
     # === 基本功能测试 ===
-    
+
     def test_simple_host(self):
         """简单 host 保持不变（转小写）"""
         assert normalize_instance_key("gitlab.example.com") == "gitlab.example.com"
 
     def test_https_url(self):
         """HTTPS URL 提取 host"""
-        assert normalize_instance_key("https://gitlab.example.com/group/project") == "gitlab.example.com"
+        assert (
+            normalize_instance_key("https://gitlab.example.com/group/project")
+            == "gitlab.example.com"
+        )
 
     def test_http_url(self):
         """HTTP URL 提取 host"""
         assert normalize_instance_key("http://gitlab.local/repo") == "gitlab.local"
 
     # === 大小写归一化 ===
-    
+
     def test_uppercase_host(self):
         """大写 host 转小写"""
         assert normalize_instance_key("GITLAB.EXAMPLE.COM") == "gitlab.example.com"
@@ -51,7 +52,7 @@ class TestNormalizeInstanceKey:
         assert normalize_instance_key("HTTPS://GITLAB.CORP.COM/Group/Project") == "gitlab.corp.com"
 
     # === 端口归一化 ===
-    
+
     def test_port_443_removed(self):
         """默认 HTTPS 端口 443 被移除"""
         assert normalize_instance_key("gitlab.example.com:443") == "gitlab.example.com"
@@ -72,7 +73,7 @@ class TestNormalizeInstanceKey:
         assert normalize_instance_key("http://gitlab.local:8080/repo") == "gitlab.local:8080"
 
     # === 协议归一化 ===
-    
+
     def test_https_protocol_ignored(self):
         """HTTPS 协议被忽略，只保留 host"""
         result = normalize_instance_key("https://gitlab.example.com/path")
@@ -92,10 +93,13 @@ class TestNormalizeInstanceKey:
         assert http_result == https_result == "gitlab.example.com"
 
     # === 路径处理 ===
-    
+
     def test_path_ignored(self):
         """URL 路径被忽略"""
-        assert normalize_instance_key("https://gitlab.example.com/group/subgroup/project.git") == "gitlab.example.com"
+        assert (
+            normalize_instance_key("https://gitlab.example.com/group/subgroup/project.git")
+            == "gitlab.example.com"
+        )
 
     def test_trailing_slash(self):
         """尾部斜杠不影响结果"""
@@ -106,7 +110,7 @@ class TestNormalizeInstanceKey:
         assert normalize_instance_key("gitlab.example.com/group/project") == "gitlab.example.com"
 
     # === 空值和边界情况 ===
-    
+
     def test_none_returns_none(self):
         """None 输入返回 None"""
         assert normalize_instance_key(None) is None
@@ -128,7 +132,7 @@ class TestNormalizeInstanceKey:
         assert normalize_instance_key("https://") is None
 
     # === 复杂 URL 场景 ===
-    
+
     def test_url_with_auth(self):
         """带认证信息的 URL（@前的部分是认证信息）"""
         # urlparse 会将认证信息放在 username/password，netloc 包含 user@host
@@ -155,7 +159,7 @@ class TestExtractTenantId:
     """extract_tenant_id 函数测试"""
 
     # === 从 payload_json 提取 ===
-    
+
     def test_payload_tenant_id(self):
         """从 payload_json 直接提取 tenant_id"""
         payload = {"tenant_id": "acme"}
@@ -173,7 +177,7 @@ class TestExtractTenantId:
         assert extract_tenant_id(payload_json=payload) == "acme"
 
     # === 从 project_key 提取 ===
-    
+
     def test_project_key_with_slash(self):
         """从 project_key 提取 / 前的部分"""
         assert extract_tenant_id(project_key="tenant-a/project-x") == "tenant-a"
@@ -195,7 +199,7 @@ class TestExtractTenantId:
         assert extract_tenant_id(project_key="  tenant/project  ") == "tenant"
 
     # === 空值和边界情况 ===
-    
+
     def test_none_payload_none_project(self):
         """两个参数都是 None 返回 None"""
         assert extract_tenant_id(None, None) is None
@@ -233,7 +237,7 @@ class TestExtractInstanceKey:
     """extract_instance_key 函数测试"""
 
     # === 从 payload_json 提取 ===
-    
+
     def test_payload_gitlab_instance(self):
         """从 payload_json 直接提取 gitlab_instance"""
         payload = {"gitlab_instance": "gitlab.example.com"}
@@ -251,10 +255,12 @@ class TestExtractInstanceKey:
         assert extract_instance_key(payload_json=payload, url=url) == "primary.gitlab.com"
 
     # === 从 URL 提取 ===
-    
+
     def test_url_extraction(self):
         """从 URL 提取实例标识"""
-        assert extract_instance_key(url="https://gitlab.corp.com/group/project") == "gitlab.corp.com"
+        assert (
+            extract_instance_key(url="https://gitlab.corp.com/group/project") == "gitlab.corp.com"
+        )
 
     def test_url_with_port(self):
         """URL 带自定义端口"""
@@ -265,7 +271,7 @@ class TestExtractInstanceKey:
         assert extract_instance_key(url="HTTPS://GITLAB.COM:443/") == "gitlab.com"
 
     # === 空值和边界情况 ===
-    
+
     def test_none_inputs(self):
         """两个参数都是 None 返回 None"""
         assert extract_instance_key(None, None) is None
@@ -297,8 +303,7 @@ class TestExtractInstanceAndTenant:
     def test_from_url_and_project_key(self):
         """从 URL 和 project_key 提取"""
         result = extract_instance_and_tenant(
-            url="https://gitlab.corp.com/repo",
-            project_key="tenant-x/project"
+            url="https://gitlab.corp.com/repo", project_key="tenant-x/project"
         )
         assert result == ("gitlab.corp.com", "tenant-x")
 
@@ -344,7 +349,7 @@ class TestEdgeCasesAndConsistency:
         http_result = normalize_instance_key("http://gitlab.example.com/")
         https_result = normalize_instance_key("https://gitlab.example.com/")
         no_protocol = normalize_instance_key("gitlab.example.com")
-        
+
         assert http_result == https_result == no_protocol == "gitlab.example.com"
 
     def test_real_world_gitlab_urls(self):
@@ -377,11 +382,11 @@ class TestEdgeCasesAndConsistency:
             "gitlab_instance": normalize_instance_key("HTTPS://GITLAB.CORP.COM:443/"),
             "tenant_id": extract_tenant_id(project_key="acme/project"),
         }
-        
+
         # 模拟 worker 读取
         instance = extract_instance_key(payload_json=scheduler_payload)
         tenant = extract_tenant_id(payload_json=scheduler_payload)
-        
+
         assert instance == "gitlab.corp.com"
         assert tenant == "acme"
 
@@ -397,7 +402,7 @@ class TestClaimAllowlistNormalization:
             "gitlab.example.com:443",
             "https://gitlab.example.com/",
         ]
-        
+
         # 规范化后应该都是相同的
         normalized = [normalize_instance_key(i) for i in user_inputs]
         assert all(n == "gitlab.example.com" for n in normalized)

@@ -8,6 +8,7 @@ policy 模块单元测试
 """
 
 import pytest
+
 from engram.gateway.policy import (
     PolicyAction,
     PolicyDecision,
@@ -705,6 +706,177 @@ class TestStrictEvidenceValidation:
             policy_json={"evidence_mode": "compat"},
         )
         assert engine.policy["evidence_mode"] == "compat"
+
+
+class TestEvidencePresentParameter:
+    """evidence_present 参数测试（v2 evidence 支持）"""
+
+    def test_v2_evidence_present_true_bypasses_evidence_refs_check(self):
+        """
+        核心契约测试：v2 evidence + evidence_refs=None 时不应触发 missing_evidence
+
+        场景：
+        - evidence_refs=None（v1 legacy 格式为空）
+        - evidence_present=True（经过 normalize_evidence 后有 v2 evidence）
+
+        预期：策略通过，不触发 missing_evidence
+        """
+        engine = PolicyEngine(
+            team_write_enabled=True,
+            policy_json={
+                "require_evidence": True,
+                "allowed_kinds": [],
+            },
+        )
+        decision = engine.decide(
+            target_space="team:myproject",
+            actor_user_id="alice",
+            payload_md="content",
+            evidence_refs=None,  # v1 格式为空
+            evidence_present=True,  # v2 格式有 evidence
+        )
+        assert decision.action == PolicyAction.ALLOW
+        assert decision.reason == "policy_passed"
+
+    def test_v2_evidence_present_false_triggers_missing_evidence(self):
+        """
+        evidence_present=False 时应触发 missing_evidence
+        """
+        engine = PolicyEngine(
+            team_write_enabled=True,
+            policy_json={
+                "require_evidence": True,
+                "allowed_kinds": [],
+            },
+        )
+        decision = engine.decide(
+            target_space="team:myproject",
+            actor_user_id="alice",
+            payload_md="content",
+            evidence_refs=None,
+            evidence_present=False,  # 明确无 evidence
+        )
+        assert decision.action == PolicyAction.REDIRECT
+        assert decision.reason == "missing_evidence"
+
+    def test_evidence_present_none_falls_back_to_evidence_refs(self):
+        """
+        evidence_present=None 时回退到 evidence_refs 检查（向后兼容）
+        """
+        engine = PolicyEngine(
+            team_write_enabled=True,
+            policy_json={
+                "require_evidence": True,
+                "allowed_kinds": [],
+            },
+        )
+        # evidence_present=None, evidence_refs=None -> missing_evidence
+        decision = engine.decide(
+            target_space="team:myproject",
+            actor_user_id="alice",
+            payload_md="content",
+            evidence_refs=None,
+            evidence_present=None,
+        )
+        assert decision.action == PolicyAction.REDIRECT
+        assert decision.reason == "missing_evidence"
+
+        # evidence_present=None, evidence_refs=["ref"] -> 通过
+        decision = engine.decide(
+            target_space="team:myproject",
+            actor_user_id="alice",
+            payload_md="content",
+            evidence_refs=["some_ref"],
+            evidence_present=None,
+        )
+        assert decision.action == PolicyAction.ALLOW
+
+    def test_evidence_present_true_with_empty_evidence_refs_passes(self):
+        """
+        evidence_present=True + evidence_refs=[] 时应通过
+        """
+        engine = PolicyEngine(
+            team_write_enabled=True,
+            policy_json={
+                "require_evidence": True,
+                "allowed_kinds": [],
+            },
+        )
+        decision = engine.decide(
+            target_space="team:myproject",
+            actor_user_id="alice",
+            payload_md="content",
+            evidence_refs=[],  # 空列表
+            evidence_present=True,  # 有 v2 evidence
+        )
+        assert decision.action == PolicyAction.ALLOW
+        assert decision.reason == "policy_passed"
+
+    def test_evidence_present_overrides_evidence_refs(self):
+        """
+        evidence_present 优先于 evidence_refs
+        """
+        engine = PolicyEngine(
+            team_write_enabled=True,
+            policy_json={
+                "require_evidence": True,
+                "allowed_kinds": [],
+            },
+        )
+        # evidence_refs 非空但 evidence_present=False -> missing_evidence
+        decision = engine.decide(
+            target_space="team:myproject",
+            actor_user_id="alice",
+            payload_md="content",
+            evidence_refs=["ref1", "ref2"],  # v1 有 refs
+            evidence_present=False,  # 但明确指定 v2 无 evidence
+        )
+        assert decision.action == PolicyAction.REDIRECT
+        assert decision.reason == "missing_evidence"
+
+
+class TestDecideWriteWithEvidencePresent:
+    """decide_write 便捷函数的 evidence_present 参数测试"""
+
+    def test_decide_write_with_evidence_present_true(self):
+        """decide_write 支持 evidence_present 参数"""
+        settings = {
+            "team_write_enabled": True,
+            "policy_json": {
+                "require_evidence": True,
+                "allowed_kinds": [],
+            },
+        }
+        result = decide_write(
+            actor_user_id="alice",
+            requested_space="team:project",
+            payload_md="content",
+            evidence_refs=None,
+            settings=settings,
+            evidence_present=True,
+        )
+        assert result["action"] == "allow"
+        assert result["reason"] == "policy_passed"
+
+    def test_decide_write_with_evidence_present_false(self):
+        """decide_write evidence_present=False 触发 missing_evidence"""
+        settings = {
+            "team_write_enabled": True,
+            "policy_json": {
+                "require_evidence": True,
+                "allowed_kinds": [],
+            },
+        }
+        result = decide_write(
+            actor_user_id="alice",
+            requested_space="team:project",
+            payload_md="content",
+            evidence_refs=None,
+            settings=settings,
+            evidence_present=False,
+        )
+        assert result["action"] == "redirect"
+        assert result["reason"] == "missing_evidence"
 
 
 class TestPolicyCheckOrder:

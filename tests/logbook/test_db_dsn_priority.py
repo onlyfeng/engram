@@ -9,8 +9,9 @@
 """
 
 import os
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from engram.logbook.db import get_dsn
 from engram.logbook.errors import ConfigError
@@ -22,7 +23,7 @@ class TestGetDsnPriority:
     def test_config_dsn_has_highest_priority(self):
         """
         显式配置优先于环境变量
-        
+
         当 config 中有 postgres.dsn 时，即使环境变量也设置了，
         应该优先使用 config 中的值。
         """
@@ -35,10 +36,13 @@ class TestGetDsnPriority:
         mock_config.get.return_value = config_dsn
 
         # 同时设置环境变量
-        with patch.dict(os.environ, {
-            "POSTGRES_DSN": env_dsn,
-            "TEST_PG_DSN": test_dsn,
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "POSTGRES_DSN": env_dsn,
+                "TEST_PG_DSN": test_dsn,
+            },
+        ):
             result = get_dsn(config=mock_config)
             assert result == config_dsn, "显式配置应该优先于环境变量"
 
@@ -53,10 +57,13 @@ class TestGetDsnPriority:
         mock_config = MagicMock()
         mock_config.get.return_value = None
 
-        with patch.dict(os.environ, {
-            "POSTGRES_DSN": env_dsn,
-            "TEST_PG_DSN": test_dsn,
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "POSTGRES_DSN": env_dsn,
+                "TEST_PG_DSN": test_dsn,
+            },
+        ):
             result = get_dsn(config=mock_config)
             assert result == env_dsn, "POSTGRES_DSN 应该优先于 TEST_PG_DSN"
 
@@ -95,7 +102,7 @@ class TestGetDsnPriority:
         with patch.dict(os.environ, env, clear=True):
             with pytest.raises(ConfigError) as exc_info:
                 get_dsn(config=mock_config)
-            
+
             # 验证错误信息包含检查过的来源
             assert "postgres.dsn" in str(exc_info.value.details)
             assert "POSTGRES_DSN" in str(exc_info.value.details)

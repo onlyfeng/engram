@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-
 DEFAULT_EXPECTED_LIFECYCLE_RULES = [
     "tmp-cleanup-7d",
     "exports-cleanup-90d",

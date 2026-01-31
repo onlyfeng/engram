@@ -24,16 +24,15 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from artifacts import (
-    build_scm_artifact_path,
-    build_legacy_scm_path,
     SCM_EXT_DIFF,
     SCM_EXT_DIFFSTAT,
     SCM_EXT_MINISTAT,
+    build_legacy_scm_path,
+    build_scm_artifact_path,
 )
 from engram.logbook.uri import (
     parse_scm_artifact_path,
     resolve_scm_artifact_path,
-    ScmArtifactPath,
 )
 
 
@@ -62,7 +61,10 @@ class TestBuildScmArtifactPath:
             sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             ext="diff",
         )
-        assert path == "scm/proj_b/2/git/abc123def/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.diff"
+        assert (
+            path
+            == "scm/proj_b/2/git/abc123def/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.diff"
+        )
 
     def test_build_diffstat_path(self):
         """测试 diffstat 扩展名"""
@@ -199,7 +201,7 @@ class TestParseScmArtifactPath:
     def test_parse_new_format(self):
         """测试解析新版路径格式"""
         result = parse_scm_artifact_path("scm/proj_a/1/svn/r100/abc123.diff")
-        
+
         assert result is not None
         assert result.project_key == "proj_a"
         assert result.repo_id == "1"
@@ -212,7 +214,7 @@ class TestParseScmArtifactPath:
     def test_parse_new_format_git(self):
         """测试解析新版 Git 路径格式"""
         result = parse_scm_artifact_path("scm/proj_b/2/git/abc123def/e3b0c44.diffstat")
-        
+
         assert result is not None
         assert result.project_key == "proj_b"
         assert result.repo_id == "2"
@@ -225,7 +227,7 @@ class TestParseScmArtifactPath:
     def test_parse_legacy_svn_format(self):
         """测试解析旧版 SVN 路径格式"""
         result = parse_scm_artifact_path("scm/1/svn/r100.diff")
-        
+
         assert result is not None
         assert result.project_key is None
         assert result.repo_id == "1"
@@ -238,7 +240,7 @@ class TestParseScmArtifactPath:
     def test_parse_legacy_git_format(self):
         """测试解析旧版 Git 路径格式"""
         result = parse_scm_artifact_path("scm/1/git/commits/abc123.diff")
-        
+
         assert result is not None
         assert result.project_key is None
         assert result.repo_id == "1"
@@ -258,7 +260,7 @@ class TestParseScmArtifactPath:
     def test_parse_normalized_path(self):
         """测试解析带反斜杠的路径"""
         result = parse_scm_artifact_path("scm\\proj_a\\1\\svn\\r100\\abc123.diff")
-        
+
         assert result is not None
         assert result.project_key == "proj_a"
 
@@ -272,7 +274,7 @@ class TestResolveScmArtifactPath:
         new_path = tmp_path / "scm" / "proj_a" / "1" / "svn" / "r100"
         new_path.mkdir(parents=True)
         (new_path / "abc123.diff").write_text("diff content")
-        
+
         result = resolve_scm_artifact_path(
             project_key="proj_a",
             repo_id="1",
@@ -282,7 +284,7 @@ class TestResolveScmArtifactPath:
             ext="diff",
             artifacts_root=tmp_path,
         )
-        
+
         assert result is not None
         assert Path(result).exists()
         assert "abc123.diff" in result
@@ -293,7 +295,7 @@ class TestResolveScmArtifactPath:
         legacy_path = tmp_path / "scm" / "1" / "svn"
         legacy_path.mkdir(parents=True)
         (legacy_path / "r100.diff").write_text("legacy diff content")
-        
+
         result = resolve_scm_artifact_path(
             project_key="proj_a",
             repo_id="1",
@@ -303,7 +305,7 @@ class TestResolveScmArtifactPath:
             ext="diff",
             artifacts_root=tmp_path,
         )
-        
+
         assert result is not None
         assert Path(result).exists()
         assert "r100.diff" in result
@@ -314,7 +316,7 @@ class TestResolveScmArtifactPath:
         legacy_path = tmp_path / "scm" / "1" / "git" / "commits"
         legacy_path.mkdir(parents=True)
         (legacy_path / "abc123.diff").write_text("legacy diff content")
-        
+
         result = resolve_scm_artifact_path(
             project_key="proj_a",
             repo_id="1",
@@ -324,7 +326,7 @@ class TestResolveScmArtifactPath:
             ext="diff",
             artifacts_root=tmp_path,
         )
-        
+
         assert result is not None
         assert Path(result).exists()
         assert "abc123.diff" in result
@@ -335,11 +337,11 @@ class TestResolveScmArtifactPath:
         new_path = tmp_path / "scm" / "proj_a" / "1" / "svn" / "r100"
         new_path.mkdir(parents=True)
         (new_path / "abc123.diff").write_text("new format content")
-        
+
         legacy_path = tmp_path / "scm" / "1" / "svn"
         legacy_path.mkdir(parents=True)
         (legacy_path / "r100.diff").write_text("legacy content")
-        
+
         result = resolve_scm_artifact_path(
             project_key="proj_a",
             repo_id="1",
@@ -349,7 +351,7 @@ class TestResolveScmArtifactPath:
             ext="diff",
             artifacts_root=tmp_path,
         )
-        
+
         assert result is not None
         # 应该返回新版路径
         assert "proj_a" in result
@@ -366,7 +368,7 @@ class TestResolveScmArtifactPath:
             ext="diff",
             artifacts_root=tmp_path,
         )
-        
+
         assert result is None
 
 
@@ -387,7 +389,7 @@ class TestScmArtifactPathRepr:
         """测试 __repr__ 格式"""
         parsed = parse_scm_artifact_path("scm/proj_a/1/svn/r100/abc123.diff")
         repr_str = repr(parsed)
-        
+
         assert "ScmArtifactPath" in repr_str
         assert "proj_a" in repr_str
         assert "svn" in repr_str

@@ -9,14 +9,15 @@ SCM Sync Job Payload Schema 契约测试
 """
 
 import json
-import os
-import pytest
 from pathlib import Path
 from typing import Any, Dict
 
+import pytest
+
 try:
-    import jsonschema
-    from jsonschema import validate, ValidationError, Draft202012Validator
+    import jsonschema  # noqa: F401
+    from jsonschema import Draft202012Validator, ValidationError, validate  # noqa: F401
+
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
@@ -26,15 +27,19 @@ except ImportError:
 def _find_schema_path() -> Path:
     """查找 schema 文件路径，支持多种执行上下文"""
     current = Path(__file__).resolve().parent
-    
+
     for _ in range(10):
         candidate = current / "schemas" / "scm_sync_job_payload_v1.schema.json"
         if candidate.exists():
             return candidate
         current = current.parent
-    
+
     # 从 apps/logbook_postgres/scripts/tests/ 回溯到项目根
-    fallback = Path(__file__).resolve().parent.parent.parent.parent.parent / "schemas" / "scm_sync_job_payload_v1.schema.json"
+    fallback = (
+        Path(__file__).resolve().parent.parent.parent.parent.parent
+        / "schemas"
+        / "scm_sync_job_payload_v1.schema.json"
+    )
     return fallback
 
 
@@ -45,7 +50,7 @@ def load_schema() -> Dict[str, Any]:
     """加载 scm_sync_job_payload_v1 schema"""
     if not SCHEMA_PATH.exists():
         pytest.skip(f"Schema 文件不存在: {SCHEMA_PATH}")
-    
+
     with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -156,7 +161,7 @@ class TestVersionField:
     def test_invalid_version_fails(self, schema):
         """无效的 version 值应失败"""
         payload = {"version": "v2"}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -178,7 +183,7 @@ class TestWindowTypeEnum:
     def test_invalid_window_type_fails(self, schema):
         """无效的 window_type 值应失败"""
         payload = {"window_type": "invalid_type"}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -200,7 +205,7 @@ class TestModeEnum:
     def test_invalid_mode_fails(self, schema):
         """无效的 mode 值应失败"""
         payload = {"mode": "invalid_mode"}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -215,16 +220,26 @@ class TestDiffModeEnum:
 
     def test_valid_diff_modes(self, schema):
         """有效的 diff_mode 值应通过"""
-        for diff_mode in ["always", "best_effort", "none"]:
+        for diff_mode in ["always", "best_effort", "minimal", "none"]:
             payload = {"diff_mode": diff_mode}
             validate(instance=payload, schema=schema)
 
     def test_invalid_diff_mode_fails(self, schema):
         """无效的 diff_mode 值应失败"""
         payload = {"diff_mode": "invalid_mode"}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
+
+    def test_minimal_diff_mode_valid(self, schema):
+        """diff_mode='minimal' 应该通过验证"""
+        payload = {"diff_mode": "minimal"}
+        validate(instance=payload, schema=schema)
+
+    def test_suggested_diff_mode_minimal_valid(self, schema):
+        """suggested_diff_mode='minimal' 应该通过验证"""
+        payload = {"suggested_diff_mode": "minimal"}
+        validate(instance=payload, schema=schema)
 
 
 @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
@@ -240,21 +255,21 @@ class TestTimeWindowFields:
         # 有效值
         payload = {"since_ts": 0}
         validate(instance=payload, schema=schema)
-        
+
         payload = {"since_ts": 1704067200}  # 2024-01-01
         validate(instance=payload, schema=schema)
 
     def test_since_ts_negative_fails(self, schema):
         """since_ts 负值应失败"""
         payload = {"since_ts": -1}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
     def test_since_ts_exceeds_max_fails(self, schema):
         """since_ts 超过最大值应失败"""
         payload = {"since_ts": 4102444801}  # 超过最大值
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -276,14 +291,14 @@ class TestRevisionWindowFields:
         """start_rev 必须在有效范围内"""
         payload = {"start_rev": 0}
         validate(instance=payload, schema=schema)
-        
+
         payload = {"start_rev": 1000}
         validate(instance=payload, schema=schema)
 
     def test_start_rev_negative_fails(self, schema):
         """start_rev 负值应失败"""
         payload = {"start_rev": -1}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -305,21 +320,21 @@ class TestBatchConfigFields:
         """batch_size 必须在有效范围内"""
         payload = {"batch_size": 1}
         validate(instance=payload, schema=schema)
-        
+
         payload = {"batch_size": 10000}
         validate(instance=payload, schema=schema)
 
     def test_batch_size_too_small_fails(self, schema):
         """batch_size 小于 1 应失败"""
         payload = {"batch_size": 0}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
     def test_batch_size_too_large_fails(self, schema):
         """batch_size 超过最大值应失败"""
         payload = {"batch_size": 10001}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -327,14 +342,14 @@ class TestBatchConfigFields:
         """forward_window_seconds 必须在有效范围内"""
         payload = {"forward_window_seconds": 60}
         validate(instance=payload, schema=schema)
-        
+
         payload = {"forward_window_seconds": 2592000}
         validate(instance=payload, schema=schema)
 
     def test_forward_window_seconds_too_small_fails(self, schema):
         """forward_window_seconds 小于最小值应失败"""
         payload = {"forward_window_seconds": 59}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -351,7 +366,7 @@ class TestChunkingFields:
         """chunk_size 必须在有效范围内"""
         payload = {"chunk_size": 1}
         validate(instance=payload, schema=schema)
-        
+
         payload = {"chunk_size": 100000}
         validate(instance=payload, schema=schema)
 
@@ -359,7 +374,7 @@ class TestChunkingFields:
         """total_chunks 必须在有效范围内"""
         payload = {"total_chunks": 1}
         validate(instance=payload, schema=schema)
-        
+
         payload = {"total_chunks": 10000}
         validate(instance=payload, schema=schema)
 
@@ -367,7 +382,7 @@ class TestChunkingFields:
         """current_chunk 必须在有效范围内"""
         payload = {"current_chunk": 0}
         validate(instance=payload, schema=schema)
-        
+
         payload = {"current_chunk": 9999}
         validate(instance=payload, schema=schema)
 
@@ -389,7 +404,7 @@ class TestCircuitStateEnum:
     def test_invalid_circuit_state_fails(self, schema):
         """无效的 circuit_state 值应失败"""
         payload = {"circuit_state": "invalid_state"}
-        
+
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
 
@@ -426,7 +441,7 @@ class TestSchemaExamplesValid:
     def test_schema_examples_pass_validation(self, schema):
         """schema 中的 examples 应通过校验"""
         examples = schema.get("examples", [])
-        
+
         for i, example in enumerate(examples):
             try:
                 validate(instance=example, schema=schema)
@@ -449,19 +464,17 @@ class TestAdditionalProperties:
             "custom_field": "custom_value",
             "another_custom": 123,
         }
-        
+
         validate(instance=payload, schema=schema)
 
     def test_complex_additional_properties(self, schema):
         """复杂的额外属性应被允许"""
         payload = {
             "version": "v1",
-            "custom_object": {
-                "nested": "value"
-            },
+            "custom_object": {"nested": "value"},
             "custom_array": [1, 2, 3],
         }
-        
+
         validate(instance=payload, schema=schema)
 
 
@@ -475,7 +488,7 @@ from unittest.mock import MagicMock
 class TestEnqueueClaimDimensionFiltering:
     """
     集成测试：验证 enqueue 写入 dimension 列，claim 按 allowlist 过滤
-    
+
     测试场景：
     1. 入队带 gitlab_instance 的任务，claim(instance_allowlist) 只取匹配的
     2. 入队带 tenant_id 的任务，claim(tenant_allowlist) 只取匹配的
@@ -494,33 +507,33 @@ class TestEnqueueClaimDimensionFiltering:
         """enqueue 应将 gitlab_instance 从 payload 写入到 DB 列"""
         conn, cursor = self._create_mock_conn()
         cursor.fetchone.return_value = ("test-job-id-123",)
-        
+
         from engram.logbook.scm_sync_queue import enqueue
-        
+
         payload = {
             "gitlab_instance": "gitlab.example.com",
             "tenant_id": "tenant-abc",
             "mode": "incremental",
         }
-        
+
         job_id = enqueue(
             repo_id=1,
             job_type="gitlab_commits",
             payload=payload,
             conn=conn,
         )
-        
+
         assert job_id == "test-job-id-123"
-        
+
         # 验证 SQL 调用包含 gitlab_instance 和 tenant_id 列
         call_args = cursor.execute.call_args
         sql = call_args[0][0]
         params = call_args[0][1]
-        
+
         # SQL 应包含这些列
         assert "gitlab_instance" in sql
         assert "tenant_id" in sql
-        
+
         # 参数应包含这些值
         assert "gitlab.example.com" in params
         assert "tenant-abc" in params
@@ -529,25 +542,25 @@ class TestEnqueueClaimDimensionFiltering:
         """enqueue 不带 dimension 字段时，应写入 NULL"""
         conn, cursor = self._create_mock_conn()
         cursor.fetchone.return_value = ("test-job-id-456",)
-        
+
         from engram.logbook.scm_sync_queue import enqueue
-        
+
         # 不带 gitlab_instance 和 tenant_id
         payload = {"mode": "incremental"}
-        
+
         job_id = enqueue(
             repo_id=2,
             job_type="svn",
             payload=payload,
             conn=conn,
         )
-        
+
         assert job_id == "test-job-id-456"
-        
+
         # 参数应包含 None（NULL）
         call_args = cursor.execute.call_args
         params = call_args[0][1]
-        
+
         # 最后两个参数应为 None（gitlab_instance, tenant_id）
         assert params[-2] is None  # gitlab_instance
         assert params[-1] is None  # tenant_id
@@ -556,9 +569,9 @@ class TestEnqueueClaimDimensionFiltering:
         """claim(instance_allowlist) 应生成包含列过滤的 SQL"""
         conn, cursor = self._create_mock_conn()
         cursor.fetchone.return_value = None  # 无可用任务
-        
+
         from engram.logbook.scm_sync_queue import claim
-        
+
         # 直接传入参数避免调用 get_claim_config
         result = claim(
             worker_id="test-worker",
@@ -567,17 +580,17 @@ class TestEnqueueClaimDimensionFiltering:
             max_consecutive_same_tenant=3,
             conn=conn,
         )
-        
+
         assert result is None  # 无任务
-        
+
         # 验证 SQL 包含 gitlab_instance 列过滤
         call_args = cursor.execute.call_args
         sql = call_args[0][0]
         params = call_args[0][1]
-        
+
         # SQL 应包含列过滤条件
         assert "gitlab_instance IS NULL" in sql or "gitlab_instance IN" in sql
-        
+
         # 参数应包含规范化的实例名
         assert "gitlab.example.com" in params
         assert "gitlab2.example.com" in params
@@ -586,9 +599,9 @@ class TestEnqueueClaimDimensionFiltering:
         """claim(tenant_allowlist) 应生成包含列过滤的 SQL"""
         conn, cursor = self._create_mock_conn()
         cursor.fetchone.return_value = None
-        
+
         from engram.logbook.scm_sync_queue import claim
-        
+
         # 直接传入参数避免调用 get_claim_config
         result = claim(
             worker_id="test-worker",
@@ -597,17 +610,17 @@ class TestEnqueueClaimDimensionFiltering:
             max_consecutive_same_tenant=3,
             conn=conn,
         )
-        
+
         assert result is None
-        
+
         # 验证 SQL 包含 tenant_id 列过滤
         call_args = cursor.execute.call_args
         sql = call_args[0][0]
         params = call_args[0][1]
-        
+
         # SQL 应包含列过滤条件
         assert "tenant_id IS NULL" in sql or "tenant_id IN" in sql
-        
+
         # 参数应包含租户 ID
         assert "tenant-a" in params
         assert "tenant-b" in params
@@ -616,9 +629,9 @@ class TestEnqueueClaimDimensionFiltering:
         """claim 同时使用 instance_allowlist 和 tenant_allowlist"""
         conn, cursor = self._create_mock_conn()
         cursor.fetchone.return_value = None
-        
+
         from engram.logbook.scm_sync_queue import claim
-        
+
         # 直接传入参数避免调用 get_claim_config
         result = claim(
             worker_id="test-worker",
@@ -628,17 +641,17 @@ class TestEnqueueClaimDimensionFiltering:
             max_consecutive_same_tenant=3,
             conn=conn,
         )
-        
+
         assert result is None
-        
+
         call_args = cursor.execute.call_args
         sql = call_args[0][0]
         params = call_args[0][1]
-        
+
         # SQL 应同时包含两种过滤
         assert "gitlab_instance" in sql
         assert "tenant_id" in sql
-        
+
         # 参数应包含两种过滤值
         assert "gitlab.example.com" in params
         assert "tenant-x" in params
@@ -650,7 +663,7 @@ class TestDimensionColumnPayloadConsistency:
     def test_payload_gitlab_instance_format(self):
         """gitlab_instance 在 payload 中应为规范化格式"""
         from engram.logbook.scm_sync_keys import normalize_instance_key
-        
+
         # 验证规范化函数行为
         assert normalize_instance_key("https://gitlab.example.com/") == "gitlab.example.com"
         assert normalize_instance_key("GITLAB.EXAMPLE.COM") == "gitlab.example.com"
@@ -660,7 +673,7 @@ class TestDimensionColumnPayloadConsistency:
     def test_payload_dimension_fields_present(self):
         """mock payload 应包含 dimension 字段"""
         payload = create_mock_job_payload_incremental()
-        
+
         # 验证 gitlab_instance 存在
         assert "gitlab_instance" in payload
         assert payload["gitlab_instance"] == "gitlab.example.com"
@@ -668,6 +681,6 @@ class TestDimensionColumnPayloadConsistency:
     def test_degradation_payload_includes_dimensions(self):
         """降级 payload 应包含 dimension 字段"""
         payload = create_mock_job_payload_with_degradation()
-        
+
         assert "gitlab_instance" in payload
         assert payload["gitlab_instance"] == "gitlab.example.com"

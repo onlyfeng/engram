@@ -27,34 +27,28 @@ import os
 import sys
 import time
 from dataclasses import asdict
-from pathlib import Path
-from typing import Set
-from unittest.mock import MagicMock, patch
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 # 添加 scripts 目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from artifact_audit import (
+    ArtifactAuditor,
+)
 from artifact_gc import (
-    GCCandidate,
-    GCResult,
     ReferencedUris,
     run_gc,
     run_tmp_gc,
-)
-from artifact_audit import (
-    ArtifactAuditor,
-    AuditResult,
-    AuditSummary,
 )
 from artifact_migrate import (
     MigrationItem,
     MigrationResult,
 )
 from engram.logbook.artifact_store import LocalArtifactsStore
-
 
 # =============================================================================
 # Fixtures
@@ -80,14 +74,14 @@ def sample_files(artifacts_root: Path) -> dict:
     """创建示例制品文件"""
     scm_dir = artifacts_root / "scm" / "proj_a"
     scm_dir.mkdir(parents=True)
-    
+
     files = {}
     for i in range(3):
         uri = f"scm/proj_a/file_{i}.diff"
         path = artifacts_root / uri
         path.write_bytes(f"content {i}".encode())
         files[uri] = path
-    
+
     return files
 
 
@@ -398,9 +392,18 @@ class TestAuditJsonShapeContract:
     }
 
     # status 允许的值
-    ALLOWED_STATUS_VALUES = {"ok", "mismatch", "missing", "error", "skipped", "head_only_unverified"}
+    ALLOWED_STATUS_VALUES = {
+        "ok",
+        "mismatch",
+        "missing",
+        "error",
+        "skipped",
+        "head_only_unverified",
+    }
 
-    def test_audit_summary_has_required_fields(self, artifacts_root: Path, store: LocalArtifactsStore):
+    def test_audit_summary_has_required_fields(
+        self, artifacts_root: Path, store: LocalArtifactsStore
+    ):
         """测试 AuditSummary 包含所有必需字段"""
         # 创建测试文件
         content = b"test content"
@@ -423,7 +426,9 @@ class TestAuditJsonShapeContract:
         for field in self.REQUIRED_SUMMARY_FIELDS:
             assert field in summary_dict, f"AuditSummary 缺少字段: {field}"
 
-    def test_audit_result_has_required_fields(self, artifacts_root: Path, store: LocalArtifactsStore):
+    def test_audit_result_has_required_fields(
+        self, artifacts_root: Path, store: LocalArtifactsStore
+    ):
         """测试 AuditResult 包含所有必需字段"""
         content = b"test content"
         result = store.put("test/file.txt", content)
@@ -626,9 +631,11 @@ class TestDeleteJsonShapeContract:
     # mode 允许的值
     ALLOWED_MODE_VALUES = {"single", "prefix", "batch"}
 
-    def test_delete_result_has_required_fields(self, artifacts_root: Path, store: LocalArtifactsStore):
+    def test_delete_result_has_required_fields(
+        self, artifacts_root: Path, store: LocalArtifactsStore
+    ):
         """测试 ArtifactDeleteResult 包含所有必需字段"""
-        from engram.logbook.artifact_delete import delete_artifact_key, ArtifactDeleteResult
+        from engram.logbook.artifact_delete import delete_artifact_key
 
         # 创建测试文件
         content = b"test content for delete"
@@ -644,7 +651,9 @@ class TestDeleteJsonShapeContract:
         assert hasattr(result, "trash_path")
         assert hasattr(result, "error")
 
-    def test_single_delete_json_output_shape(self, artifacts_root: Path, store: LocalArtifactsStore):
+    def test_single_delete_json_output_shape(
+        self, artifacts_root: Path, store: LocalArtifactsStore
+    ):
         """测试单个删除 JSON 输出包含所有必需字段"""
         from engram.logbook.artifact_delete import delete_artifact_key
 
@@ -760,12 +769,14 @@ class TestDeleteJsonShapeContract:
         results = []
         for i in range(3):
             result = delete_artifact_key(f"batch_delete/file_{i}.txt", store=store)
-            results.append({
-                "uri": result.uri,
-                "deleted": result.deleted,
-                "existed": result.existed,
-                "trashed": result.trashed,
-            })
+            results.append(
+                {
+                    "uri": result.uri,
+                    "deleted": result.deleted,
+                    "existed": result.existed,
+                    "trashed": result.trashed,
+                }
+            )
 
         output = {
             "ok": True,
@@ -795,7 +806,9 @@ class TestDeleteJsonShapeContract:
             for field in self.REQUIRED_RESULT_ITEM_FIELDS:
                 assert field in item, f"result 项缺少字段: {field}"
 
-    def test_prefix_delete_json_output_shape(self, artifacts_root: Path, store: LocalArtifactsStore):
+    def test_prefix_delete_json_output_shape(
+        self, artifacts_root: Path, store: LocalArtifactsStore
+    ):
         """测试前缀删除 JSON 输出 shape"""
         from engram.logbook.artifact_delete import delete_artifact_key
 
@@ -807,12 +820,14 @@ class TestDeleteJsonShapeContract:
         results = []
         for i in range(2):
             result = delete_artifact_key(f"prefix_delete/sub/file_{i}.txt", store=store)
-            results.append({
-                "uri": result.uri,
-                "deleted": result.deleted,
-                "existed": result.existed,
-                "trashed": result.trashed,
-            })
+            results.append(
+                {
+                    "uri": result.uri,
+                    "deleted": result.deleted,
+                    "existed": result.existed,
+                    "trashed": result.trashed,
+                }
+            )
 
         output = {
             "ok": True,
@@ -874,7 +889,9 @@ class TestDeleteJsonShapeContract:
         # 验证 results 中的 action
         assert output["results"][0]["action"] == "pending"
 
-    def test_delete_nonexistent_json_output_shape(self, artifacts_root: Path, store: LocalArtifactsStore):
+    def test_delete_nonexistent_json_output_shape(
+        self, artifacts_root: Path, store: LocalArtifactsStore
+    ):
         """测试删除不存在文件的 JSON 输出 shape"""
         from engram.logbook.artifact_delete import delete_artifact_key
 
@@ -935,12 +952,14 @@ class TestDeleteJsonShapeContract:
             "failed_count": 0,
             "pending_count": 0,
             "not_existed_count": 0,
-            "results": [{
-                "uri": result.uri,
-                "deleted": result.deleted,
-                "existed": result.existed,
-                "trashed": result.trashed,
-            }],
+            "results": [
+                {
+                    "uri": result.uri,
+                    "deleted": result.deleted,
+                    "existed": result.existed,
+                    "trashed": result.trashed,
+                }
+            ],
             "path": "json_test/file.txt",
             "deleted": True,
             "existed": True,
@@ -994,7 +1013,9 @@ class TestDeleteErrorCodesContract:
         assert result.deleted is False
         assert result.existed is False
         assert result.error is not None
-        assert "路径" in result.error or "traversal" in result.error.lower() or "穿越" in result.error
+        assert (
+            "路径" in result.error or "traversal" in result.error.lower() or "穿越" in result.error
+        )
 
     def test_path_traversal_error_json_shape(
         self, artifacts_root: Path, store: LocalArtifactsStore
@@ -1051,8 +1072,8 @@ class TestDeleteErrorCodesContract:
     def test_ops_credentials_required_error(self):
         """测试 ops 凭证要求时抛出正确的异常"""
         from engram.logbook.artifact_delete import (
-            _delete_object_store_artifact,
             ArtifactDeleteOpsCredentialsRequiredError,
+            _delete_object_store_artifact,
         )
         from engram.logbook.artifact_store import ObjectStore
 
@@ -1063,9 +1084,7 @@ class TestDeleteErrorCodesContract:
 
         # 验证 require_ops=True 时抛出异常
         with pytest.raises(ArtifactDeleteOpsCredentialsRequiredError) as exc_info:
-            _delete_object_store_artifact(
-                mock_store, "test/file.txt", require_ops=True
-            )
+            _delete_object_store_artifact(mock_store, "test/file.txt", require_ops=True)
 
         # 验证异常包含正确的错误类型
         assert exc_info.value.error_type == "ARTIFACT_DELETE_OPS_CREDENTIALS_REQUIRED"
@@ -1101,13 +1120,11 @@ class TestDeleteErrorCodesContract:
         assert "error_details" in output
         assert output["error_details"].get("hint") is not None
 
-    def test_not_supported_error_for_file_uri_store(
-        self, artifacts_root: Path
-    ):
+    def test_not_supported_error_for_file_uri_store(self, artifacts_root: Path):
         """测试 FileUriStore 不支持逻辑键删除"""
         from engram.logbook.artifact_delete import (
-            delete_artifact_key,
             ArtifactDeleteNotSupportedError,
+            delete_artifact_key,
         )
         from engram.logbook.artifact_store import FileUriStore
 
@@ -1123,8 +1140,8 @@ class TestDeleteErrorCodesContract:
         """测试所有删除错误类都有 error_type 属性"""
         from engram.logbook.artifact_delete import (
             ArtifactDeleteError,
-            ArtifactDeleteOpsCredentialsRequiredError,
             ArtifactDeleteNotSupportedError,
+            ArtifactDeleteOpsCredentialsRequiredError,
         )
 
         # 验证基类
@@ -1132,7 +1149,10 @@ class TestDeleteErrorCodesContract:
 
         # 验证子类
         assert hasattr(ArtifactDeleteOpsCredentialsRequiredError, "error_type")
-        assert ArtifactDeleteOpsCredentialsRequiredError.error_type == "ARTIFACT_DELETE_OPS_CREDENTIALS_REQUIRED"
+        assert (
+            ArtifactDeleteOpsCredentialsRequiredError.error_type
+            == "ARTIFACT_DELETE_OPS_CREDENTIALS_REQUIRED"
+        )
 
         assert hasattr(ArtifactDeleteNotSupportedError, "error_type")
         assert ArtifactDeleteNotSupportedError.error_type == "ARTIFACT_DELETE_NOT_SUPPORTED"
@@ -1141,12 +1161,12 @@ class TestDeleteErrorCodesContract:
         """测试 artifact_store 错误类都有 error_type 属性"""
         from engram.logbook.artifact_store import (
             ArtifactError,
-            PathTraversalError,
-            ArtifactNotFoundError,
-            ArtifactWriteDisabledError,
-            ArtifactOverwriteDeniedError,
             ArtifactHashMismatchError,
+            ArtifactNotFoundError,
+            ArtifactOverwriteDeniedError,
+            ArtifactWriteDisabledError,
             FileUriPathError,
+            PathTraversalError,
         )
 
         # 验证所有错误类都有 error_type

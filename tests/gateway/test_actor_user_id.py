@@ -8,14 +8,19 @@ actor_user_id 审计参数测试
 - memory_store_impl 在各种场景下正确传递 actor_user_id
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from engram.gateway.main import (
-    memory_store_impl,
     MemoryStoreRequest,
     compute_payload_sha,
+    memory_store_impl,
 )
+
+# Mock 路径：重构后模块使用的依赖
+HANDLER_MODULE = "engram.gateway.handlers.memory_store"
+ACTOR_VALIDATION_MODULE = "engram.gateway.services.actor_validation"
 
 
 class TestActorUserIdInAudit:
@@ -29,11 +34,12 @@ class TestActorUserIdInAudit:
         actor_user_id = "user_alice_123"
         payload_sha = compute_payload_sha(payload_md)
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
 
@@ -58,7 +64,7 @@ class TestActorUserIdInAudit:
             )
 
             assert result.ok is True
-            
+
             # 验证 actor_user_id 传入审计
             mock_db.insert_audit.assert_called_once()
             audit_call = mock_db.insert_audit.call_args[1]
@@ -71,12 +77,13 @@ class TestActorUserIdInAudit:
         target_space = "team:restricted"
         actor_user_id = "user_bob_456"
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
-             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
 
@@ -94,6 +101,7 @@ class TestActorUserIdInAudit:
 
             # 模拟策略拒绝
             from engram.gateway.policy import PolicyAction
+
             mock_decision = MagicMock()
             mock_decision.action = PolicyAction.REJECT
             mock_decision.reason = "team_write_disabled"
@@ -120,13 +128,14 @@ class TestActorUserIdInAudit:
         target_space = "team:success"
         actor_user_id = "user_charlie_789"
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.get_client") as mock_get_client, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
-             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
 
@@ -144,6 +153,7 @@ class TestActorUserIdInAudit:
 
             # 模拟策略允许
             from engram.gateway.policy import PolicyAction
+
             mock_decision = MagicMock()
             mock_decision.action = PolicyAction.ALLOW
             mock_decision.reason = "allowed"
@@ -179,13 +189,14 @@ class TestActorUserIdInAudit:
         target_space = "team:error"
         actor_user_id = "user_dave_999"
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.get_client") as mock_get_client, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
-             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
 
@@ -204,6 +215,7 @@ class TestActorUserIdInAudit:
 
             # 模拟策略允许
             from engram.gateway.policy import PolicyAction
+
             mock_decision = MagicMock()
             mock_decision.action = PolicyAction.ALLOW
             mock_decision.reason = "allowed"
@@ -212,6 +224,7 @@ class TestActorUserIdInAudit:
 
             # 模拟 OpenMemory 连接失败
             from engram.gateway.openmemory_client import OpenMemoryConnectionError
+
             mock_client = MagicMock()
             mock_client.store.side_effect = OpenMemoryConnectionError("Connection refused")
             mock_get_client.return_value = mock_client
@@ -237,10 +250,11 @@ class TestActorUserIdInAudit:
         target_space = "team:anon"
         payload_sha = compute_payload_sha(payload_md)
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
 
@@ -305,6 +319,34 @@ class TestMemoryStoreRequestModel:
 class TestActorUserValidation:
     """actor_user_id 校验测试"""
 
+    def _assert_audit_has_policy_validation_substructures(
+        self, evidence_refs_json: dict, allow_none_values: bool = True
+    ):
+        """
+        断言 evidence_refs_json.gateway_event 包含 policy 和 validation 子结构
+
+        v1.1 契约要求：所有分支的审计事件必须包含这些子结构
+        """
+        gateway_event = evidence_refs_json.get("gateway_event", {})
+
+        # 验证 policy 子结构存在
+        assert "policy" in gateway_event, "gateway_event 必须包含 policy 子结构"
+        policy = gateway_event["policy"]
+        for field in ["mode", "mode_reason", "policy_version", "is_pointerized", "policy_source"]:
+            assert field in policy, f"policy 必须包含 {field} 字段"
+
+        # 验证 validation 子结构存在
+        assert "validation" in gateway_event, "gateway_event 必须包含 validation 子结构"
+        validation = gateway_event["validation"]
+        for field in ["validate_refs_effective", "validate_refs_reason", "evidence_validation"]:
+            assert field in validation, f"validation 必须包含 {field} 字段"
+
+        # actor 分支发生在策略评估之前，mode_reason 应该说明原因
+        if allow_none_values:
+            assert "actor_validation" in policy.get("mode_reason", "") or "before" in policy.get(
+                "mode_reason", ""
+            ), "actor 分支的 policy.mode_reason 应说明是 actor_validation 阶段"
+
     @pytest.mark.asyncio
     async def test_unknown_actor_reject_policy(self):
         """未知用户 + reject 策略：拒绝请求"""
@@ -312,11 +354,13 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "unknown_user_001"
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter"),
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{ACTOR_VALIDATION_MODULE}.get_db") as mock_get_db_validation,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
             mock_config.return_value.unknown_actor_policy = "reject"
@@ -327,6 +371,7 @@ class TestActorUserValidation:
 
             mock_db = MagicMock()
             mock_get_db.return_value = mock_db
+            mock_get_db_validation.return_value = mock_db
 
             result = await memory_store_impl(
                 payload_md=payload_md,
@@ -345,6 +390,10 @@ class TestActorUserValidation:
             assert audit_call["action"] == "reject"
             assert "actor_unknown:reject" in audit_call["reason"]
 
+            # v1.1 契约：验证 policy/validation 子结构存在
+            evidence_refs_json = audit_call.get("evidence_refs_json", {})
+            self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
+
     @pytest.mark.asyncio
     async def test_unknown_actor_degrade_policy(self):
         """未知用户 + degrade 策略：降级到 private:unknown"""
@@ -352,13 +401,15 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "unknown_user_002"
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.get_client") as mock_get_client, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
-             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{ACTOR_VALIDATION_MODULE}.get_db") as mock_get_db_validation,
+            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
             mock_config.return_value.unknown_actor_policy = "degrade"
@@ -375,9 +426,11 @@ class TestActorUserValidation:
                 "policy_json": {},
             }
             mock_get_db.return_value = mock_db
+            mock_get_db_validation.return_value = mock_db
 
             # 模拟策略允许
             from engram.gateway.policy import PolicyAction
+
             mock_decision = MagicMock()
             mock_decision.action = PolicyAction.ALLOW
             mock_decision.reason = "allowed"
@@ -392,7 +445,7 @@ class TestActorUserValidation:
             mock_client.store.return_value = mock_store_result
             mock_get_client.return_value = mock_client
 
-            result = await memory_store_impl(
+            await memory_store_impl(
                 payload_md=payload_md,
                 target_space=target_space,
                 actor_user_id=actor_user_id,
@@ -403,6 +456,10 @@ class TestActorUserValidation:
             assert first_audit_call["action"] == "redirect"
             assert "actor_unknown:degrade" in first_audit_call["reason"]
 
+            # v1.1 契约：验证 policy/validation 子结构存在
+            evidence_refs_json = first_audit_call.get("evidence_refs_json", {})
+            self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
+
     @pytest.mark.asyncio
     async def test_unknown_actor_auto_create_policy(self):
         """未知用户 + auto_create 策略：自动创建用户"""
@@ -410,14 +467,16 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "new_user_003"
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.get_client") as mock_get_client, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user, \
-             patch("engram.gateway.main.ensure_user") as mock_ensure_user, \
-             patch("engram.gateway.main.create_engine_from_settings") as mock_engine:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{ACTOR_VALIDATION_MODULE}.get_db") as mock_get_db_validation,
+            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+            patch(f"{ACTOR_VALIDATION_MODULE}.ensure_user") as mock_ensure_user,
+            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
             mock_config.return_value.unknown_actor_policy = "auto_create"
@@ -440,9 +499,11 @@ class TestActorUserValidation:
                 "policy_json": {},
             }
             mock_get_db.return_value = mock_db
+            mock_get_db_validation.return_value = mock_db
 
             # 模拟策略允许
             from engram.gateway.policy import PolicyAction
+
             mock_decision = MagicMock()
             mock_decision.action = PolicyAction.ALLOW
             mock_decision.reason = "allowed"
@@ -477,6 +538,11 @@ class TestActorUserValidation:
             autocreate_audit = [c for c in audit_calls if "actor_autocreated" in str(c)]
             assert len(autocreate_audit) == 1
 
+            # v1.1 契约：验证 actor_autocreated 审计的 policy/validation 子结构
+            autocreate_call = autocreate_audit[0][1]
+            evidence_refs_json = autocreate_call.get("evidence_refs_json", {})
+            self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
+
     @pytest.mark.asyncio
     async def test_existing_actor_continues_normally(self):
         """已存在的用户正常处理"""
@@ -485,11 +551,12 @@ class TestActorUserValidation:
         actor_user_id = "existing_user_004"
         payload_sha = compute_payload_sha(payload_md)
 
-        with patch("engram.gateway.main.get_config") as mock_config, \
-             patch("engram.gateway.main.logbook_adapter") as mock_adapter, \
-             patch("engram.gateway.main.get_db") as mock_get_db, \
-             patch("engram.gateway.main.check_user_exists") as mock_check_user:
-
+        with (
+            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
+            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
+            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
+            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
+        ):
             mock_config.return_value.default_team_space = "team:default"
             mock_config.return_value.project_key = "test_project"
             mock_config.return_value.unknown_actor_policy = "reject"  # 策略为 reject，但用户存在
@@ -525,6 +592,7 @@ class TestEnsureUserAndAccount:
     def test_unknown_actor_policy_import(self):
         """验证 UnknownActorPolicy 可导入"""
         from engram.gateway.logbook_adapter import UnknownActorPolicy
+
         assert UnknownActorPolicy.REJECT == "reject"
         assert UnknownActorPolicy.DEGRADE == "degrade"
         assert UnknownActorPolicy.AUTO_CREATE == "auto_create"
@@ -532,16 +600,19 @@ class TestEnsureUserAndAccount:
     def test_ensure_user_function_exists(self):
         """验证 ensure_user 函数存在"""
         from engram.gateway.logbook_adapter import ensure_user
+
         assert callable(ensure_user)
 
     def test_ensure_account_function_exists(self):
         """验证 ensure_account 函数存在"""
         from engram.gateway.logbook_adapter import ensure_account
+
         assert callable(ensure_account)
 
     def test_check_user_exists_function_exists(self):
         """验证 check_user_exists 函数存在"""
         from engram.gateway.logbook_adapter import check_user_exists
+
         assert callable(check_user_exists)
 
 

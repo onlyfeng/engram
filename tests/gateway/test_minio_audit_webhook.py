@@ -21,15 +21,16 @@ test_minio_audit_webhook - MinIO Audit Webhook 端点测试
 
 import json
 import os
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 try:
-    import jsonschema
-    from jsonschema import validate, ValidationError
+    import jsonschema  # noqa: F401
+    from jsonschema import ValidationError, validate  # noqa: F401
+
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
@@ -38,6 +39,7 @@ except ImportError:
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def valid_minio_event():
@@ -88,14 +90,16 @@ def client(mock_config):
     os.environ.setdefault("PROJECT_KEY", "test_project")
     os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost/test")
     os.environ.setdefault("OPENMEMORY_BASE_URL", "http://localhost:8080")
-    
+
     from engram.gateway.main import app
+
     return TestClient(app)
 
 
 # ============================================================================
 # Token 认证测试
 # ============================================================================
+
 
 class TestMinioAuditTokenAuth:
     """Token 认证测试"""
@@ -107,7 +111,7 @@ class TestMinioAuditTokenAuth:
             json=valid_minio_event,
             # 不提供任何认证 header
         )
-        
+
         assert response.status_code == 401
         data = response.json()
         assert data["ok"] is False
@@ -120,7 +124,7 @@ class TestMinioAuditTokenAuth:
             json=valid_minio_event,
             headers={"Authorization": "Bearer wrong-token"},
         )
-        
+
         assert response.status_code == 403
         data = response.json()
         assert data["ok"] is False
@@ -133,7 +137,7 @@ class TestMinioAuditTokenAuth:
             json=valid_minio_event,
             headers={"X-Minio-Auth-Token": "wrong-token"},
         )
-        
+
         assert response.status_code == 403
         data = response.json()
         assert data["ok"] is False
@@ -145,7 +149,7 @@ class TestMinioAuditTokenAuth:
             json=valid_minio_event,
             headers={"Authorization": "Bearer test-secret-token"},
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["ok"] is True
@@ -157,7 +161,7 @@ class TestMinioAuditTokenAuth:
             json=valid_minio_event,
             headers={"X-Minio-Auth-Token": "test-secret-token"},
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["ok"] is True
@@ -171,22 +175,23 @@ class TestMinioAuditTokenNotConfigured:
         os.environ.setdefault("PROJECT_KEY", "test_project")
         os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost/test")
         os.environ.setdefault("OPENMEMORY_BASE_URL", "http://localhost:8080")
-        
+
         with patch("engram.gateway.minio_audit_webhook.get_config") as mock_config:
             config = MagicMock()
             config.minio_audit_webhook_auth_token = None  # 未配置
             config.minio_audit_max_payload_size = 1024 * 1024
             mock_config.return_value = config
-            
+
             from engram.gateway.main import app
+
             client = TestClient(app)
-            
+
             response = client.post(
                 "/minio/audit",
                 json=valid_minio_event,
                 headers={"Authorization": "Bearer any-token"},
             )
-            
+
             assert response.status_code == 503
             data = response.json()
             assert data["ok"] is False
@@ -196,6 +201,7 @@ class TestMinioAuditTokenNotConfigured:
 # ============================================================================
 # Payload 验证测试
 # ============================================================================
+
 
 class TestMinioAuditPayloadValidation:
     """Payload 验证测试"""
@@ -210,7 +216,7 @@ class TestMinioAuditPayloadValidation:
                 "Content-Type": "application/json",
             },
         )
-        
+
         assert response.status_code == 400
         data = response.json()
         assert data["ok"] is False
@@ -226,7 +232,7 @@ class TestMinioAuditPayloadValidation:
                 "Content-Type": "application/json",
             },
         )
-        
+
         assert response.status_code == 400
         data = response.json()
         assert data["ok"] is False
@@ -237,7 +243,7 @@ class TestMinioAuditPayloadValidation:
         os.environ.setdefault("PROJECT_KEY", "test_project")
         os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost/test")
         os.environ.setdefault("OPENMEMORY_BASE_URL", "http://localhost:8080")
-        
+
         # 配置很小的 max payload size
         with patch("engram.gateway.minio_audit_webhook.get_config") as mock_config:
             config = MagicMock()
@@ -245,20 +251,21 @@ class TestMinioAuditPayloadValidation:
             config.minio_audit_max_payload_size = 100  # 只允许 100 字节
             config.postgres_dsn = "postgresql://test:test@localhost/test"
             mock_config.return_value = config
-            
+
             from engram.gateway.main import app
+
             client = TestClient(app)
-            
+
             # 创建大于 100 字节的 payload
             large_event = valid_minio_event.copy()
             large_event["extra_data"] = "x" * 200
-            
+
             response = client.post(
                 "/minio/audit",
                 json=large_event,
                 headers={"Authorization": "Bearer test-secret-token"},
             )
-            
+
             assert response.status_code == 413
             data = response.json()
             assert data["ok"] is False
@@ -268,6 +275,7 @@ class TestMinioAuditPayloadValidation:
 # ============================================================================
 # 成功落库测试
 # ============================================================================
+
 
 class TestMinioAuditSuccess:
     """成功落库测试"""
@@ -279,7 +287,7 @@ class TestMinioAuditSuccess:
             json=valid_minio_event,
             headers={"Authorization": "Bearer test-secret-token"},
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["ok"] is True
@@ -293,12 +301,12 @@ class TestMinioAuditSuccess:
             json=valid_minio_event,
             headers={"Authorization": "Bearer test-secret-token"},
         )
-        
+
         assert response.status_code == 200
-        
+
         # 验证 _insert_audit_to_db 被调用
         mock_db_insert.assert_called_once()
-        
+
         # 检查调用参数（归一化后的结构）
         call_args = mock_db_insert.call_args[0][0]
         assert call_args["schema_version"] == "1.0"
@@ -316,7 +324,7 @@ class TestMinioAuditSuccess:
             json=valid_minio_event,
             headers={"Authorization": "Bearer test-secret-token"},
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert "message" in data
@@ -326,19 +334,20 @@ class TestMinioAuditSuccess:
 # 字段提取测试
 # ============================================================================
 
+
 class TestMinioAuditFieldExtraction:
     """字段提取测试"""
 
     def test_extracts_operation_from_api_name(self, client, mock_db_insert, valid_minio_event):
         """从 api.name 提取 operation"""
         valid_minio_event["api"]["name"] = "DeleteObject"
-        
+
         response = client.post(
             "/minio/audit",
             json=valid_minio_event,
             headers={"Authorization": "Bearer test-secret-token"},
         )
-        
+
         assert response.status_code == 200
         call_args = mock_db_insert.call_args[0][0]
         # 归一化后 operation 使用 s3: 前缀
@@ -356,7 +365,7 @@ class TestMinioAuditFieldExtraction:
         assert response.status_code == 200
         call_args = mock_db_insert.call_args[0][0]
         assert call_args["success"] is True
-        
+
         # 测试失败状态码
         valid_minio_event["api"]["statusCode"] = 403
         response = client.post(
@@ -371,13 +380,13 @@ class TestMinioAuditFieldExtraction:
     def test_handles_minimal_event(self, client, mock_db_insert):
         """处理最小化事件"""
         minimal_event = {"api": {}}
-        
+
         response = client.post(
             "/minio/audit",
             json=minimal_event,
             headers={"Authorization": "Bearer test-secret-token"},
         )
-        
+
         assert response.status_code == 200
         call_args = mock_db_insert.call_args[0][0]
         assert call_args["operation"] == "unknown"
@@ -390,6 +399,7 @@ class TestMinioAuditFieldExtraction:
 # 数据库错误处理测试
 # ============================================================================
 
+
 class TestMinioAuditDbError:
     """数据库错误处理测试"""
 
@@ -397,14 +407,15 @@ class TestMinioAuditDbError:
         """数据库错误返回 500"""
         with patch("engram.gateway.minio_audit_webhook._insert_audit_to_db") as mock_insert:
             from engram.gateway.minio_audit_webhook import MinioAuditError
+
             mock_insert.side_effect = MinioAuditError("数据库连接失败", status_code=500)
-            
+
             response = client.post(
                 "/minio/audit",
                 json=valid_minio_event,
                 headers={"Authorization": "Bearer test-secret-token"},
             )
-            
+
             assert response.status_code == 500
             data = response.json()
             assert data["ok"] is False
@@ -415,6 +426,7 @@ class TestMinioAuditDbError:
 # 集成测试（需要数据库）
 # ============================================================================
 
+
 class TestMinioAuditIntegration:
     """集成测试（需要数据库连接）"""
 
@@ -424,9 +436,10 @@ class TestMinioAuditIntegration:
         dsn = os.environ.get("TEST_PG_DSN") or os.environ.get("POSTGRES_DSN")
         if not dsn:
             pytest.skip("需要 TEST_PG_DSN 或 POSTGRES_DSN 环境变量")
-        
+
         try:
             import psycopg
+
             conn = psycopg.connect(dsn, connect_timeout=2)
             conn.close()
         except Exception as e:
@@ -436,32 +449,34 @@ class TestMinioAuditIntegration:
         """真实数据库插入测试"""
         dsn = os.environ.get("TEST_PG_DSN") or os.environ.get("POSTGRES_DSN")
         auth_token = "integration-test-token"
-        
+
         # 配置环境
         os.environ["PROJECT_KEY"] = "test_project"
         os.environ["POSTGRES_DSN"] = dsn
         os.environ["OPENMEMORY_BASE_URL"] = "http://localhost:8080"
         os.environ["MINIO_AUDIT_WEBHOOK_AUTH_TOKEN"] = auth_token
-        
+
         # 重置配置
         from engram.gateway.config import reset_config
+
         reset_config()
-        
+
         try:
             from engram.gateway.main import app
+
             client = TestClient(app)
-            
+
             response = client.post(
                 "/minio/audit",
                 json=valid_minio_event,
                 headers={"Authorization": f"Bearer {auth_token}"},
             )
-            
+
             # 即使表不存在也应该返回错误而不是崩溃
             assert response.status_code in [200, 500]
             data = response.json()
             assert "ok" in data
-            
+
         finally:
             reset_config()
             os.environ.pop("MINIO_AUDIT_WEBHOOK_AUTH_TOKEN", None)
@@ -471,17 +486,22 @@ class TestMinioAuditIntegration:
 # Schema 加载辅助函数
 # ============================================================================
 
+
 def _find_schema_path() -> Path:
     """查找 object_store_audit_event_v1.schema.json 路径"""
     current = Path(__file__).resolve().parent
-    
+
     for _ in range(10):
         candidate = current / "schemas" / "object_store_audit_event_v1.schema.json"
         if candidate.exists():
             return candidate
         current = current.parent
-    
-    fallback = Path(__file__).resolve().parent.parent.parent.parent.parent / "schemas" / "object_store_audit_event_v1.schema.json"
+
+    fallback = (
+        Path(__file__).resolve().parent.parent.parent.parent.parent
+        / "schemas"
+        / "object_store_audit_event_v1.schema.json"
+    )
     return fallback
 
 
@@ -490,7 +510,7 @@ def load_object_store_schema():
     schema_path = _find_schema_path()
     if not schema_path.exists():
         pytest.skip(f"Schema 文件不存在: {schema_path}")
-    
+
     with open(schema_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -498,6 +518,7 @@ def load_object_store_schema():
 # ============================================================================
 # 归一化映射测试
 # ============================================================================
+
 
 @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
 class TestMinioAuditNormalization:
@@ -511,7 +532,7 @@ class TestMinioAuditNormalization:
     def test_normalize_minio_event_basic(self, schema):
         """基本 MinIO 事件归一化后符合 schema"""
         from engram.gateway.minio_audit_webhook import normalize_to_schema
-        
+
         minio_event = {
             "version": "1",
             "deploymentid": "test-deployment-id",
@@ -526,12 +547,12 @@ class TestMinioAuditNormalization:
             "requestID": "req-123456",
             "userAgent": "MinIO Client",
         }
-        
+
         normalized = normalize_to_schema(minio_event)
-        
+
         # 验证符合 schema
         validate(instance=normalized, schema=schema)
-        
+
         # 验证关键字段
         assert normalized["schema_version"] == "1.0"
         assert normalized["provider"] == "minio"
@@ -545,7 +566,7 @@ class TestMinioAuditNormalization:
     def test_normalize_minio_event_with_null_fields(self, schema):
         """包含空字段的 MinIO 事件归一化后符合 schema"""
         from engram.gateway.minio_audit_webhook import normalize_to_schema
-        
+
         minio_event = {
             "api": {
                 "name": "ListBuckets",
@@ -553,12 +574,12 @@ class TestMinioAuditNormalization:
             },
             "time": "2024-01-15T10:00:00.000Z",
         }
-        
+
         normalized = normalize_to_schema(minio_event)
-        
+
         # 验证符合 schema
         validate(instance=normalized, schema=schema)
-        
+
         # 验证空字段处理
         assert normalized["schema_version"] == "1.0"
         assert normalized["provider"] == "minio"
@@ -569,7 +590,7 @@ class TestMinioAuditNormalization:
     def test_normalize_minio_event_failure_status(self, schema):
         """失败状态的 MinIO 事件归一化后符合 schema"""
         from engram.gateway.minio_audit_webhook import normalize_to_schema
-        
+
         minio_event = {
             "time": "2024-01-15T10:00:00.000Z",
             "api": {
@@ -579,12 +600,12 @@ class TestMinioAuditNormalization:
                 "statusCode": 404,
             },
         }
-        
+
         normalized = normalize_to_schema(minio_event)
-        
+
         # 验证符合 schema
         validate(instance=normalized, schema=schema)
-        
+
         # 验证失败状态
         assert normalized["status_code"] == 404
         assert normalized["success"] is False
@@ -592,7 +613,7 @@ class TestMinioAuditNormalization:
     def test_normalize_preserves_raw_event(self, schema):
         """归一化后 raw 字段完整保留原始事件"""
         from engram.gateway.minio_audit_webhook import normalize_to_schema
-        
+
         minio_event = {
             "version": "1",
             "deploymentid": "test-deployment",
@@ -617,9 +638,9 @@ class TestMinioAuditNormalization:
                 "Content-Type": "application/octet-stream",
             },
         }
-        
+
         normalized = normalize_to_schema(minio_event)
-        
+
         # 验证 raw 完整保留
         assert normalized["raw"] == minio_event
         assert normalized["raw"]["requestClaims"]["accessKey"] == "minioadmin"
@@ -628,7 +649,7 @@ class TestMinioAuditNormalization:
     def test_normalize_extracts_principal(self, schema):
         """归一化正确提取 principal"""
         from engram.gateway.minio_audit_webhook import normalize_to_schema
-        
+
         minio_event = {
             "time": "2024-01-15T10:00:00.000Z",
             "api": {
@@ -640,16 +661,16 @@ class TestMinioAuditNormalization:
                 "accessKey": "AKIAIOSFODNN7EXAMPLE",
             },
         }
-        
+
         normalized = normalize_to_schema(minio_event)
-        
+
         # 验证 principal 提取
         assert normalized["principal"] == "AKIAIOSFODNN7EXAMPLE"
 
     def test_normalize_strips_port_from_remote_ip(self, schema):
         """归一化移除 remote_ip 中的端口号"""
         from engram.gateway.minio_audit_webhook import normalize_to_schema
-        
+
         minio_event = {
             "time": "2024-01-15T10:00:00.000Z",
             "api": {
@@ -659,26 +680,26 @@ class TestMinioAuditNormalization:
             },
             "remotehost": "192.168.1.100:52431",
         }
-        
+
         normalized = normalize_to_schema(minio_event)
-        
+
         # 验证端口被移除
         assert normalized["remote_ip"] == "192.168.1.100"
 
     def test_normalize_handles_unknown_operation(self, schema):
         """未知操作类型归一化为 unknown"""
         from engram.gateway.minio_audit_webhook import normalize_to_schema
-        
+
         minio_event = {
             "time": "2024-01-15T10:00:00.000Z",
             "api": {},  # 无 name 字段
         }
-        
+
         normalized = normalize_to_schema(minio_event)
-        
+
         # 验证符合 schema
         validate(instance=normalized, schema=schema)
-        
+
         # 验证未知操作
         assert normalized["operation"] == "unknown"
 
@@ -691,22 +712,23 @@ class TestMinioAuditDbInsertWithSchema:
         """数据库插入应使用归一化后的数据"""
         with patch("engram.gateway.minio_audit_webhook._insert_audit_to_db") as mock_insert:
             mock_insert.return_value = 12345
-            
+
             os.environ.setdefault("PROJECT_KEY", "test_project")
             os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost/test")
             os.environ.setdefault("OPENMEMORY_BASE_URL", "http://localhost:8080")
-            
+
             from engram.gateway.main import app
+
             client = TestClient(app)
-            
+
             response = client.post(
                 "/minio/audit",
                 json=valid_minio_event,
                 headers={"Authorization": "Bearer test-secret-token"},
             )
-            
+
             assert response.status_code == 200
-            
+
             # 验证插入数据包含归一化字段
             call_args = mock_insert.call_args[0][0]
             assert call_args["schema_version"] == "1.0"

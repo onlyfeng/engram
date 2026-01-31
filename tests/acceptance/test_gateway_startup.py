@@ -10,24 +10,24 @@ Gateway 启动验收测试
 """
 
 import os
-import time
 import signal
-import pytest
+import time
 from multiprocessing import Process
 
+import pytest
 
 # 检查 Gateway 依赖是否可用
 try:
-    import httpx
-    import uvicorn
+    import httpx  # noqa: F401
+    import uvicorn  # noqa: F401
+
     GATEWAY_DEPS_AVAILABLE = True
 except ImportError:
     GATEWAY_DEPS_AVAILABLE = False
 
 
 pytestmark = pytest.mark.skipif(
-    not GATEWAY_DEPS_AVAILABLE,
-    reason="Gateway 依赖 (httpx, uvicorn) 未安装"
+    not GATEWAY_DEPS_AVAILABLE, reason="Gateway 依赖 (httpx, uvicorn) 未安装"
 )
 
 
@@ -36,9 +36,10 @@ def start_gateway_server(host: str, port: int, dsn: str):
     os.environ["POSTGRES_DSN"] = dsn
     os.environ["OPENMEMORY_BASE_URL"] = ""  # 可选，设为空
     os.environ["GATEWAY_PORT"] = str(port)
-    
+
     try:
         import uvicorn
+
         uvicorn.run(
             "engram.gateway.main:app",
             host=host,
@@ -58,7 +59,7 @@ class TestGatewayStartup:
         host = "127.0.0.1"
         port = unused_tcp_port
         dsn = migrated_db["dsn"]
-        
+
         # 在子进程中启动服务器
         proc = Process(
             target=start_gateway_server,
@@ -66,7 +67,7 @@ class TestGatewayStartup:
             daemon=True,
         )
         proc.start()
-        
+
         # 等待服务器启动
         base_url = f"http://{host}:{port}"
         max_retries = 30
@@ -82,9 +83,9 @@ class TestGatewayStartup:
             proc.terminate()
             proc.join(timeout=5)
             pytest.skip(f"Gateway 服务器启动超时 (port={port})")
-        
+
         yield base_url
-        
+
         # 清理
         proc.terminate()
         proc.join(timeout=5)
@@ -94,10 +95,10 @@ class TestGatewayStartup:
     def test_health_endpoint(self, gateway_server):
         """健康检查端点返回响应"""
         response = httpx.get(f"{gateway_server}/health", timeout=5.0)
-        
+
         # 健康检查应该返回 200 或 503（如果 OpenMemory 不可用）
         assert response.status_code in (200, 503), f"健康检查返回: {response.status_code}"
-        
+
         # 响应应该是 JSON
         try:
             data = response.json()
@@ -109,7 +110,7 @@ class TestGatewayStartup:
     def test_health_endpoint_has_status(self, gateway_server):
         """健康检查包含状态信息"""
         response = httpx.get(f"{gateway_server}/health", timeout=5.0)
-        
+
         if response.status_code == 200:
             try:
                 data = response.json()
@@ -141,7 +142,7 @@ class TestGatewayStartup:
                     return
             except Exception:
                 continue
-        
+
         # 如果所有端点都失败，跳过测试
         pytest.skip("未找到 MCP 端点")
 
@@ -159,7 +160,7 @@ class TestGatewayStartup:
                     },
                     timeout=5.0,
                 )
-                
+
                 if response.status_code == 200:
                     data = response.json()
                     if "result" in data:
@@ -189,7 +190,7 @@ class TestGatewayStartup:
             headers={"Origin": "http://localhost:3000"},
             timeout=5.0,
         )
-        
+
         # CORS 可能启用也可能未启用
         # 只验证请求不会崩溃
         assert response.status_code in (200, 204, 405)
@@ -204,14 +205,14 @@ class TestGatewayWithoutOpenMemory:
         host = "127.0.0.1"
         port = unused_tcp_port
         dsn = migrated_db["dsn"]
-        
+
         proc = Process(
             target=start_gateway_server,
             args=(host, port, dsn),
             daemon=True,
         )
         proc.start()
-        
+
         base_url = f"http://{host}:{port}"
         max_retries = 30
         for i in range(max_retries):
@@ -226,9 +227,9 @@ class TestGatewayWithoutOpenMemory:
             proc.terminate()
             proc.join(timeout=5)
             pytest.skip("Gateway 启动超时")
-        
+
         yield base_url
-        
+
         proc.terminate()
         proc.join(timeout=5)
         if proc.is_alive():
@@ -237,7 +238,7 @@ class TestGatewayWithoutOpenMemory:
     def test_health_without_openmemory(self, gateway_no_openmemory):
         """无 OpenMemory 时健康检查仍可用"""
         response = httpx.get(f"{gateway_no_openmemory}/health", timeout=5.0)
-        
+
         # 应该返回响应（可能是 503 表示部分服务不可用）
         assert response.status_code in (200, 503)
 
@@ -249,6 +250,7 @@ class TestGatewayAppImport:
         """FastAPI app 可导入"""
         try:
             from engram.gateway.main import app
+
             assert app is not None
         except ImportError as e:
             if "fastapi" in str(e).lower():
@@ -259,8 +261,9 @@ class TestGatewayAppImport:
         """app 是 FastAPI 实例"""
         try:
             from fastapi import FastAPI
+
             from engram.gateway.main import app
-            
+
             assert isinstance(app, FastAPI)
         except ImportError:
             pytest.skip("FastAPI 未安装")

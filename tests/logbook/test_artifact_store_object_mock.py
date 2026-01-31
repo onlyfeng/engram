@@ -19,10 +19,9 @@ test_artifact_store_object_mock.py - ObjectStore Mock 测试
 """
 
 import hashlib
-import io
 import os
 import sys
-from unittest.mock import MagicMock, Mock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,20 +29,17 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engram.logbook.artifact_store import (
+    MULTIPART_CHUNK_SIZE,
+    MULTIPART_THRESHOLD,
+    ArtifactNotFoundError,
+    ArtifactSizeLimitExceededError,
     ObjectStore,
     ObjectStoreError,
     ObjectStoreNotConfiguredError,
-    ObjectStoreConnectionError,
-    ObjectStoreUploadError,
-    ObjectStoreDownloadError,
-    ObjectStoreTimeoutError,
     ObjectStoreThrottlingError,
-    ArtifactNotFoundError,
-    ArtifactSizeLimitExceededError,
-    MULTIPART_THRESHOLD,
-    MULTIPART_CHUNK_SIZE,
+    ObjectStoreTimeoutError,
+    ObjectStoreUploadError,
 )
-
 
 # ============ 测试辅助函数 ============
 
@@ -161,13 +157,16 @@ class TestObjectStoreConfiguration:
 
     def test_environment_variable_fallback(self):
         """从环境变量读取配置"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_ENDPOINT": "http://env-endpoint:9000",
-            "ENGRAM_S3_ACCESS_KEY": "env-key",
-            "ENGRAM_S3_SECRET_KEY": "env-secret",
-            "ENGRAM_S3_BUCKET": "env-bucket",
-            "ENGRAM_S3_REGION": "env-region",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_ENDPOINT": "http://env-endpoint:9000",
+                "ENGRAM_S3_ACCESS_KEY": "env-key",
+                "ENGRAM_S3_SECRET_KEY": "env-secret",
+                "ENGRAM_S3_BUCKET": "env-bucket",
+                "ENGRAM_S3_REGION": "env-region",
+            },
+        ):
             store = ObjectStore()
 
             assert store.endpoint == "http://env-endpoint:9000"
@@ -178,10 +177,13 @@ class TestObjectStoreConfiguration:
 
     def test_explicit_params_override_env(self):
         """显式参数优先于环境变量"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_ENDPOINT": "http://env-endpoint:9000",
-            "ENGRAM_S3_BUCKET": "env-bucket",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_ENDPOINT": "http://env-endpoint:9000",
+                "ENGRAM_S3_BUCKET": "env-bucket",
+            },
+        ):
             store = ObjectStore(
                 endpoint="http://explicit-endpoint:9000",
                 bucket="explicit-bucket",
@@ -282,7 +284,7 @@ class TestObjectStorePut:
         mock_client = create_mock_s3_client()
         store = create_store_with_mock_client(mock_client, prefix="prefix/v1")
 
-        result = store.put("test.txt", b"content")
+        store.put("test.txt", b"content")
 
         call_args = mock_client.put_object.call_args
         assert call_args.kwargs["Key"] == "prefix/v1/test.txt"
@@ -378,7 +380,7 @@ class TestObjectStoreMultipartUpload:
         # 创建超过阈值的内容
         large_content = iter([b"x" * 60, b"y" * 60])
 
-        result = store.put("large.bin", large_content)
+        store.put("large.bin", large_content)
 
         assert mock_client.create_multipart_upload.called
         assert mock_client.upload_part.called
@@ -437,7 +439,6 @@ class TestObjectStoreStreamingMultipart:
             multipart_chunk_size=50,
         )
 
-        chunks = [b"chunk1", b"chunk2", b"chunk3", b"chunk4"]
         # 每个 chunk 6 bytes，总共 24 bytes，但我们需要超过 100 threshold
         large_chunks = [b"x" * 40, b"y" * 40, b"z" * 40]  # 120 bytes
 
@@ -651,7 +652,7 @@ class TestObjectStoreGetStream:
         mock_client.head_object.return_value = {"ContentLength": 1024}
         store = create_store_with_mock_client(mock_client)
 
-        chunks = list(store.get_stream("test.txt", chunk_size=1024))
+        list(store.get_stream("test.txt", chunk_size=1024))
 
         # 验证 read 被调用时使用了指定的 chunk_size
         mock_body.read.assert_called_with(1024)
@@ -984,10 +985,10 @@ class TestObjectStoreBotoConfigAddressingStyle:
         mock_boto_config_class = MagicMock()
         mock_boto_config_instance = MagicMock()
         mock_boto_config_class.return_value = mock_boto_config_instance
-        
+
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",
             access_key="key",
@@ -995,18 +996,22 @@ class TestObjectStoreBotoConfigAddressingStyle:
             bucket="test-bucket",
             addressing_style="path",
         )
-        
+
         # Mock 整个 boto3 和 botocore.config 模块
-        with patch.dict("sys.modules", {"boto3": mock_boto3, "botocore": MagicMock(), "botocore.config": MagicMock()}):
+        with patch.dict(
+            "sys.modules",
+            {"boto3": mock_boto3, "botocore": MagicMock(), "botocore.config": MagicMock()},
+        ):
             with patch("engram_logbook.artifact_store.boto3", mock_boto3, create=True):
                 # 重新导入模块使用 mock
-                import importlib
                 import engram_logbook.artifact_store as artifact_store_module
-                
+
                 # 直接 mock _get_client 中的 import 语句
-                with patch.object(artifact_store_module, "__builtins__", {"__import__": MagicMock()}):
+                with patch.object(
+                    artifact_store_module, "__builtins__", {"__import__": MagicMock()}
+                ):
                     pass
-        
+
         # 使用简化的方式验证：检查 store 属性设置正确
         assert store.addressing_style == "path"
 
@@ -1019,7 +1024,7 @@ class TestObjectStoreBotoConfigAddressingStyle:
             bucket="test-bucket",
             addressing_style="auto",
         )
-        
+
         # 验证 store 属性正确设置
         assert store.addressing_style == "auto"
 
@@ -1032,7 +1037,7 @@ class TestObjectStoreBotoConfigAddressingStyle:
             bucket="test-bucket",
             addressing_style="virtual",
         )
-        
+
         # 验证 store 属性正确设置
         assert store.addressing_style == "virtual"
 
@@ -1042,10 +1047,10 @@ class TestObjectStoreBotoConfigAddressingStyle:
         mock_boto_config = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config
-        
+
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",
             access_key="key",
@@ -1054,20 +1059,23 @@ class TestObjectStoreBotoConfigAddressingStyle:
             addressing_style="path",
             verify_ssl=False,  # 开发环境使用 http:// 需禁用 SSL 验证
         )
-        
+
         # 使用 sys.modules patch 来模拟 import boto3 和 botocore.config
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             # 调用 _get_client
             store._get_client()
-            
+
             # 验证 BotoConfig 被调用时包含 s3 参数
             mock_boto_config.assert_called_once()
             call_kwargs = mock_boto_config.call_args.kwargs
-            
+
             # 验证 s3 配置包含 addressing_style
             assert "s3" in call_kwargs
             assert call_kwargs["s3"]["addressing_style"] == "path"
@@ -1084,14 +1092,14 @@ class TestObjectStoreGetClientBoto3Params:
         mock_boto3 = MagicMock()
         mock_client_instance = MagicMock()
         mock_boto3.client.return_value = mock_client_instance
-        
+
         mock_boto_config_class = MagicMock()
         mock_boto_config_instance = MagicMock()
         mock_boto_config_class.return_value = mock_boto_config_instance
-        
+
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="https://minio.example.com:9000",
             access_key="test_access_key",
@@ -1100,18 +1108,21 @@ class TestObjectStoreGetClientBoto3Params:
             region="ap-northeast-1",
             verify_ssl=True,
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             # 验证 boto3.client 被调用
             mock_boto3.client.assert_called_once()
             call_kwargs = mock_boto3.client.call_args.kwargs
-            
+
             # 验证传递的参数
             assert call_kwargs["endpoint_url"] == "https://minio.example.com:9000"
             assert call_kwargs["aws_access_key_id"] == "test_access_key"
@@ -1119,7 +1130,7 @@ class TestObjectStoreGetClientBoto3Params:
             assert call_kwargs["region_name"] == "ap-northeast-1"
             assert call_kwargs["verify"] is True
             assert call_kwargs["config"] is mock_boto_config_instance
-            
+
             # 验证 service_name 为 's3'
             call_args = mock_boto3.client.call_args.args
             assert call_args[0] == "s3"
@@ -1128,11 +1139,11 @@ class TestObjectStoreGetClientBoto3Params:
         """验证 ca_bundle 参数正确传递给 boto3.client"""
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="https://minio.example.com:9000",
             access_key="key",
@@ -1140,16 +1151,19 @@ class TestObjectStoreGetClientBoto3Params:
             bucket="test-bucket",
             ca_bundle="/path/to/custom/ca-bundle.crt",
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             call_kwargs = mock_boto3.client.call_args.kwargs
-            
+
             # 当 ca_bundle 指定时，verify 应该是 ca_bundle 路径
             assert call_kwargs["verify"] == "/path/to/custom/ca-bundle.crt"
 
@@ -1157,11 +1171,11 @@ class TestObjectStoreGetClientBoto3Params:
         """验证 verify_ssl=False 时，verify 参数为 False"""
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",  # HTTP 端点需要 verify_ssl=False
             access_key="key",
@@ -1169,14 +1183,17 @@ class TestObjectStoreGetClientBoto3Params:
             bucket="test-bucket",
             verify_ssl=False,
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             call_kwargs = mock_boto3.client.call_args.kwargs
             assert call_kwargs["verify"] is False
 
@@ -1184,11 +1201,11 @@ class TestObjectStoreGetClientBoto3Params:
         """验证 BotoConfig 接收正确的超时和重试参数"""
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",
             access_key="key",
@@ -1199,26 +1216,29 @@ class TestObjectStoreGetClientBoto3Params:
             read_timeout=30.0,
             retries=5,
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             # 验证 BotoConfig 被调用
             mock_boto_config_class.assert_called_once()
             config_kwargs = mock_boto_config_class.call_args.kwargs
-            
+
             # 验证超时配置
             assert config_kwargs["connect_timeout"] == 5.0
             assert config_kwargs["read_timeout"] == 30.0
-            
+
             # 验证重试配置
             assert config_kwargs["retries"]["max_attempts"] == 5
             assert config_kwargs["retries"]["mode"] == "adaptive"
-            
+
             # 验证签名版本
             assert config_kwargs["signature_version"] == "s3v4"
 
@@ -1226,11 +1246,11 @@ class TestObjectStoreGetClientBoto3Params:
         """验证 addressing_style=path 正确传递到 BotoConfig"""
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",
             access_key="key",
@@ -1239,16 +1259,19 @@ class TestObjectStoreGetClientBoto3Params:
             verify_ssl=False,
             addressing_style="path",
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             config_kwargs = mock_boto_config_class.call_args.kwargs
-            
+
             # 验证 s3 配置中的 addressing_style
             assert "s3" in config_kwargs
             assert config_kwargs["s3"]["addressing_style"] == "path"
@@ -1257,11 +1280,11 @@ class TestObjectStoreGetClientBoto3Params:
         """验证 addressing_style=virtual 正确传递到 BotoConfig"""
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="https://s3.amazonaws.com",
             access_key="key",
@@ -1269,14 +1292,17 @@ class TestObjectStoreGetClientBoto3Params:
             bucket="test-bucket",
             addressing_style="virtual",
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             config_kwargs = mock_boto_config_class.call_args.kwargs
             assert config_kwargs["s3"]["addressing_style"] == "virtual"
 
@@ -1284,11 +1310,11 @@ class TestObjectStoreGetClientBoto3Params:
         """验证未指定 region 时使用默认值 us-east-1"""
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",
             access_key="key",
@@ -1297,16 +1323,19 @@ class TestObjectStoreGetClientBoto3Params:
             verify_ssl=False,
             # 不指定 region
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             call_kwargs = mock_boto3.client.call_args.kwargs
-            
+
             # 默认 region 应为 us-east-1
             assert call_kwargs["region_name"] == "us-east-1"
 
@@ -1315,11 +1344,11 @@ class TestObjectStoreGetClientBoto3Params:
         mock_boto3 = MagicMock()
         mock_client_instance = MagicMock()
         mock_boto3.client.return_value = mock_client_instance
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",
             access_key="key",
@@ -1327,20 +1356,23 @@ class TestObjectStoreGetClientBoto3Params:
             bucket="test-bucket",
             verify_ssl=False,
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             # 第一次调用
             client1 = store._get_client()
             # 第二次调用
             client2 = store._get_client()
-            
+
             # 应该返回同一个实例
             assert client1 is client2
-            
+
             # boto3.client 只应调用一次
             assert mock_boto3.client.call_count == 1
 
@@ -1348,11 +1380,11 @@ class TestObjectStoreGetClientBoto3Params:
         """验证 store.prefix 不影响 boto3.client 参数（prefix 仅影响 key 构建）"""
         mock_boto3 = MagicMock()
         mock_boto3.client.return_value = MagicMock()
-        
+
         mock_boto_config_class = MagicMock()
         mock_botocore_config = MagicMock()
         mock_botocore_config.Config = mock_boto_config_class
-        
+
         store = ObjectStore(
             endpoint="http://localhost:9000",
             access_key="key",
@@ -1361,19 +1393,22 @@ class TestObjectStoreGetClientBoto3Params:
             prefix="my-prefix/v1",  # 设置 prefix
             verify_ssl=False,
         )
-        
-        with patch.dict("sys.modules", {
-            "boto3": mock_boto3,
-            "botocore": MagicMock(),
-            "botocore.config": mock_botocore_config,
-        }):
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "boto3": mock_boto3,
+                "botocore": MagicMock(),
+                "botocore.config": mock_botocore_config,
+            },
+        ):
             store._get_client()
-            
+
             call_kwargs = mock_boto3.client.call_args.kwargs
-            
+
             # boto3.client 参数不应包含 prefix
             assert "prefix" not in call_kwargs
-            
+
             # 但 store.prefix 应该被正确保存
             assert store.prefix == "my-prefix/v1"
 
@@ -1386,20 +1421,24 @@ class TestObjectStoreCredentialSelection:
 
     def test_explicit_credentials_take_priority(self):
         """显式传入的凭证优先级最高"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "true",
-            "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
-            "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
-            "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
-            "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "true",
+                "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
+                "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
+                "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
+                "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
+            },
+            clear=False,
+        ):
             store = ObjectStore(
                 endpoint="http://localhost:9000",
                 access_key="explicit-key",
                 secret_key="explicit-secret",
                 bucket="test-bucket",
             )
-            
+
             assert store.access_key == "explicit-key"
             assert store.secret_key == "explicit-secret"
             # 显式传入时 _using_ops_credentials 为 None
@@ -1407,18 +1446,22 @@ class TestObjectStoreCredentialSelection:
 
     def test_use_ops_true_selects_ops_credentials(self):
         """ENGRAM_S3_USE_OPS=true 时使用 ops 凭证"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "true",
-            "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
-            "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
-            "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
-            "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "true",
+                "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
+                "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
+                "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
+                "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
+            },
+            clear=False,
+        ):
             store = ObjectStore(
                 endpoint="http://localhost:9000",
                 bucket="test-bucket",
             )
-            
+
             assert store.access_key == "ops-key"
             assert store.secret_key == "ops-secret"
             assert store._using_ops_credentials is True
@@ -1426,18 +1469,22 @@ class TestObjectStoreCredentialSelection:
 
     def test_use_ops_false_selects_app_credentials(self):
         """ENGRAM_S3_USE_OPS=false 时使用 app 凭证"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "false",
-            "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
-            "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
-            "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
-            "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "false",
+                "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
+                "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
+                "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
+                "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
+            },
+            clear=False,
+        ):
             store = ObjectStore(
                 endpoint="http://localhost:9000",
                 bucket="test-bucket",
             )
-            
+
             assert store.access_key == "app-key"
             assert store.secret_key == "app-secret"
             assert store._using_ops_credentials is False
@@ -1454,78 +1501,98 @@ class TestObjectStoreCredentialSelection:
         clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
         clean_env["ENGRAM_S3_APP_ACCESS_KEY"] = "app-key"
         clean_env["ENGRAM_S3_APP_SECRET_KEY"] = "app-secret"
-        
+
         with patch.dict(os.environ, clean_env, clear=True):
             store = ObjectStore(
                 endpoint="http://localhost:9000",
                 bucket="test-bucket",
             )
-            
+
             assert store.access_key == "app-key"
             assert store.secret_key == "app-secret"
             assert store._using_ops_credentials is False
 
     def test_fallback_to_generic_credentials(self):
         """没有 app/ops 凭证时回退到通用凭证"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "false",
-            "ENGRAM_S3_ACCESS_KEY": "generic-key",
-            "ENGRAM_S3_SECRET_KEY": "generic-secret",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "false",
+                "ENGRAM_S3_ACCESS_KEY": "generic-key",
+                "ENGRAM_S3_SECRET_KEY": "generic-secret",
+            },
+            clear=False,
+        ):
             # 移除 app/ops 特定凭证
-            for key in ["ENGRAM_S3_APP_ACCESS_KEY", "ENGRAM_S3_APP_SECRET_KEY",
-                        "ENGRAM_S3_OPS_ACCESS_KEY", "ENGRAM_S3_OPS_SECRET_KEY"]:
+            for key in [
+                "ENGRAM_S3_APP_ACCESS_KEY",
+                "ENGRAM_S3_APP_SECRET_KEY",
+                "ENGRAM_S3_OPS_ACCESS_KEY",
+                "ENGRAM_S3_OPS_SECRET_KEY",
+            ]:
                 os.environ.pop(key, None)
-            
+
             store = ObjectStore(
                 endpoint="http://localhost:9000",
                 bucket="test-bucket",
             )
-            
+
             assert store.access_key == "generic-key"
             assert store.secret_key == "generic-secret"
 
     def test_use_ops_with_various_true_values(self):
         """ENGRAM_S3_USE_OPS 接受多种 true 值"""
         for true_value in ["true", "True", "TRUE", "1", "yes", "YES"]:
-            with patch.dict(os.environ, {
-                "ENGRAM_S3_USE_OPS": true_value,
-                "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
-                "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
-            }, clear=False):
+            with patch.dict(
+                os.environ,
+                {
+                    "ENGRAM_S3_USE_OPS": true_value,
+                    "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
+                    "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
+                },
+                clear=False,
+            ):
                 store = ObjectStore(
                     endpoint="http://localhost:9000",
                     bucket="test-bucket",
                 )
-                
+
                 assert store._using_ops_credentials is True, f"Failed for value: {true_value}"
 
     def test_is_ops_credentials_with_explicit_credentials_checks_env(self):
         """显式传入凭证时，is_ops_credentials 检查环境变量"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "true",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "true",
+            },
+            clear=False,
+        ):
             store = ObjectStore(
                 endpoint="http://localhost:9000",
                 access_key="explicit-key",
                 secret_key="explicit-secret",
                 bucket="test-bucket",
             )
-            
+
             # _using_ops_credentials 为 None，但 is_ops_credentials() 检查环境变量
             assert store._using_ops_credentials is None
             assert store.is_ops_credentials() is True
 
     def test_using_ops_credentials_property(self):
         """using_ops_credentials 属性正确暴露凭证状态"""
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "true",
-            "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
-            "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "true",
+                "ENGRAM_S3_OPS_ACCESS_KEY": "ops-key",
+                "ENGRAM_S3_OPS_SECRET_KEY": "ops-secret",
+            },
+            clear=False,
+        ):
             store = ObjectStore(
                 endpoint="http://localhost:9000",
                 bucket="test-bucket",
             )
-            
+
             assert store.using_ops_credentials is True

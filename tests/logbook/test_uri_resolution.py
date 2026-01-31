@@ -25,37 +25,29 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engram.logbook.uri import (
-    ParsedUri,
+    ATTACHMENT_URI_ERR_INVALID_ID,
+    ATTACHMENT_URI_ERR_INVALID_SHA256,
+    ATTACHMENT_URI_ERR_LEGACY_FORMAT,
+    ATTACHMENT_URI_ERR_MALFORMED,
+    ATTACHMENT_URI_ERR_NOT_ATTACHMENTS,
+    ATTACHMENT_URI_ERR_NOT_MEMORY,
     UriType,
     build_artifact_uri,
+    # Attachment URI 相关
+    build_attachment_evidence_uri,
+    build_evidence_uri,
+    build_evidence_uri_from_patch_blob,
     classify_uri,
     get_uri_path,
     is_local_uri,
+    is_patch_blob_evidence_uri,
     is_remote_uri,
     normalize_uri,
-    parse_uri,
-    resolve_to_local_path,
-    parse_scm_artifact_path,
-    resolve_scm_artifact_path,
-    ScmArtifactPath,
-    # Patch blobs Evidence URI 相关
-    build_evidence_uri,
-    build_evidence_uri_from_patch_blob,
-    parse_evidence_uri,
-    is_patch_blob_evidence_uri,
-    # Attachment URI 相关
-    build_attachment_evidence_uri,
     parse_attachment_evidence_uri,
     parse_attachment_evidence_uri_strict,
-    AttachmentUriParseResult,
-    is_attachment_evidence_uri,
-    # 错误码
-    ATTACHMENT_URI_ERR_NOT_MEMORY,
-    ATTACHMENT_URI_ERR_NOT_ATTACHMENTS,
-    ATTACHMENT_URI_ERR_LEGACY_FORMAT,
-    ATTACHMENT_URI_ERR_INVALID_ID,
-    ATTACHMENT_URI_ERR_INVALID_SHA256,
-    ATTACHMENT_URI_ERR_MALFORMED,
+    parse_evidence_uri,
+    parse_uri,
+    resolve_to_local_path,
 )
 
 
@@ -635,25 +627,53 @@ class TestPatchBlobsUriCompatibilityMatrix:
     # 参数化测试: (uri, should_succeed, expected_source_type, expected_source_id, description)
     PATCH_BLOBS_CASES = [
         # ===== 正确格式: 应该成功 =====
-        (f"memory://patch_blobs/git/1:abc123/{VALID_SHA256}", True, "git", "1:abc123", "Git 标准格式"),
+        (
+            f"memory://patch_blobs/git/1:abc123/{VALID_SHA256}",
+            True,
+            "git",
+            "1:abc123",
+            "Git 标准格式",
+        ),
         (f"memory://patch_blobs/svn/2:1234/{VALID_SHA256}", True, "svn", "2:1234", "SVN 标准格式"),
-        (f"memory://patch_blobs/gitlab/3:def456/{VALID_SHA256}", True, "gitlab", "3:def456", "GitLab 格式"),
+        (
+            f"memory://patch_blobs/gitlab/3:def456/{VALID_SHA256}",
+            True,
+            "gitlab",
+            "3:def456",
+            "GitLab 格式",
+        ),
         # source_id 中包含特殊字符
-        (f"memory://patch_blobs/git/1:abc123def456/{VALID_SHA256}", True, "git", "1:abc123def456", "长 SHA"),
-        (f"memory://patch_blobs/svn/99:99999/{VALID_SHA256}", True, "svn", "99:99999", "大 revision"),
-
+        (
+            f"memory://patch_blobs/git/1:abc123def456/{VALID_SHA256}",
+            True,
+            "git",
+            "1:abc123def456",
+            "长 SHA",
+        ),
+        (
+            f"memory://patch_blobs/svn/99:99999/{VALID_SHA256}",
+            True,
+            "svn",
+            "99:99999",
+            "大 revision",
+        ),
         # ===== 错误格式: 应该返回 None =====
-        (f"memory://patch_blobs/git/1:abc", None, None, None, "缺少 sha256"),
+        ("memory://patch_blobs/git/1:abc", None, None, None, "缺少 sha256"),
         ("memory://patch_blobs/git", None, None, None, "缺少 source_id 和 sha256"),
         ("memory://patch_blobs", None, None, None, "只有 patch_blobs 前缀"),
-        (f"memory://attachments/123/{VALID_SHA256}", None, None, None, "attachments 而非 patch_blobs"),
+        (
+            f"memory://attachments/123/{VALID_SHA256}",
+            None,
+            None,
+            None,
+            "attachments 而非 patch_blobs",
+        ),
         (f"https://patch_blobs/git/1:abc/{VALID_SHA256}", None, None, None, "非 memory scheme"),
         (f"file:///patch_blobs/git/1:abc/{VALID_SHA256}", None, None, None, "file scheme"),
     ]
 
     @pytest.mark.parametrize(
-        "uri,should_succeed,expected_source_type,expected_source_id,description",
-        PATCH_BLOBS_CASES
+        "uri,should_succeed,expected_source_type,expected_source_id,description", PATCH_BLOBS_CASES
     )
     def test_patch_blobs_uri_compatibility(
         self, uri, should_succeed, expected_source_type, expected_source_id, description
@@ -663,12 +683,11 @@ class TestPatchBlobsUriCompatibilityMatrix:
 
         if should_succeed:
             assert result is not None, f"[{description}] 应该成功解析: {uri}"
-            assert result["source_type"] == expected_source_type, \
+            assert result["source_type"] == expected_source_type, (
                 f"[{description}] source_type 不匹配"
-            assert result["source_id"] == expected_source_id, \
-                f"[{description}] source_id 不匹配"
-            assert result["sha256"] == VALID_SHA256, \
-                f"[{description}] sha256 不匹配"
+            )
+            assert result["source_id"] == expected_source_id, f"[{description}] source_id 不匹配"
+            assert result["sha256"] == VALID_SHA256, f"[{description}] sha256 不匹配"
         else:
             assert result is None, f"[{description}] 应该返回 None: {uri}"
 
@@ -697,18 +716,21 @@ class TestDocsEvidenceUri:
     def test_parse_docs_evidence_uri_exists(self):
         """契约测试: parse_docs_evidence_uri 函数应存在"""
         from engram.logbook.uri import parse_docs_evidence_uri
+
         assert callable(parse_docs_evidence_uri)
 
     @pytest.mark.xfail(reason="build_docs_evidence_uri 尚未实现，待 implement task 完成")
     def test_build_docs_evidence_uri_exists(self):
         """契约测试: build_docs_evidence_uri 函数应存在"""
         from engram.logbook.uri import build_docs_evidence_uri
+
         assert callable(build_docs_evidence_uri)
 
     @pytest.mark.xfail(reason="is_docs_evidence_uri 尚未实现，待 implement task 完成")
     def test_is_docs_evidence_uri_exists(self):
         """契约测试: is_docs_evidence_uri 函数应存在"""
         from engram.logbook.uri import is_docs_evidence_uri
+
         assert callable(is_docs_evidence_uri)
 
     @pytest.mark.xfail(reason="parse_docs_evidence_uri 尚未实现，待 implement task 完成")
@@ -765,23 +787,29 @@ class TestDocsEvidenceUriCompatibilityMatrix:
     # 参数化测试: (uri, should_succeed, expected_rel_path, description)
     DOCS_CASES = [
         # ===== 正确格式: 应该成功 =====
-        (f"memory://docs/contracts/evidence_packet.md/{VALID_SHA256}", True, "contracts/evidence_packet.md", "规格文档"),
-        (f"memory://docs/docs/architecture.md/{VALID_SHA256}", True, "docs/architecture.md", "架构文档"),
+        (
+            f"memory://docs/contracts/evidence_packet.md/{VALID_SHA256}",
+            True,
+            "contracts/evidence_packet.md",
+            "规格文档",
+        ),
+        (
+            f"memory://docs/docs/architecture.md/{VALID_SHA256}",
+            True,
+            "docs/architecture.md",
+            "架构文档",
+        ),
         (f"memory://docs/README.md/{VALID_SHA256}", True, "README.md", "根目录文档"),
         (f"memory://docs/a/b/c/deep.md/{VALID_SHA256}", True, "a/b/c/deep.md", "深层嵌套路径"),
-
         # ===== 错误格式: 应该返回 None =====
-        (f"memory://docs/file.md", None, None, "缺少 sha256"),
+        ("memory://docs/file.md", None, None, "缺少 sha256"),
         ("memory://docs", None, None, "只有 docs 前缀"),
         (f"memory://patch_blobs/git/1:abc/{VALID_SHA256}", None, None, "patch_blobs 而非 docs"),
         (f"https://docs/file.md/{VALID_SHA256}", None, None, "非 memory scheme"),
     ]
 
     @pytest.mark.xfail(reason="parse_docs_evidence_uri 尚未实现，待 implement task 完成")
-    @pytest.mark.parametrize(
-        "uri,should_succeed,expected_rel_path,description",
-        DOCS_CASES
-    )
+    @pytest.mark.parametrize("uri,should_succeed,expected_rel_path,description", DOCS_CASES)
     def test_docs_uri_compatibility(self, uri, should_succeed, expected_rel_path, description):
         """参数化测试: docs URI 格式兼容性"""
         from engram.logbook.uri import parse_docs_evidence_uri
@@ -790,10 +818,8 @@ class TestDocsEvidenceUriCompatibilityMatrix:
 
         if should_succeed:
             assert result is not None, f"[{description}] 应该成功解析: {uri}"
-            assert result["rel_path"] == expected_rel_path, \
-                f"[{description}] rel_path 不匹配"
-            assert result["sha256"] == VALID_SHA256, \
-                f"[{description}] sha256 不匹配"
+            assert result["rel_path"] == expected_rel_path, f"[{description}] rel_path 不匹配"
+            assert result["sha256"] == VALID_SHA256, f"[{description}] sha256 不匹配"
         else:
             assert result is None, f"[{description}] 应该返回 None: {uri}"
 
@@ -842,7 +868,7 @@ class TestParseAttachmentEvidenceUri:
         """测试解析有效的 attachment evidence URI"""
         uri = f"memory://attachments/12345/{VALID_SHA256}"
         result = parse_attachment_evidence_uri(uri)
-        
+
         assert result is not None
         assert result["attachment_id"] == 12345
         assert result["sha256"] == VALID_SHA256
@@ -851,10 +877,10 @@ class TestParseAttachmentEvidenceUri:
         """测试无效 URI 返回 None"""
         # 非 memory:// scheme
         assert parse_attachment_evidence_uri("https://example.com/attachments/123/sha") is None
-        
+
         # 非 attachments 路径
         assert parse_attachment_evidence_uri(f"memory://patch_blobs/123/{VALID_SHA256}") is None
-        
+
         # 旧格式（三段路径）
         assert parse_attachment_evidence_uri(f"memory://attachments/ns/123/{VALID_SHA256}") is None
 
@@ -866,7 +892,7 @@ class TestParseAttachmentEvidenceUriStrict:
         """测试解析有效的 attachment evidence URI"""
         uri = f"memory://attachments/12345/{VALID_SHA256}"
         result = parse_attachment_evidence_uri_strict(uri)
-        
+
         assert result.success is True
         assert result.attachment_id == 12345
         assert result.sha256 == VALID_SHA256
@@ -877,7 +903,7 @@ class TestParseAttachmentEvidenceUriStrict:
         """测试 to_dict 方法"""
         uri = f"memory://attachments/12345/{VALID_SHA256}"
         result = parse_attachment_evidence_uri_strict(uri)
-        
+
         d = result.to_dict()
         assert d == {"attachment_id": 12345, "sha256": VALID_SHA256}
 
@@ -886,31 +912,29 @@ class TestParseAttachmentEvidenceUriStrict:
         result = parse_attachment_evidence_uri_strict(
             f"https://example.com/attachments/123/{VALID_SHA256}"
         )
-        
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_NOT_MEMORY
         assert "memory://" in result.error_message
 
     def test_error_not_attachments_path(self):
         """测试错误码: E_NOT_ATTACHMENTS（路径不以 attachments/ 开头）"""
-        result = parse_attachment_evidence_uri_strict(
-            f"memory://patch_blobs/123/{VALID_SHA256}"
-        )
-        
+        result = parse_attachment_evidence_uri_strict(f"memory://patch_blobs/123/{VALID_SHA256}")
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_NOT_ATTACHMENTS
         assert "attachments/" in result.error_message
 
     def test_error_legacy_format_three_segments(self):
         """测试错误码: E_LEGACY_FORMAT（旧格式三段路径）
-        
+
         文档规范: ~~memory://attachments/<namespace>/<id>/<sha256>~~ 已废弃
         """
         # 旧格式: namespace/id/sha256 (三段路径)
         result = parse_attachment_evidence_uri_strict(
             f"memory://attachments/my_namespace/123/{VALID_SHA256}"
         )
-        
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_LEGACY_FORMAT
         assert "旧格式" in result.error_message
@@ -921,16 +945,14 @@ class TestParseAttachmentEvidenceUriStrict:
         result = parse_attachment_evidence_uri_strict(
             f"memory://attachments/ns/sub/123/{VALID_SHA256}"
         )
-        
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_LEGACY_FORMAT
 
     def test_error_invalid_id_not_integer(self):
         """测试错误码: E_INVALID_ID（attachment_id 非整数）"""
-        result = parse_attachment_evidence_uri_strict(
-            f"memory://attachments/abc/{VALID_SHA256}"
-        )
-        
+        result = parse_attachment_evidence_uri_strict(f"memory://attachments/abc/{VALID_SHA256}")
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_INVALID_ID
         assert "整数" in result.error_message
@@ -938,10 +960,8 @@ class TestParseAttachmentEvidenceUriStrict:
 
     def test_error_invalid_sha256_length(self):
         """测试错误码: E_INVALID_SHA256（sha256 长度不对）"""
-        result = parse_attachment_evidence_uri_strict(
-            "memory://attachments/12345/abc123"
-        )
-        
+        result = parse_attachment_evidence_uri_strict("memory://attachments/12345/abc123")
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_INVALID_SHA256
         assert "64 位" in result.error_message
@@ -949,45 +969,35 @@ class TestParseAttachmentEvidenceUriStrict:
     def test_error_invalid_sha256_chars(self):
         """测试错误码: E_INVALID_SHA256（sha256 包含非法字符）"""
         invalid_sha = "g" * 64  # 'g' 不是十六进制字符
-        result = parse_attachment_evidence_uri_strict(
-            f"memory://attachments/12345/{invalid_sha}"
-        )
-        
+        result = parse_attachment_evidence_uri_strict(f"memory://attachments/12345/{invalid_sha}")
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_INVALID_SHA256
 
     def test_error_malformed_missing_sha256(self):
         """测试错误码: E_MALFORMED（路径缺少 sha256）"""
-        result = parse_attachment_evidence_uri_strict(
-            "memory://attachments/12345"
-        )
-        
+        result = parse_attachment_evidence_uri_strict("memory://attachments/12345")
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_MALFORMED
 
     def test_error_malformed_only_attachments(self):
         """测试错误码: E_MALFORMED（只有 attachments 前缀）"""
-        result = parse_attachment_evidence_uri_strict(
-            "memory://attachments"
-        )
-        
+        result = parse_attachment_evidence_uri_strict("memory://attachments")
+
         assert result.success is False
         assert result.error_code == ATTACHMENT_URI_ERR_MALFORMED
 
     def test_repr_success(self):
         """测试成功结果的 __repr__"""
-        result = parse_attachment_evidence_uri_strict(
-            f"memory://attachments/12345/{VALID_SHA256}"
-        )
+        result = parse_attachment_evidence_uri_strict(f"memory://attachments/12345/{VALID_SHA256}")
         repr_str = repr(result)
         assert "success=True" in repr_str
         assert "12345" in repr_str
 
     def test_repr_failure(self):
         """测试失败结果的 __repr__"""
-        result = parse_attachment_evidence_uri_strict(
-            "memory://attachments/abc/sha"
-        )
+        result = parse_attachment_evidence_uri_strict("memory://attachments/abc/sha")
         repr_str = repr(result)
         assert "success=False" in repr_str
         assert "E_INVALID_ID" in repr_str
@@ -1000,13 +1010,13 @@ class TestAttachmentUriRoundTrip:
         """测试 build 后 parse 应能正确还原"""
         attachment_id = 99999
         sha256 = VALID_SHA256
-        
+
         # build
         uri = build_attachment_evidence_uri(attachment_id, sha256)
-        
+
         # parse
         result = parse_attachment_evidence_uri_strict(uri)
-        
+
         assert result.success is True
         assert result.attachment_id == attachment_id
         assert result.sha256 == sha256
@@ -1016,24 +1026,26 @@ class TestAttachmentUriRoundTrip:
         for aid in [0, 1, 100, 99999999]:
             uri = build_attachment_evidence_uri(aid, VALID_SHA256)
             result = parse_attachment_evidence_uri_strict(uri)
-            
+
             assert result.success is True
             assert result.attachment_id == aid
 
     def test_logbook_can_parse_gateway_uri(self):
         """契约测试: Logbook 可解析 Gateway 构建的 attachment URI
-        
+
         对应 03_memory_contract.md 中的要求:
         - attachment URI 格式必须严格遵循 Logbook parse_attachment_evidence_uri() 的解析规则
         - Gateway → Logbook：通过 parse_attachment_evidence_uri(uri) 解析出 attachment_id
         """
         # 模拟 Gateway 构建的 URI（符合规范格式）
         gateway_uri = f"memory://attachments/12345/{VALID_SHA256}"
-        
+
         # Logbook 解析
         result = parse_attachment_evidence_uri_strict(gateway_uri)
-        
-        assert result.success is True, f"Logbook 应能解析 Gateway 构建的 URI: {result.error_message}"
+
+        assert result.success is True, (
+            f"Logbook 应能解析 Gateway 构建的 URI: {result.error_message}"
+        )
         assert result.attachment_id == 12345
         assert result.sha256 == VALID_SHA256
 
@@ -1041,7 +1053,7 @@ class TestAttachmentUriRoundTrip:
 class TestAttachmentUriCompatibilityMatrix:
     """
     旧格式兼容性矩阵测试
-    
+
     覆盖 03_memory_contract.md 中的规范:
     - 正确格式: memory://attachments/<attachment_id>/<sha256>
     - 禁止使用旧格式: ~~memory://attachments/<namespace>/<id>/<sha256>~~
@@ -1053,39 +1065,75 @@ class TestAttachmentUriCompatibilityMatrix:
         (f"memory://attachments/1/{VALID_SHA256}", True, None, "最小 ID"),
         (f"memory://attachments/12345/{VALID_SHA256}", True, None, "普通 ID"),
         (f"memory://attachments/9999999999/{VALID_SHA256}", True, None, "大 ID"),
-        
         # ===== 旧格式（三段路径）: 应该被拒绝 =====
-        (f"memory://attachments/namespace/123/{VALID_SHA256}", False, ATTACHMENT_URI_ERR_LEGACY_FORMAT, "旧格式: namespace/id/sha"),
-        (f"memory://attachments/scm/456/{VALID_SHA256}", False, ATTACHMENT_URI_ERR_LEGACY_FORMAT, "旧格式: scm/id/sha"),
-        (f"memory://attachments/team_x/789/{VALID_SHA256}", False, ATTACHMENT_URI_ERR_LEGACY_FORMAT, "旧格式: team_x/id/sha"),
-        
+        (
+            f"memory://attachments/namespace/123/{VALID_SHA256}",
+            False,
+            ATTACHMENT_URI_ERR_LEGACY_FORMAT,
+            "旧格式: namespace/id/sha",
+        ),
+        (
+            f"memory://attachments/scm/456/{VALID_SHA256}",
+            False,
+            ATTACHMENT_URI_ERR_LEGACY_FORMAT,
+            "旧格式: scm/id/sha",
+        ),
+        (
+            f"memory://attachments/team_x/789/{VALID_SHA256}",
+            False,
+            ATTACHMENT_URI_ERR_LEGACY_FORMAT,
+            "旧格式: team_x/id/sha",
+        ),
         # ===== 错误格式 =====
-        (f"memory://attachments/abc/{VALID_SHA256}", False, ATTACHMENT_URI_ERR_INVALID_ID, "非整数 ID"),
-        (f"memory://attachments/12345/short", False, ATTACHMENT_URI_ERR_INVALID_SHA256, "sha256 太短"),
+        (
+            f"memory://attachments/abc/{VALID_SHA256}",
+            False,
+            ATTACHMENT_URI_ERR_INVALID_ID,
+            "非整数 ID",
+        ),
+        (
+            "memory://attachments/12345/short",
+            False,
+            ATTACHMENT_URI_ERR_INVALID_SHA256,
+            "sha256 太短",
+        ),
         ("memory://attachments/12345", False, ATTACHMENT_URI_ERR_MALFORMED, "缺少 sha256"),
-        (f"https://attachments/12345/{VALID_SHA256}", False, ATTACHMENT_URI_ERR_NOT_MEMORY, "非 memory scheme"),
-        (f"memory://other/12345/{VALID_SHA256}", False, ATTACHMENT_URI_ERR_NOT_ATTACHMENTS, "非 attachments 路径"),
+        (
+            f"https://attachments/12345/{VALID_SHA256}",
+            False,
+            ATTACHMENT_URI_ERR_NOT_MEMORY,
+            "非 memory scheme",
+        ),
+        (
+            f"memory://other/12345/{VALID_SHA256}",
+            False,
+            ATTACHMENT_URI_ERR_NOT_ATTACHMENTS,
+            "非 attachments 路径",
+        ),
     ]
 
     @pytest.mark.parametrize(
-        "uri,should_succeed,expected_error_code,description",
-        COMPATIBILITY_CASES
+        "uri,should_succeed,expected_error_code,description", COMPATIBILITY_CASES
     )
-    def test_attachment_uri_compatibility(self, uri, should_succeed, expected_error_code, description):
+    def test_attachment_uri_compatibility(
+        self, uri, should_succeed, expected_error_code, description
+    ):
         """参数化测试: attachment URI 格式兼容性"""
         result = parse_attachment_evidence_uri_strict(uri)
-        
-        assert result.success == should_succeed, \
+
+        assert result.success == should_succeed, (
             f"[{description}] expected success={should_succeed}, got {result.success}: {result.error_message}"
-        
+        )
+
         if not should_succeed:
-            assert result.error_code == expected_error_code, \
+            assert result.error_code == expected_error_code, (
                 f"[{description}] expected error_code={expected_error_code}, got {result.error_code}"
+            )
 
 
 # ---------- S3 URI 审计测试 ----------
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestAuditS3UriResolution:
@@ -1098,16 +1146,18 @@ class TestAuditS3UriResolution:
         monkeypatch.setenv("ENGRAM_S3_ENDPOINT", "https://s3.example.com")
         monkeypatch.setenv("ENGRAM_S3_ACCESS_KEY", "test-key")
         monkeypatch.setenv("ENGRAM_S3_SECRET_KEY", "test-secret")
-        
+
         from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ObjectStore
-        
+
         auditor = ArtifactAuditor()
-        
+
         # Mock ObjectStore 避免实际 S3 连接
-        with patch.object(auditor, '_object_store', None):
-            store, resolved_uri = auditor._get_store_for_uri("s3://my-artifacts/path/to/object.diff")
-        
+        with patch.object(auditor, "_object_store", None):
+            store, resolved_uri = auditor._get_store_for_uri(
+                "s3://my-artifacts/path/to/object.diff"
+            )
+
         # 验证返回的是 ObjectStore 实例
         assert isinstance(store, ObjectStore)
         # 验证返回的是 key 而不是完整 URI
@@ -1117,16 +1167,16 @@ class TestAuditS3UriResolution:
         """测试 S3 URI bucket 与配置 bucket 不一致时抛出错误"""
         # 设置环境变量
         monkeypatch.setenv("ENGRAM_S3_BUCKET", "my-artifacts")
-        
+
         from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ArtifactReadError
-        
+
         auditor = ArtifactAuditor()
-        
+
         # 尝试访问不同 bucket 的对象
         with pytest.raises(ArtifactReadError) as exc_info:
             auditor._get_store_for_uri("s3://other-bucket/path/to/object.diff")
-        
+
         assert "拒绝跨 bucket 审计" in str(exc_info.value)
         assert "other-bucket" in str(exc_info.value)
         assert "my-artifacts" in str(exc_info.value)
@@ -1135,36 +1185,37 @@ class TestAuditS3UriResolution:
         """测试未配置 bucket 时访问 S3 URI 抛出错误"""
         # 确保环境变量未设置
         monkeypatch.delenv("ENGRAM_S3_BUCKET", raising=False)
-        
+
         # 清除可能的全局配置缓存
         import engram_logbook.config as config_module
+
         config_module._global_config = None
         config_module._global_app_config = None
-        
+
         from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ArtifactReadError
-        
+
         auditor = ArtifactAuditor()
-        
+
         with pytest.raises(ArtifactReadError) as exc_info:
             auditor._get_store_for_uri("s3://some-bucket/path/to/object.diff")
-        
+
         assert "未配置 bucket" in str(exc_info.value)
 
     def test_s3_uri_missing_key_raises_error(self, monkeypatch):
         """测试 S3 URI 缺少 key 时抛出错误"""
         monkeypatch.setenv("ENGRAM_S3_BUCKET", "my-artifacts")
-        
+
         from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ArtifactReadError
-        
+
         auditor = ArtifactAuditor()
-        
+
         # 只有 bucket 没有 key 的 URI（实际上 parse_uri 会处理为 bucket 没有 /）
         # 需要构造一个只有 bucket 的情况
         with pytest.raises(ArtifactReadError) as exc_info:
             auditor._get_store_for_uri("s3://bucket-only")
-        
+
         assert "缺少对象 key" in str(exc_info.value)
 
     def test_s3_uri_with_nested_key(self, monkeypatch):
@@ -1173,17 +1224,17 @@ class TestAuditS3UriResolution:
         monkeypatch.setenv("ENGRAM_S3_ENDPOINT", "https://s3.example.com")
         monkeypatch.setenv("ENGRAM_S3_ACCESS_KEY", "test-key")
         monkeypatch.setenv("ENGRAM_S3_SECRET_KEY", "test-secret")
-        
+
         from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ObjectStore
-        
+
         auditor = ArtifactAuditor()
-        
-        with patch.object(auditor, '_object_store', None):
+
+        with patch.object(auditor, "_object_store", None):
             store, resolved_uri = auditor._get_store_for_uri(
                 "s3://engram-artifacts/scm/project/repo/git/abc123/sha256.diff"
             )
-        
+
         assert isinstance(store, ObjectStore)
         assert resolved_uri == "scm/project/repo/git/abc123/sha256.diff"
 

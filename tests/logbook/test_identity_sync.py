@@ -10,7 +10,6 @@ test_identity_sync.py - 身份同步功能测试
 - 目录不存在时的错误处理
 """
 
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -25,18 +24,15 @@ if str(scripts_dir) not in sys.path:
     sys.path.insert(0, str(scripts_dir))
 
 from identity_sync import (
-    UserConfig,
-    RoleProfile,
+    AgentXDirectoryNotFoundError,
     SyncStats,
-    scan_user_configs,
-    scan_role_profiles,
-    load_home_user_config,
+    UserConfig,
     merge_user_configs,
     parse_user_config,
+    scan_role_profiles,
+    scan_user_configs,
     sync_identities,
-    AgentXDirectoryNotFoundError,
 )
-
 
 # ---------- Fixtures ----------
 
@@ -300,12 +296,11 @@ class TestIdentitySyncIntegration:
     """身份同步集成测试（需要数据库）"""
 
     @pytest.mark.usefixtures("migrated_db")
-    def test_sync_users_and_accounts(
-        self, temp_repo_with_users: Path, migrated_db: dict
-    ):
+    def test_sync_users_and_accounts(self, temp_repo_with_users: Path, migrated_db: dict):
         """测试用户和账户写入数据库"""
-        import psycopg
         from unittest.mock import MagicMock
+
+        import psycopg
 
         dsn = migrated_db["dsn"]
 
@@ -333,9 +328,7 @@ class TestIdentitySyncIntegration:
         try:
             with conn.cursor() as cur:
                 # 检查 users 表
-                cur.execute(
-                    "SELECT user_id, display_name FROM identity.users ORDER BY user_id"
-                )
+                cur.execute("SELECT user_id, display_name FROM identity.users ORDER BY user_id")
                 users = cur.fetchall()
                 assert len(users) == 2
                 assert users[0][0] == "test_user_1"
@@ -354,8 +347,9 @@ class TestIdentitySyncIntegration:
     @pytest.mark.usefixtures("migrated_db")
     def test_sync_idempotency(self, temp_repo_with_users: Path, migrated_db: dict):
         """测试同步幂等性：多次运行结果相同"""
-        import psycopg
         from unittest.mock import MagicMock
+
+        import psycopg
 
         dsn = migrated_db["dsn"]
 
@@ -399,12 +393,11 @@ class TestIdentitySyncIntegration:
             conn.close()
 
     @pytest.mark.usefixtures("migrated_db")
-    def test_sync_with_role_profiles(
-        self, temp_repo_with_roles: Path, migrated_db: dict
-    ):
+    def test_sync_with_role_profiles(self, temp_repo_with_roles: Path, migrated_db: dict):
         """测试包含角色配置的同步"""
-        import psycopg
         from unittest.mock import MagicMock
+
+        import psycopg
 
         dsn = migrated_db["dsn"]
 
@@ -427,9 +420,7 @@ class TestIdentitySyncIntegration:
         conn = psycopg.connect(dsn, autocommit=False)
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT user_id, profile_md FROM identity.role_profiles"
-                )
+                cur.execute("SELECT user_id, profile_md FROM identity.role_profiles")
                 profiles = cur.fetchall()
                 assert len(profiles) == 1
                 assert profiles[0][0] == "test_user_1"

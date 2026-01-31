@@ -26,36 +26,29 @@ test_scm_sync_state_machine_invariants.py - SCM 同步状态机不变量测试
 """
 
 import time
+from typing import Set, Tuple
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
-from typing import List, Set, Tuple
 
 from engram.logbook.scm_sync_policy import (
-    SchedulerConfig,
-    RepoSyncState,
-    SyncJobCandidate,
-    BudgetSnapshot,
-    # 纯函数
-    select_jobs_to_enqueue,
-    calculate_cursor_age,
-    calculate_failure_rate,
-    calculate_rate_limit_rate,
-    compute_job_priority,
-    should_schedule_repo,
-    should_schedule_repo_health,
-    # Bucket 暂停相关
-    InstanceBucketStatus,
-    calculate_bucket_priority_penalty,
-    should_skip_due_to_bucket_pause,
-    BUCKET_PAUSED_PRIORITY_PENALTY,
     BUCKET_LOW_TOKENS_PRIORITY_PENALTY,
+    BUCKET_PAUSED_PRIORITY_PENALTY,
+    BudgetSnapshot,
+    CircuitBreakerConfig,
     # 熔断相关
     CircuitBreakerController,
-    CircuitBreakerConfig,
     CircuitState,
+    # Bucket 暂停相关
+    InstanceBucketStatus,
+    RepoSyncState,
+    SchedulerConfig,
+    SyncJobCandidate,
     build_circuit_breaker_key,
+    calculate_bucket_priority_penalty,
+    select_jobs_to_enqueue,
+    should_skip_due_to_bucket_pause,
 )
-
 
 # ============================================================================
 # 第一部分: 纯函数层测试
@@ -65,7 +58,7 @@ from engram.logbook.scm_sync_policy import (
 class TestInvariant1_NoDuplicateEnqueue:
     """
     INV-1: 同一 (repo_id, job_type) 不会重复入队
-    
+
     漂移风险: 如果 queued_pairs 检查失效，可能导致任务重复入队
     """
 
@@ -75,7 +68,7 @@ class TestInvariant1_NoDuplicateEnqueue:
             cursor_age_threshold_seconds=3600,
             max_queue_depth=100,
         )
-        
+
         states = [
             RepoSyncState(
                 repo_id=1,
@@ -84,10 +77,10 @@ class TestInvariant1_NoDuplicateEnqueue:
                 is_queued=False,
             ),
         ]
-        
+
         # (1, "commits") 已在队列中
         queued_pairs: Set[Tuple[int, str]] = {(1, "commits")}
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits", "mrs", "reviews"],
@@ -95,7 +88,7 @@ class TestInvariant1_NoDuplicateEnqueue:
             queued_pairs=queued_pairs,
             now=1000.0,
         )
-        
+
         # commits 被跳过，但 mrs 和 reviews 应该被选中
         job_types_selected = {c.job_type for c in candidates}
         assert "commits" not in job_types_selected, "已入队的 job_type 不应被再次选择"
@@ -108,14 +101,14 @@ class TestInvariant1_NoDuplicateEnqueue:
             cursor_age_threshold_seconds=3600,
             max_queue_depth=100,
         )
-        
+
         now = 1000.0
         states = [
             RepoSyncState(repo_id=1, repo_type="git", cursor_updated_at=None),
             RepoSyncState(repo_id=2, repo_type="git", cursor_updated_at=None),
             RepoSyncState(repo_id=3, repo_type="git", cursor_updated_at=None),
         ]
-        
+
         # repo 1 的 commits 和 repo 2 的全部已入队
         queued_pairs = {
             (1, "commits"),
@@ -123,7 +116,7 @@ class TestInvariant1_NoDuplicateEnqueue:
             (2, "mrs"),
             (2, "reviews"),
         }
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits", "mrs", "reviews"],
@@ -131,14 +124,14 @@ class TestInvariant1_NoDuplicateEnqueue:
             queued_pairs=queued_pairs,
             now=now,
         )
-        
+
         # 验证结果
         selected_pairs = {(c.repo_id, c.job_type) for c in candidates}
-        
+
         # 已入队的不应出现
         for pair in queued_pairs:
             assert pair not in selected_pairs, f"已入队的 {pair} 不应被再次选择"
-        
+
         # repo 1 的 mrs/reviews 和 repo 3 的全部应该被选中
         assert (1, "mrs") in selected_pairs
         assert (1, "reviews") in selected_pairs
@@ -148,7 +141,7 @@ class TestInvariant1_NoDuplicateEnqueue:
 class TestInvariant2_BudgetEnforcement:
     """
     INV-2: 预算超限时不入队新任务
-    
+
     漂移风险: 如果预算检查逻辑有 bug，可能导致队列过载
     """
 
@@ -159,18 +152,18 @@ class TestInvariant2_BudgetEnforcement:
             max_running=5,
             max_queue_depth=100,
         )
-        
+
         states = [
             RepoSyncState(repo_id=1, repo_type="git", cursor_updated_at=None),
         ]
-        
+
         # 已有 5 个 running，达到 max_running 限制
         budget = BudgetSnapshot(
             global_running=5,
             global_pending=0,
             global_active=5,
         )
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
@@ -178,7 +171,7 @@ class TestInvariant2_BudgetEnforcement:
             budget_snapshot=budget,
             now=1000.0,
         )
-        
+
         assert len(candidates) == 0, "max_running 达限时不应入队"
 
     def test_max_queue_depth_limit_blocks_enqueue(self):
@@ -188,18 +181,18 @@ class TestInvariant2_BudgetEnforcement:
             max_running=10,
             max_queue_depth=5,
         )
-        
+
         states = [
             RepoSyncState(repo_id=1, repo_type="git", cursor_updated_at=None),
         ]
-        
+
         # 已有 5 个活跃任务（pending + running），达到 max_queue_depth
         budget = BudgetSnapshot(
             global_running=2,
             global_pending=3,
             global_active=5,
         )
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
@@ -207,7 +200,7 @@ class TestInvariant2_BudgetEnforcement:
             budget_snapshot=budget,
             now=1000.0,
         )
-        
+
         assert len(candidates) == 0, "max_queue_depth 达限时不应入队"
 
     def test_partial_budget_remaining(self):
@@ -218,20 +211,19 @@ class TestInvariant2_BudgetEnforcement:
             max_queue_depth=5,
             max_enqueue_per_scan=100,
         )
-        
+
         # 3 个仓库，每个 3 个 job_type = 9 个候选
         states = [
-            RepoSyncState(repo_id=i, repo_type="git", cursor_updated_at=None)
-            for i in range(1, 4)
+            RepoSyncState(repo_id=i, repo_type="git", cursor_updated_at=None) for i in range(1, 4)
         ]
-        
+
         # 已有 3 个活跃，剩余空间 = 5 - 3 = 2
         budget = BudgetSnapshot(
             global_running=1,
             global_pending=2,
             global_active=3,
         )
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits", "mrs", "reviews"],
@@ -239,14 +231,14 @@ class TestInvariant2_BudgetEnforcement:
             budget_snapshot=budget,
             now=1000.0,
         )
-        
+
         assert len(candidates) == 2, f"剩余预算为 2，应只选择 2 个候选，实际: {len(candidates)}"
 
 
 class TestInvariant3_BucketPriorityPenalty:
     """
     INV-3: Bucket 暂停状态正确应用 priority penalty
-    
+
     漂移风险: 如果 penalty 计算错误，暂停实例的任务可能优先级过高
     """
 
@@ -258,9 +250,9 @@ class TestInvariant3_BucketPriorityPenalty:
             paused_until=time.time() + 300,
             pause_remaining_seconds=300.0,
         )
-        
+
         penalty, reason = calculate_bucket_priority_penalty(bucket)
-        
+
         assert penalty == BUCKET_PAUSED_PRIORITY_PENALTY
         assert reason == "bucket_paused"
 
@@ -272,9 +264,9 @@ class TestInvariant3_BucketPriorityPenalty:
             current_tokens=1.0,  # 只有 1 个令牌
             burst=10.0,  # 最大 10 个，10% < 20%
         )
-        
+
         penalty, reason = calculate_bucket_priority_penalty(bucket)
-        
+
         assert penalty == BUCKET_LOW_TOKENS_PRIORITY_PENALTY
         assert reason == "bucket_low_tokens"
 
@@ -286,9 +278,9 @@ class TestInvariant3_BucketPriorityPenalty:
             current_tokens=8.0,  # 80% > 20%
             burst=10.0,
         )
-        
+
         penalty, reason = calculate_bucket_priority_penalty(bucket)
-        
+
         assert penalty == 0
         assert reason is None
 
@@ -298,21 +290,23 @@ class TestInvariant3_BucketPriorityPenalty:
             cursor_age_threshold_seconds=3600,
             max_queue_depth=100,
         )
-        
+
         # 两个仓库：一个在暂停实例，一个在健康实例
         states = [
             RepoSyncState(
-                repo_id=1, repo_type="git",
+                repo_id=1,
+                repo_type="git",
                 cursor_updated_at=None,
                 gitlab_instance="paused.gitlab.com",
             ),
             RepoSyncState(
-                repo_id=2, repo_type="git",
+                repo_id=2,
+                repo_type="git",
                 cursor_updated_at=None,
                 gitlab_instance="healthy.gitlab.com",
             ),
         ]
-        
+
         bucket_statuses = {
             "paused.gitlab.com": InstanceBucketStatus(
                 instance_key="paused.gitlab.com",
@@ -326,7 +320,7 @@ class TestInvariant3_BucketPriorityPenalty:
                 burst=10.0,
             ),
         }
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
@@ -335,14 +329,14 @@ class TestInvariant3_BucketPriorityPenalty:
             skip_on_bucket_pause=False,  # 不跳过，只降权
             now=1000.0,
         )
-        
+
         # 应该有 2 个候选
         assert len(candidates) == 2
-        
+
         # 健康实例的任务应该排在前面（优先级更高）
         assert candidates[0].repo_id == 2, "健康实例任务应排在前面"
         assert candidates[1].repo_id == 1, "暂停实例任务应排在后面"
-        
+
         # 验证 penalty 被记录
         paused_candidate = next(c for c in candidates if c.repo_id == 1)
         assert paused_candidate.bucket_paused is True
@@ -352,7 +346,7 @@ class TestInvariant3_BucketPriorityPenalty:
 class TestInvariant4_BucketSkipOnPause:
     """
     INV-4: Bucket 暂停时 skip_on_pause=True 会跳过任务
-    
+
     漂移风险: 如果跳过逻辑失效，暂停实例的任务仍会入队
     """
 
@@ -363,11 +357,9 @@ class TestInvariant4_BucketSkipOnPause:
             is_paused=True,
             pause_remaining_seconds=300.0,
         )
-        
-        should_skip, reason, remaining = should_skip_due_to_bucket_pause(
-            bucket, skip_on_pause=True
-        )
-        
+
+        should_skip, reason, remaining = should_skip_due_to_bucket_pause(bucket, skip_on_pause=True)
+
         assert should_skip is True
         assert reason == "bucket_paused"
         assert remaining == 300.0
@@ -379,11 +371,11 @@ class TestInvariant4_BucketSkipOnPause:
             is_paused=True,
             pause_remaining_seconds=300.0,
         )
-        
+
         should_skip, reason, remaining = should_skip_due_to_bucket_pause(
             bucket, skip_on_pause=False
         )
-        
+
         assert should_skip is False
         assert reason == "bucket_paused_penalty_only"
 
@@ -393,20 +385,22 @@ class TestInvariant4_BucketSkipOnPause:
             cursor_age_threshold_seconds=3600,
             max_queue_depth=100,
         )
-        
+
         states = [
             RepoSyncState(
-                repo_id=1, repo_type="git",
+                repo_id=1,
+                repo_type="git",
                 cursor_updated_at=None,
                 gitlab_instance="paused.gitlab.com",
             ),
             RepoSyncState(
-                repo_id=2, repo_type="git",
+                repo_id=2,
+                repo_type="git",
                 cursor_updated_at=None,
                 gitlab_instance="healthy.gitlab.com",
             ),
         ]
-        
+
         bucket_statuses = {
             "paused.gitlab.com": InstanceBucketStatus(
                 instance_key="paused.gitlab.com",
@@ -414,7 +408,7 @@ class TestInvariant4_BucketSkipOnPause:
                 pause_remaining_seconds=300.0,
             ),
         }
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
@@ -423,7 +417,7 @@ class TestInvariant4_BucketSkipOnPause:
             skip_on_bucket_pause=True,  # 跳过暂停实例
             now=1000.0,
         )
-        
+
         # 只有健康实例的任务
         assert len(candidates) == 1
         assert candidates[0].repo_id == 2
@@ -432,7 +426,7 @@ class TestInvariant4_BucketSkipOnPause:
 class TestInvariant5a_CircuitBreakerSkippedResult:
     """
     INV-5a: skipped 结果不影响熔断状态
-    
+
     漂移风险: 如果 skipped 结果被记录到熔断器，可能导致:
     - HALF_OPEN 状态下错误计数 half_open_successes/attempts
     - 非真实执行的结果干扰熔断状态机
@@ -445,58 +439,58 @@ class TestInvariant5a_CircuitBreakerSkippedResult:
             half_open_max_requests=3,
             recovery_success_count=2,
         )
-        
+
         controller = CircuitBreakerController(config=config, key="test-skipped")
-        
+
         # 进入 HALF_OPEN 状态
         controller.force_open(reason="test")
         # 模拟时间流逝，转为 HALF_OPEN
         controller._opened_at = 0  # 设置为很久以前
-        decision = controller.check(now=10000.0)
+        controller.check(now=10000.0)
         assert controller.state == CircuitState.HALF_OPEN
-        
+
         # 记录初始计数
         initial_attempts = controller._half_open_attempts
         initial_successes = controller._half_open_successes
-        
+
         # 模拟 worker 层跳过记录（skipped=True 时不调用 record_result）
         # 这里验证的是：如果 skipped 结果错误地调用了 record_result(success=True)
         # 会导致计数器增加，这是不期望的行为
-        
+
         # 正确行为：skipped 结果时 worker 不调用 record_result
         # 所以 attempts 和 successes 应保持不变
-        
+
         # 验证 record_result 被调用时确实会增加计数
         controller.record_result(success=True)
         assert controller._half_open_attempts == initial_attempts + 1
         assert controller._half_open_successes == initial_successes + 1
-        
+
     def test_closed_state_skipped_should_not_trip(self):
         """CLOSED 状态下 skipped 结果不应触发熔断"""
         config = CircuitBreakerConfig(
             failure_rate_threshold=0.3,
             min_samples=3,
         )
-        
+
         controller = CircuitBreakerController(config=config, key="test-closed-skip")
         assert controller.state == CircuitState.CLOSED
-        
+
         # 模拟大量 skipped（如果错误地被当作失败处理）
         # 正确的行为是 skipped 不被记录，所以状态保持 CLOSED
         # record_result 在 CLOSED 状态下不影响 half_open 计数
         # 熔断触发是通过 check() 时的 health_stats 判断的
-        
+
         # 验证 CLOSED 状态下 record_result 不改变状态
         for _ in range(5):
             controller.record_result(success=True)
-        
+
         assert controller.state == CircuitState.CLOSED
 
 
 class TestInvariant5_CircuitBreakerPersistence:
     """
     INV-5: 熔断器状态正确持久化和恢复
-    
+
     漂移风险: 如果状态丢失，熔断器可能在重启后失效
     """
 
@@ -506,19 +500,19 @@ class TestInvariant5_CircuitBreakerPersistence:
             failure_rate_threshold=0.3,
             min_samples=5,
         )
-        
+
         controller = CircuitBreakerController(config=config, key="test-key")
-        
+
         # 模拟触发熔断
         controller.force_open(reason="test_trigger")
-        
+
         # 获取状态
         state_dict = controller.get_state_dict()
-        
+
         # 创建新实例并加载状态
         new_controller = CircuitBreakerController(config=config, key="test-key")
         new_controller.load_state_dict(state_dict)
-        
+
         # 验证状态一致
         assert new_controller.state == CircuitState.OPEN
         assert new_controller._last_failure_reason == "test_trigger"
@@ -528,18 +522,17 @@ class TestInvariant5_CircuitBreakerPersistence:
         # 全局 key
         key1 = build_circuit_breaker_key(project_key="myproject", scope="global")
         assert key1 == "myproject:global"
-        
+
         # Pool key
         key2 = build_circuit_breaker_key(project_key="myproject", worker_pool="gitlab-prod")
         assert key2 == "myproject:pool:gitlab-prod"
-        
+
         # Instance key
         key3 = build_circuit_breaker_key(
-            project_key="myproject",
-            instance_key="https://gitlab.example.com/path"
+            project_key="myproject", instance_key="https://gitlab.example.com/path"
         )
         assert key3 == "myproject:instance:gitlab.example.com"
-        
+
         # Tenant key
         key4 = build_circuit_breaker_key(project_key="myproject", tenant_id="tenant-a")
         assert key4 == "myproject:tenant:tenant-a"
@@ -548,7 +541,7 @@ class TestInvariant5_CircuitBreakerPersistence:
 class TestInvariant6_ConcurrencyLimits:
     """
     INV-6: 并发限制按 instance/tenant 正确应用
-    
+
     漂移风险: 如果并发检查失效，单个实例/租户可能占用全部队列
     """
 
@@ -559,24 +552,25 @@ class TestInvariant6_ConcurrencyLimits:
             max_queue_depth=100,
             per_instance_concurrency=2,
         )
-        
+
         # 同一实例的 5 个仓库
         states = [
             RepoSyncState(
-                repo_id=i, repo_type="git",
+                repo_id=i,
+                repo_type="git",
                 cursor_updated_at=None,
                 gitlab_instance="gitlab.example.com",
             )
             for i in range(1, 6)
         ]
-        
+
         # 该实例已有 1 个活跃任务
         budget = BudgetSnapshot(
             global_running=1,
             global_active=1,
             by_instance={"gitlab.example.com": 1},
         )
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
@@ -584,7 +578,7 @@ class TestInvariant6_ConcurrencyLimits:
             budget_snapshot=budget,
             now=1000.0,
         )
-        
+
         # 每实例限制 2，已有 1，只能再入队 1 个
         assert len(candidates) == 1
 
@@ -595,24 +589,25 @@ class TestInvariant6_ConcurrencyLimits:
             max_queue_depth=100,
             per_tenant_concurrency=3,
         )
-        
+
         # 同一租户的 10 个仓库
         states = [
             RepoSyncState(
-                repo_id=i, repo_type="git",
+                repo_id=i,
+                repo_type="git",
                 cursor_updated_at=None,
                 tenant_id="tenant-a",
             )
             for i in range(1, 11)
         ]
-        
+
         # 该租户已有 2 个活跃任务
         budget = BudgetSnapshot(
             global_running=2,
             global_active=2,
             by_tenant={"tenant-a": 2},
         )
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
@@ -620,7 +615,7 @@ class TestInvariant6_ConcurrencyLimits:
             budget_snapshot=budget,
             now=1000.0,
         )
-        
+
         # 每租户限制 3，已有 2，只能再入队 1 个
         assert len(candidates) == 1
 
@@ -628,7 +623,7 @@ class TestInvariant6_ConcurrencyLimits:
 class TestInvariant7_PriorityStability:
     """
     INV-7: 优先级排序保持稳定性
-    
+
     漂移风险: 如果排序不稳定，任务顺序可能在每次扫描时变化
     """
 
@@ -638,35 +633,39 @@ class TestInvariant7_PriorityStability:
             cursor_age_threshold_seconds=3600,
             max_queue_depth=100,
         )
-        
+
         now = 10000.0
         states = [
             RepoSyncState(
-                repo_id=1, repo_type="git",
+                repo_id=1,
+                repo_type="git",
                 cursor_updated_at=now - 7200,  # 2 小时前同步过
             ),
             RepoSyncState(
-                repo_id=2, repo_type="git",
+                repo_id=2,
+                repo_type="git",
                 cursor_updated_at=None,  # 从未同步
             ),
             RepoSyncState(
-                repo_id=3, repo_type="git",
+                repo_id=3,
+                repo_type="git",
                 cursor_updated_at=now - 3600,  # 1 小时前同步过
             ),
         ]
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
             config=config,
             now=now,
         )
-        
+
         # 从未同步的优先级最高（-100 调整）
         commits_candidates = [c for c in candidates if c.job_type == "commits"]
         # repo 2（从未同步）应该排在第一位
-        assert commits_candidates[0].repo_id == 2, \
+        assert commits_candidates[0].repo_id == 2, (
             f"从未同步的 repo 应排第一，实际第一个是 repo_id={commits_candidates[0].repo_id}"
+        )
 
     def test_priority_respects_job_type_order(self):
         """优先级尊重 job_type 的配置顺序"""
@@ -679,32 +678,34 @@ class TestInvariant7_PriorityStability:
                 "reviews": 3,  # 最低优先级
             },
         )
-        
+
         now = 10000.0
         states = [
             RepoSyncState(
-                repo_id=1, repo_type="git",
+                repo_id=1,
+                repo_type="git",
                 cursor_updated_at=None,  # 从未同步
             ),
         ]
-        
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["reviews", "mrs", "commits"],  # 故意乱序
             config=config,
             now=now,
         )
-        
+
         # 应该按 job_type_priority 排序
         job_types = [c.job_type for c in candidates]
-        assert job_types == ["commits", "mrs", "reviews"], \
+        assert job_types == ["commits", "mrs", "reviews"], (
             f"预期按 job_type 优先级排序，实际 {job_types}"
+        )
 
 
 class TestInvariant8_TenantFairness:
     """
     INV-8: Tenant 公平调度策略正确轮询
-    
+
     漂移风险: 如果公平策略失效，大租户可能饥饿小租户
     """
 
@@ -716,34 +717,34 @@ class TestInvariant8_TenantFairness:
             enable_tenant_fairness=True,
             tenant_fairness_max_per_round=1,
         )
-        
+
         now = 1000.0
         # 3 个租户，每个 3 个仓库
         states = []
         for tenant_idx in range(3):
             tenant_id = f"tenant-{tenant_idx}"
             for repo_idx in range(3):
-                states.append(RepoSyncState(
-                    repo_id=tenant_idx * 10 + repo_idx + 1,
-                    repo_type="git",
-                    cursor_updated_at=None,  # 从未同步
-                    tenant_id=tenant_id,
-                ))
-        
+                states.append(
+                    RepoSyncState(
+                        repo_id=tenant_idx * 10 + repo_idx + 1,
+                        repo_type="git",
+                        cursor_updated_at=None,  # 从未同步
+                        tenant_id=tenant_id,
+                    )
+                )
+
         candidates = select_jobs_to_enqueue(
             states=states,
             job_types=["commits"],
             config=config,
             now=now,
         )
-        
+
         # 验证前 3 个候选来自不同 tenant
         first_3_tenants = [
-            next(s.tenant_id for s in states if s.repo_id == c.repo_id)
-            for c in candidates[:3]
+            next(s.tenant_id for s in states if s.repo_id == c.repo_id) for c in candidates[:3]
         ]
-        assert len(set(first_3_tenants)) == 3, \
-            f"前 3 个候选应来自不同 tenant: {first_3_tenants}"
+        assert len(set(first_3_tenants)) == 3, f"前 3 个候选应来自不同 tenant: {first_3_tenants}"
 
 
 # ============================================================================
@@ -754,7 +755,7 @@ class TestInvariant8_TenantFairness:
 class TestDbInvariant_SyncJobsQueue:
     """
     DB 层不变量: scm.sync_jobs 队列状态读写一致性
-    
+
     验证点:
     - 入队后立即可读
     - 唯一键约束正确阻止重复入队
@@ -765,6 +766,7 @@ class TestDbInvariant_SyncJobsQueue:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -774,16 +776,15 @@ class TestDbInvariant_SyncJobsQueue:
         """入队后立即可读"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import enqueue, get_job
-        import db as scm_db
-        
+
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建测试仓库
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -793,7 +794,7 @@ class TestDbInvariant_SyncJobsQueue:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 入队
             job_id = enqueue(
@@ -803,17 +804,17 @@ class TestDbInvariant_SyncJobsQueue:
                 priority=100,
                 conn=db_conn,
             )
-            
+
             assert job_id is not None, "入队应返回 job_id"
-            
+
             # 立即读取
             job = get_job(job_id, conn=db_conn)
-            
+
             assert job is not None, "应能读取刚入队的任务"
             assert job["repo_id"] == repo_id
             assert job["job_type"] == "gitlab_commits"
             assert job["status"] == "pending"
-        
+
         finally:
             # 清理
             with db_conn.cursor() as cur:
@@ -822,18 +823,18 @@ class TestDbInvariant_SyncJobsQueue:
                 db_conn.commit()
 
     def test_unique_constraint_prevents_duplicate(self, migrated_db, db_conn):
-        """唯一键约束阻止重复入队"""
+        """唯一键约束 idx_sync_jobs_unique_active (repo_id, job_type, mode) 阻止重复入队"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import enqueue
-        
+
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建测试仓库
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -843,7 +844,7 @@ class TestDbInvariant_SyncJobsQueue:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 第一次入队成功
             job_id1 = enqueue(
@@ -853,7 +854,7 @@ class TestDbInvariant_SyncJobsQueue:
                 conn=db_conn,
             )
             assert job_id1 is not None
-            
+
             # 第二次入队应返回 None（ON CONFLICT DO NOTHING）
             job_id2 = enqueue(
                 repo_id=repo_id,
@@ -862,7 +863,60 @@ class TestDbInvariant_SyncJobsQueue:
                 conn=db_conn,
             )
             assert job_id2 is None, "重复入队应返回 None"
-        
+
+        finally:
+            with db_conn.cursor() as cur:
+                cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
+                cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
+                db_conn.commit()
+
+    def test_different_modes_can_coexist(self, migrated_db, db_conn):
+        """同一 (repo_id, job_type) 不同 mode 可以同时入队
+
+        唯一索引 idx_sync_jobs_unique_active 是 (repo_id, job_type, mode)，
+        所以 incremental 和 backfill 可以同时存在。
+        """
+        import sys
+        from pathlib import Path
+
+        scripts_dir = Path(__file__).parent.parent
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from engram.logbook.scm_sync_queue import enqueue
+
+        scm_schema = migrated_db["schemas"]["scm"]
+
+        # 创建测试仓库
+        with db_conn.cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO {scm_schema}.repos (vcs_type, remote_url)
+                VALUES ('git', 'https://example.com/test-diff-modes.git')
+                RETURNING repo_id
+            """)
+            repo_id = cur.fetchone()[0]
+            db_conn.commit()
+
+        try:
+            # incremental 模式入队
+            job_id1 = enqueue(
+                repo_id=repo_id,
+                job_type="gitlab_commits",
+                mode="incremental",
+                conn=db_conn,
+            )
+            assert job_id1 is not None, "incremental 模式入队应成功"
+
+            # backfill 模式入队（同一 repo_id, job_type，不同 mode）
+            job_id2 = enqueue(
+                repo_id=repo_id,
+                job_type="gitlab_commits",
+                mode="backfill",
+                conn=db_conn,
+            )
+            assert job_id2 is not None, "不同 mode 应能同时入队"
+            assert job_id1 != job_id2, "应该是两个不同的任务"
+
         finally:
             with db_conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
@@ -873,7 +927,7 @@ class TestDbInvariant_SyncJobsQueue:
 class TestDbInvariant_CircuitBreakerState:
     """
     DB 层不变量: 熔断状态持久化一致性
-    
+
     验证点:
     - 保存后可正确读取
     - 不同 key 的状态隔离
@@ -883,6 +937,7 @@ class TestDbInvariant_CircuitBreakerState:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -892,13 +947,13 @@ class TestDbInvariant_CircuitBreakerState:
         """保存并加载熔断状态"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         import db as scm_db
-        
+
         test_key = "test:circuit_breaker:state_test"
         test_state = {
             "state": "open",
@@ -906,20 +961,20 @@ class TestDbInvariant_CircuitBreakerState:
             "half_open_attempts": 2,
             "last_failure_reason": "test_reason",
         }
-        
+
         try:
             # 保存状态
             scm_db.save_circuit_breaker_state(db_conn, test_key, test_state)
             db_conn.commit()
-            
+
             # 加载状态
             loaded_state = scm_db.load_circuit_breaker_state(db_conn, test_key)
-            
+
             assert loaded_state is not None, "应能加载保存的状态"
             assert loaded_state["state"] == "open"
             assert loaded_state["opened_at"] == 1234567890.0
             assert loaded_state["last_failure_reason"] == "test_reason"
-        
+
         finally:
             # 清理
             scm_db.delete_circuit_breaker_state(db_conn, test_key)
@@ -929,32 +984,32 @@ class TestDbInvariant_CircuitBreakerState:
         """不同 key 的状态隔离"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         import db as scm_db
-        
+
         key1 = "test:circuit_breaker:isolation_1"
         key2 = "test:circuit_breaker:isolation_2"
-        
+
         state1 = {"state": "open", "last_failure_reason": "reason1"}
         state2 = {"state": "closed", "last_failure_reason": None}
-        
+
         try:
             # 保存两个不同 key 的状态
             scm_db.save_circuit_breaker_state(db_conn, key1, state1)
             scm_db.save_circuit_breaker_state(db_conn, key2, state2)
             db_conn.commit()
-            
+
             # 分别加载验证隔离
             loaded1 = scm_db.load_circuit_breaker_state(db_conn, key1)
             loaded2 = scm_db.load_circuit_breaker_state(db_conn, key2)
-            
+
             assert loaded1["state"] == "open"
             assert loaded2["state"] == "closed"
-        
+
         finally:
             scm_db.delete_circuit_breaker_state(db_conn, key1)
             scm_db.delete_circuit_breaker_state(db_conn, key2)
@@ -964,7 +1019,7 @@ class TestDbInvariant_CircuitBreakerState:
 class TestDbInvariant_RateLimitBucket:
     """
     DB 层不变量: Rate Limit Bucket 状态读写一致性
-    
+
     验证点:
     - bucket 状态正确保存和读取
     - pause 状态过期后自动解除
@@ -974,6 +1029,7 @@ class TestDbInvariant_RateLimitBucket:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -983,15 +1039,15 @@ class TestDbInvariant_RateLimitBucket:
         """Bucket 状态持久化"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         import db as scm_db
-        
+
         instance_key = "test-bucket.gitlab.com"
-        
+
         try:
             # 写入 bucket 状态（暂停 5 分钟）
             scm_db.upsert_rate_limit_bucket(
@@ -1003,15 +1059,15 @@ class TestDbInvariant_RateLimitBucket:
                 burst=10.0,
             )
             db_conn.commit()
-            
+
             # 读取状态
             status = scm_db.get_rate_limit_status(db_conn, instance_key)
-            
+
             assert status is not None
             assert status["instance_key"] == instance_key
             assert status["is_paused"] is True
             assert status["pause_remaining_seconds"] > 0
-        
+
         finally:
             # 清理
             scm_db.delete_rate_limit_bucket(db_conn, instance_key)
@@ -1227,47 +1283,40 @@ def _build_snapshot_from_fixture(fixture: dict):
     """从 fixture dict 构建 BuildJobsSnapshot 对象"""
     import sys
     from pathlib import Path
-    
+
     scripts_dir = Path(__file__).parent.parent
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
-    
-    from scm_sync_scheduler import BuildJobsSnapshot
+
     from engram.logbook.scm_sync_policy import (
-        RepoSyncState,
-        SyncJobCandidate,
         BudgetSnapshot,
         CircuitBreakerDecision,
+        RepoSyncState,
     )
-    
+    from scm_sync_scheduler import BuildJobsSnapshot
+
     # 构建 candidates
-    candidates = [
-        SyncJobCandidate(**c) for c in fixture["candidates_to_enqueue"]
-    ]
-    
+    candidates = [SyncJobCandidate(**c) for c in fixture["candidates_to_enqueue"]]
+
     # 构建 states
-    states = [
-        RepoSyncState(**s) for s in fixture["states"]
-    ]
-    
+    states = [RepoSyncState(**s) for s in fixture["states"]]
+
     # 构建 circuit_decision
     circuit_decision = CircuitBreakerDecision(**fixture["circuit_decision"])
-    
+
     # 构建 instance_decisions
     instance_decisions = {
-        k: CircuitBreakerDecision(**v)
-        for k, v in fixture["instance_decisions"].items()
+        k: CircuitBreakerDecision(**v) for k, v in fixture["instance_decisions"].items()
     }
-    
+
     # 构建 tenant_decisions
     tenant_decisions = {
-        k: CircuitBreakerDecision(**v)
-        for k, v in fixture["tenant_decisions"].items()
+        k: CircuitBreakerDecision(**v) for k, v in fixture["tenant_decisions"].items()
     }
-    
+
     # 构建 budget_snapshot
     budget_snapshot = BudgetSnapshot(**fixture["budget_snapshot"])
-    
+
     return BuildJobsSnapshot(
         candidates_to_enqueue=candidates,
         states=states,
@@ -1279,11 +1328,10 @@ def _build_snapshot_from_fixture(fixture: dict):
     )
 
 
-@pytest.mark.skip(reason="build_jobs_to_insert 纯函数尚未从 SyncScheduler 提取")
 class TestBuildJobsToInsertReplay:
     """
     build_jobs_to_insert 纯函数回放测试
-    
+
     验证三类场景下的关键输出字段：
     1. Bucket Paused: bucket_paused/bucket_pause_remaining_seconds 正确写入
     2. HALF_OPEN Probe: mode=probe, is_probe_mode=True
@@ -1294,27 +1342,27 @@ class TestBuildJobsToInsertReplay:
         """场景 1: Bucket 暂停时正确记录降权信息"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from scm_sync_scheduler import build_jobs_to_insert
-        
+
         snapshot = _build_snapshot_from_fixture(FIXTURE_BUCKET_PAUSED)
         result = build_jobs_to_insert(snapshot)
-        
+
         # 应该生成 1 个 job
         assert len(result.jobs) == 1, f"预期 1 个 job，实际 {len(result.jobs)}"
-        
+
         job = result.jobs[0]
-        
+
         # 验证关键字段
         assert job["repo_id"] == 1
         assert job["job_type"] == "gitlab_commits"  # logical->physical 转换
         assert job["mode"] == "incremental"  # 正常模式（未触发熔断）
         assert job["priority"] == 100
-        
+
         # 验证 payload 中的 bucket 信息
         payload = job["payload_json"]
         assert payload["bucket_paused"] is True
@@ -1326,32 +1374,32 @@ class TestBuildJobsToInsertReplay:
         """场景 2: HALF_OPEN 探测模式正确标记 probe"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from scm_sync_scheduler import build_jobs_to_insert
-        
+
         snapshot = _build_snapshot_from_fixture(FIXTURE_HALF_OPEN_PROBE)
         result = build_jobs_to_insert(snapshot)
-        
+
         # 应该生成 1 个 job
         assert len(result.jobs) == 1, f"预期 1 个 job，实际 {len(result.jobs)}"
-        
+
         job = result.jobs[0]
-        
+
         # 验证关键字段
         assert job["repo_id"] == 2
         assert job["job_type"] == "gitlab_commits"
         assert job["mode"] == "probe", f"预期 mode='probe'，实际 '{job['mode']}'"
-        
+
         # 验证 payload 中的探测模式标记
         payload = job["payload_json"]
         assert payload["is_probe_mode"] is True
         assert payload["probe_budget"] == 3
         assert payload["circuit_state"] == "half_open"
-        
+
         # 验证降级参数
         assert payload["suggested_batch_size"] == 20
         assert payload["suggested_forward_window_seconds"] == 1800
@@ -1361,23 +1409,23 @@ class TestBuildJobsToInsertReplay:
         """场景 3: 租户熔断 OPEN 导致 candidate 被跳过"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from scm_sync_scheduler import build_jobs_to_insert
-        
+
         snapshot = _build_snapshot_from_fixture(FIXTURE_ERROR_BUDGET_PAUSE)
         result = build_jobs_to_insert(snapshot)
-        
+
         # 不应生成任何 job（租户熔断 OPEN）
         assert len(result.jobs) == 0, f"预期 0 个 job，实际 {len(result.jobs)}"
-        
+
         # 应记录租户熔断导致的跳过
         assert result.tenant_paused_count == 1
         assert result.instance_paused_count == 0
-        
+
         # 验证跳过原因
         assert len(result.skipped_jobs) == 1
         skipped = result.skipped_jobs[0]
@@ -1389,14 +1437,13 @@ class TestBuildJobsToInsertReplay:
         """实例熔断 OPEN 导致 candidate 被跳过"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from scm_sync_scheduler import build_jobs_to_insert
-        from engram.logbook.scm_sync_policy import CircuitBreakerDecision
-        
+
         # 基于 FIXTURE_BUCKET_PAUSED 修改，添加实例熔断
         fixture = dict(FIXTURE_BUCKET_PAUSED)
         fixture["instance_decisions"] = {
@@ -1414,10 +1461,10 @@ class TestBuildJobsToInsertReplay:
                 "probe_job_types_allowlist": [],
             },
         }
-        
+
         snapshot = _build_snapshot_from_fixture(fixture)
         result = build_jobs_to_insert(snapshot)
-        
+
         # 不应生成任何 job（实例熔断 OPEN）
         assert len(result.jobs) == 0
         assert result.instance_paused_count == 1
@@ -1427,19 +1474,18 @@ class TestBuildJobsToInsertReplay:
         """正常情况下生成 incremental job"""
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from scm_sync_scheduler import build_jobs_to_insert, BuildJobsSnapshot
+
         from engram.logbook.scm_sync_policy import (
-            RepoSyncState,
-            SyncJobCandidate,
             BudgetSnapshot,
             CircuitBreakerDecision,
+            RepoSyncState,
         )
-        
+        from scm_sync_scheduler import BuildJobsSnapshot, build_jobs_to_insert
+
         # 构建最简单的正常快照
         snapshot = BuildJobsSnapshot(
             candidates_to_enqueue=[
@@ -1467,16 +1513,16 @@ class TestBuildJobsToInsertReplay:
             budget_snapshot=BudgetSnapshot(),
             scheduled_at="2024-01-01T12:00:00+00:00",
         )
-        
+
         result = build_jobs_to_insert(snapshot)
-        
+
         # 应生成 1 个 incremental job
         assert len(result.jobs) == 1
         job = result.jobs[0]
         assert job["mode"] == "incremental"
         assert job["job_type"] == "gitlab_commits"
         assert job["repo_id"] == 10
-        
+
         # 验证 payload 基本字段
         payload = job["payload_json"]
         assert payload["reason"] == "cursor_age"
@@ -1493,7 +1539,7 @@ class TestBuildJobsToInsertReplay:
 class TestLockHeldRequeue:
     """
     lock_held 场景的无惩罚重入队测试
-    
+
     验证点:
     - 当 dispatch 返回 locked=True 且 skipped=True 时，调用 requeue_without_penalty
     - 当 error_category=lock_held 时，调用 requeue_without_penalty
@@ -1504,6 +1550,7 @@ class TestLockHeldRequeue:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -1512,7 +1559,7 @@ class TestLockHeldRequeue:
     def test_lock_held_requeue_via_locked_skipped(self, migrated_db, db_conn):
         """
         测试 locked=True + skipped=True 场景下的无惩罚重入队
-        
+
         验证：
         1. job claim 后 status=running, attempts=1
         2. dispatch 返回 locked=True, skipped=True
@@ -1521,16 +1568,15 @@ class TestLockHeldRequeue:
         """
         import sys
         from pathlib import Path
-        from unittest.mock import patch, MagicMock
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job
+
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建测试仓库
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -1540,7 +1586,7 @@ class TestLockHeldRequeue:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 1. 入队并 claim
             job_id = enqueue(
@@ -1550,19 +1596,19 @@ class TestLockHeldRequeue:
                 conn=db_conn,
             )
             assert job_id is not None
-            
+
             worker_id = "test-worker-lock-held"
             job = claim(worker_id=worker_id, conn=db_conn)
-            
+
             assert job is not None
             assert job["job_id"] == job_id
             assert job["attempts"] == 1
-            
+
             # 验证 job 状态为 running
             job_detail = get_job(job_id, conn=db_conn)
             assert job_detail["status"] == "running"
             assert job_detail["locked_by"] == worker_id
-            
+
             # 2. Mock dispatch_sync_function 返回 locked=True, skipped=True
             mock_result = {
                 "success": True,  # 虽然 success=True，但因为 locked 会触发重入队
@@ -1570,17 +1616,20 @@ class TestLockHeldRequeue:
                 "skipped": True,
                 "message": "Watermark lock held by another process",
             }
-            
+
             # 3. 调用 process_one_job（通过 mock）
             with patch("scm_sync_worker.dispatch_sync_function", return_value=mock_result):
-                with patch("scm_sync_worker.get_worker_config_from_module", return_value={
-                    "lease_seconds": 300,
-                    "renew_interval_seconds": 60,
-                    "max_renew_failures": 3,
-                }):
+                with patch(
+                    "scm_sync_worker.get_worker_config_from_module",
+                    return_value={
+                        "lease_seconds": 300,
+                        "renew_interval_seconds": 60,
+                        "max_renew_failures": 3,
+                    },
+                ):
                     # 直接测试 requeue_without_penalty 的效果
                     from engram.logbook.scm_sync_queue import requeue_without_penalty
-                    
+
                     success = requeue_without_penalty(
                         job_id=job_id,
                         worker_id=worker_id,
@@ -1588,19 +1637,21 @@ class TestLockHeldRequeue:
                         jitter_seconds=5,
                         conn=db_conn,
                     )
-                    
+
                     assert success is True
-            
+
             # 4. 验证 job 状态变回 pending 且 attempts 回补
             job_after = get_job(job_id, conn=db_conn)
             assert job_after is not None
-            assert job_after["status"] == "pending", \
+            assert job_after["status"] == "pending", (
                 f"期望 status=pending，实际 status={job_after['status']}"
-            assert job_after["attempts"] == 0, \
+            )
+            assert job_after["attempts"] == 0, (
                 f"期望 attempts=0（回补），实际 attempts={job_after['attempts']}"
+            )
             assert job_after["locked_by"] is None
             assert "lock_held" in (job_after["last_error"] or "")
-        
+
         finally:
             # 清理
             with db_conn.cursor() as cur:
@@ -1611,7 +1662,7 @@ class TestLockHeldRequeue:
     def test_lock_held_requeue_via_error_category(self, migrated_db, db_conn):
         """
         测试 error_category=lock_held 场景下的无惩罚重入队
-        
+
         验证：
         1. job claim 后 status=running, attempts=1
         2. dispatch 返回 error_category=lock_held
@@ -1620,16 +1671,16 @@ class TestLockHeldRequeue:
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, get_job, requeue_without_penalty
+
         from engram.logbook.scm_sync_errors import ErrorCategory
-        
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job, requeue_without_penalty
+
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建测试仓库
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -1639,7 +1690,7 @@ class TestLockHeldRequeue:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 1. 入队并 claim
             job_id = enqueue(
@@ -1649,13 +1700,13 @@ class TestLockHeldRequeue:
                 conn=db_conn,
             )
             assert job_id is not None
-            
+
             worker_id = "test-worker-lock-held-category"
             job = claim(worker_id=worker_id, conn=db_conn)
-            
+
             assert job is not None
             assert job["attempts"] == 1
-            
+
             # 2. 模拟 error_category=lock_held 的结果处理
             # 直接测试 requeue_without_penalty
             success = requeue_without_penalty(
@@ -1665,15 +1716,15 @@ class TestLockHeldRequeue:
                 jitter_seconds=10,
                 conn=db_conn,
             )
-            
+
             assert success is True
-            
+
             # 3. 验证 job 状态
             job_after = get_job(job_id, conn=db_conn)
             assert job_after["status"] == "pending"
             assert job_after["attempts"] == 0  # 回补
             assert job_after["locked_by"] is None
-        
+
         finally:
             with db_conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
@@ -1686,15 +1737,15 @@ class TestLockHeldRequeue:
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, get_job, requeue_without_penalty
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job, requeue_without_penalty
+
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建测试仓库
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -1704,7 +1755,7 @@ class TestLockHeldRequeue:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 入队时设置特定的 priority 和 payload
             job_id = enqueue(
@@ -1715,10 +1766,10 @@ class TestLockHeldRequeue:
                 payload={"key": "value", "test": True},
                 conn=db_conn,
             )
-            
+
             worker_id = "test-worker-metadata"
-            job_before = claim(worker_id=worker_id, conn=db_conn)
-            
+            claim(worker_id=worker_id, conn=db_conn)
+
             # 执行重入队
             requeue_without_penalty(
                 job_id=job_id,
@@ -1727,7 +1778,7 @@ class TestLockHeldRequeue:
                 jitter_seconds=5,
                 conn=db_conn,
             )
-            
+
             # 验证元数据被保留
             job_after = get_job(job_id, conn=db_conn)
             assert job_after["repo_id"] == repo_id
@@ -1736,7 +1787,7 @@ class TestLockHeldRequeue:
             assert job_after["priority"] == 50
             assert job_after["payload"].get("key") == "value"
             assert job_after["payload"].get("test") is True
-        
+
         finally:
             with db_conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {scm_schema}.sync_jobs WHERE repo_id = %s", (repo_id,))
@@ -1778,7 +1829,7 @@ class TestLockHeldRequeue:
 class TestSyncJobsStateMachine:
     """
     sync_jobs 状态机表驱动测试
-    
+
     覆盖状态转换：
     - pending → running (claim)
     - running → completed (ack)
@@ -1788,7 +1839,7 @@ class TestSyncJobsStateMachine:
     - running → pending (requeue_without_penalty)
     - failed → running (claim, 重试场景)
     - dead → pending (reset_dead_jobs)
-    
+
     验证字段一致性：
     - status, attempts, not_before, locked_by, locked_at, last_error
     """
@@ -1797,6 +1848,7 @@ class TestSyncJobsStateMachine:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -1828,12 +1880,39 @@ class TestSyncJobsStateMachine:
         ("pending_to_running_via_claim", "claim", 0, 3, "running", 1, "test-worker", None),
         ("running_to_completed_via_ack", "ack", 1, 3, "completed", 0, None, None),
         ("running_to_failed_via_fail_retry", "fail_retry", 1, 3, "failed", 0, None, "test error"),
-        ("running_to_dead_via_fail_retry_max_attempts", "fail_retry_max", 3, 3, "dead", 0, None, "test error"),
+        (
+            "running_to_dead_via_fail_retry_max_attempts",
+            "fail_retry_max",
+            3,
+            3,
+            "dead",
+            0,
+            None,
+            "test error",
+        ),
         ("running_to_dead_via_mark_dead", "mark_dead", 1, 3, "dead", 0, None, "permanent error"),
         ("running_to_pending_via_requeue", "requeue", 1, 3, "pending", -1, None, "lock_held"),
         # 边界条件
-        ("fail_retry_at_max_minus_one", "fail_retry", 2, 3, "failed", 0, None, "test error"),  # attempts=2, max=3, 仍可重试
-        ("requeue_preserves_zero_attempts", "requeue_from_1", 1, 3, "pending", -1, None, "lock_held"),  # attempts 回补到 0
+        (
+            "fail_retry_at_max_minus_one",
+            "fail_retry",
+            2,
+            3,
+            "failed",
+            0,
+            None,
+            "test error",
+        ),  # attempts=2, max=3, 仍可重试
+        (
+            "requeue_preserves_zero_attempts",
+            "requeue_from_1",
+            1,
+            3,
+            "pending",
+            -1,
+            None,
+            "lock_held",
+        ),  # attempts 回补到 0
     ]
 
     @pytest.mark.parametrize(
@@ -1857,7 +1936,7 @@ class TestSyncJobsStateMachine:
     ):
         """
         表驱动状态转换测试
-        
+
         验证：
         1. 状态正确转换
         2. attempts 变化正确
@@ -1866,20 +1945,25 @@ class TestSyncJobsStateMachine:
         """
         import sys
         from pathlib import Path
-        from datetime import datetime, timezone, timedelta
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import (
-            enqueue, claim, ack, fail_retry, mark_dead, requeue_without_penalty, get_job,
+            ack,
+            claim,
+            enqueue,
+            fail_retry,
+            get_job,
+            mark_dead,
+            requeue_without_penalty,
         )
-        
+
         scm_schema = migrated_db["schemas"]["scm"]
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 1. 创建初始任务
         job_id = enqueue(
             repo_id=repo_id,
@@ -1889,23 +1973,26 @@ class TestSyncJobsStateMachine:
             conn=db_conn,
         )
         assert job_id is not None, "任务入队应成功"
-        
+
         # 2. 如果需要，先设置初始状态
         if operation != "claim":
             # 先 claim 使任务进入 running 状态
             claimed = claim(worker_id=worker_id, conn=db_conn)
             assert claimed is not None, "claim 应成功"
-            
+
             # 如果需要更多的 attempts，通过 SQL 直接设置
             if initial_attempts > 1:
                 with db_conn.cursor() as cur:
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         UPDATE {scm_schema}.sync_jobs
                         SET attempts = %s
                         WHERE job_id = %s
-                    """, (initial_attempts, job_id))
+                    """,
+                        (initial_attempts, job_id),
+                    )
                     db_conn.commit()
-        
+
         # 3. 执行操作
         if operation == "claim":
             result = claim(worker_id=worker_id, conn=db_conn)
@@ -1913,87 +2000,103 @@ class TestSyncJobsStateMachine:
         elif operation == "ack":
             success = ack(job_id=job_id, worker_id=worker_id, conn=db_conn)
         elif operation == "fail_retry":
-            success = fail_retry(job_id=job_id, worker_id=worker_id, error="test error", conn=db_conn)
+            success = fail_retry(
+                job_id=job_id, worker_id=worker_id, error="test error", conn=db_conn
+            )
         elif operation == "fail_retry_max":
-            success = fail_retry(job_id=job_id, worker_id=worker_id, error="test error", conn=db_conn)
+            success = fail_retry(
+                job_id=job_id, worker_id=worker_id, error="test error", conn=db_conn
+            )
         elif operation == "mark_dead":
-            success = mark_dead(job_id=job_id, worker_id=worker_id, error="permanent error", conn=db_conn)
+            success = mark_dead(
+                job_id=job_id, worker_id=worker_id, error="permanent error", conn=db_conn
+            )
         elif operation in ("requeue", "requeue_from_1"):
             success = requeue_without_penalty(
-                job_id=job_id, worker_id=worker_id, reason="lock_held", jitter_seconds=0, conn=db_conn
+                job_id=job_id,
+                worker_id=worker_id,
+                reason="lock_held",
+                jitter_seconds=0,
+                conn=db_conn,
             )
         else:
             pytest.fail(f"未知操作: {operation}")
-        
+
         assert success, f"操作 {operation} 应成功"
-        
+
         # 4. 验证状态
         job = get_job(job_id, conn=db_conn)
         assert job is not None, "应能获取任务详情"
-        
+
         # 验证 status
-        assert job["status"] == expected_status, \
+        assert job["status"] == expected_status, (
             f"预期 status={expected_status}，实际 status={job['status']}"
-        
+        )
+
         # 验证 attempts
         expected_attempts = initial_attempts + expected_attempts_delta
         if operation == "claim":
             expected_attempts = 1  # claim 时 attempts 从 0 变为 1
-        assert job["attempts"] == expected_attempts, \
+        assert job["attempts"] == expected_attempts, (
             f"预期 attempts={expected_attempts}，实际 attempts={job['attempts']}"
-        
+        )
+
         # 验证 locked_by
-        assert job["locked_by"] == expected_locked_by, \
+        assert job["locked_by"] == expected_locked_by, (
             f"预期 locked_by={expected_locked_by}，实际 locked_by={job['locked_by']}"
-        
+        )
+
         # 验证 locked_at
         if expected_locked_by is not None:
             assert job["locked_at"] is not None, "locked_by 非空时 locked_at 也应非空"
         else:
             assert job["locked_at"] is None, "locked_by 为空时 locked_at 也应为空"
-        
+
         # 验证 last_error
         if expected_last_error_contains is not None:
             assert job["last_error"] is not None, "last_error 应非空"
-            assert expected_last_error_contains in job["last_error"], \
+            assert expected_last_error_contains in job["last_error"], (
                 f"last_error 应包含 '{expected_last_error_contains}'，实际: {job['last_error']}"
+            )
 
     def test_failed_to_running_via_retry_claim(self, migrated_db, db_conn, test_repo):
         """
         failed → running: 重试 claim 测试
-        
+
         验证 failed 状态且 attempts < max_attempts 的任务可以被重新 claim
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, fail_retry, get_job
-        
-        scm_schema = migrated_db["schemas"]["scm"]
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, fail_retry, get_job
+
+        migrated_db["schemas"]["scm"]
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", max_attempts=3, conn=db_conn)
         claim(worker_id=worker_id, conn=db_conn)
-        
+
         # 触发 fail_retry，设置立即可重试（backoff=0）
-        fail_retry(job_id=job_id, worker_id=worker_id, error="first error", backoff_seconds=0, conn=db_conn)
-        
+        fail_retry(
+            job_id=job_id, worker_id=worker_id, error="first error", backoff_seconds=0, conn=db_conn
+        )
+
         # 验证状态为 failed
         job_after_fail = get_job(job_id, conn=db_conn)
         assert job_after_fail["status"] == "failed"
         assert job_after_fail["attempts"] == 1
-        
+
         # 重新 claim（重试）
         claimed = claim(worker_id="worker-retry", conn=db_conn)
         assert claimed is not None, "failed 任务应可被重新 claim"
         assert claimed["job_id"] == job_id
-        
+
         # 验证状态更新
         job_after_retry = get_job(job_id, conn=db_conn)
         assert job_after_retry["status"] == "running"
@@ -2003,34 +2106,40 @@ class TestSyncJobsStateMachine:
     def test_dead_to_pending_via_reset(self, migrated_db, db_conn, test_repo):
         """
         dead → pending: reset_dead_jobs 测试
-        
+
         验证管理员可以将 dead 任务重置为 pending
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, mark_dead, reset_dead_jobs, get_job
-        
+
+        from engram.logbook.scm_sync_queue import (
+            claim,
+            enqueue,
+            get_job,
+            mark_dead,
+            reset_dead_jobs,
+        )
+
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 入队、claim、标记为 dead
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker_id, conn=db_conn)
         mark_dead(job_id=job_id, worker_id=worker_id, error="permanent error", conn=db_conn)
-        
+
         # 验证状态为 dead
         job_dead = get_job(job_id, conn=db_conn)
         assert job_dead["status"] == "dead"
-        
+
         # 重置
         reset_count = reset_dead_jobs(repo_id=repo_id, conn=db_conn)
         assert reset_count == 1
-        
+
         # 验证状态恢复为 pending
         job_reset = get_job(job_id, conn=db_conn)
         assert job_reset["status"] == "pending"
@@ -2063,7 +2172,7 @@ class TestSyncJobsStateMachine:
 class TestConcurrencyBoundary:
     """
     并发边界测试
-    
+
     覆盖：
     - 并发 claim：多 worker 同时 claim
     - 重复 ack：同一任务多次 ack
@@ -2077,6 +2186,7 @@ class TestConcurrencyBoundary:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -2104,33 +2214,33 @@ class TestConcurrencyBoundary:
     def test_duplicate_ack_returns_false(self, migrated_db, db_conn, test_repo):
         """
         重复 ack 测试
-        
+
         验证：第二次 ack 返回 False（任务已完成）
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, ack, get_job
-        
+
+        from engram.logbook.scm_sync_queue import ack, claim, enqueue, get_job
+
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker_id, conn=db_conn)
-        
+
         # 第一次 ack 成功
         result1 = ack(job_id=job_id, worker_id=worker_id, conn=db_conn)
         assert result1 is True, "第一次 ack 应成功"
-        
+
         # 验证状态为 completed
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "completed"
-        
+
         # 第二次 ack 返回 False
         result2 = ack(job_id=job_id, worker_id=worker_id, conn=db_conn)
         assert result2 is False, "重复 ack 应返回 False"
@@ -2138,33 +2248,33 @@ class TestConcurrencyBoundary:
     def test_duplicate_fail_retry_returns_false(self, migrated_db, db_conn, test_repo):
         """
         重复 fail_retry 测试
-        
+
         验证：第二次 fail_retry 返回 False（任务已不在 running 状态）
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, fail_retry, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, fail_retry, get_job
+
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker_id, conn=db_conn)
-        
+
         # 第一次 fail_retry 成功
         result1 = fail_retry(job_id=job_id, worker_id=worker_id, error="error 1", conn=db_conn)
         assert result1 is True, "第一次 fail_retry 应成功"
-        
+
         # 验证状态为 failed
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "failed"
-        
+
         # 第二次 fail_retry 返回 False
         result2 = fail_retry(job_id=job_id, worker_id=worker_id, error="error 2", conn=db_conn)
         assert result2 is False, "重复 fail_retry 应返回 False"
@@ -2172,23 +2282,23 @@ class TestConcurrencyBoundary:
     def test_renew_lease_returns_false_when_preempted(self, migrated_db, db_conn, test_repo):
         """
         renew_lease 返回 False 测试
-        
+
         验证：当任务被其他 worker 抢占后，原 worker 的 renew_lease 返回 False
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, renew_lease, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job, renew_lease
+
         scm_schema = migrated_db["schemas"]["scm"]
         worker1_id = "worker-1"
         worker2_id = "worker-2"
         repo_id = test_repo
-        
+
         # Worker1 入队并 claim
         job_id = enqueue(
             repo_id=repo_id,
@@ -2198,25 +2308,28 @@ class TestConcurrencyBoundary:
         )
         job = claim(worker_id=worker1_id, conn=db_conn)
         assert job is not None
-        
+
         # 模拟租约过期：直接修改 locked_at 为过去时间
         with db_conn.cursor() as cur:
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 UPDATE {scm_schema}.sync_jobs
                 SET locked_at = locked_at - interval '10 seconds'
                 WHERE job_id = %s
-            """, (job_id,))
+            """,
+                (job_id,),
+            )
             db_conn.commit()
-        
+
         # Worker2 claim 抢占任务
         job2 = claim(worker_id=worker2_id, conn=db_conn)
         assert job2 is not None, "Worker2 应能 claim 过期的任务"
         assert job2["job_id"] == job_id
-        
+
         # Worker1 的 renew_lease 应返回 False
         result = renew_lease(job_id=job_id, worker_id=worker1_id, conn=db_conn)
         assert result is False, "被抢占后 renew_lease 应返回 False"
-        
+
         # 验证任务现在属于 Worker2
         job_detail = get_job(job_id, conn=db_conn)
         assert job_detail["locked_by"] == worker2_id
@@ -2224,23 +2337,23 @@ class TestConcurrencyBoundary:
     def test_expired_running_job_can_be_reclaimed(self, migrated_db, db_conn, test_repo):
         """
         running 过期后被再次 claim 测试
-        
+
         验证：租约过期的 running 任务可以被另一个 worker claim
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job
+
         scm_schema = migrated_db["schemas"]["scm"]
         worker1_id = "worker-original"
         worker2_id = "worker-reclaim"
         repo_id = test_repo
-        
+
         # Worker1 入队并 claim
         job_id = enqueue(
             repo_id=repo_id,
@@ -2250,63 +2363,66 @@ class TestConcurrencyBoundary:
         )
         job1 = claim(worker_id=worker1_id, conn=db_conn)
         assert job1 is not None
-        
+
         # 验证初始状态
         job_before = get_job(job_id, conn=db_conn)
         assert job_before["status"] == "running"
         assert job_before["locked_by"] == worker1_id
         assert job_before["attempts"] == 1
-        
+
         # 模拟租约过期
         with db_conn.cursor() as cur:
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 UPDATE {scm_schema}.sync_jobs
                 SET locked_at = locked_at - interval '10 seconds'
                 WHERE job_id = %s
-            """, (job_id,))
+            """,
+                (job_id,),
+            )
             db_conn.commit()
-        
+
         # Worker2 应能 claim 过期任务
         job2 = claim(worker_id=worker2_id, conn=db_conn)
         assert job2 is not None, "应能 claim 过期的 running 任务"
         assert job2["job_id"] == job_id
-        
+
         # 验证状态更新
         job_after = get_job(job_id, conn=db_conn)
         assert job_after["status"] == "running"
-        assert job_after["locked_by"] == worker2_id, \
+        assert job_after["locked_by"] == worker2_id, (
             f"locked_by 应更新为 {worker2_id}，实际: {job_after['locked_by']}"
-        assert job_after["attempts"] == 2, \
-            f"attempts 应增加到 2，实际: {job_after['attempts']}"
+        )
+        assert job_after["attempts"] == 2, f"attempts 应增加到 2，实际: {job_after['attempts']}"
         assert job_after["locked_at"] is not None
 
     def test_ack_by_wrong_worker_returns_false(self, migrated_db, db_conn, test_repo):
         """
         错误 worker ack 测试
-        
+
         验证：非持有锁的 worker 调用 ack 返回 False
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, ack, get_job
-        
+
+        from engram.logbook.scm_sync_queue import ack, claim, enqueue, get_job
+
         worker1_id = "worker-holder"
         worker2_id = "worker-other"
         repo_id = test_repo
-        
+
         # Worker1 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker1_id, conn=db_conn)
-        
+
         # Worker2 尝试 ack 应返回 False
         result = ack(job_id=job_id, worker_id=worker2_id, conn=db_conn)
         assert result is False, "错误 worker 的 ack 应返回 False"
-        
+
         # 任务仍应处于 running 状态，属于 Worker1
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "running"
@@ -2315,30 +2431,32 @@ class TestConcurrencyBoundary:
     def test_fail_retry_by_wrong_worker_returns_false(self, migrated_db, db_conn, test_repo):
         """
         错误 worker fail_retry 测试
-        
+
         验证：非持有锁的 worker 调用 fail_retry 返回 False
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, fail_retry, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, fail_retry, get_job
+
         worker1_id = "worker-holder"
         worker2_id = "worker-other"
         repo_id = test_repo
-        
+
         # Worker1 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker1_id, conn=db_conn)
-        
+
         # Worker2 尝试 fail_retry 应返回 False
-        result = fail_retry(job_id=job_id, worker_id=worker2_id, error="wrong worker error", conn=db_conn)
+        result = fail_retry(
+            job_id=job_id, worker_id=worker2_id, error="wrong worker error", conn=db_conn
+        )
         assert result is False, "错误 worker 的 fail_retry 应返回 False"
-        
+
         # 任务仍应处于 running 状态
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "running"
@@ -2348,72 +2466,78 @@ class TestConcurrencyBoundary:
     def test_not_before_updated_on_fail_retry(self, migrated_db, db_conn, test_repo):
         """
         fail_retry 更新 not_before 测试
-        
+
         验证：fail_retry 后 not_before 被设置为未来时间（退避延迟）
         """
         import sys
-        from pathlib import Path
         from datetime import datetime, timezone
-        
+        from pathlib import Path
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, fail_retry, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, fail_retry, get_job
+
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker_id, conn=db_conn)
-        
+
         # 记录当前时间
         now = datetime.now(timezone.utc)
-        
+
         # fail_retry 并指定退避时间
         backoff_seconds = 60
-        fail_retry(job_id=job_id, worker_id=worker_id, error="test error", backoff_seconds=backoff_seconds, conn=db_conn)
-        
+        fail_retry(
+            job_id=job_id,
+            worker_id=worker_id,
+            error="test error",
+            backoff_seconds=backoff_seconds,
+            conn=db_conn,
+        )
+
         # 验证 not_before 被更新
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "failed"
         assert job["not_before"] is not None
-        
+
         # not_before 应该在 now + backoff_seconds 附近
         not_before = job["not_before"]
         if not_before.tzinfo is None:
             not_before = not_before.replace(tzinfo=timezone.utc)
-        
-        expected_min = now
+
         # 允许一些误差（最多 5 秒）
         diff_seconds = (not_before - now).total_seconds()
-        assert diff_seconds >= backoff_seconds - 5, \
+        assert diff_seconds >= backoff_seconds - 5, (
             f"not_before 应该在 now + {backoff_seconds}s 之后，实际延迟: {diff_seconds}s"
+        )
 
     def test_requeue_preserves_attempts_on_rollback(self, migrated_db, db_conn, test_repo):
         """
         requeue_without_penalty 回补 attempts 测试
-        
+
         验证：requeue_without_penalty 将 attempts 减 1（补偿 claim 时的 +1）
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, requeue_without_penalty, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job, requeue_without_penalty
+
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         job_after_claim = claim(worker_id=worker_id, conn=db_conn)
         assert job_after_claim["attempts"] == 1, "claim 后 attempts 应为 1"
-        
+
         # requeue
         success = requeue_without_penalty(
             job_id=job_id,
@@ -2423,33 +2547,32 @@ class TestConcurrencyBoundary:
             conn=db_conn,
         )
         assert success is True
-        
+
         # 验证 attempts 被回补
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "pending"
-        assert job["attempts"] == 0, \
-            f"requeue 后 attempts 应回补为 0，实际: {job['attempts']}"
+        assert job["attempts"] == 0, f"requeue 后 attempts 应回补为 0，实际: {job['attempts']}"
         assert job["locked_by"] is None
         assert "lock_held" in job["last_error"]
 
     def test_claim_respects_not_before(self, migrated_db, db_conn, test_repo):
         """
         not_before 边界测试
-        
+
         验证：not_before 未到期的 pending 任务不会被 claim
         """
         import sys
+        from datetime import datetime, timedelta, timezone
         from pathlib import Path
-        from datetime import datetime, timezone, timedelta
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job
+
         repo_id = test_repo
-        
+
         # 创建一个 not_before 设置为未来时间的任务
         future_time = datetime.now(timezone.utc) + timedelta(hours=1)
         job_id = enqueue(
@@ -2459,11 +2582,11 @@ class TestConcurrencyBoundary:
             conn=db_conn,
         )
         assert job_id is not None
-        
+
         # 尝试 claim 应返回 None（没有可用任务）
         claimed = claim(worker_id="test-worker", conn=db_conn)
         assert claimed is None, "not_before 未到期的任务不应被 claim"
-        
+
         # 验证任务仍为 pending
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "pending"
@@ -2472,31 +2595,33 @@ class TestConcurrencyBoundary:
     def test_failed_job_respects_not_before(self, migrated_db, db_conn, test_repo):
         """
         failed 任务的 not_before 边界测试
-        
+
         验证：failed 状态的任务在 not_before 未到期时不会被 claim
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, fail_retry, get_job
-        
-        scm_schema = migrated_db["schemas"]["scm"]
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, fail_retry, get_job
+
+        migrated_db["schemas"]["scm"]
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 入队、claim、fail_retry（设置较长的 backoff）
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", max_attempts=3, conn=db_conn)
         claim(worker_id=worker_id, conn=db_conn)
-        fail_retry(job_id=job_id, worker_id=worker_id, error="error", backoff_seconds=3600, conn=db_conn)
-        
+        fail_retry(
+            job_id=job_id, worker_id=worker_id, error="error", backoff_seconds=3600, conn=db_conn
+        )
+
         # 验证任务为 failed 且 not_before 在未来
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "failed"
-        
+
         # 尝试 claim 应返回 None
         claimed = claim(worker_id="worker-retry", conn=db_conn)
         assert claimed is None, "not_before 未到期的 failed 任务不应被 claim"
@@ -2504,34 +2629,34 @@ class TestConcurrencyBoundary:
     def test_concurrent_claim_simulation(self, migrated_db, db_conn, test_repo):
         """
         并发 claim 模拟测试
-        
+
         验证：使用 FOR UPDATE SKIP LOCKED，多次 claim 尝试只有一个成功
         （此测试模拟而非真实并发，真实并发测试需要多线程/多进程）
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job
+
         repo_id = test_repo
-        
+
         # 创建一个任务
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         assert job_id is not None
-        
+
         # 第一个 worker claim 成功
         claimed1 = claim(worker_id="worker-1", conn=db_conn)
         assert claimed1 is not None
         assert claimed1["job_id"] == job_id
-        
+
         # 第二个 worker 尝试 claim 同一任务应返回 None（没有其他可用任务）
         claimed2 = claim(worker_id="worker-2", conn=db_conn)
         assert claimed2 is None, "任务已被锁定，第二个 worker 应无法 claim"
-        
+
         # 验证任务仍属于 worker-1
         job = get_job(job_id, conn=db_conn)
         assert job["locked_by"] == "worker-1"
@@ -2539,21 +2664,21 @@ class TestConcurrencyBoundary:
     def test_lease_expiry_boundary_exact(self, migrated_db, db_conn, test_repo):
         """
         租约过期边界精确测试
-        
+
         验证：租约刚好过期时任务可被抢占
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job
+
         scm_schema = migrated_db["schemas"]["scm"]
         repo_id = test_repo
-        
+
         # 创建任务并 claim，设置短租约
         job_id = enqueue(
             repo_id=repo_id,
@@ -2562,21 +2687,24 @@ class TestConcurrencyBoundary:
             conn=db_conn,
         )
         claim(worker_id="worker-1", conn=db_conn)
-        
+
         # 模拟租约刚好过期（设置 locked_at 为 lease_seconds + 1 秒前）
         with db_conn.cursor() as cur:
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 UPDATE {scm_schema}.sync_jobs
                 SET locked_at = now() - interval '11 seconds'
                 WHERE job_id = %s
-            """, (job_id,))
+            """,
+                (job_id,),
+            )
             db_conn.commit()
-        
+
         # 第二个 worker 应能 claim
         claimed2 = claim(worker_id="worker-2", conn=db_conn)
         assert claimed2 is not None, "租约过期后应能被抢占"
         assert claimed2["job_id"] == job_id
-        
+
         # 验证任务现在属于 worker-2，attempts 增加
         job = get_job(job_id, conn=db_conn)
         assert job["locked_by"] == "worker-2"
@@ -2585,26 +2713,26 @@ class TestConcurrencyBoundary:
     def test_requeue_wrong_worker_returns_false(self, migrated_db, db_conn, test_repo):
         """
         错误 worker requeue 测试
-        
+
         验证：非持有锁的 worker 调用 requeue_without_penalty 返回 False
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, requeue_without_penalty, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job, requeue_without_penalty
+
         worker1_id = "worker-holder"
         worker2_id = "worker-other"
         repo_id = test_repo
-        
+
         # Worker1 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker1_id, conn=db_conn)
-        
+
         # Worker2 尝试 requeue 应返回 False
         result = requeue_without_penalty(
             job_id=job_id,
@@ -2613,7 +2741,7 @@ class TestConcurrencyBoundary:
             conn=db_conn,
         )
         assert result is False, "错误 worker 的 requeue 应返回 False"
-        
+
         # 任务仍应处于 running 状态，属于 Worker1
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "running"
@@ -2622,30 +2750,30 @@ class TestConcurrencyBoundary:
     def test_mark_dead_wrong_worker_returns_false(self, migrated_db, db_conn, test_repo):
         """
         错误 worker mark_dead 测试
-        
+
         验证：非持有锁的 worker 调用 mark_dead 返回 False
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim, mark_dead, get_job
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue, get_job, mark_dead
+
         worker1_id = "worker-holder"
         worker2_id = "worker-other"
         repo_id = test_repo
-        
+
         # Worker1 入队并 claim
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", conn=db_conn)
         claim(worker_id=worker1_id, conn=db_conn)
-        
+
         # Worker2 尝试 mark_dead 应返回 False
         result = mark_dead(job_id=job_id, worker_id=worker2_id, error="wrong worker", conn=db_conn)
         assert result is False, "错误 worker 的 mark_dead 应返回 False"
-        
+
         # 任务仍应处于 running 状态
         job = get_job(job_id, conn=db_conn)
         assert job["status"] == "running"
@@ -2660,7 +2788,7 @@ class TestConcurrencyBoundary:
 class TestConcurrencyBoundaryTableDriven:
     """
     并发边界表驱动测试
-    
+
     使用 parametrize 覆盖多种并发场景
     """
 
@@ -2668,6 +2796,7 @@ class TestConcurrencyBoundaryTableDriven:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -2732,28 +2861,33 @@ class TestConcurrencyBoundaryTableDriven:
     ):
         """
         表驱动测试：在非预期状态下执行操作
-        
+
         验证：各操作在非 running 状态下返回 False
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import (
-            enqueue, claim, ack, fail_retry, mark_dead, 
-            requeue_without_penalty, renew_lease, get_job,
+            ack,
+            claim,
+            enqueue,
+            fail_retry,
+            mark_dead,
+            renew_lease,
+            requeue_without_penalty,
         )
-        
-        scm_schema = migrated_db["schemas"]["scm"]
+
+        migrated_db["schemas"]["scm"]
         worker_id = "test-worker"
         repo_id = test_repo
-        
+
         # 1. 创建任务
         job_id = enqueue(repo_id=repo_id, job_type="gitlab_commits", max_attempts=3, conn=db_conn)
-        
+
         # 2. 设置初始状态
         if setup_status == "pending":
             pass  # 默认状态
@@ -2764,11 +2898,13 @@ class TestConcurrencyBoundaryTableDriven:
             ack(job_id=job_id, worker_id=worker_id, conn=db_conn)
         elif setup_status == "failed":
             claim(worker_id=worker_id, conn=db_conn)
-            fail_retry(job_id=job_id, worker_id=worker_id, error="setup", backoff_seconds=0, conn=db_conn)
+            fail_retry(
+                job_id=job_id, worker_id=worker_id, error="setup", backoff_seconds=0, conn=db_conn
+            )
         elif setup_status == "dead":
             claim(worker_id=worker_id, conn=db_conn)
             mark_dead(job_id=job_id, worker_id=worker_id, error="setup", conn=db_conn)
-        
+
         # 3. 执行操作
         if operation == "ack":
             result = ack(job_id=job_id, worker_id=worker_id, conn=db_conn)
@@ -2784,10 +2920,11 @@ class TestConcurrencyBoundaryTableDriven:
             result = renew_lease(job_id=job_id, worker_id=worker_id, conn=db_conn)
         else:
             pytest.fail(f"未知操作: {operation}")
-        
+
         # 4. 验证结果
-        assert result == expected_result, \
+        assert result == expected_result, (
             f"操作 {operation} 在 {setup_status} 状态下应返回 {expected_result}"
+        )
 
 
 # ============================================================================
@@ -2798,10 +2935,10 @@ class TestConcurrencyBoundaryTableDriven:
 class TestDimensionColumnIntegrity:
     """
     维度列完整性测试
-    
+
     验证 pending/running 状态的 sync_jobs 维度列（gitlab_instance, tenant_id）
     的正确性，确保 budget 查询和 pool 过滤能正常工作。
-    
+
     边界条件：
     - gitlab 类型任务应有 gitlab_instance
     - tenant_id 在多租户环境中应非空
@@ -2812,6 +2949,7 @@ class TestDimensionColumnIntegrity:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -2843,24 +2981,24 @@ class TestDimensionColumnIntegrity:
     def test_enqueue_with_dimension_columns(self, migrated_db, db_conn, test_repo_with_url):
         """
         测试 enqueue 时维度列正确写入
-        
+
         验证：
         1. payload 中的 gitlab_instance 和 tenant_id 被写入对应列
         2. 列值与 payload 一致
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, get_job
-        
+
+        from engram.logbook.scm_sync_queue import enqueue
+
         repo_id = test_repo_with_url["repo_id"]
         expected_instance = test_repo_with_url["expected_instance"]
         expected_tenant = test_repo_with_url["expected_tenant"]
-        
+
         # 入队时指定维度信息
         job_id = enqueue(
             repo_id=repo_id,
@@ -2873,42 +3011,46 @@ class TestDimensionColumnIntegrity:
             conn=db_conn,
         )
         assert job_id is not None
-        
+
         # 验证维度列写入正确
         with db_conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT gitlab_instance, tenant_id
                 FROM scm.sync_jobs
                 WHERE job_id = %s
-            """, (job_id,))
+            """,
+                (job_id,),
+            )
             row = cur.fetchone()
-        
-        assert row is not None
-        assert row[0] == expected_instance, \
-            f"gitlab_instance 应为 {expected_instance}，实际: {row[0]}"
-        assert row[1] == expected_tenant, \
-            f"tenant_id 应为 {expected_tenant}，实际: {row[1]}"
 
-    def test_enqueue_gitlab_job_without_instance_warning(self, migrated_db, db_conn, test_repo_with_url):
+        assert row is not None
+        assert row[0] == expected_instance, (
+            f"gitlab_instance 应为 {expected_instance}，实际: {row[0]}"
+        )
+        assert row[1] == expected_tenant, f"tenant_id 应为 {expected_tenant}，实际: {row[1]}"
+
+    def test_enqueue_gitlab_job_without_instance_warning(
+        self, migrated_db, db_conn, test_repo_with_url
+    ):
         """
         测试 gitlab 类型任务缺少 gitlab_instance 时的警告
-        
+
         验证：
         1. 非严格模式下，任务可以入队但会记录警告
         2. 任务 payload 和 DB 列都为空
         """
         import sys
         from pathlib import Path
-        import logging
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import enqueue
-        
+
         repo_id = test_repo_with_url["repo_id"]
-        
+
         # 使用新的 job_type 避免唯一约束冲突
         job_id = enqueue(
             repo_id=repo_id,
@@ -2917,19 +3059,22 @@ class TestDimensionColumnIntegrity:
             payload={},  # 不提供 gitlab_instance
             conn=db_conn,
         )
-        
+
         # 非严格模式应该成功入队
         assert job_id is not None
-        
+
         # 验证维度列为 NULL
         with db_conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT gitlab_instance, tenant_id
                 FROM scm.sync_jobs
                 WHERE job_id = %s
-            """, (job_id,))
+            """,
+                (job_id,),
+            )
             row = cur.fetchone()
-        
+
         assert row is not None
         assert row[0] is None, "非严格模式下 gitlab_instance 应为 NULL"
         assert row[1] is None, "未提供 tenant_id 时应为 NULL"
@@ -2940,15 +3085,15 @@ class TestDimensionColumnIntegrity:
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import enqueue
-        
+
         repo_id = test_repo_with_url["repo_id"]
-        
+
         with pytest.raises(ValueError) as exc_info:
             enqueue(
                 repo_id=repo_id,
@@ -2958,14 +3103,14 @@ class TestDimensionColumnIntegrity:
                 strict_dimension_check=True,  # 严格模式
                 conn=db_conn,
             )
-        
+
         assert "gitlab_instance" in str(exc_info.value)
         assert "gitlab_reviews" in str(exc_info.value)
 
     def test_dimension_column_normalization(self, migrated_db, db_conn, test_repo_with_url):
         """
         测试 gitlab_instance 规范化
-        
+
         验证：
         1. URL 被正确解析为主机名
         2. 主机名被转为小写
@@ -2973,15 +3118,15 @@ class TestDimensionColumnIntegrity:
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import enqueue
-        
+
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建新仓库用于此测试
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -2991,7 +3136,7 @@ class TestDimensionColumnIntegrity:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 入队时使用 URL 格式
             job_id = enqueue(
@@ -3005,23 +3150,27 @@ class TestDimensionColumnIntegrity:
                 conn=db_conn,
             )
             assert job_id is not None
-            
+
             # 验证规范化结果
             with db_conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT gitlab_instance
                     FROM scm.sync_jobs
                     WHERE job_id = %s
-                """, (job_id,))
+                """,
+                    (job_id,),
+                )
                 row = cur.fetchone()
-            
+
             # 应该被规范化为小写主机名（可能包含端口）
             assert row is not None
             normalized = row[0]
             # normalize_instance_key 会移除 scheme 和 path，保留 host:port
-            assert "gitlab.example.com" in normalized.lower(), \
+            assert "gitlab.example.com" in normalized.lower(), (
                 f"应包含小写主机名，实际: {normalized}"
-        
+            )
+
         finally:
             # 清理
             with db_conn.cursor() as cur:
@@ -3032,34 +3181,37 @@ class TestDimensionColumnIntegrity:
     def test_pending_running_jobs_dimension_query(self, migrated_db, db_conn, test_repo_with_url):
         """
         测试活跃任务按维度列查询
-        
+
         验证 budget 查询可以正确使用维度列过滤
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
-        from engram.logbook.scm_sync_queue import enqueue, claim
-        
+
+        from engram.logbook.scm_sync_queue import claim, enqueue
+
         scm_schema = migrated_db["schemas"]["scm"]
         repo_id = test_repo_with_url["repo_id"]
         instance = "budget-test.gitlab.com"
         tenant = "budget-tenant"
-        
+
         # 创建多个任务
         job_ids = []
         for i, jt in enumerate(["gitlab_commits", "gitlab_mrs"]):
             # 先清理可能存在的任务
             with db_conn.cursor() as cur:
-                cur.execute(f"""
-                    DELETE FROM {scm_schema}.sync_jobs 
+                cur.execute(
+                    f"""
+                    DELETE FROM {scm_schema}.sync_jobs
                     WHERE repo_id = %s AND job_type = %s
-                """, (repo_id, jt))
+                """,
+                    (repo_id, jt),
+                )
                 db_conn.commit()
-            
+
             jid = enqueue(
                 repo_id=repo_id,
                 job_type=jt,
@@ -3072,56 +3224,62 @@ class TestDimensionColumnIntegrity:
             )
             if jid:
                 job_ids.append(jid)
-        
+
         # claim 其中一个使其变为 running
         if job_ids:
             claim(worker_id="test-worker-budget", conn=db_conn)
-        
+
         # 使用维度列进行 budget 查询
         with db_conn.cursor() as cur:
             # 按 gitlab_instance 统计活跃任务
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT gitlab_instance, COUNT(*) as cnt
                 FROM scm.sync_jobs
                 WHERE status IN ('pending', 'running')
                   AND gitlab_instance = %s
                 GROUP BY gitlab_instance
-            """, (instance,))
+            """,
+                (instance,),
+            )
             instance_counts = dict(cur.fetchall())
-            
+
             # 按 tenant_id 统计活跃任务
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT tenant_id, COUNT(*) as cnt
                 FROM scm.sync_jobs
                 WHERE status IN ('pending', 'running')
                   AND tenant_id = %s
                 GROUP BY tenant_id
-            """, (tenant,))
+            """,
+                (tenant,),
+            )
             tenant_counts = dict(cur.fetchall())
-        
+
         # 验证查询结果
-        assert instance in instance_counts or len(job_ids) == 0, \
-            f"应能通过 gitlab_instance 查询到活跃任务"
-        assert tenant in tenant_counts or len(job_ids) == 0, \
-            f"应能通过 tenant_id 查询到活跃任务"
+        assert instance in instance_counts or len(job_ids) == 0, (
+            "应能通过 gitlab_instance 查询到活跃任务"
+        )
+        assert tenant in tenant_counts or len(job_ids) == 0, "应能通过 tenant_id 查询到活跃任务"
 
     def test_svn_job_without_gitlab_instance_ok(self, migrated_db, db_conn):
         """
         测试 SVN 类型任务不需要 gitlab_instance
-        
+
         验证非 gitlab 类型任务不强制要求 gitlab_instance
         """
         import sys
         from pathlib import Path
-        
+
         scripts_dir = Path(__file__).parent.parent
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
-        
+
         from engram.logbook.scm_sync_queue import enqueue
-        
+
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建 SVN 仓库
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -3131,7 +3289,7 @@ class TestDimensionColumnIntegrity:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # SVN 任务不需要 gitlab_instance，即使严格模式也应成功
             job_id = enqueue(
@@ -3142,22 +3300,25 @@ class TestDimensionColumnIntegrity:
                 strict_dimension_check=True,  # 严格模式
                 conn=db_conn,
             )
-            
+
             # SVN 任务应该成功入队
             assert job_id is not None
-            
+
             # 验证维度列为 NULL（预期行为）
             with db_conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT gitlab_instance, tenant_id
                     FROM scm.sync_jobs
                     WHERE job_id = %s
-                """, (job_id,))
+                """,
+                    (job_id,),
+                )
                 row = cur.fetchone()
-            
+
             assert row is not None
             assert row[0] is None, "SVN 任务 gitlab_instance 应为 NULL"
-        
+
         finally:
             # 清理
             with db_conn.cursor() as cur:
@@ -3169,7 +3330,7 @@ class TestDimensionColumnIntegrity:
 class TestDimensionColumnBackfillVerification:
     """
     维度列回填验证测试
-    
+
     模拟 SQL 迁移脚本的回填逻辑，验证边界条件处理
     """
 
@@ -3177,6 +3338,7 @@ class TestDimensionColumnBackfillVerification:
     def db_conn(self, migrated_db):
         """获取测试数据库连接"""
         import psycopg
+
         dsn = migrated_db["dsn"]
         conn = psycopg.connect(dsn)
         yield conn
@@ -3185,11 +3347,11 @@ class TestDimensionColumnBackfillVerification:
     def test_backfill_from_repos_url(self, migrated_db, db_conn):
         """
         测试从 repos.url 回填 gitlab_instance
-        
+
         模拟 SQL 迁移脚本中的回填逻辑
         """
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建带 URL 的仓库
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -3199,39 +3361,46 @@ class TestDimensionColumnBackfillVerification:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 直接插入任务（不通过 enqueue，模拟旧数据）
             with db_conn.cursor() as cur:
-                cur.execute(f"""
-                    INSERT INTO {scm_schema}.sync_jobs 
+                cur.execute(
+                    f"""
+                    INSERT INTO {scm_schema}.sync_jobs
                     (repo_id, job_type, mode, status, payload_json)
                     VALUES (%s, 'gitlab_commits', 'incremental', 'pending', '{{}}')
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = cur.fetchone()[0]
                 db_conn.commit()
-            
+
             # 验证初始状态：维度列为 NULL
             with db_conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT gitlab_instance, tenant_id
                     FROM {scm_schema}.sync_jobs
                     WHERE job_id = %s
-                """, (job_id,))
+                """,
+                    (job_id,),
+                )
                 row = cur.fetchone()
-            
+
             assert row[0] is None, "初始 gitlab_instance 应为 NULL"
             assert row[1] is None, "初始 tenant_id 应为 NULL"
-            
+
             # 执行回填（模拟 SQL 迁移脚本逻辑）
             with db_conn.cursor() as cur:
                 # 回填 gitlab_instance
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     UPDATE {scm_schema}.sync_jobs j
                     SET gitlab_instance = (
-                        SELECT 
-                            CASE 
+                        SELECT
+                            CASE
                                 WHEN r.vcs_type = 'git' AND r.remote_url IS NOT NULL AND r.remote_url LIKE '%://%'
                                 THEN LOWER(REGEXP_REPLACE(r.remote_url, '^[^:]+://([^/:]+).*$', '\\1'))
                                 ELSE NULL
@@ -3240,14 +3409,17 @@ class TestDimensionColumnBackfillVerification:
                         WHERE r.repo_id = j.repo_id
                     )
                     WHERE j.job_id = %s AND j.gitlab_instance IS NULL
-                """, (job_id,))
-                
+                """,
+                    (job_id,),
+                )
+
                 # 回填 tenant_id
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     UPDATE {scm_schema}.sync_jobs j
                     SET tenant_id = (
-                        SELECT 
-                            CASE 
+                        SELECT
+                            CASE
                                 WHEN r.project_key IS NOT NULL AND r.project_key LIKE '%/%'
                                 THEN SPLIT_PART(r.project_key, '/', 1)
                                 ELSE NULL
@@ -3256,23 +3428,28 @@ class TestDimensionColumnBackfillVerification:
                         WHERE r.repo_id = j.repo_id
                     )
                     WHERE j.job_id = %s AND j.tenant_id IS NULL
-                """, (job_id,))
+                """,
+                    (job_id,),
+                )
                 db_conn.commit()
-            
+
             # 验证回填结果
             with db_conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT gitlab_instance, tenant_id
                     FROM {scm_schema}.sync_jobs
                     WHERE job_id = %s
-                """, (job_id,))
+                """,
+                    (job_id,),
+                )
                 row = cur.fetchone()
-            
-            assert row[0] == "backfill-test.gitlab.com", \
+
+            assert row[0] == "backfill-test.gitlab.com", (
                 f"回填后 gitlab_instance 应为 'backfill-test.gitlab.com'，实际: {row[0]}"
-            assert row[1] == "myorg", \
-                f"回填后 tenant_id 应为 'myorg'，实际: {row[1]}"
-        
+            )
+            assert row[1] == "myorg", f"回填后 tenant_id 应为 'myorg'，实际: {row[1]}"
+
         finally:
             # 清理
             with db_conn.cursor() as cur:
@@ -3283,11 +3460,11 @@ class TestDimensionColumnBackfillVerification:
     def test_orphan_job_backfill_safety(self, migrated_db, db_conn):
         """
         测试孤立任务（repo 不存在）的回填安全性
-        
+
         验证回填不会因为关联的 repo 不存在而失败
         """
         scm_schema = migrated_db["schemas"]["scm"]
-        
+
         # 创建仓库并记录 ID
         with db_conn.cursor() as cur:
             cur.execute(f"""
@@ -3297,56 +3474,65 @@ class TestDimensionColumnBackfillVerification:
             """)
             repo_id = cur.fetchone()[0]
             db_conn.commit()
-        
+
         try:
             # 插入任务
             with db_conn.cursor() as cur:
-                cur.execute(f"""
-                    INSERT INTO {scm_schema}.sync_jobs 
+                cur.execute(
+                    f"""
+                    INSERT INTO {scm_schema}.sync_jobs
                     (repo_id, job_type, mode, status, payload_json)
                     VALUES (%s, 'gitlab_commits', 'incremental', 'pending', '{{}}')
                     RETURNING job_id
-                """, (repo_id,))
+                """,
+                    (repo_id,),
+                )
                 job_id = cur.fetchone()[0]
                 db_conn.commit()
-            
+
             # 删除 repo（制造孤立任务）
             with db_conn.cursor() as cur:
                 cur.execute(f"DELETE FROM {scm_schema}.repos WHERE repo_id = %s", (repo_id,))
                 db_conn.commit()
-            
+
             # 尝试回填（应该不会失败，只是维度列保持 NULL）
             with db_conn.cursor() as cur:
                 # 带 EXISTS 检查的回填
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     UPDATE {scm_schema}.sync_jobs j
                     SET gitlab_instance = (
                         SELECT LOWER(REGEXP_REPLACE(r.remote_url, '^[^:]+://([^/:]+).*$', '\\1'))
                         FROM {scm_schema}.repos r
                         WHERE r.repo_id = j.repo_id
                     )
-                    WHERE j.job_id = %s 
+                    WHERE j.job_id = %s
                       AND j.gitlab_instance IS NULL
                       AND EXISTS (SELECT 1 FROM {scm_schema}.repos r WHERE r.repo_id = j.repo_id)
-                """, (job_id,))
+                """,
+                    (job_id,),
+                )
                 affected = cur.rowcount
                 db_conn.commit()
-            
+
             # 应该影响 0 行（repo 不存在）
             assert affected == 0, "孤立任务不应被回填"
-            
+
             # 验证任务仍然存在且维度列为 NULL
             with db_conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT gitlab_instance, tenant_id
                     FROM {scm_schema}.sync_jobs
                     WHERE job_id = %s
-                """, (job_id,))
+                """,
+                    (job_id,),
+                )
                 row = cur.fetchone()
-            
+
             assert row is not None, "任务应仍然存在"
             assert row[0] is None, "孤立任务的 gitlab_instance 应保持 NULL"
-        
+
         finally:
             # 清理孤立任务
             with db_conn.cursor() as cur:

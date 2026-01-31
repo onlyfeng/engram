@@ -12,12 +12,14 @@ test_scm_sync_payload_contract.py - SCM Sync Payload JSON Schema 契约测试
 import json
 import os
 from pathlib import Path
+
 import pytest
 
 # 尝试导入 jsonschema，如果不可用则跳过测试
 try:
     import jsonschema
     from jsonschema import Draft202012Validator, ValidationError
+
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
@@ -25,17 +27,15 @@ except ImportError:
     ValidationError = Exception
 
 from engram.logbook.scm_sync_payload import (
-    SyncJobPayloadV1,
-    parse_payload,
-    validate_payload,
-    build_time_window_payload,
-    build_rev_window_payload,
-    JobPayloadVersion,
     DiffMode,
+    JobPayloadVersion,
+    SyncJobPayloadV1,
     SyncMode,
     WindowType,
+    build_rev_window_payload,
+    build_time_window_payload,
+    parse_payload,
 )
-
 
 # Schema 文件路径（tests/logbook -> tests -> repo root）
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +47,7 @@ def payload_schema():
     """加载 payload schema"""
     if not os.path.exists(SCHEMA_PATH):
         pytest.skip(f"Schema file not found: {SCHEMA_PATH}")
-    
+
     with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -57,7 +57,7 @@ def validator(payload_schema):
     """创建 schema validator"""
     if not HAS_JSONSCHEMA:
         pytest.skip("jsonschema not installed")
-    
+
     return Draft202012Validator(payload_schema)
 
 
@@ -89,6 +89,16 @@ class TestMinimalPayload:
         }
         is_valid, errors = validate_against_schema(validator, payload)
         assert is_valid, f"Minimal incremental payload invalid: {errors}"
+
+    @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
+    def test_minimal_probe_payload(self, validator):
+        """最小 probe 模式 payload"""
+        payload = {
+            "version": "v1",
+            "mode": "probe",
+        }
+        is_valid, errors = validate_against_schema(validator, payload)
+        assert is_valid, f"Minimal probe payload invalid: {errors}"
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_minimal_time_window_payload(self, validator):
@@ -146,11 +156,11 @@ class TestUnknownFields:
             "custom_field_1": "value1",
             "custom_field_2": {"nested": "value"},
         }
-        
+
         # 先验证 schema
         is_valid, errors = validate_against_schema(validator, payload_dict)
         assert is_valid, f"Payload with unknown fields invalid: {errors}"
-        
+
         # 解析并检查 extra
         payload = parse_payload(payload_dict)
         assert payload.extra.get("custom_field_1") == "value1"
@@ -164,12 +174,12 @@ class TestUnknownFields:
             "gitlab_instance": "gitlab.example.com",
             "unknown_key": "unknown_value",
         }
-        
+
         payload = parse_payload(original)
         result = payload.to_json_dict()
-        
+
         assert result.get("unknown_key") == "unknown_value"
-        
+
         # 结果也应该通过 schema 验证
         is_valid, errors = validate_against_schema(validator, result)
         assert is_valid, f"Roundtrip result invalid: {errors}"
@@ -209,6 +219,20 @@ class TestFieldTypes:
         assert not is_valid, "Invalid diff_mode should be rejected"
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
+    def test_minimal_diff_mode_accepted(self, validator):
+        """diff_mode='minimal' 应该被接受"""
+        payload = {
+            "diff_mode": "minimal",
+        }
+        is_valid, errors = validate_against_schema(validator, payload)
+        assert is_valid, f"diff_mode='minimal' should be valid: {errors}"
+
+    def test_minimal_diff_mode_parsed_correctly(self):
+        """diff_mode='minimal' 解析后应该保持原值"""
+        payload = parse_payload({"diff_mode": "minimal"})
+        assert payload.diff_mode == "minimal", "diff_mode='minimal' should be preserved"
+
+    @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_invalid_window_type_rejected(self, validator):
         """无效 window_type 应该被拒绝"""
         payload = {
@@ -224,12 +248,12 @@ class TestFieldTypes:
         payload_valid = {"batch_size": 100}
         is_valid, _ = validate_against_schema(validator, payload_valid)
         assert is_valid, "Valid batch_size should pass"
-        
+
         # 超出范围 - 太小
         payload_too_small = {"batch_size": 0}
         is_valid, _ = validate_against_schema(validator, payload_too_small)
         assert not is_valid, "batch_size < 1 should be rejected"
-        
+
         # 超出范围 - 太大
         payload_too_large = {"batch_size": 100000}
         is_valid, _ = validate_against_schema(validator, payload_too_large)
@@ -242,7 +266,7 @@ class TestFieldTypes:
         payload_valid = {"start_rev": 1000, "end_rev": 2000}
         is_valid, _ = validate_against_schema(validator, payload_valid)
         assert is_valid, "Valid revision should pass"
-        
+
         # 负数 revision
         payload_negative = {"start_rev": -1}
         is_valid, _ = validate_against_schema(validator, payload_negative)
@@ -264,7 +288,7 @@ class TestBuilderSchemaConsistency:
             gitlab_instance="gitlab.example.com",
             mode=SyncMode.BACKFILL.value,
         )
-        
+
         payload_dict = payload.to_json_dict()
         is_valid, errors = validate_against_schema(validator, payload_dict)
         assert is_valid, f"build_time_window_payload output invalid: {errors}"
@@ -277,7 +301,7 @@ class TestBuilderSchemaConsistency:
             end_rev=1100,
             mode=SyncMode.BACKFILL.value,
         )
-        
+
         payload_dict = payload.to_json_dict()
         is_valid, errors = validate_against_schema(validator, payload_dict)
         assert is_valid, f"build_rev_window_payload output invalid: {errors}"
@@ -287,7 +311,7 @@ class TestBuilderSchemaConsistency:
         """默认 SyncJobPayloadV1 应该通过 schema 验证"""
         payload = SyncJobPayloadV1()
         payload_dict = payload.to_json_dict()
-        
+
         is_valid, errors = validate_against_schema(validator, payload_dict)
         assert is_valid, f"Default payload invalid: {errors}"
 
@@ -313,7 +337,7 @@ class TestBuilderSchemaConsistency:
             current_chunk=0,
             extra={"custom": "value"},
         )
-        
+
         payload_dict = payload.to_json_dict()
         is_valid, errors = validate_against_schema(validator, payload_dict)
         assert is_valid, f"Full payload invalid: {errors}"
@@ -477,7 +501,9 @@ class TestChunkPayload:
         """window_type='REVISION' 大小写不敏感，应该被规范化为 'rev'"""
         for variant in ["REVISION", "Revision", "ReVision"]:
             payload = parse_payload({"window_type": variant})
-            assert payload.window_type == "rev", f"window_type='{variant}' should be normalized to 'rev'"
+            assert payload.window_type == "rev", (
+                f"window_type='{variant}' should be normalized to 'rev'"
+            )
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_negative_chunk_index_rejected(self, validator):
@@ -527,7 +553,7 @@ class TestSchemaFile:
                 schema = json.load(f)
             except json.JSONDecodeError as e:
                 pytest.fail(f"Schema is not valid JSON: {e}")
-        
+
         assert schema is not None
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
@@ -574,7 +600,7 @@ class TestTypeCoercion:
         # 非零整数 -> True
         payload = parse_payload({"strict": 1})
         assert payload.strict is True
-        
+
         # 零 -> False
         payload = parse_payload({"strict": 0})
         assert payload.strict is False
@@ -634,13 +660,15 @@ class TestExtraFieldPreservation:
 
     def test_extra_simple_types_preserved(self):
         """简单类型的 extra 字段保留"""
-        payload = parse_payload({
-            "custom_string": "value",
-            "custom_int": 42,
-            "custom_float": 3.14,
-            "custom_bool": True,
-        })
-        
+        payload = parse_payload(
+            {
+                "custom_string": "value",
+                "custom_int": 42,
+                "custom_float": 3.14,
+                "custom_bool": True,
+            }
+        )
+
         assert payload.extra.get("custom_string") == "value"
         assert payload.extra.get("custom_int") == 42
         assert payload.extra.get("custom_float") == 3.14
@@ -650,24 +678,26 @@ class TestExtraFieldPreservation:
         """嵌套对象的 extra 字段保留"""
         nested = {"level1": {"level2": {"level3": "deep"}}}
         payload = parse_payload({"nested_config": nested})
-        
+
         assert payload.extra.get("nested_config") == nested
         assert payload.extra["nested_config"]["level1"]["level2"]["level3"] == "deep"
 
     def test_extra_list_preserved(self):
         """列表类型的 extra 字段保留"""
-        payload = parse_payload({
-            "custom_list": [1, 2, 3],
-            "mixed_list": [1, "two", {"three": 3}],
-        })
-        
+        payload = parse_payload(
+            {
+                "custom_list": [1, 2, 3],
+                "mixed_list": [1, "two", {"three": 3}],
+            }
+        )
+
         assert payload.extra.get("custom_list") == [1, 2, 3]
         assert payload.extra.get("mixed_list") == [1, "two", {"three": 3}]
 
     def test_extra_null_preserved(self):
         """null 值的 extra 字段保留"""
         payload = parse_payload({"custom_null": None})
-        
+
         assert "custom_null" in payload.extra
         assert payload.extra["custom_null"] is None
 
@@ -681,15 +711,15 @@ class TestExtraFieldPreservation:
             "custom_field_2": {"nested": True},
             "custom_field_3": [1, 2, 3],
         }
-        
+
         payload = parse_payload(original)
         result = payload.to_json_dict()
-        
+
         # 已知字段保留
         assert result["version"] == "v1"
         assert result["gitlab_instance"] == "gitlab.example.com"
         assert result["batch_size"] == 100
-        
+
         # extra 字段保留
         assert result["custom_field_1"] == "preserved"
         assert result["custom_field_2"] == {"nested": True}
@@ -698,12 +728,12 @@ class TestExtraFieldPreservation:
     def test_extra_access_via_get(self):
         """通过 extra.get() 访问未知字段"""
         payload = parse_payload({"scheduler_metadata": {"reason": "test"}})
-        
+
         # 直接访问 extra
         meta = payload.extra.get("scheduler_metadata")
         assert meta is not None
         assert meta["reason"] == "test"
-        
+
         # 缺失字段返回默认值
         assert payload.extra.get("nonexistent", "default") == "default"
 
@@ -717,7 +747,7 @@ class TestErrorMessages:
     def test_validation_error_includes_field_name(self):
         """验证错误应包含字段名"""
         from engram.logbook.scm_sync_payload import PayloadValidationError
-        
+
         # 非法版本
         try:
             parse_payload({"version": "invalid"}, strict=True)
@@ -728,7 +758,7 @@ class TestErrorMessages:
     def test_validation_error_includes_invalid_value(self):
         """验证错误应包含无效值"""
         from engram.logbook.scm_sync_payload import PayloadValidationError
-        
+
         # 非法 mode
         try:
             parse_payload({"mode": "invalid_mode"}, strict=True)
@@ -739,7 +769,7 @@ class TestErrorMessages:
     def test_validation_error_for_range_violation(self):
         """范围验证错误应有清晰提示"""
         from engram.logbook.scm_sync_payload import PayloadValidationError
-        
+
         # batch_size 超出范围
         try:
             parse_payload({"batch_size": 0}, strict=True)
@@ -750,14 +780,17 @@ class TestErrorMessages:
     def test_validation_error_for_window_order(self):
         """窗口顺序错误应有清晰提示"""
         from engram.logbook.scm_sync_payload import PayloadValidationError
-        
+
         # since > until
         try:
-            parse_payload({
-                "window_type": "time",
-                "since": 2000000000,
-                "until": 1000000000,
-            }, strict=True)
+            parse_payload(
+                {
+                    "window_type": "time",
+                    "since": 2000000000,
+                    "until": 1000000000,
+                },
+                strict=True,
+            )
             pytest.fail("Should raise PayloadValidationError")
         except PayloadValidationError as e:
             assert "since" in str(e) or "until" in str(e) or "窗口" in str(e)
@@ -766,7 +799,7 @@ class TestErrorMessages:
         """非 strict 模式返回部分有效结果"""
         # 无效的 batch_size，但不抛出异常
         payload = parse_payload({"batch_size": "invalid"}, strict=False)
-        
+
         # batch_size 无法解析时变为 None
         assert payload.batch_size is None
         # 其他字段使用默认值
@@ -776,7 +809,7 @@ class TestErrorMessages:
     def test_none_input_returns_default_payload(self):
         """None 输入返回默认 payload"""
         payload = parse_payload(None)
-        
+
         assert payload is not None
         assert payload.version == "v1"
         assert payload.mode == "incremental"
@@ -785,7 +818,7 @@ class TestErrorMessages:
     def test_empty_dict_returns_default_payload(self):
         """空 dict 返回默认 payload"""
         payload = parse_payload({})
-        
+
         assert payload is not None
         assert payload.version == "v1"
         assert payload.mode == "incremental"
@@ -800,28 +833,32 @@ class TestSchemaImplementationConsistency:
     def test_all_schema_enums_match_implementation(self, payload_schema):
         """Schema 中的枚举值与实现一致"""
         props = payload_schema.get("properties", {})
-        
+
         # version enum
         version_enum = props.get("version", {}).get("enum", [])
         assert "v1" in version_enum
         assert JobPayloadVersion.V1.value in version_enum
-        
+
         # mode enum
         mode_enum = props.get("mode", {}).get("enum", [])
         assert "incremental" in mode_enum
         assert "backfill" in mode_enum
+        assert "probe" in mode_enum
         assert SyncMode.INCREMENTAL.value in mode_enum
         assert SyncMode.BACKFILL.value in mode_enum
-        
+        assert SyncMode.PROBE.value in mode_enum
+
         # diff_mode enum
         diff_mode_enum = props.get("diff_mode", {}).get("enum", [])
         assert "always" in diff_mode_enum
         assert "best_effort" in diff_mode_enum
+        assert "minimal" in diff_mode_enum
         assert "none" in diff_mode_enum
         assert DiffMode.ALWAYS.value in diff_mode_enum
         assert DiffMode.BEST_EFFORT.value in diff_mode_enum
+        assert DiffMode.MINIMAL.value in diff_mode_enum
         assert DiffMode.NONE.value in diff_mode_enum
-        
+
         # window_type enum
         window_type_enum = props.get("window_type", {}).get("enum", [])
         assert "time" in window_type_enum
@@ -834,27 +871,29 @@ class TestSchemaImplementationConsistency:
     def test_schema_defaults_match_implementation(self, payload_schema):
         """Schema 中的默认值与实现一致"""
         props = payload_schema.get("properties", {})
-        
+
         # 创建默认 payload
         default_payload = SyncJobPayloadV1()
-        
+
         # version default
         assert default_payload.version == props.get("version", {}).get("default", "v1")
-        
+
         # mode default
         assert default_payload.mode == props.get("mode", {}).get("default", "incremental")
-        
+
         # diff_mode default
         assert default_payload.diff_mode == props.get("diff_mode", {}).get("default", "best_effort")
-        
+
         # window_type default
         assert default_payload.window_type == props.get("window_type", {}).get("default", "time")
-        
+
         # strict default
         assert default_payload.strict == props.get("strict", {}).get("default", False)
-        
+
         # update_watermark default
-        assert default_payload.update_watermark == props.get("update_watermark", {}).get("default", True)
+        assert default_payload.update_watermark == props.get("update_watermark", {}).get(
+            "default", True
+        )
 
     def test_schema_range_constraints_enforced(self):
         """Schema 中的范围约束应在实现中强制执行"""
@@ -862,11 +901,11 @@ class TestSchemaImplementationConsistency:
         payload = SyncJobPayloadV1(batch_size=5000)
         errors = payload.validate()
         assert len(errors) == 0, "Valid batch_size should pass"
-        
+
         payload = SyncJobPayloadV1(batch_size=0)
         errors = payload.validate()
         assert len(errors) > 0, "batch_size=0 should fail validation"
-        
+
         payload = SyncJobPayloadV1(batch_size=100000)
         errors = payload.validate()
         assert len(errors) > 0, "batch_size=100000 should fail validation"
@@ -983,7 +1022,7 @@ class TestInvalidFieldCategories:
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_valid_suggested_diff_mode_accepted(self, validator):
         """有效 suggested_diff_mode 应该被接受"""
-        for valid_mode in ["always", "best_effort", "none", None]:
+        for valid_mode in ["always", "best_effort", "minimal", "none", None]:
             payload = {"suggested_diff_mode": valid_mode}
             is_valid, errors = validate_against_schema(validator, payload)
             assert is_valid, f"suggested_diff_mode='{valid_mode}' should be valid: {errors}"
@@ -1127,7 +1166,7 @@ class TestCompletePayloadScenarios:
         payload = {
             "version": "v1",
             "gitlab_instance": "gitlab.example.com",
-            "mode": "incremental",
+            "mode": "probe",  # probe 模式
             "circuit_state": "half_open",
             "is_probe_mode": True,
             "probe_budget": 5,
@@ -1135,6 +1174,23 @@ class TestCompletePayloadScenarios:
         }
         is_valid, errors = validate_against_schema(validator, payload)
         assert is_valid, f"Full probe mode payload invalid: {errors}"
+
+    @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
+    def test_probe_mode_with_degraded_params(self, validator):
+        """probe 模式配合降级参数 payload"""
+        payload = {
+            "version": "v1",
+            "gitlab_instance": "gitlab.example.com",
+            "mode": "probe",
+            "circuit_state": "half_open",
+            "is_probe_mode": True,
+            "probe_budget": 3,
+            "suggested_batch_size": 20,
+            "suggested_forward_window_seconds": 1800,
+            "suggested_diff_mode": "minimal",
+        }
+        is_valid, errors = validate_against_schema(validator, payload)
+        assert is_valid, f"Probe mode with degraded params invalid: {errors}"
 
 
 # ============ 未知字段深度透传测试 ============
@@ -1145,15 +1201,7 @@ class TestUnknownFieldsDeepPassthrough:
 
     def test_deeply_nested_unknown_fields_preserved(self):
         """深层嵌套的未知字段应该保留"""
-        nested = {
-            "level1": {
-                "level2": {
-                    "level3": {
-                        "deep_value": "preserved"
-                    }
-                }
-            }
-        }
+        nested = {"level1": {"level2": {"level3": {"deep_value": "preserved"}}}}
         payload = parse_payload({"deep_nested": nested})
         assert payload.extra.get("deep_nested") == nested
 
@@ -1180,15 +1228,15 @@ class TestUnknownFieldsDeepPassthrough:
             "custom_bool": True,
             "custom_null": None,
         }
-        
+
         payload = parse_payload(original)
         result = payload.to_json_dict()
-        
+
         # 已知字段保留
         assert result["version"] == "v1"
         assert result["gitlab_instance"] == "gitlab.example.com"
         assert result["batch_size"] == 100
-        
+
         # 未知字段保留
         assert result.get("custom_metadata") == {"key": "value"}
         assert result.get("custom_tags") == ["tag1", "tag2"]
@@ -1206,10 +1254,10 @@ class TestUnknownFieldsDeepPassthrough:
             "future_field_1": "value1",
             "future_field_2": {"nested": True},
         }
-        
+
         payload = parse_payload(original)
         result = payload.to_json_dict()
-        
+
         is_valid, errors = validate_against_schema(validator, result)
         assert is_valid, f"Roundtrip result should pass schema: {errors}"
 
@@ -1239,7 +1287,7 @@ class TestPythonValidation:
         payload = SyncJobPayloadV1(forward_window_seconds=30)
         errors = payload.validate()
         assert len(errors) > 0
-        
+
         # 太大
         payload = SyncJobPayloadV1(forward_window_seconds=3000000)
         errors = payload.validate()
@@ -1250,7 +1298,7 @@ class TestPythonValidation:
         payload = SyncJobPayloadV1(chunk_size=0)
         errors = payload.validate()
         assert len(errors) > 0
-        
+
         payload = SyncJobPayloadV1(chunk_size=200000)
         errors = payload.validate()
         assert len(errors) > 0
@@ -1300,3 +1348,70 @@ class TestPythonValidation:
         )
         errors = payload.validate()
         assert len(errors) > 0
+
+
+# ============ Probe 模式测试 ============
+
+
+class TestProbeModeContract:
+    """测试 probe 模式的契约一致性"""
+
+    def test_probe_mode_enum_value(self):
+        """SyncMode.PROBE 值正确"""
+        assert SyncMode.PROBE.value == "probe"
+
+    def test_parse_probe_mode_payload(self):
+        """解析 probe 模式 payload"""
+        payload = parse_payload({"mode": "probe"})
+        assert payload.mode == "probe"
+
+    def test_probe_mode_validation_passes(self):
+        """probe 模式验证通过"""
+        payload = SyncJobPayloadV1(mode=SyncMode.PROBE.value)
+        errors = payload.validate()
+        assert len(errors) == 0, f"Probe mode should be valid: {errors}"
+
+    def test_probe_mode_with_probe_budget(self):
+        """probe 模式配合 probe_budget"""
+        payload = parse_payload(
+            {
+                "mode": "probe",
+                "is_probe_mode": True,
+                "probe_budget": 10,
+                "circuit_state": "half_open",
+            }
+        )
+        assert payload.mode == "probe"
+        assert payload.extra.get("is_probe_mode") is True
+        assert payload.extra.get("probe_budget") == 10
+        assert payload.extra.get("circuit_state") == "half_open"
+
+    def test_probe_mode_roundtrip(self):
+        """probe 模式往返序列化"""
+        original = {
+            "version": "v1",
+            "mode": "probe",
+            "gitlab_instance": "gitlab.example.com",
+            "is_probe_mode": True,
+            "probe_budget": 5,
+        }
+        payload = parse_payload(original)
+        result = payload.to_json_dict()
+
+        assert result["mode"] == "probe"
+        assert result.get("is_probe_mode") is True
+        assert result.get("probe_budget") == 5
+
+    @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
+    def test_probe_mode_schema_valid(self, validator):
+        """probe 模式通过 schema 验证"""
+        payload = {"mode": "probe"}
+        is_valid, errors = validate_against_schema(validator, payload)
+        assert is_valid, f"mode='probe' should be valid: {errors}"
+
+    def test_all_sync_modes_valid(self):
+        """所有 SyncMode 枚举值都能通过验证"""
+        for mode in SyncMode:
+            payload = SyncJobPayloadV1(mode=mode.value)
+            errors = payload.validate()
+            assert len(errors) == 0, f"Mode '{mode.value}' should be valid: {errors}"

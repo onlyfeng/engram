@@ -16,13 +16,11 @@ Worker 流程语义测试请参见 Gateway 测试：
 - statement_timeout: 连接级超时设置
 """
 
-import os
-import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import pytest
 import psycopg
+import pytest
 
 
 class TestGetConnectionStatementTimeout:
@@ -41,14 +39,16 @@ class TestGetConnectionStatementTimeout:
                 cur.execute("SHOW statement_timeout")
                 result = cur.fetchone()[0]
                 # PostgreSQL 返回格式可能是 "1s" 或 "1000ms"
-                assert result in ("1s", "1000ms"), f"statement_timeout 应为 1s 或 1000ms，实际: {result}"
+                assert result in ("1s", "1000ms"), (
+                    f"statement_timeout 应为 1s 或 1000ms，实际: {result}"
+                )
         finally:
             conn.close()
 
     def test_statement_timeout_from_env(self, migrated_db, monkeypatch):
         """通过环境变量设置 statement_timeout"""
         dsn = migrated_db["dsn"]
-        
+
         # 设置环境变量
         monkeypatch.setenv("ENGRAM_PG_STATEMENT_TIMEOUT_MS", "2000")
 
@@ -59,14 +59,16 @@ class TestGetConnectionStatementTimeout:
             with conn.cursor() as cur:
                 cur.execute("SHOW statement_timeout")
                 result = cur.fetchone()[0]
-                assert result in ("2s", "2000ms"), f"statement_timeout 应为 2s 或 2000ms，实际: {result}"
+                assert result in ("2s", "2000ms"), (
+                    f"statement_timeout 应为 2s 或 2000ms，实际: {result}"
+                )
         finally:
             conn.close()
 
     def test_statement_timeout_parameter_overrides_env(self, migrated_db, monkeypatch):
         """参数优先于环境变量"""
         dsn = migrated_db["dsn"]
-        
+
         # 设置环境变量
         monkeypatch.setenv("ENGRAM_PG_STATEMENT_TIMEOUT_MS", "5000")
 
@@ -85,7 +87,7 @@ class TestGetConnectionStatementTimeout:
     def test_statement_timeout_not_set_when_env_empty(self, migrated_db, monkeypatch):
         """环境变量未设置时不修改默认值"""
         dsn = migrated_db["dsn"]
-        
+
         # 确保环境变量未设置
         monkeypatch.delenv("ENGRAM_PG_STATEMENT_TIMEOUT_MS", raising=False)
 
@@ -114,16 +116,19 @@ class TestGetConnectionStatementTimeout:
                 with conn.cursor() as cur:
                     # 执行长时间查询（100ms）
                     cur.execute("SELECT pg_sleep(0.1)")
-            
+
             # 验证错误类型
-            assert "statement timeout" in str(exc_info.value).lower() or exc_info.value.sqlstate == "57014"
+            assert (
+                "statement timeout" in str(exc_info.value).lower()
+                or exc_info.value.sqlstate == "57014"
+            )
         finally:
             conn.close()
 
     def test_statement_timeout_invalid_env_ignored(self, migrated_db, monkeypatch):
         """无效的环境变量值被忽略"""
         dsn = migrated_db["dsn"]
-        
+
         # 设置无效值
         monkeypatch.setenv("ENGRAM_PG_STATEMENT_TIMEOUT_MS", "not_a_number")
 
@@ -151,13 +156,14 @@ class TestCheckDedup:
 
         conn = psycopg.connect(dsn, autocommit=True)
         try:
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
+
                 result = check_dedup(target_space="team:test", payload_sha="nonexistent_sha")
 
                 assert result is None
@@ -182,13 +188,14 @@ class TestCheckDedup:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
+
                 result = check_dedup(target_space="team:test", payload_sha="sha_sent_123")
 
                 assert result is not None
@@ -200,7 +207,10 @@ class TestCheckDedup:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_check_dedup_ignores_pending(self, migrated_db):
@@ -221,13 +231,14 @@ class TestCheckDedup:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
+
                 result = check_dedup(target_space="team:test", payload_sha="sha_pending_456")
 
                 # pending 状态不应被检测到
@@ -235,7 +246,10 @@ class TestCheckDedup:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_check_dedup_ignores_dead(self, migrated_db):
@@ -256,13 +270,14 @@ class TestCheckDedup:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
+
                 result = check_dedup(target_space="team:test", payload_sha="sha_dead_789")
 
                 # dead 状态不应被检测到
@@ -270,7 +285,10 @@ class TestCheckDedup:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_check_dedup_different_target_space(self, migrated_db):
@@ -291,13 +309,14 @@ class TestCheckDedup:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
+
                 # 查询不同的 target_space
                 result = check_dedup(target_space="team:project_b", payload_sha="sha_common")
 
@@ -306,7 +325,10 @@ class TestCheckDedup:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
 
@@ -333,13 +355,14 @@ class TestClaimOutbox:
                 ids = [row[0] for row in cur.fetchall()]
 
             # Mock get_connection 返回正确的连接
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 results = claim_outbox(worker_id="worker-1", limit=10, lease_seconds=60)
 
                 assert len(results) == 2
@@ -350,10 +373,13 @@ class TestClaimOutbox:
 
             # 验证数据库中锁已设置
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT locked_by, locked_at FROM {logbook_schema}.outbox_memory
                     WHERE outbox_id = ANY(%s)
-                """, (ids,))
+                """,
+                    (ids,),
+                )
                 rows = cur.fetchall()
                 for row in rows:
                     assert row[0] == "worker-1"
@@ -361,7 +387,9 @@ class TestClaimOutbox:
         finally:
             # 清理
             with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,))
+                cur.execute(
+                    f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,)
+                )
             conn.close()
 
     def test_claim_outbox_respects_limit(self, migrated_db):
@@ -382,19 +410,22 @@ class TestClaimOutbox:
                     """)
                     ids.append(cur.fetchone()[0])
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 results = claim_outbox(worker_id="worker-1", limit=3, lease_seconds=60)
 
                 assert len(results) == 3
         finally:
             with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,))
+                cur.execute(
+                    f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,)
+                )
             conn.close()
 
     def test_claim_outbox_skips_future_attempts(self, migrated_db):
@@ -417,20 +448,23 @@ class TestClaimOutbox:
                 """)
                 ids = [row[0] for row in cur.fetchall()]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 results = claim_outbox(worker_id="worker-1", limit=10, lease_seconds=60)
 
                 assert len(results) == 1
                 assert results[0]["payload_md"] == "ready"
         finally:
             with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,))
+                cur.execute(
+                    f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,)
+                )
             conn.close()
 
     def test_claim_outbox_skips_locked_records(self, migrated_db):
@@ -453,20 +487,23 @@ class TestClaimOutbox:
                 """)
                 ids = [row[0] for row in cur.fetchall()]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 results = claim_outbox(worker_id="worker-1", limit=10, lease_seconds=60)
 
                 assert len(results) == 1
                 assert results[0]["payload_md"] == "unlocked"
         finally:
             with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,))
+                cur.execute(
+                    f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,)
+                )
             conn.close()
 
     def test_claim_outbox_reclaims_expired_lease(self, migrated_db):
@@ -483,26 +520,29 @@ class TestClaimOutbox:
                     INSERT INTO {logbook_schema}.outbox_memory
                         (target_space, payload_md, payload_sha, status, next_attempt_at, locked_by, locked_at)
                     VALUES
-                        ('team:test', 'expired', 'sha1', 'pending', now() - interval '1 minute', 
+                        ('team:test', 'expired', 'sha1', 'pending', now() - interval '1 minute',
                          'dead-worker', now() - interval '2 minutes')
                     RETURNING outbox_id
                 """)
                 ids = [cur.fetchone()[0]]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 results = claim_outbox(worker_id="worker-2", limit=10, lease_seconds=60)
 
                 assert len(results) == 1
                 assert results[0]["locked_by"] == "worker-2"
         finally:
             with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,))
+                cur.execute(
+                    f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,)
+                )
             conn.close()
 
     def test_claim_outbox_lease_seconds_zero_can_reclaim(self, migrated_db):
@@ -525,13 +565,14 @@ class TestClaimOutbox:
                 """)
                 ids = [cur.fetchone()[0]]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 # lease_seconds=0 意味着任何已锁定的记录都被认为已过期
                 results = claim_outbox(worker_id="worker-2", limit=10, lease_seconds=0)
 
@@ -541,7 +582,9 @@ class TestClaimOutbox:
                 assert results[0]["outbox_id"] == ids[0]
         finally:
             with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,))
+                cur.execute(
+                    f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,)
+                )
             conn.close()
 
     def test_claim_outbox_lease_seconds_one_cannot_reclaim_fresh(self, migrated_db):
@@ -564,13 +607,14 @@ class TestClaimOutbox:
                 """)
                 ids = [cur.fetchone()[0]]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 # lease_seconds=1 时，刚刚锁定的记录（locked_at = now()）不应被 reclaim
                 results = claim_outbox(worker_id="worker-2", limit=10, lease_seconds=1)
 
@@ -579,7 +623,9 @@ class TestClaimOutbox:
                 assert ids[0] not in claimed_ids, "lease_seconds=1 时，刚锁定的记录不应被 reclaim"
         finally:
             with conn.cursor() as cur:
-                cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,))
+                cur.execute(
+                    f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = ANY(%s)", (ids,)
+                )
             conn.close()
 
 
@@ -603,23 +649,27 @@ class TestAckSent:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import ack_sent
+
                 result = ack_sent(outbox_id, worker_id="worker-1", memory_id="mem-123")
 
                 assert result is True
 
             # 验证状态变更
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT status, locked_by, locked_at, last_error
                     FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s
-                """, (outbox_id,))
+                """,
+                    (outbox_id,),
+                )
                 row = cur.fetchone()
                 assert row[0] == "sent"
                 assert row[1] is None  # 锁已释放
@@ -628,7 +678,10 @@ class TestAckSent:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_ack_sent_wrong_worker(self, migrated_db):
@@ -648,25 +701,32 @@ class TestAckSent:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import ack_sent
+
                 result = ack_sent(outbox_id, worker_id="wrong-worker")
 
                 assert result is False
 
             # 验证状态未变
             with conn.cursor() as cur:
-                cur.execute(f"SELECT status FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                cur.execute(
+                    f"SELECT status FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                    (outbox_id,),
+                )
                 assert cur.fetchone()[0] == "pending"
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
 
@@ -692,23 +752,29 @@ class TestFailRetry:
 
             next_time = datetime.now(timezone.utc) + timedelta(hours=1)
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import fail_retry
-                result = fail_retry(outbox_id, worker_id="worker-1", error="timeout", next_attempt_at=next_time)
+
+                result = fail_retry(
+                    outbox_id, worker_id="worker-1", error="timeout", next_attempt_at=next_time
+                )
 
                 assert result is True
 
             # 验证更新
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT status, retry_count, last_error, locked_by, locked_at
                     FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s
-                """, (outbox_id,))
+                """,
+                    (outbox_id,),
+                )
                 row = cur.fetchone()
                 assert row[0] == "pending"  # 状态保持
                 assert row[1] == 1  # retry_count 增加
@@ -718,7 +784,10 @@ class TestFailRetry:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_fail_retry_stores_next_attempt_at(self, migrated_db):
@@ -741,23 +810,29 @@ class TestFailRetry:
             # 设置一个确定的下次重试时间（2小时后）
             next_time = datetime.now(timezone.utc) + timedelta(hours=2)
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import fail_retry
-                result = fail_retry(outbox_id, worker_id="worker-1", error="error", next_attempt_at=next_time)
+
+                result = fail_retry(
+                    outbox_id, worker_id="worker-1", error="error", next_attempt_at=next_time
+                )
 
                 assert result is True
 
             # 验证 retry_count 增加到 3 且 next_attempt_at 正确存储
             with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT retry_count, next_attempt_at 
+                cur.execute(
+                    f"""
+                    SELECT retry_count, next_attempt_at
                     FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s
-                """, (outbox_id,))
+                """,
+                    (outbox_id,),
+                )
                 row = cur.fetchone()
                 assert row[0] == 3
                 # 验证 next_attempt_at 在预期范围内（允许几秒误差）
@@ -769,7 +844,10 @@ class TestFailRetry:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_fail_retry_with_iso_string(self, migrated_db):
@@ -793,22 +871,28 @@ class TestFailRetry:
             next_time = datetime.now(timezone.utc) + timedelta(minutes=30)
             next_time_iso = next_time.isoformat()
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import fail_retry
-                result = fail_retry(outbox_id, worker_id="worker-1", error="error", next_attempt_at=next_time_iso)
+
+                result = fail_retry(
+                    outbox_id, worker_id="worker-1", error="error", next_attempt_at=next_time_iso
+                )
 
                 assert result is True
 
             # 验证 next_attempt_at 正确存储
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT next_attempt_at FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s
-                """, (outbox_id,))
+                """,
+                    (outbox_id,),
+                )
                 stored_time = cur.fetchone()[0]
                 if stored_time.tzinfo is None:
                     stored_time = stored_time.replace(tzinfo=timezone.utc)
@@ -817,7 +901,10 @@ class TestFailRetry:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_fail_retry_wrong_worker(self, migrated_db):
@@ -839,20 +926,26 @@ class TestFailRetry:
 
             next_time = datetime.now(timezone.utc) + timedelta(hours=1)
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import fail_retry
-                result = fail_retry(outbox_id, worker_id="wrong-worker", error="error", next_attempt_at=next_time)
+
+                result = fail_retry(
+                    outbox_id, worker_id="wrong-worker", error="error", next_attempt_at=next_time
+                )
 
                 assert result is False
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
 
@@ -876,23 +969,29 @@ class TestMarkDeadByWorker:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import mark_dead_by_worker
-                result = mark_dead_by_worker(outbox_id, worker_id="worker-1", error="max retries exceeded")
+
+                result = mark_dead_by_worker(
+                    outbox_id, worker_id="worker-1", error="max retries exceeded"
+                )
 
                 assert result is True
 
             # 验证状态变更
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT status, last_error, locked_by, locked_at
                     FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s
-                """, (outbox_id,))
+                """,
+                    (outbox_id,),
+                )
                 row = cur.fetchone()
                 assert row[0] == "dead"
                 assert row[1] == "max retries exceeded"
@@ -901,7 +1000,10 @@ class TestMarkDeadByWorker:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_mark_dead_wrong_worker(self, migrated_db):
@@ -921,25 +1023,32 @@ class TestMarkDeadByWorker:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import mark_dead_by_worker
+
                 result = mark_dead_by_worker(outbox_id, worker_id="wrong-worker", error="error")
 
                 assert result is False
 
             # 验证状态未变
             with conn.cursor() as cur:
-                cur.execute(f"SELECT status FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                cur.execute(
+                    f"SELECT status FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                    (outbox_id,),
+                )
                 assert cur.fetchone()[0] == "pending"
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_mark_dead_already_sent(self, migrated_db):
@@ -959,20 +1068,24 @@ class TestMarkDeadByWorker:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import mark_dead_by_worker
+
                 result = mark_dead_by_worker(outbox_id, worker_id="worker-1", error="error")
 
                 assert result is False
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
 
@@ -999,30 +1112,37 @@ class TestRenewLease:
                 outbox_id = row[0]
                 old_locked_at = row[1]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import renew_lease
+
                 result = renew_lease(outbox_id, worker_id="worker-1")
 
                 assert result is True
 
             # 验证 locked_at 已更新
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT locked_by, locked_at FROM {logbook_schema}.outbox_memory
                     WHERE outbox_id = %s
-                """, (outbox_id,))
+                """,
+                    (outbox_id,),
+                )
                 row = cur.fetchone()
                 assert row[0] == "worker-1"
                 assert row[1] > old_locked_at, "locked_at 应该被更新为更新的时间"
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_renew_lease_wrong_worker(self, migrated_db):
@@ -1042,20 +1162,24 @@ class TestRenewLease:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import renew_lease
+
                 result = renew_lease(outbox_id, worker_id="wrong-worker")
 
                 assert result is False
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_renew_lease_not_pending(self, migrated_db):
@@ -1075,20 +1199,24 @@ class TestRenewLease:
                 """)
                 outbox_id = cur.fetchone()[0]
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import renew_lease
+
                 result = renew_lease(outbox_id, worker_id="worker-1")
 
                 assert result is False
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_renew_lease_prevents_reclaim(self, migrated_db):
@@ -1110,24 +1238,26 @@ class TestRenewLease:
                 outbox_id = cur.fetchone()[0]
 
             # Worker-1 续期
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import renew_lease
+
                 result = renew_lease(outbox_id, worker_id="worker-1")
                 assert result is True
 
             # Worker-2 尝试 claim（lease_seconds=60，续期后不应能获取）
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import claim_outbox
+
                 results = claim_outbox(worker_id="worker-2", limit=10, lease_seconds=60)
 
                 # 续期后的记录不应被 worker-2 获取
@@ -1136,7 +1266,10 @@ class TestRenewLease:
         finally:
             if outbox_id:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
 
@@ -1162,20 +1295,24 @@ class TestRenewLeaseBatch:
                     """)
                     outbox_ids.append(cur.fetchone()[0])
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import renew_lease_batch
+
                 count = renew_lease_batch(outbox_ids, worker_id="worker-1")
 
                 assert count == 3
         finally:
             for outbox_id in outbox_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_renew_lease_batch_partial(self, migrated_db):
@@ -1206,13 +1343,14 @@ class TestRenewLeaseBatch:
                 """)
                 outbox_ids.append(cur.fetchone()[0])
 
-            with patch('engram_logbook.outbox.get_connection') as mock_get_conn:
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
                     cur.execute(f"SET search_path TO {logbook_schema}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import renew_lease_batch
+
                 count = renew_lease_batch(outbox_ids, worker_id="worker-1")
 
                 # 只应续期属于 worker-1 的 2 条
@@ -1220,14 +1358,18 @@ class TestRenewLeaseBatch:
         finally:
             for outbox_id in outbox_ids:
                 with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s", (outbox_id,))
+                    cur.execute(
+                        f"DELETE FROM {logbook_schema}.outbox_memory WHERE outbox_id = %s",
+                        (outbox_id,),
+                    )
             conn.close()
 
     def test_renew_lease_batch_empty(self, migrated_db):
         """空列表返回 0"""
-        dsn = migrated_db["dsn"]
-        logbook_schema = migrated_db["schemas"]["logbook"]
+        migrated_db["dsn"]
+        migrated_db["schemas"]["logbook"]
 
         from engram.logbook.outbox import renew_lease_batch
+
         count = renew_lease_batch([], worker_id="worker-1")
         assert count == 0

@@ -22,8 +22,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Set
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -31,25 +30,19 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from artifact_gc import (
-    GCCandidate,
     GCDatabaseError,
-    GCError,
-    GCPrefixError,
     GCOpsCredentialsRequiredError,
-    GCResult,
+    GCPrefixError,
     ReferencedUris,
-    delete_local_file,
+    _normalize_uri_for_gc,
     delete_file_uri_file,
+    delete_local_file,
     get_referenced_uris,
     run_gc,
     run_tmp_gc,
-    scan_local_artifacts,
     scan_file_uri_artifacts,
-    _normalize_uri_for_gc,
+    scan_local_artifacts,
 )
-from engram.logbook.artifact_store import LocalArtifactsStore, FileUriStore
-from engram.logbook.db import get_connection
-from engram.logbook.uri import PhysicalRef
 from engram.logbook.artifact_ops_audit import (
     AuditEvent,
     write_audit_event,
@@ -57,7 +50,8 @@ from engram.logbook.artifact_ops_audit import (
     write_gc_delete_audit_event,
     write_gc_summary_audit_event,
 )
-
+from engram.logbook.artifact_store import FileUriStore, LocalArtifactsStore
+from engram.logbook.uri import PhysicalRef
 
 # =============================================================================
 # Fixtures
@@ -426,7 +420,7 @@ class TestAttachmentsReferenceProtection:
         with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
             mock_get_refs.return_value = _make_referenced_uris({referenced_uri})
 
-            result = run_gc(
+            run_gc(
                 prefix="attachments/",
                 dry_run=False,
                 delete=True,
@@ -466,7 +460,7 @@ class TestAttachmentsReferenceProtection:
             mock_get_refs.return_value = _make_referenced_uris(referenced)
 
             # 测试 scm/ 前缀
-            result_scm = run_gc(
+            run_gc(
                 prefix="scm/",
                 dry_run=False,
                 delete=True,
@@ -482,7 +476,7 @@ class TestAttachmentsReferenceProtection:
                 assert path.exists(), f"patch_blobs 引用的文件应该存在: {uri}"
 
             # 测试 attachments/ 前缀
-            result_attach = run_gc(
+            run_gc(
                 prefix="attachments/",
                 dry_run=False,
                 delete=True,
@@ -519,10 +513,7 @@ class TestAttachmentsReferenceProtection:
             unprotected_files.append(file_path)
 
         # 引用前 5 个文件
-        referenced_uris = {
-            f"attachments/2024/monthly/report_{i:03d}.pdf"
-            for i in range(5)
-        }
+        referenced_uris = {f"attachments/2024/monthly/report_{i:03d}.pdf" for i in range(5)}
 
         with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
             mock_get_refs.return_value = _make_referenced_uris(referenced_uris)
@@ -566,10 +557,10 @@ class TestAttachmentsReferenceProtection:
 
         # 在不同目录创建文件
         files_to_create = [
-            ("attachments/2024/q1/jan/report.pdf", True),   # 被引用
-            ("attachments/2024/q1/jan/draft.pdf", False),   # 未被引用
+            ("attachments/2024/q1/jan/report.pdf", True),  # 被引用
+            ("attachments/2024/q1/jan/draft.pdf", False),  # 未被引用
             ("attachments/2024/q1/feb/summary.pdf", True),  # 被引用
-            ("attachments/2024/q2/apr/notes.pdf", False),   # 未被引用
+            ("attachments/2024/q2/apr/notes.pdf", False),  # 未被引用
         ]
 
         for file_uri, _ in files_to_create:
@@ -577,9 +568,7 @@ class TestAttachmentsReferenceProtection:
             file_path.write_bytes(f"content of {file_uri}".encode())
 
         # 只引用标记为 True 的文件
-        referenced_uris = {
-            uri for uri, is_referenced in files_to_create if is_referenced
-        }
+        referenced_uris = {uri for uri, is_referenced in files_to_create if is_referenced}
 
         with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
             mock_get_refs.return_value = _make_referenced_uris(referenced_uris)
@@ -977,8 +966,7 @@ class TestScanLocalArtifacts:
 
         # 只统计 scm/ 前缀下的文件
         expected_scm_files = [
-            uri for uri in sample_artifacts["all_files"].keys()
-            if uri.startswith("scm/")
+            uri for uri in sample_artifacts["all_files"].keys() if uri.startswith("scm/")
         ]
 
         assert len(files) == len(expected_scm_files)
@@ -1175,10 +1163,12 @@ class TestGetReferencedUris:
 
     def test_query_with_prefix_filter(self):
         """验证带前缀过滤的查询"""
-        mock_conn, mock_cursor = self._create_mock_connection([
-            ("scm/proj_a/1.diff",),
-            ("scm/proj_a/2.diff",),
-        ])
+        mock_conn, mock_cursor = self._create_mock_connection(
+            [
+                ("scm/proj_a/1.diff",),
+                ("scm/proj_a/2.diff",),
+            ]
+        )
 
         with patch("engram_logbook.db.get_connection") as mock_get_conn:
             mock_get_conn.return_value = mock_conn
@@ -1439,9 +1429,7 @@ class TestDeleteFileUriFile:
         # 构建 file:// URI
         file_uri = file_uri_store._ensure_file_uri(str(test_file))
 
-        success, error = delete_file_uri_file(
-            file_uri_store, file_uri, trash_prefix=".trash/"
-        )
+        success, error = delete_file_uri_file(file_uri_store, file_uri, trash_prefix=".trash/")
 
         assert success is True
         assert error is None
@@ -1521,14 +1509,16 @@ class TestFileUriStoreGCIntegration:
         # 构建引用 URI 集合（file:// 格式）
         # PhysicalRef 需要存储在 physical_refs 列表中
         from engram.logbook.uri import PhysicalRef
+
         physical_refs = []
         artifact_keys = set()
-        
+
         for rel_path in file_uri_artifacts["referenced"]:
             full_path = file_uri_root / rel_path
             file_uri = store._ensure_file_uri(str(full_path))
             # 规范化后的 path 部分用于匹配
             from artifact_gc import _normalize_uri_for_gc
+
             normalized, uri_type = _normalize_uri_for_gc(file_uri)
             if uri_type == "physical_uri" and isinstance(normalized, PhysicalRef):
                 physical_refs.append(normalized)
@@ -1559,9 +1549,7 @@ class TestFileUriStoreGCIntegration:
             full_path = file_uri_root / rel_path
             file_uri = store._ensure_file_uri(str(full_path))
 
-            success, error = delete_file_uri_file(
-                store, file_uri, trash_prefix=".trash/"
-            )
+            success, error = delete_file_uri_file(store, file_uri, trash_prefix=".trash/")
 
             assert success is True
             assert not full_path.exists()
@@ -1607,8 +1595,7 @@ class TestGCResult:
 
             # 扫描数 = 被引用 + 未引用（scm/ 前缀下）
             scm_files = [
-                uri for uri in sample_artifacts["all_files"].keys()
-                if uri.startswith("scm/")
+                uri for uri in sample_artifacts["all_files"].keys() if uri.startswith("scm/")
             ]
             assert result.scanned_count == len(scm_files)
 
@@ -1834,10 +1821,10 @@ class TestTmpGCMode:
 
         # 创建不同年龄的文件（不使用 .tmp 后缀，因为会被跳过）
         files_with_ages = [
-            ("very_old.tar.gz", 30),   # 30 天前，应删除
-            ("old.tar.gz", 10),        # 10 天前，应删除
-            ("recent.tar.gz", 3),      # 3 天前，应保留
-            ("new.tar.gz", 0),         # 刚创建，应保留
+            ("very_old.tar.gz", 30),  # 30 天前，应删除
+            ("old.tar.gz", 10),  # 10 天前，应删除
+            ("recent.tar.gz", 3),  # 3 天前，应保留
+            ("new.tar.gz", 0),  # 刚创建，应保留
         ]
 
         for filename, age_days in files_with_ages:
@@ -1928,10 +1915,7 @@ class TestOrphanAndTmpGCCoverage:
     ):
         """孤立清理 local 后端软删除"""
         referenced = set(sample_artifacts["referenced"])
-        unreferenced_scm = [
-            u for u in sample_artifacts["unreferenced"]
-            if u.startswith("scm/")
-        ]
+        unreferenced_scm = [u for u in sample_artifacts["unreferenced"] if u.startswith("scm/")]
 
         with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
             mock_get_refs.return_value = _make_referenced_uris(referenced)
@@ -1965,10 +1949,7 @@ class TestOrphanAndTmpGCCoverage:
     ):
         """孤立清理 local 后端硬删除"""
         referenced = set(sample_artifacts["referenced"])
-        unreferenced_scm = [
-            u for u in sample_artifacts["unreferenced"]
-            if u.startswith("scm/")
-        ]
+        unreferenced_scm = [u for u in sample_artifacts["unreferenced"] if u.startswith("scm/")]
 
         with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
             mock_get_refs.return_value = _make_referenced_uris(referenced)
@@ -2129,7 +2110,7 @@ class TestPhysicalUriReferenceProtection:
     def test_s3_physical_ref_protects_matching_object(self):
         """
         回归测试：DB 引用含 s3:// 时，GC dry-run 不应把被引用对象列为候选
-        
+
         场景:
         - DB 中有 s3://engram-bucket/prefix/scm/proj_a/1.diff 引用
         - ObjectStore 配置: bucket=engram-bucket, prefix=prefix/
@@ -2143,27 +2124,27 @@ class TestPhysicalUriReferenceProtection:
             key="prefix/scm/proj_a/1.diff",
             raw="s3://engram-bucket/prefix/scm/proj_a/1.diff",
         )
-        
+
         # 创建 ReferencedUris
         referenced = ReferencedUris(
             artifact_keys=set(),  # 无 artifact key 引用
             physical_refs=[physical_ref],  # 有 s3:// 物理引用
         )
-        
+
         # 验证 has_physical_ref_for_key 方法
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/proj_a/1.diff",
             store_bucket="engram-bucket",
             store_prefix="prefix/",
         )
-        
+
         # bucket 不匹配时不应匹配
         assert not referenced.has_physical_ref_for_key(
             artifact_key="scm/proj_a/1.diff",
             store_bucket="other-bucket",
             store_prefix="prefix/",
         )
-        
+
         # prefix 不匹配时不应匹配
         assert not referenced.has_physical_ref_for_key(
             artifact_key="scm/proj_a/1.diff",
@@ -2179,19 +2160,19 @@ class TestPhysicalUriReferenceProtection:
             key="production/scm/proj_a/1.diff",  # 使用 production/ 前缀
             raw="s3://engram-bucket/production/scm/proj_a/1.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # 使用 staging/ 前缀的 store 不应匹配
         assert not referenced.has_physical_ref_for_key(
             artifact_key="scm/proj_a/1.diff",
             store_bucket="engram-bucket",
             store_prefix="staging/",
         )
-        
+
         # 使用 production/ 前缀的 store 应该匹配
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/proj_a/1.diff",
@@ -2207,12 +2188,12 @@ class TestPhysicalUriReferenceProtection:
             key="scm/proj_a/1.diff",  # 无前缀
             raw="s3://engram-bucket/scm/proj_a/1.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # store.prefix 为空时应直接匹配 key
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/proj_a/1.diff",
@@ -2236,26 +2217,26 @@ class TestPhysicalUriReferenceProtection:
                 raw="s3://bucket-b/prefix/scm/2.diff",
             ),
         ]
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=refs,
         )
-        
+
         # 应该匹配 bucket-a 中的文件
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/1.diff",
             store_bucket="bucket-a",
             store_prefix="prefix/",
         )
-        
+
         # 应该匹配 bucket-b 中的文件
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/2.diff",
             store_bucket="bucket-b",
             store_prefix="prefix/",
         )
-        
+
         # bucket-a 中没有 scm/2.diff
         assert not referenced.has_physical_ref_for_key(
             artifact_key="scm/2.diff",
@@ -2271,15 +2252,15 @@ class TestPhysicalUriReferenceProtection:
             key="prefix/scm/s3-referenced.diff",
             raw="s3://engram-bucket/prefix/scm/s3-referenced.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys={"scm/key-referenced.diff"},  # artifact key 引用
             physical_refs=[physical_ref],  # s3 物理引用
         )
-        
+
         # artifact key 引用应该可以直接匹配
         assert "scm/key-referenced.diff" in referenced.artifact_keys
-        
+
         # s3 物理引用应该通过 has_physical_ref_for_key 匹配
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/s3-referenced.diff",
@@ -2295,12 +2276,12 @@ class TestPhysicalUriReferenceProtection:
             key="prefix/scm/1.diff",
             raw="gs://gcs-bucket/prefix/scm/1.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/1.diff",
             store_bucket="gcs-bucket",
@@ -2314,12 +2295,12 @@ class TestPhysicalUriReferenceProtection:
             key="/mnt/artifacts/scm/1.diff",
             raw="file:///mnt/artifacts/scm/1.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # file:// 引用不应该通过 has_physical_ref_for_key 匹配
         # （因为 file:// 没有 bucket 概念）
         assert not referenced.has_physical_ref_for_key(
@@ -2337,7 +2318,7 @@ class TestPhysicalUriReferenceProtection:
 class TestS3UriParsingRegression:
     """
     s3:// URI 解析回归测试
-    
+
     确保 artifact_gc.py 中 _normalize_uri_for_gc 和相关函数
     正确处理 s3:// URI，不会误判或遗漏 s3 引用。
     """
@@ -2346,7 +2327,7 @@ class TestS3UriParsingRegression:
         """回归测试: _normalize_uri_for_gc 正确解析 s3:// URI 的 bucket 和 key"""
         uri = "s3://engram-artifacts/prefix/scm/proj_a/1/git/abc123.diff"
         result, uri_type = _normalize_uri_for_gc(uri)
-        
+
         assert uri_type == "physical_uri"
         assert isinstance(result, PhysicalRef)
         assert result.scheme == "s3"
@@ -2358,7 +2339,7 @@ class TestS3UriParsingRegression:
         """回归测试: s3:// URI 中 key 的尾部斜杠被正确处理"""
         uri = "s3://bucket/prefix/path/to/object/"
         result, uri_type = _normalize_uri_for_gc(uri)
-        
+
         assert uri_type == "physical_uri"
         assert isinstance(result, PhysicalRef)
         assert result.scheme == "s3"
@@ -2370,7 +2351,7 @@ class TestS3UriParsingRegression:
         """回归测试: s3://bucket（无 key）的处理"""
         uri = "s3://bucket-only"
         result, uri_type = _normalize_uri_for_gc(uri)
-        
+
         assert uri_type == "physical_uri"
         assert isinstance(result, PhysicalRef)
         assert result.scheme == "s3"
@@ -2381,7 +2362,7 @@ class TestS3UriParsingRegression:
         """回归测试: s3://bucket/（bucket 后有斜杠但无 key）"""
         uri = "s3://bucket/"
         result, uri_type = _normalize_uri_for_gc(uri)
-        
+
         assert uri_type == "physical_uri"
         assert isinstance(result, PhysicalRef)
         assert result.scheme == "s3"
@@ -2392,7 +2373,7 @@ class TestS3UriParsingRegression:
         """回归测试: s3:// 复杂 key 路径被完整保留"""
         uri = "s3://my-bucket/engram/v2/scm/proj-abc/123/git/abc123def456/sha256hash.diff"
         result, uri_type = _normalize_uri_for_gc(uri)
-        
+
         assert uri_type == "physical_uri"
         assert isinstance(result, PhysicalRef)
         assert result.bucket == "my-bucket"
@@ -2406,12 +2387,12 @@ class TestS3UriParsingRegression:
             key="prefix/scm/proj_a/1.diff",
             raw="s3://engram-bucket/prefix/scm/proj_a/1.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # 正确配置应该匹配
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/proj_a/1.diff",
@@ -2427,12 +2408,12 @@ class TestS3UriParsingRegression:
             key="prefix/scm/1.diff",
             raw="s3://engram-bucket/prefix/scm/1.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # 错误 bucket 不应匹配
         assert not referenced.has_physical_ref_for_key(
             artifact_key="scm/1.diff",
@@ -2448,12 +2429,12 @@ class TestS3UriParsingRegression:
             key="prod/scm/1.diff",  # 使用 prod/ 前缀
             raw="s3://bucket/prod/scm/1.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # staging/ 前缀不应匹配
         assert not referenced.has_physical_ref_for_key(
             artifact_key="scm/1.diff",
@@ -2464,7 +2445,7 @@ class TestS3UriParsingRegression:
     def test_gc_dry_run_protects_s3_referenced_objects(self):
         """
         回归测试: GC dry-run 不把 s3:// 引用的对象当作 orphan
-        
+
         场景:
         - DB 中有 s3://bucket/prefix/scm/1.diff 引用
         - 扫描到 scm/1.diff 对象
@@ -2476,23 +2457,23 @@ class TestS3UriParsingRegression:
             key="prefix/scm/proj_a/referenced.diff",
             raw="s3://engram-bucket/prefix/scm/proj_a/referenced.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # 模拟 GC 判断逻辑：对象应该被保护
         artifact_key = "scm/proj_a/referenced.diff"
         store_bucket = "engram-bucket"
         store_prefix = "prefix/"
-        
+
         is_protected = referenced.has_physical_ref_for_key(
             artifact_key=artifact_key,
             store_bucket=store_bucket,
             store_prefix=store_prefix,
         )
-        
+
         assert is_protected is True, "s3:// 引用的对象应该被 GC 保护"
 
     def test_gc_identifies_orphan_when_no_s3_ref(self):
@@ -2505,23 +2486,23 @@ class TestS3UriParsingRegression:
             key="prefix/scm/other.diff",  # 不同的对象
             raw="s3://engram-bucket/prefix/scm/other.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys=set(),
             physical_refs=[physical_ref],
         )
-        
+
         # 这个对象不应该被保护
         artifact_key = "scm/orphan.diff"
         store_bucket = "engram-bucket"
         store_prefix = "prefix/"
-        
+
         is_protected = referenced.has_physical_ref_for_key(
             artifact_key=artifact_key,
             store_bucket=store_bucket,
             store_prefix=store_prefix,
         )
-        
+
         assert is_protected is False, "无 s3:// 引用的对象应为 orphan"
 
     def test_mixed_artifact_keys_and_s3_refs_protection(self):
@@ -2534,22 +2515,22 @@ class TestS3UriParsingRegression:
             key="prefix/scm/s3-ref.diff",
             raw="s3://bucket/prefix/scm/s3-ref.diff",
         )
-        
+
         referenced = ReferencedUris(
             artifact_keys={"scm/key-ref.diff"},  # artifact key 引用
             physical_refs=[physical_ref],  # s3 物理引用
         )
-        
+
         # artifact key 引用的对象应该直接在 artifact_keys 中
         assert "scm/key-ref.diff" in referenced.artifact_keys
-        
+
         # s3 引用的对象应该通过 has_physical_ref_for_key 匹配
         assert referenced.has_physical_ref_for_key(
             artifact_key="scm/s3-ref.diff",
             store_bucket="bucket",
             store_prefix="prefix/",
         )
-        
+
         # 未引用的对象不应匹配
         assert not referenced.has_physical_ref_for_key(
             artifact_key="scm/orphan.diff",
@@ -2562,7 +2543,7 @@ class TestS3UriParsingRegression:
         # S3 允许 key 中包含一些特殊字符
         uri = "s3://bucket/prefix/scm/proj-a_123/file+name.diff"
         result, uri_type = _normalize_uri_for_gc(uri)
-        
+
         assert uri_type == "physical_uri"
         assert isinstance(result, PhysicalRef)
         assert result.bucket == "bucket"
@@ -2582,21 +2563,24 @@ class TestRequireOpsFlag:
         """
         require_ops=True 但使用 app 凭证时应抛出错误（object 后端）
         """
-        from engram.logbook.artifact_store import ObjectStore
-        
+
         # 创建测试文件
         scm_dir = artifacts_root / "scm"
         scm_dir.mkdir()
         (scm_dir / "test.diff").write_bytes(b"test content")
-        
+
         # Mock ObjectStore 使用 app 凭证
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "false",
-            "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
-            "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
-            "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
-            "ENGRAM_S3_BUCKET": "test-bucket",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "false",
+                "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
+                "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
+                "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
+                "ENGRAM_S3_BUCKET": "test-bucket",
+            },
+            clear=False,
+        ):
             with pytest.raises(GCOpsCredentialsRequiredError) as exc_info:
                 run_gc(
                     prefix="scm/",
@@ -2606,7 +2590,7 @@ class TestRequireOpsFlag:
                     require_ops=True,
                     verbose=False,
                 )
-            
+
             assert "ops 凭证" in str(exc_info.value)
 
     def test_run_gc_require_ops_with_ops_credentials_succeeds(self, artifacts_root):
@@ -2617,7 +2601,7 @@ class TestRequireOpsFlag:
         scm_dir = artifacts_root / "scm"
         scm_dir.mkdir()
         (scm_dir / "test.diff").write_bytes(b"test content")
-        
+
         # 对 local 后端，require_ops 检查不适用
         result = run_gc(
             prefix="scm/",
@@ -2628,7 +2612,7 @@ class TestRequireOpsFlag:
             require_ops=True,  # local 后端不检查此标志
             verbose=False,
         )
-        
+
         # local 后端不检查 ops 凭证，应正常返回结果
         assert result.scanned_count >= 0
 
@@ -2643,16 +2627,21 @@ class TestRequireOpsFlag:
         old_file.write_bytes(b"old content")
         # 设置文件时间为 10 天前
         import time
+
         old_mtime = time.time() - 10 * 24 * 3600
         os.utime(old_file, (old_mtime, old_mtime))
-        
-        with patch.dict(os.environ, {
-            "ENGRAM_S3_USE_OPS": "false",
-            "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
-            "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
-            "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
-            "ENGRAM_S3_BUCKET": "test-bucket",
-        }, clear=False):
+
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_S3_USE_OPS": "false",
+                "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
+                "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
+                "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
+                "ENGRAM_S3_BUCKET": "test-bucket",
+            },
+            clear=False,
+        ):
             with pytest.raises(GCOpsCredentialsRequiredError):
                 run_tmp_gc(
                     tmp_prefix="tmp/",
@@ -2672,7 +2661,7 @@ class TestRequireOpsFlag:
         scm_dir = artifacts_root / "scm"
         scm_dir.mkdir()
         (scm_dir / "test.diff").write_bytes(b"test content")
-        
+
         # 使用 local 后端，不检查凭证
         result = run_gc(
             prefix="scm/",
@@ -2683,21 +2672,21 @@ class TestRequireOpsFlag:
             require_ops=False,
             verbose=False,
         )
-        
+
         # 应正常返回结果
         assert result.scanned_count > 0
 
     def test_dry_run_does_not_require_ops_check(self, artifacts_root):
         """
         dry-run 模式下即使 require_ops=True 也不应抛出错误
-        
+
         注意: 当前实现在 delete=False 时不检查 require_ops，
         因为 dry-run 不执行实际删除操作
         """
         scm_dir = artifacts_root / "scm"
         scm_dir.mkdir()
         (scm_dir / "test.diff").write_bytes(b"test content")
-        
+
         # dry-run 模式下使用 local 后端
         result = run_gc(
             prefix="scm/",
@@ -2708,7 +2697,7 @@ class TestRequireOpsFlag:
             require_ops=True,
             verbose=False,
         )
-        
+
         # dry-run 应正常完成
         assert result.scanned_count >= 0
 
@@ -2728,7 +2717,7 @@ class TestAuditEventPayload:
             operation="gc_delete",
             success=True,
         )
-        
+
         # 必填字段
         assert event.tool == "artifact_gc"
         assert event.operation == "gc_delete"
@@ -2749,7 +2738,7 @@ class TestAuditEventPayload:
             error=None,
             details={"size_bytes": 1024, "age_days": 30.5},
         )
-        
+
         assert event.backend == "object"
         assert event.uri == "scm/proj/1/test.diff"
         assert event.bucket == "engram-bucket"
@@ -2768,9 +2757,9 @@ class TestAuditEventPayload:
             success=False,
             error="Permission denied",
         )
-        
+
         d = event.to_dict()
-        
+
         assert "tool" in d
         assert "operation" in d
         assert "success" in d
@@ -2783,7 +2772,7 @@ class TestAuditEventPayload:
         """验证 write_gc_delete_audit_event 生成的事件包含必要字段"""
         with patch("engram_logbook.artifact_ops_audit.write_audit_event") as mock_write:
             mock_write.return_value = 1
-            
+
             write_gc_delete_audit_event(
                 uri="scm/proj/1/test.diff",
                 backend="object",
@@ -2797,11 +2786,11 @@ class TestAuditEventPayload:
                 size_bytes=2048,
                 age_days=15.5,
             )
-            
+
             # 验证 write_audit_event 被调用
             mock_write.assert_called_once()
             event = mock_write.call_args[0][0]
-            
+
             # 验证关键字段
             assert event.tool == "artifact_gc"
             assert event.operation == "gc_move_to_trash"  # trashed=True
@@ -2820,14 +2809,14 @@ class TestAuditEventPayload:
         """验证硬删除事件的 operation 字段"""
         with patch("engram_logbook.artifact_ops_audit.write_audit_event") as mock_write:
             mock_write.return_value = 1
-            
+
             write_gc_delete_audit_event(
                 uri="scm/test.diff",
                 backend="local",
                 success=True,
                 trashed=False,  # 硬删除
             )
-            
+
             event = mock_write.call_args[0][0]
             assert event.operation == "gc_delete"  # 硬删除
 
@@ -2835,7 +2824,7 @@ class TestAuditEventPayload:
         """验证 write_gc_summary_audit_event 生成的事件包含必要字段"""
         with patch("engram_logbook.artifact_ops_audit.write_audit_event") as mock_write:
             mock_write.return_value = 1
-            
+
             write_gc_summary_audit_event(
                 gc_mode="orphan",
                 backend="object",
@@ -2853,10 +2842,10 @@ class TestAuditEventPayload:
                 error="5 files failed to delete",
                 details={"dry_run": False},
             )
-            
+
             mock_write.assert_called_once()
             event = mock_write.call_args[0][0]
-            
+
             # 验证关键字段
             assert event.tool == "artifact_gc"
             assert event.operation == "gc_run_summary"
@@ -2865,7 +2854,7 @@ class TestAuditEventPayload:
             assert event.using_ops_credentials is True
             assert event.success is False
             assert "5 files failed" in event.error
-            
+
             # 验证 details 中的汇总信息
             assert event.details.get("gc_mode") == "orphan"
             assert event.details.get("prefix") == "scm/"
@@ -2881,7 +2870,7 @@ class TestAuditEventPayload:
         """验证 write_delete_audit_event 生成的事件包含必要字段"""
         with patch("engram_logbook.artifact_ops_audit.write_audit_event") as mock_write:
             mock_write.return_value = 1
-            
+
             write_delete_audit_event(
                 uri="scm/proj/1/test.diff",
                 backend="object",
@@ -2892,10 +2881,10 @@ class TestAuditEventPayload:
                 using_ops_credentials=True,
                 require_ops=True,
             )
-            
+
             mock_write.assert_called_once()
             event = mock_write.call_args[0][0]
-            
+
             assert event.tool == "artifact_delete"
             assert event.operation == "delete"  # trashed=False
             assert event.backend == "object"
@@ -2908,7 +2897,7 @@ class TestAuditEventPayload:
         """验证软删除事件的 operation 字段"""
         with patch("engram_logbook.artifact_ops_audit.write_audit_event") as mock_write:
             mock_write.return_value = 1
-            
+
             write_delete_audit_event(
                 uri="scm/test.diff",
                 backend="local",
@@ -2916,7 +2905,7 @@ class TestAuditEventPayload:
                 trashed=True,  # 软删除
                 trash_prefix=".trash/",
             )
-            
+
             event = mock_write.call_args[0][0]
             assert event.operation == "move_to_trash"
             assert event.trash_prefix == ".trash/"
@@ -2935,13 +2924,14 @@ class TestGCAuditIntegration:
         scm_dir.mkdir()
         (scm_dir / "orphan.diff").write_bytes(b"orphan content")
 
-        with patch("artifact_gc.get_referenced_uris") as mock_get_refs, \
-             patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit, \
-             patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit:
-            
+        with (
+            patch("artifact_gc.get_referenced_uris") as mock_get_refs,
+            patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit,
+            patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit,
+        ):
             mock_get_refs.return_value = _make_referenced_uris(set())
 
-            result = run_gc(
+            run_gc(
                 prefix="scm/",
                 dry_run=False,
                 delete=True,
@@ -2976,13 +2966,14 @@ class TestGCAuditIntegration:
         scm_dir.mkdir()
         (scm_dir / "orphan.diff").write_bytes(b"orphan content")
 
-        with patch("artifact_gc.get_referenced_uris") as mock_get_refs, \
-             patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit, \
-             patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit:
-            
+        with (
+            patch("artifact_gc.get_referenced_uris") as mock_get_refs,
+            patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit,
+            patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit,
+        ):
             mock_get_refs.return_value = _make_referenced_uris(set())
 
-            result = run_gc(
+            run_gc(
                 prefix="scm/",
                 dry_run=True,
                 delete=False,  # dry-run
@@ -3006,13 +2997,14 @@ class TestGCAuditIntegration:
         scm_dir.mkdir()
         (scm_dir / "orphan.diff").write_bytes(b"orphan content")
 
-        with patch("artifact_gc.get_referenced_uris") as mock_get_refs, \
-             patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit, \
-             patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit:
-            
+        with (
+            patch("artifact_gc.get_referenced_uris") as mock_get_refs,
+            patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit,
+            patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit,
+        ):
             mock_get_refs.return_value = _make_referenced_uris(set())
 
-            result = run_gc(
+            run_gc(
                 prefix="scm/",
                 dry_run=False,
                 delete=True,
@@ -3033,17 +3025,18 @@ class TestGCAuditIntegration:
         """TMP GC 删除时应写入审计事件"""
         tmp_dir = artifacts_root / "tmp"
         tmp_dir.mkdir()
-        
+
         # 创建旧文件
         old_file = tmp_dir / "old.tar.gz"
         old_file.write_bytes(b"old content")
         old_mtime = time.time() - (10 * 24 * 3600)
         os.utime(old_file, (old_mtime, old_mtime))
 
-        with patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit, \
-             patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit:
-
-            result = run_tmp_gc(
+        with (
+            patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit,
+            patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit,
+        ):
+            run_tmp_gc(
                 tmp_prefix="tmp/",
                 older_than_days=7,
                 dry_run=False,
@@ -3077,13 +3070,14 @@ class TestGCAuditIntegration:
         scm_dir.mkdir()
         (scm_dir / "orphan.diff").write_bytes(b"orphan content")
 
-        with patch("artifact_gc.get_referenced_uris") as mock_get_refs, \
-             patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit, \
-             patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit:
-            
+        with (
+            patch("artifact_gc.get_referenced_uris") as mock_get_refs,
+            patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit,
+            patch("artifact_gc.write_gc_summary_audit_event"),
+        ):
             mock_get_refs.return_value = _make_referenced_uris(set())
 
-            result = run_gc(
+            run_gc(
                 prefix="scm/",
                 dry_run=False,
                 delete=True,
@@ -3116,13 +3110,14 @@ class TestGCAuditIntegration:
         scm_dir.chmod(0o555)  # 禁止目录写入
 
         try:
-            with patch("artifact_gc.get_referenced_uris") as mock_get_refs, \
-                 patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit, \
-                 patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit:
-                
+            with (
+                patch("artifact_gc.get_referenced_uris") as mock_get_refs,
+                patch("artifact_gc.write_gc_delete_audit_event") as mock_delete_audit,
+                patch("artifact_gc.write_gc_summary_audit_event") as mock_summary_audit,
+            ):
                 mock_get_refs.return_value = _make_referenced_uris(set())
 
-                result = run_gc(
+                run_gc(
                     prefix="scm/",
                     dry_run=False,
                     delete=True,
@@ -3156,29 +3151,29 @@ class TestAuditEventWriteFunction:
         """无 DSN 配置时 write_audit_event 应返回 None"""
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("POSTGRES_DSN", None)
-            
+
             event = AuditEvent(
                 tool="artifact_gc",
                 operation="gc_delete",
                 success=True,
             )
-            
+
             result = write_audit_event(event)
             assert result is None
 
     def test_write_audit_event_handles_db_error_gracefully(self):
         """数据库错误时 write_audit_event 应静默失败"""
         from engram.logbook.errors import DbConnectionError
-        
+
         with patch("engram_logbook.artifact_ops_audit.get_connection") as mock_conn:
             mock_conn.side_effect = DbConnectionError("Connection refused", {})
-            
+
             event = AuditEvent(
                 tool="artifact_gc",
                 operation="gc_delete",
                 success=True,
             )
-            
+
             # 不应抛出异常
             result = write_audit_event(event, dsn="postgresql://test")
             assert result is None
@@ -3195,11 +3190,11 @@ class TestAuditEventWriteFunction:
                 "nested": {"key": "value"},
             },
         )
-        
+
         # 验证 details 可以被 JSON 序列化
         json_str = json.dumps(event.details)
         parsed = json.loads(json_str)
-        
+
         assert parsed["scanned"] == 100
         assert parsed["deleted"] == 50
         assert parsed["nested"]["key"] == "value"
@@ -3222,14 +3217,14 @@ class TestGCGovernanceSwitches:
         默认 require_trash=False 时允许硬删除
         """
         referenced = set(sample_artifacts["referenced"])
-        
+
         # 确保环境变量未设置（使用默认值 False）
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ENGRAM_GC_REQUIRE_TRASH_DEFAULT", None)
-            
+
             with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
                 mock_get_refs.return_value = _make_referenced_uris(referenced)
-                
+
                 # require_trash=None 时使用默认值 False，应允许硬删除
                 result = run_gc(
                     prefix="scm/",
@@ -3241,7 +3236,7 @@ class TestGCGovernanceSwitches:
                     require_trash=None,  # 使用默认值
                     verbose=False,
                 )
-                
+
                 # 应该成功执行硬删除
                 assert result.deleted_count > 0
                 assert result.trashed_count == 0
@@ -3255,12 +3250,12 @@ class TestGCGovernanceSwitches:
         环境变量 ENGRAM_GC_REQUIRE_TRASH_DEFAULT=true 时阻止硬删除
         """
         referenced = set(sample_artifacts["referenced"])
-        
+
         # 设置环境变量
         with patch.dict(os.environ, {"ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "true"}, clear=False):
             with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
                 mock_get_refs.return_value = _make_referenced_uris(referenced)
-                
+
                 # require_trash=None 时使用环境变量默认值 True
                 with pytest.raises(GCPrefixError) as exc_info:
                     run_gc(
@@ -3273,7 +3268,7 @@ class TestGCGovernanceSwitches:
                         require_trash=None,  # 使用默认值（来自环境变量）
                         verbose=False,
                     )
-                
+
                 assert "require_trash" in str(exc_info.value).lower()
 
     def test_require_trash_explicit_true_blocks_hard_delete(
@@ -3285,12 +3280,12 @@ class TestGCGovernanceSwitches:
         显式 require_trash=True 时阻止硬删除（覆盖默认值）
         """
         referenced = set(sample_artifacts["referenced"])
-        
+
         # 即使环境变量为 False，显式参数也应生效
         with patch.dict(os.environ, {"ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "false"}, clear=False):
             with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
                 mock_get_refs.return_value = _make_referenced_uris(referenced)
-                
+
                 with pytest.raises(GCPrefixError) as exc_info:
                     run_gc(
                         prefix="scm/",
@@ -3302,7 +3297,7 @@ class TestGCGovernanceSwitches:
                         require_trash=True,  # 显式要求软删除
                         verbose=False,
                     )
-                
+
                 assert "require_trash" in str(exc_info.value).lower()
 
     def test_require_trash_explicit_false_allows_hard_delete(
@@ -3314,12 +3309,12 @@ class TestGCGovernanceSwitches:
         显式 require_trash=False 时允许硬删除（覆盖环境变量默认值）
         """
         referenced = set(sample_artifacts["referenced"])
-        
+
         # 即使环境变量为 True，显式 False 也应允许硬删除
         with patch.dict(os.environ, {"ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "true"}, clear=False):
             with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
                 mock_get_refs.return_value = _make_referenced_uris(referenced)
-                
+
                 result = run_gc(
                     prefix="scm/",
                     dry_run=False,
@@ -3330,7 +3325,7 @@ class TestGCGovernanceSwitches:
                     require_trash=False,  # 显式禁用检查
                     verbose=False,
                 )
-                
+
                 # 应该成功执行硬删除
                 assert result.deleted_count > 0
 
@@ -3343,11 +3338,11 @@ class TestGCGovernanceSwitches:
         提供 trash_prefix 时无论 require_trash 如何都应成功（软删除）
         """
         referenced = set(sample_artifacts["referenced"])
-        
+
         with patch.dict(os.environ, {"ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "true"}, clear=False):
             with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
                 mock_get_refs.return_value = _make_referenced_uris(referenced)
-                
+
                 result = run_gc(
                     prefix="scm/",
                     dry_run=False,
@@ -3358,7 +3353,7 @@ class TestGCGovernanceSwitches:
                     require_trash=None,  # 使用默认值
                     verbose=False,
                 )
-                
+
                 # 应该成功执行软删除
                 assert result.trashed_count > 0
                 assert result.deleted_count == 0
@@ -3371,16 +3366,20 @@ class TestGCGovernanceSwitches:
         scm_dir = artifacts_root / "scm"
         scm_dir.mkdir()
         (scm_dir / "test.diff").write_bytes(b"test content")
-        
+
         # 设置环境变量：require_ops=true 但不使用 ops 凭证
-        with patch.dict(os.environ, {
-            "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
-            "ENGRAM_S3_USE_OPS": "false",
-            "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
-            "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
-            "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
-            "ENGRAM_S3_BUCKET": "test-bucket",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
+                "ENGRAM_S3_USE_OPS": "false",
+                "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
+                "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
+                "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
+                "ENGRAM_S3_BUCKET": "test-bucket",
+            },
+            clear=False,
+        ):
             with pytest.raises(GCOpsCredentialsRequiredError):
                 run_gc(
                     prefix="scm/",
@@ -3399,12 +3398,16 @@ class TestGCGovernanceSwitches:
         scm_dir = artifacts_root / "scm"
         scm_dir.mkdir()
         (scm_dir / "test.diff").write_bytes(b"test content")
-        
+
         # 对 local 后端测试，因为 object 后端需要真实的 S3 配置
         # 这里验证 require_ops=False 不会因为 object 检查而失败
-        with patch.dict(os.environ, {
-            "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
+            },
+            clear=False,
+        ):
             # local 后端不检查 ops 凭证
             result = run_gc(
                 prefix="scm/",
@@ -3415,7 +3418,7 @@ class TestGCGovernanceSwitches:
                 require_ops=False,  # 显式禁用
                 verbose=False,
             )
-            
+
             # 应正常返回结果
             assert result.scanned_count >= 0
 
@@ -3428,14 +3431,14 @@ class TestGCGovernanceConfigIntegration:
         测试 get_gc_governance_config 默认值
         """
         from engram.logbook.config import get_gc_governance_config
-        
+
         # 确保环境变量未设置
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ENGRAM_GC_REQUIRE_TRASH_DEFAULT", None)
             os.environ.pop("ENGRAM_GC_REQUIRE_OPS_DEFAULT", None)
-            
+
             config = get_gc_governance_config()
-            
+
             # 默认值都是 False
             assert config["require_trash_default"] is False
             assert config["require_ops_default"] is False
@@ -3445,13 +3448,17 @@ class TestGCGovernanceConfigIntegration:
         测试环境变量覆盖 get_gc_governance_config
         """
         from engram.logbook.config import get_gc_governance_config
-        
-        with patch.dict(os.environ, {
-            "ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "true",
-            "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "1",  # 也支持 "1"
-        }, clear=False):
+
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "true",
+                "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "1",  # 也支持 "1"
+            },
+            clear=False,
+        ):
             config = get_gc_governance_config()
-            
+
             assert config["require_trash_default"] is True
             assert config["require_ops_default"] is True
 
@@ -3460,13 +3467,17 @@ class TestGCGovernanceConfigIntegration:
         测试环境变量设置为 false 的情况
         """
         from engram.logbook.config import get_gc_governance_config
-        
-        with patch.dict(os.environ, {
-            "ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "false",
-            "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "0",
-        }, clear=False):
+
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "false",
+                "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "0",
+            },
+            clear=False,
+        ):
             config = get_gc_governance_config()
-            
+
             assert config["require_trash_default"] is False
             assert config["require_ops_default"] is False
 
@@ -3475,12 +3486,12 @@ class TestGCGovernanceConfigIntegration:
         测试 get_gc_require_trash_default 便捷函数
         """
         from engram.logbook.config import get_gc_require_trash_default
-        
+
         # 默认值
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ENGRAM_GC_REQUIRE_TRASH_DEFAULT", None)
             assert get_gc_require_trash_default() is False
-        
+
         # 环境变量 true
         with patch.dict(os.environ, {"ENGRAM_GC_REQUIRE_TRASH_DEFAULT": "yes"}, clear=False):
             assert get_gc_require_trash_default() is True
@@ -3490,12 +3501,12 @@ class TestGCGovernanceConfigIntegration:
         测试 get_gc_require_ops_default 便捷函数
         """
         from engram.logbook.config import get_gc_require_ops_default
-        
+
         # 默认值
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ENGRAM_GC_REQUIRE_OPS_DEFAULT", None)
             assert get_gc_require_ops_default() is False
-        
+
         # 环境变量 on
         with patch.dict(os.environ, {"ENGRAM_GC_REQUIRE_OPS_DEFAULT": "on"}, clear=False):
             assert get_gc_require_ops_default() is True
@@ -3515,16 +3526,20 @@ class TestGCGovernanceTmpMode:
         old_file.write_bytes(b"old content")
         old_mtime = time.time() - 10 * 24 * 3600
         os.utime(old_file, (old_mtime, old_mtime))
-        
+
         # 设置环境变量
-        with patch.dict(os.environ, {
-            "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
-            "ENGRAM_S3_USE_OPS": "false",
-            "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
-            "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
-            "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
-            "ENGRAM_S3_BUCKET": "test-bucket",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
+                "ENGRAM_S3_USE_OPS": "false",
+                "ENGRAM_S3_APP_ACCESS_KEY": "app-key",
+                "ENGRAM_S3_APP_SECRET_KEY": "app-secret",
+                "ENGRAM_S3_ENDPOINT": "http://localhost:9000",
+                "ENGRAM_S3_BUCKET": "test-bucket",
+            },
+            clear=False,
+        ):
             with pytest.raises(GCOpsCredentialsRequiredError):
                 run_tmp_gc(
                     tmp_prefix="tmp/",
@@ -3547,11 +3562,15 @@ class TestGCGovernanceTmpMode:
         old_file.write_bytes(b"old content")
         old_mtime = time.time() - 10 * 24 * 3600
         os.utime(old_file, (old_mtime, old_mtime))
-        
+
         # local 后端测试
-        with patch.dict(os.environ, {
-            "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
-        }, clear=False):
+        with patch.dict(
+            os.environ,
+            {
+                "ENGRAM_GC_REQUIRE_OPS_DEFAULT": "true",
+            },
+            clear=False,
+        ):
             result = run_tmp_gc(
                 tmp_prefix="tmp/",
                 older_than_days=7,
@@ -3562,6 +3581,6 @@ class TestGCGovernanceTmpMode:
                 require_ops=False,  # 显式禁用
                 verbose=False,
             )
-            
+
             # 应成功执行
             assert result.deleted_count >= 0

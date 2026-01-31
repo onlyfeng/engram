@@ -9,9 +9,10 @@ test_redact_sensitive.py - 敏感信息脱敏单元测试
 - 构造包含 token 的异常文本，断言最终日志/返回结构不包含明文 token
 """
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 # 确保能够导入 engram_logbook 模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -246,15 +247,15 @@ class TestRedactInExceptionMessage:
             "GitLab API Error: 401 Unauthorized\n"
             "Request: GET https://gitlab.example.com/api/v4/projects\n"
             "Headers: PRIVATE-TOKEN: glpat-abc123def456xyz789\n"
-            "Response: {\"error\": \"invalid_token\", \"error_description\": \"Token was revoked\"}"
+            'Response: {"error": "invalid_token", "error_description": "Token was revoked"}'
         )
-        
+
         result = redact(error_msg)
-        
+
         # 验证明文 token 被脱敏
         assert "glpat-abc123def456xyz789" not in result
         assert "[REDACTED]" in result or "[GITLAB_TOKEN]" in result
-        
+
         # 验证非敏感信息保留
         assert "GitLab API Error: 401 Unauthorized" in result
         assert "gitlab.example.com" in result
@@ -266,9 +267,9 @@ class TestRedactInExceptionMessage:
             "Repository: svn://admin:secret123@svn.example.com/repo/trunk\n"
             "Error code: E170001"
         )
-        
+
         result = redact(error_msg)
-        
+
         # 验证密码被脱敏
         assert "secret123" not in result
         assert "[REDACTED]" in result
@@ -283,13 +284,13 @@ class TestRedactInExceptionMessage:
                 "PRIVATE-TOKEN": "glpat-abc123xyz789",
             },
         }
-        
+
         result = redact_dict(error_details)
-        
+
         # 验证字典中所有敏感信息被脱敏
         assert "glpat-secret" not in str(result)
         assert "glpat-abc123xyz789" not in str(result)
-        
+
         # 验证结构保持
         assert result["status_code"] == 401
         assert "headers" in result
@@ -303,7 +304,7 @@ class TestRedactInExceptionMessage:
             "endpoint": "https://gitlab.com/api/v4/projects?private_token=glpat-secret123",
             "error_message": "Invalid token: glpat-secret123",
         }
-        
+
         # 模拟 to_dict 的脱敏逻辑
         redacted_result = {
             "success": api_result["success"],
@@ -311,11 +312,14 @@ class TestRedactInExceptionMessage:
             "endpoint": redact(api_result["endpoint"]),
             "error_message": redact(api_result["error_message"]),
         }
-        
+
         # 验证脱敏效果
         assert "glpat-secret123" not in redacted_result["endpoint"]
         assert "glpat-secret123" not in redacted_result["error_message"]
-        assert "[REDACTED]" in redacted_result["endpoint"] or "[GITLAB_TOKEN]" in redacted_result["error_message"]
+        assert (
+            "[REDACTED]" in redacted_result["endpoint"]
+            or "[GITLAB_TOKEN]" in redacted_result["error_message"]
+        )
 
 
 class TestMetaJsonSafety:
@@ -323,23 +327,19 @@ class TestMetaJsonSafety:
 
     def test_meta_json_source_fetch_error(self):
         """验证 meta_json.source_fetch_error 字段脱敏"""
-        source_fetch_error = (
-            "Request failed: PRIVATE-TOKEN: glpat-abc123 returned 401"
-        )
-        
+        source_fetch_error = "Request failed: PRIVATE-TOKEN: glpat-abc123 returned 401"
+
         redacted = redact(source_fetch_error)
-        
+
         assert "glpat-abc123" not in redacted
         assert "[REDACTED]" in redacted
 
     def test_meta_json_original_endpoint(self):
         """验证 meta_json.original_endpoint 字段脱敏"""
-        original_endpoint = (
-            "https://gitlab.com/api/v4/projects?access_token=secret123"
-        )
-        
+        original_endpoint = "https://gitlab.com/api/v4/projects?access_token=secret123"
+
         redacted = redact(original_endpoint)
-        
+
         # token 参数应该被脱敏
         assert "secret123" not in redacted
 
@@ -352,7 +352,7 @@ class TestMetaJsonSafety:
             "source_fetch_error": "401 Unauthorized: token glpat-xyz789 expired",
             "original_endpoint": "https://gitlab.com/api/v4/projects/123/repository/commits/abc/diff",
         }
-        
+
         # 模拟写入 meta_json 前的脱敏处理
         safe_meta = {
             "materialize_status": meta_json["materialize_status"],
@@ -361,10 +361,10 @@ class TestMetaJsonSafety:
             "source_fetch_error": redact(meta_json["source_fetch_error"]),
             "original_endpoint": redact(meta_json["original_endpoint"]),
         }
-        
+
         # 验证敏感信息被脱敏
         assert "glpat-xyz789" not in safe_meta["source_fetch_error"]
-        
+
         # 验证非敏感信息保留
         assert safe_meta["materialize_status"] == "failed"
         assert safe_meta["degraded"] is True
@@ -373,15 +373,14 @@ class TestMetaJsonSafety:
 class TestWorkerComponentRedaction:
     """
     测试 Worker 组件中的敏感信息脱敏
-    
+
     验证 worker 在处理任务结果、错误信息时正确脱敏敏感数据
     """
 
     def test_worker_error_with_token(self):
         """验证 worker 错误消息中的 token 被脱敏"""
         error_msg = (
-            "GitLab API 认证失败: PRIVATE-TOKEN: glpat-abc123xyz789 "
-            "returned 401 Unauthorized"
+            "GitLab API 认证失败: PRIVATE-TOKEN: glpat-abc123xyz789 returned 401 Unauthorized"
         )
         result = redact(error_msg)
         # 核心验证：明文 token 不在结果中
@@ -425,15 +424,14 @@ class TestWorkerComponentRedaction:
 class TestReaperComponentRedaction:
     """
     测试 Reaper 组件中的敏感信息脱敏
-    
+
     验证 reaper 在处理过期任务、记录错误时正确脱敏敏感数据
     """
 
     def test_reaper_last_error_with_token(self):
         """验证 reaper 处理 last_error 中的 token 脱敏"""
         last_error = (
-            "Sync failed: PRIVATE-TOKEN: glpat-reaper-test-token123 "
-            "returned HTTP 403 Forbidden"
+            "Sync failed: PRIVATE-TOKEN: glpat-reaper-test-token123 returned HTTP 403 Forbidden"
         )
         result = redact(last_error)
         # 核心验证：明文 token 不在结果中
@@ -467,7 +465,7 @@ class TestReaperComponentRedaction:
 class TestSchedulerComponentRedaction:
     """
     测试 Scheduler 组件中的敏感信息脱敏
-    
+
     验证 scheduler 在记录暂停原因、任务参数时正确脱敏敏感数据
     """
 
@@ -504,7 +502,7 @@ class TestSchedulerComponentRedaction:
 class TestCrossComponentRedaction:
     """
     测试跨组件的敏感信息脱敏一致性
-    
+
     验证从 scheduler -> worker -> reaper 整个流程中的脱敏一致性
     """
 
@@ -515,23 +513,23 @@ class TestCrossComponentRedaction:
             "reason": "incremental",
             "gitlab_instance": "https://user:glpat-xxx@gitlab.com/api",
         }
-        
+
         # 模拟 worker 处理后的错误
         worker_error = {
             "success": False,
             "error": f"Auth failed for {scheduler_payload['gitlab_instance']}",
             "error_category": "auth_error",
         }
-        
+
         # 模拟 reaper 记录的错误摘要
         reaper_summary = {
             "message": f"Reaped: {worker_error['error']}",
             "original_payload": scheduler_payload,
         }
-        
+
         # 对最终结果进行脱敏
         final_result = redact_dict(reaper_summary)
-        
+
         # 验证 token 在任何层级都不存在
         final_str = str(final_result)
         assert "glpat-xxx" not in final_str
@@ -547,10 +545,10 @@ class TestCrossComponentRedaction:
             },
             "error": "Failed with password=secret in URL",
         }
-        
+
         result = redact_dict(mixed_data)
         result_str = str(result)
-        
+
         # 验证所有敏感信息被脱敏
         assert "secret123" not in result_str
         assert "abc123" not in result_str

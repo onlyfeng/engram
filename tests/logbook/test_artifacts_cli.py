@@ -19,7 +19,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -29,8 +29,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from typer.testing import CliRunner
 
 from logbook_cli_main import app, artifacts_app
-from artifact_cli import main as artifact_cli_main
-
 
 # =============================================================================
 # Fixtures
@@ -55,6 +53,7 @@ def mock_store(temp_artifacts_dir):
     """创建 mock store 并设置环境变量"""
     # 重置全局 store 缓存
     from engram.logbook.artifact_store import reset_default_store
+
     reset_default_store()
 
     os.environ["ENGRAM_ARTIFACTS_ROOT"] = str(temp_artifacts_dir)
@@ -307,13 +306,14 @@ class TestArtifactsGcCommand:
     def test_gc_dry_run_by_default(self, mock_run_gc, runner):
         """测试默认 dry-run 模式"""
         from artifact_gc import GCResult
+
         mock_run_gc.return_value = GCResult(
             scanned_count=10,
             referenced_count=8,
             candidates_count=2,
         )
 
-        result = runner.invoke(
+        runner.invoke(
             app,
             ["artifacts", "gc", "--prefix", "scm/"],
         )
@@ -361,13 +361,13 @@ class TestArtifactCliCompatibility:
 
     def test_artifact_cli_imports_correctly(self):
         """测试兼容入口可以正确导入"""
-        from artifact_cli import main, artifacts_app
+        from artifact_cli import artifacts_app, main
+
         assert callable(main)
         assert artifacts_app is not None
 
     def test_artifact_cli_app_has_commands(self):
         """测试 artifacts_app 包含所有命令"""
-        from logbook_cli_main import artifacts_app
 
         # 获取注册的命令名称
         command_names = [cmd.name for cmd in artifacts_app.registered_commands]
@@ -463,14 +463,14 @@ class TestChecksumMismatchCLI:
     def test_write_with_overwrite_policy_deny(self, runner, mock_store):
         """测试覆盖策略为 deny 时写入已存在文件被拒绝"""
         test_path = "checksum_test/file.txt"
-        
+
         # 先写入一次
         result = runner.invoke(
             app,
             ["artifacts", "write", "--path", test_path, "--content", "original content"],
         )
         assert result.exit_code == 0
-        
+
         # 验证文件存在
         file_path = mock_store / "checksum_test" / "file.txt"
         assert file_path.exists()
@@ -527,7 +527,7 @@ class TestExistsCLI:
             ["artifacts", "exists", "--path", "format_test.txt"],
         )
         output = json.loads(result.stdout)
-        
+
         # 验证输出格式符合契约
         assert "ok" in output
         assert "exists" in output

@@ -29,7 +29,6 @@ import os
 import secrets
 import sys
 import time
-from typing import Generator
 
 import pytest
 
@@ -37,23 +36,25 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engram.logbook.artifact_store import (
-    ObjectStore,
-    ObjectStoreNotConfiguredError,
-    ObjectStoreConnectionError,
-    ObjectStoreUploadError,
-    ObjectStoreDownloadError,
-    ArtifactNotFoundError,
     MULTIPART_THRESHOLD,
+    ArtifactNotFoundError,
+    ObjectStore,
+    ObjectStoreConnectionError,
+    ObjectStoreDownloadError,
+    ObjectStoreUploadError,
 )
-
 
 # ============ 测试启用条件 ============
 
-MINIO_INTEGRATION_ENABLED = os.environ.get("ENGRAM_MINIO_INTEGRATION", "").lower() in ("1", "true", "yes")
+MINIO_INTEGRATION_ENABLED = os.environ.get("ENGRAM_MINIO_INTEGRATION", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 pytestmark = pytest.mark.skipif(
     not MINIO_INTEGRATION_ENABLED,
-    reason="MinIO 集成测试未启用，设置 ENGRAM_MINIO_INTEGRATION=1 启用"
+    reason="MinIO 集成测试未启用，设置 ENGRAM_MINIO_INTEGRATION=1 启用",
 )
 
 
@@ -98,7 +99,7 @@ def unique_key():
 def cleanup_keys(object_store):
     """
     收集测试创建的对象键，测试结束后清理
-    
+
     用法:
         def test_xxx(cleanup_keys):
             key = "test/my_object.txt"
@@ -107,7 +108,7 @@ def cleanup_keys(object_store):
     """
     keys = []
     yield keys
-    
+
     # 清理测试创建的对象
     client = object_store._get_client()
     for key in keys:
@@ -129,7 +130,7 @@ class TestMinIOConnection:
         # _get_client 应成功初始化客户端
         client = object_store._get_client()
         assert client is not None
-        
+
         # 尝试列出 bucket 验证连接
         response = client.list_buckets()
         bucket_names = [b["Name"] for b in response.get("Buckets", [])]
@@ -145,18 +146,28 @@ class TestMinIOConnection:
             secret_key="wrong_secret",
             bucket=minio_config["bucket"],
         )
-        
+
         # 连接时不会报错，但操作时会失败
-        with pytest.raises((ObjectStoreUploadError, ObjectStoreConnectionError, Exception)) as exc_info:
+        with pytest.raises(
+            (ObjectStoreUploadError, ObjectStoreConnectionError, Exception)
+        ) as exc_info:
             store.put("test/wrong_creds.txt", b"content")
-        
+
         # 验证错误信息中包含认证相关信息
         error_str = str(exc_info.value).lower()
         # MinIO 可能返回不同的错误消息
-        assert any(kw in error_str for kw in [
-            "access", "denied", "credential", "signature", "forbidden",
-            "invalidaccesskey", "上传制品失败"
-        ])
+        assert any(
+            kw in error_str
+            for kw in [
+                "access",
+                "denied",
+                "credential",
+                "signature",
+                "forbidden",
+                "invalidaccesskey",
+                "上传制品失败",
+            ]
+        )
 
 
 # ============ 小对象操作测试 ============
@@ -169,17 +180,17 @@ class TestSmallObjectOperations:
         """put 和 get 字节内容"""
         key = f"{unique_key}/bytes.txt"
         cleanup_keys.append(key)
-        
+
         content = b"Hello, MinIO! " + secrets.token_bytes(32)
         expected_sha256 = hashlib.sha256(content).hexdigest()
-        
+
         # Put
         result = object_store.put(key, content)
-        
+
         assert result["uri"] == key
         assert result["sha256"] == expected_sha256
         assert result["size_bytes"] == len(content)
-        
+
         # Get
         retrieved = object_store.get(key)
         assert retrieved == content
@@ -188,17 +199,17 @@ class TestSmallObjectOperations:
         """put 和 get 字符串内容"""
         key = f"{unique_key}/string.txt"
         cleanup_keys.append(key)
-        
+
         content_str = "你好，MinIO！这是 UTF-8 字符串测试。🚀"
         content_bytes = content_str.encode("utf-8")
         expected_sha256 = hashlib.sha256(content_bytes).hexdigest()
-        
+
         # Put string
         result = object_store.put(key, content_str)
-        
+
         assert result["sha256"] == expected_sha256
         assert result["size_bytes"] == len(content_bytes)
-        
+
         # Get returns bytes
         retrieved = object_store.get(key)
         assert retrieved == content_bytes
@@ -208,17 +219,17 @@ class TestSmallObjectOperations:
         """put 迭代器内容"""
         key = f"{unique_key}/iterator.txt"
         cleanup_keys.append(key)
-        
+
         chunks = [b"chunk1_", b"chunk2_", b"chunk3_end"]
         full_content = b"".join(chunks)
         expected_sha256 = hashlib.sha256(full_content).hexdigest()
-        
+
         # Put iterator
         result = object_store.put(key, iter(chunks))
-        
+
         assert result["sha256"] == expected_sha256
         assert result["size_bytes"] == len(full_content)
-        
+
         # Get
         retrieved = object_store.get(key)
         assert retrieved == full_content
@@ -227,35 +238,35 @@ class TestSmallObjectOperations:
         """exists 对存在的对象返回 True"""
         key = f"{unique_key}/exists_true.txt"
         cleanup_keys.append(key)
-        
+
         # 先创建对象
         object_store.put(key, b"content for exists test")
-        
+
         # 检查 exists
         assert object_store.exists(key) is True
 
     def test_exists_false(self, object_store, unique_key):
         """exists 对不存在的对象返回 False"""
         key = f"{unique_key}/definitely_not_exists.txt"
-        
+
         assert object_store.exists(key) is False
 
     def test_overwrite_object(self, object_store, unique_key, cleanup_keys):
         """覆盖已存在的对象"""
         key = f"{unique_key}/overwrite.txt"
         cleanup_keys.append(key)
-        
+
         content_v1 = b"version 1"
         content_v2 = b"version 2 - updated content"
-        
+
         # 写入 v1
         result1 = object_store.put(key, content_v1)
         assert result1["size_bytes"] == len(content_v1)
-        
+
         # 覆盖为 v2
         result2 = object_store.put(key, content_v2)
         assert result2["size_bytes"] == len(content_v2)
-        
+
         # 读取应为 v2
         retrieved = object_store.get(key)
         assert retrieved == content_v2
@@ -271,19 +282,19 @@ class TestMultipartUpload:
         """6MB 文件触发 Multipart 上传"""
         key = f"{unique_key}/multipart_6mb.bin"
         cleanup_keys.append(key)
-        
+
         # 创建 6MB 内容（超过 5MB 阈值）
         size = 6 * 1024 * 1024
         content = secrets.token_bytes(size)
         expected_sha256 = hashlib.sha256(content).hexdigest()
-        
+
         # Put - 应使用 multipart
         result = object_store.put(key, content)
-        
+
         assert result["uri"] == key
         assert result["sha256"] == expected_sha256
         assert result["size_bytes"] == size
-        
+
         # Get 并验证完整性
         retrieved = object_store.get(key)
         assert len(retrieved) == size
@@ -293,22 +304,22 @@ class TestMultipartUpload:
         """迭代器大内容触发 Multipart 上传"""
         key = f"{unique_key}/multipart_iter.bin"
         cleanup_keys.append(key)
-        
+
         # 创建多个 chunks，总大小超过阈值
         chunk_size = 2 * 1024 * 1024  # 2MB per chunk
         num_chunks = 4  # 总计 8MB
-        
+
         # 预生成 chunks 以便计算 sha256
         chunks = [secrets.token_bytes(chunk_size) for _ in range(num_chunks)]
         full_content = b"".join(chunks)
         expected_sha256 = hashlib.sha256(full_content).hexdigest()
-        
+
         # Put iterator
         result = object_store.put(key, iter(chunks))
-        
+
         assert result["sha256"] == expected_sha256
         assert result["size_bytes"] == len(full_content)
-        
+
         # 验证
         retrieved = object_store.get(key)
         assert hashlib.sha256(retrieved).hexdigest() == expected_sha256
@@ -317,16 +328,16 @@ class TestMultipartUpload:
         """刚好达到 Multipart 阈值边界"""
         key = f"{unique_key}/boundary.bin"
         cleanup_keys.append(key)
-        
+
         # 刚好 5MB - 应该不触发 multipart（阈值是 >=）
         size = MULTIPART_THRESHOLD
         content = secrets.token_bytes(size)
         expected_sha256 = hashlib.sha256(content).hexdigest()
-        
+
         result = object_store.put(key, content)
-        
+
         assert result["size_bytes"] == size
-        
+
         retrieved = object_store.get(key)
         assert hashlib.sha256(retrieved).hexdigest() == expected_sha256
 
@@ -340,17 +351,19 @@ class TestErrorHandling:
     def test_get_nonexistent_key(self, object_store, unique_key):
         """访问不存在的 key 应抛出 ArtifactNotFoundError"""
         key = f"{unique_key}/nonexistent_object.txt"
-        
+
         with pytest.raises(ArtifactNotFoundError) as exc_info:
             object_store.get(key)
-        
+
         error = exc_info.value
-        assert "不存在" in str(error) or "NoSuchKey" in str(error) or "not found" in str(error).lower()
+        assert (
+            "不存在" in str(error) or "NoSuchKey" in str(error) or "not found" in str(error).lower()
+        )
 
     def test_get_info_nonexistent_key(self, object_store, unique_key):
         """get_info 对不存在的 key 应抛出 ArtifactNotFoundError"""
         key = f"{unique_key}/nonexistent_for_info.txt"
-        
+
         with pytest.raises(ArtifactNotFoundError):
             object_store.get_info(key)
 
@@ -362,7 +375,7 @@ class TestErrorHandling:
             secret_key=minio_config["secret_key"],
             bucket="definitely-nonexistent-bucket-12345",
         )
-        
+
         with pytest.raises((ObjectStoreUploadError, ObjectStoreDownloadError, Exception)):
             store.put("test.txt", b"content")
 
@@ -377,14 +390,14 @@ class TestMetadataAndUrl:
         """get_info 返回正确的元数据"""
         key = f"{unique_key}/metadata.txt"
         cleanup_keys.append(key)
-        
+
         content = b"content for metadata test"
         expected_sha256 = hashlib.sha256(content).hexdigest()
-        
+
         object_store.put(key, content)
-        
+
         info = object_store.get_info(key)
-        
+
         assert info["uri"] == key
         assert info["sha256"] == expected_sha256
         assert info["size_bytes"] == len(content)
@@ -392,9 +405,9 @@ class TestMetadataAndUrl:
     def test_resolve_returns_s3_url(self, object_store, unique_key):
         """resolve 返回 S3 URL 格式"""
         key = f"{unique_key}/resolve.txt"
-        
+
         url = object_store.resolve(key)
-        
+
         assert url.startswith("s3://")
         assert object_store.bucket in url
         assert key in url
@@ -403,13 +416,13 @@ class TestMetadataAndUrl:
         """生成预签名 URL"""
         key = f"{unique_key}/presigned.txt"
         cleanup_keys.append(key)
-        
+
         content = b"content for presigned url"
         object_store.put(key, content)
-        
+
         # 生成预签名 URL
         presigned_url = object_store.generate_presigned_url(key, expires_in=3600)
-        
+
         assert presigned_url is not None
         assert "http" in presigned_url
         # URL 应包含签名参数
@@ -426,35 +439,35 @@ class TestStreamDownload:
         """流式下载小文件"""
         key = f"{unique_key}/stream_small.txt"
         cleanup_keys.append(key)
-        
+
         content = b"content for stream test " * 100
         object_store.put(key, content)
-        
+
         # 流式读取
         chunks = list(object_store.get_stream(key))
         retrieved = b"".join(chunks)
-        
+
         assert retrieved == content
 
     def test_get_stream_large_file(self, object_store, unique_key, cleanup_keys):
         """流式下载大文件"""
         key = f"{unique_key}/stream_large.bin"
         cleanup_keys.append(key)
-        
+
         # 3MB 文件
         size = 3 * 1024 * 1024
         content = secrets.token_bytes(size)
         expected_sha256 = hashlib.sha256(content).hexdigest()
-        
+
         object_store.put(key, content)
-        
+
         # 流式读取并计算 sha256
         hasher = hashlib.sha256()
         total_size = 0
         for chunk in object_store.get_stream(key, chunk_size=65536):
             hasher.update(chunk)
             total_size += len(chunk)
-        
+
         assert total_size == size
         assert hasher.hexdigest() == expected_sha256
 
@@ -475,23 +488,23 @@ class TestPrefixOperations:
             bucket=minio_config["bucket"],
             prefix=prefix,
         )
-        
+
         key = f"{unique_key}/prefixed.txt"
         cleanup_keys.append(f"{prefix}/{key}")  # 实际 key 包含 prefix
-        
+
         content = b"content with prefix"
-        
+
         # Put
         result = store.put(key, content)
         assert result["uri"] == key
-        
+
         # Exists
         assert store.exists(key) is True
-        
+
         # Get
         retrieved = store.get(key)
         assert retrieved == content
-        
+
         # Resolve
         url = store.resolve(key)
         assert prefix in url

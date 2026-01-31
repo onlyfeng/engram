@@ -16,42 +16,42 @@ test_uri_boundary_contract.py - URI 边界契约测试
 测试归属：make test-logbook-unit
 """
 
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 # 确保可以导入 engram_logbook 模块
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from engram.logbook.uri import (
-    # 核心解析函数（Gateway 必须使用这些函数，不能自定义）
-    parse_uri,
-    parse_evidence_uri,
-    parse_attachment_evidence_uri,
-    parse_attachment_evidence_uri_strict,
-    # 构建函数
-    build_evidence_uri,
-    build_attachment_evidence_uri,
-    build_evidence_ref_for_patch_blob,
-    build_attachment_evidence_ref,
-    build_evidence_refs_json,
-    # 验证函数
-    validate_evidence_ref,
-    # 类型检查函数
-    is_patch_blob_evidence_uri,
-    is_attachment_evidence_uri,
-    # 类型定义
-    UriType,
-    AttachmentUriParseResult,
-    # 错误码常量
-    ATTACHMENT_URI_ERR_NOT_MEMORY,
-    ATTACHMENT_URI_ERR_NOT_ATTACHMENTS,
-    ATTACHMENT_URI_ERR_LEGACY_FORMAT,
     ATTACHMENT_URI_ERR_INVALID_ID,
     ATTACHMENT_URI_ERR_INVALID_SHA256,
+    ATTACHMENT_URI_ERR_LEGACY_FORMAT,
     ATTACHMENT_URI_ERR_MALFORMED,
+    ATTACHMENT_URI_ERR_NOT_ATTACHMENTS,
+    # 错误码常量
+    ATTACHMENT_URI_ERR_NOT_MEMORY,
+    AttachmentUriParseResult,
+    # 类型定义
+    UriType,
+    build_attachment_evidence_ref,
+    build_attachment_evidence_uri,
+    build_evidence_ref_for_patch_blob,
+    build_evidence_refs_json,
+    # 构建函数
+    build_evidence_uri,
+    is_attachment_evidence_uri,
+    # 类型检查函数
+    is_patch_blob_evidence_uri,
+    parse_attachment_evidence_uri,
+    parse_attachment_evidence_uri_strict,
+    parse_evidence_uri,
+    # 核心解析函数（Gateway 必须使用这些函数，不能自定义）
+    parse_uri,
+    # 验证函数
+    validate_evidence_ref,
 )
-
 
 # =============================================================================
 # 测试常量
@@ -95,24 +95,27 @@ class TestUriGrammarOwnership:
         # patch_blobs URI
         patch_uri = f"memory://patch_blobs/git/1:abc123/{VALID_SHA256}"
         parsed = parse_uri(patch_uri)
-        assert parsed.uri_type == UriType.MEMORY, \
+        assert parsed.uri_type == UriType.MEMORY, (
             "parse_uri 必须将 memory://patch_blobs/... 识别为 MEMORY 类型"
+        )
         assert parsed.scheme == "memory"
         assert parsed.is_local is True
 
         # attachments URI
         attachment_uri = f"memory://attachments/12345/{VALID_SHA256}"
         parsed = parse_uri(attachment_uri)
-        assert parsed.uri_type == UriType.MEMORY, \
+        assert parsed.uri_type == UriType.MEMORY, (
             "parse_uri 必须将 memory://attachments/... 识别为 MEMORY 类型"
+        )
         assert parsed.scheme == "memory"
         assert parsed.is_local is True
 
         # docs URI (根据 evidence_packet.md)
         docs_uri = f"memory://docs/contracts/evidence_packet.md/{VALID_SHA256}"
         parsed = parse_uri(docs_uri)
-        assert parsed.uri_type == UriType.MEMORY, \
+        assert parsed.uri_type == UriType.MEMORY, (
             "parse_uri 必须将 memory://docs/... 识别为 MEMORY 类型"
+        )
         assert parsed.scheme == "memory"
 
     def test_logbook_provides_specialized_parsers(self):
@@ -122,18 +125,21 @@ class TestUriGrammarOwnership:
         Gateway 应使用这些函数，而非自行实现解析逻辑。
         """
         # patch_blobs 专用解析器
-        assert callable(parse_evidence_uri), \
-            "Logbook 必须提供 parse_evidence_uri 函数"
-        assert callable(is_patch_blob_evidence_uri), \
+        assert callable(parse_evidence_uri), "Logbook 必须提供 parse_evidence_uri 函数"
+        assert callable(is_patch_blob_evidence_uri), (
             "Logbook 必须提供 is_patch_blob_evidence_uri 函数"
+        )
 
         # attachments 专用解析器
-        assert callable(parse_attachment_evidence_uri), \
+        assert callable(parse_attachment_evidence_uri), (
             "Logbook 必须提供 parse_attachment_evidence_uri 函数"
-        assert callable(parse_attachment_evidence_uri_strict), \
+        )
+        assert callable(parse_attachment_evidence_uri_strict), (
             "Logbook 必须提供 parse_attachment_evidence_uri_strict 函数"
-        assert callable(is_attachment_evidence_uri), \
+        )
+        assert callable(is_attachment_evidence_uri), (
             "Logbook 必须提供 is_attachment_evidence_uri 函数"
+        )
 
     def test_logbook_provides_uri_builders(self):
         """
@@ -141,16 +147,17 @@ class TestUriGrammarOwnership:
 
         Gateway 应使用这些函数构建 evidence URI，而非自行拼接字符串。
         """
-        assert callable(build_evidence_uri), \
-            "Logbook 必须提供 build_evidence_uri 函数"
-        assert callable(build_attachment_evidence_uri), \
+        assert callable(build_evidence_uri), "Logbook 必须提供 build_evidence_uri 函数"
+        assert callable(build_attachment_evidence_uri), (
             "Logbook 必须提供 build_attachment_evidence_uri 函数"
-        assert callable(build_evidence_ref_for_patch_blob), \
+        )
+        assert callable(build_evidence_ref_for_patch_blob), (
             "Logbook 必须提供 build_evidence_ref_for_patch_blob 函数"
-        assert callable(build_attachment_evidence_ref), \
+        )
+        assert callable(build_attachment_evidence_ref), (
             "Logbook 必须提供 build_attachment_evidence_ref 函数"
-        assert callable(build_evidence_refs_json), \
-            "Logbook 必须提供 build_evidence_refs_json 函数"
+        )
+        assert callable(build_evidence_refs_json), "Logbook 必须提供 build_evidence_refs_json 函数"
 
     def test_gateway_cannot_bypass_logbook_parser(self):
         """
@@ -164,19 +171,17 @@ class TestUriGrammarOwnership:
         result = parse_evidence_uri(uri)
 
         assert result is not None
-        assert "source_type" in result, \
-            "parse_evidence_uri 必须返回 source_type 字段"
-        assert "source_id" in result, \
-            "parse_evidence_uri 必须返回 source_id 字段"
-        assert "sha256" in result, \
-            "parse_evidence_uri 必须返回 sha256 字段"
+        assert "source_type" in result, "parse_evidence_uri 必须返回 source_type 字段"
+        assert "source_id" in result, "parse_evidence_uri 必须返回 source_id 字段"
+        assert "sha256" in result, "parse_evidence_uri 必须返回 sha256 字段"
 
         # 验证 parse_attachment_evidence_uri_strict 返回结构稳定
         attachment_uri = f"memory://attachments/12345/{VALID_SHA256}"
         attachment_result = parse_attachment_evidence_uri_strict(attachment_uri)
 
-        assert isinstance(attachment_result, AttachmentUriParseResult), \
+        assert isinstance(attachment_result, AttachmentUriParseResult), (
             "parse_attachment_evidence_uri_strict 必须返回 AttachmentUriParseResult"
+        )
         assert hasattr(attachment_result, "success")
         assert hasattr(attachment_result, "attachment_id")
         assert hasattr(attachment_result, "sha256")
@@ -231,8 +236,9 @@ class TestEvidencePacketContract:
 
         uri = build_evidence_uri(source_type, source_id, sha256)
 
-        assert uri == f"memory://patch_blobs/{source_type}/{source_id}/{sha256}", \
+        assert uri == f"memory://patch_blobs/{source_type}/{source_id}/{sha256}", (
             "artifact_uri 必须遵循 memory://patch_blobs/<source_type>/<source_id>/<sha256> 格式"
+        )
 
     def test_artifact_uri_format_attachments(self):
         """
@@ -245,8 +251,9 @@ class TestEvidencePacketContract:
 
         uri = build_attachment_evidence_uri(attachment_id, sha256)
 
-        assert uri == f"memory://attachments/{attachment_id}/{sha256}", \
+        assert uri == f"memory://attachments/{attachment_id}/{sha256}", (
             "artifact_uri 必须遵循 memory://attachments/<attachment_id>/<sha256> 格式"
+        )
 
     def test_sha256_must_be_64_hex_chars(self):
         """
@@ -256,10 +263,8 @@ class TestEvidencePacketContract:
         """
         ref = build_evidence_ref_for_patch_blob("git", "1:abc", VALID_SHA256)
 
-        assert len(ref["sha256"]) == 64, \
-            "sha256 必须是 64 位"
-        assert all(c in "0123456789abcdef" for c in ref["sha256"]), \
-            "sha256 必须是十六进制字符"
+        assert len(ref["sha256"]) == 64, "sha256 必须是 64 位"
+        assert all(c in "0123456789abcdef" for c in ref["sha256"]), "sha256 必须是十六进制字符"
 
     def test_sha256_normalized_to_lowercase(self):
         """
@@ -268,8 +273,7 @@ class TestEvidencePacketContract:
         upper_sha = VALID_SHA256.upper()
         ref = build_evidence_ref_for_patch_blob("git", "1:abc", upper_sha)
 
-        assert ref["sha256"] == VALID_SHA256.lower(), \
-            "sha256 必须自动规范化为小写"
+        assert ref["sha256"] == VALID_SHA256.lower(), "sha256 必须自动规范化为小写"
 
     def test_source_id_format(self):
         """
@@ -279,8 +283,7 @@ class TestEvidencePacketContract:
         """
         # Git 格式
         ref = build_evidence_ref_for_patch_blob("git", "1:abc123def", VALID_SHA256)
-        assert ":" in ref["source_id"], \
-            "source_id 必须包含 : 分隔符"
+        assert ":" in ref["source_id"], "source_id 必须包含 : 分隔符"
         assert ref["source_id"] == "1:abc123def"
 
         # SVN 格式
@@ -297,16 +300,14 @@ class TestEvidencePacketContract:
 
         for source_type in allowed_source_types:
             ref = build_evidence_ref_for_patch_blob(source_type, "1:test", VALID_SHA256)
-            assert ref["source_type"] == source_type.lower(), \
-                f"source_type {source_type} 应被支持"
+            assert ref["source_type"] == source_type.lower(), f"source_type {source_type} 应被支持"
 
     def test_source_type_normalized_to_lowercase(self):
         """
         契约测试：source_type 自动规范化为小写
         """
         ref = build_evidence_ref_for_patch_blob("GIT", "1:abc", VALID_SHA256)
-        assert ref["source_type"] == "git", \
-            "source_type 必须自动规范化为小写"
+        assert ref["source_type"] == "git", "source_type 必须自动规范化为小写"
 
     def test_evidence_ref_required_fields(self):
         """
@@ -408,10 +409,10 @@ class TestAttachmentEvidenceUriStrictContract:
 
         for uri in legacy_uris:
             result = parse_attachment_evidence_uri_strict(uri)
-            assert result.success is False, \
-                f"必须拒绝旧格式 URI: {uri}"
-            assert result.error_code == ATTACHMENT_URI_ERR_LEGACY_FORMAT, \
+            assert result.success is False, f"必须拒绝旧格式 URI: {uri}"
+            assert result.error_code == ATTACHMENT_URI_ERR_LEGACY_FORMAT, (
                 f"旧格式 URI 应返回 E_LEGACY_FORMAT 错误码: {uri}"
+            )
             assert "旧格式" in result.error_message or "三段路径" in result.error_message
 
     def test_strict_parser_requires_integer_attachment_id(self):
@@ -429,8 +430,7 @@ class TestAttachmentEvidenceUriStrictContract:
             result = parse_attachment_evidence_uri_strict(uri)
             # 非整数 ID 应失败
             if not str(uri.split("/")[3]).lstrip("-").isdigit():
-                assert result.success is False, \
-                    f"必须拒绝非整数 attachment_id: {desc}"
+                assert result.success is False, f"必须拒绝非整数 attachment_id: {desc}"
                 assert result.error_code in [
                     ATTACHMENT_URI_ERR_INVALID_ID,
                     ATTACHMENT_URI_ERR_LEGACY_FORMAT,
@@ -450,10 +450,10 @@ class TestAttachmentEvidenceUriStrictContract:
 
         for uri, desc in invalid_sha256_cases:
             result = parse_attachment_evidence_uri_strict(uri)
-            assert result.success is False, \
-                f"必须拒绝无效 sha256: {desc}"
-            assert result.error_code == ATTACHMENT_URI_ERR_INVALID_SHA256, \
+            assert result.success is False, f"必须拒绝无效 sha256: {desc}"
+            assert result.error_code == ATTACHMENT_URI_ERR_INVALID_SHA256, (
                 f"应返回 E_INVALID_SHA256: {desc}"
+            )
 
     def test_strict_parser_error_codes_are_stable(self):
         """
@@ -475,8 +475,7 @@ class TestAttachmentEvidenceUriStrictContract:
             uri = build_attachment_evidence_uri(attachment_id, VALID_SHA256)
             result = parse_attachment_evidence_uri_strict(uri)
 
-            assert result.success is True, \
-                f"build 生成的 URI 必须能被 strict 解析: {uri}"
+            assert result.success is True, f"build 生成的 URI 必须能被 strict 解析: {uri}"
             assert result.attachment_id == attachment_id
             assert result.sha256 == VALID_SHA256.lower()
 
@@ -548,12 +547,9 @@ class TestEvidenceRefsJsonContract:
             }
         )
 
-        assert refs_json.get("outbox_id") == 12345, \
-            "outbox_id 必须在顶层（用于 SQL 查询）"
-        assert refs_json.get("memory_id") == "mem_abc123", \
-            "memory_id 必须在顶层"
-        assert refs_json.get("source") == "outbox_worker", \
-            "source 必须在顶层"
+        assert refs_json.get("outbox_id") == 12345, "outbox_id 必须在顶层（用于 SQL 查询）"
+        assert refs_json.get("memory_id") == "mem_abc123", "memory_id 必须在顶层"
+        assert refs_json.get("source") == "outbox_worker", "source 必须在顶层"
 
     def test_evidence_summary_structure(self):
         """
@@ -681,8 +677,9 @@ class TestGatewayLogbookInteropContract:
         # Logbook 解析 URI
         parsed = parse_attachment_evidence_uri_strict(uri)
 
-        assert parsed.success is True, \
+        assert parsed.success is True, (
             f"Logbook 必须能解析 Gateway 构建的 attachment URI: {parsed.error_message}"
+        )
         assert parsed.attachment_id == attachment_id
         assert parsed.sha256 == sha256.lower()
 

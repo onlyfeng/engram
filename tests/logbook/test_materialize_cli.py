@@ -8,25 +8,21 @@ test_materialize_cli.py - scm_materialize_patch_blob CLI 单测
 3. 参数组合验证
 """
 
-import argparse
 import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # 添加 scripts 目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scm_materialize_patch_blob import (
-    parse_args,
-    materialize_patch_blobs,
-    get_blobs_by_attachment_id,
-    get_blobs_by_attachment_kind,
-    PatchBlobRecord,
     MaterializeResult,
     MaterializeStatus,
+    PatchBlobRecord,
+    get_blobs_by_attachment_id,
+    get_blobs_by_attachment_kind,
+    parse_args,
 )
 
 
@@ -97,14 +93,19 @@ class TestCliArgumentParsing:
 
     def test_parse_args_combined(self):
         """测试多个参数组合"""
-        with patch("sys.argv", [
-            "prog",
-            "--kind", "patch",
-            "--materialize-missing",
-            "--batch-size", "50",
-            "--json",
-            "--verbose"
-        ]):
+        with patch(
+            "sys.argv",
+            [
+                "prog",
+                "--kind",
+                "patch",
+                "--materialize-missing",
+                "--batch-size",
+                "50",
+                "--json",
+                "--verbose",
+            ],
+        ):
             args = parse_args()
             assert args.kind == "patch"
             assert args.materialize_missing is True
@@ -125,7 +126,7 @@ class TestOutputStructure:
             sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             size_bytes=1024,
         )
-        
+
         assert result.blob_id == 123
         assert result.status == MaterializeStatus.MATERIALIZED
         assert result.uri is not None
@@ -140,7 +141,7 @@ class TestOutputStructure:
             status=MaterializeStatus.FAILED,
             error="连接超时",
         )
-        
+
         assert result.blob_id == 456
         assert result.status == MaterializeStatus.FAILED
         assert result.uri is None
@@ -153,7 +154,7 @@ class TestOutputStructure:
             status=MaterializeStatus.SKIPPED,
             uri="scm/1/git/commits/existing.diff",
         )
-        
+
         assert result.blob_id == 789
         assert result.status == MaterializeStatus.SKIPPED
         assert result.uri is not None
@@ -194,7 +195,7 @@ class TestOutputStructure:
                 },
             ],
         }
-        
+
         # 验证顶层结构
         assert "success" in result
         assert "total" in result
@@ -202,15 +203,21 @@ class TestOutputStructure:
         assert "skipped" in result
         assert "failed" in result
         assert "details" in result
-        
+
         # 验证数值一致性
         assert result["total"] == result["materialized"] + result["skipped"] + result["failed"]
-        
+
         # 验证 details 结构
         for detail in result["details"]:
             assert "blob_id" in detail
             assert "status" in detail
-            assert detail["status"] in ["materialized", "skipped", "failed", "pending", "unreachable"]
+            assert detail["status"] in [
+                "materialized",
+                "skipped",
+                "failed",
+                "pending",
+                "unreachable",
+            ]
 
 
 class TestPatchBlobRecordStructure:
@@ -228,7 +235,7 @@ class TestPatchBlobRecordStructure:
             format="diff",
             meta_json={"materialize_status": "done"},
         )
-        
+
         assert record.blob_id == 123
         assert record.source_type == "git"
         assert record.source_id == "1:abc123def"
@@ -250,7 +257,7 @@ class TestPatchBlobRecordStructure:
             size_bytes=None,
             format="diff",
         )
-        
+
         assert record.uri is None
         assert record.size_bytes is None
         assert record.meta_json is None
@@ -263,7 +270,7 @@ class TestMaterializeStatusEnum:
         """测试所有状态枚举值"""
         expected_statuses = ["pending", "materialized", "failed", "skipped", "unreachable"]
         actual_statuses = [s.value for s in MaterializeStatus]
-        
+
         for expected in expected_statuses:
             assert expected in actual_statuses, f"缺少状态: {expected}"
 
@@ -285,9 +292,9 @@ class TestGetBlobsFunctions:
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
         mock_cursor.fetchone.return_value = None  # attachment 不存在
-        
+
         results = get_blobs_by_attachment_id(mock_conn, 999)
-        
+
         assert results == []
 
     def test_get_blobs_by_attachment_id_sha256_match(self):
@@ -295,7 +302,7 @@ class TestGetBlobsFunctions:
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-        
+
         # 第一次调用返回 attachment
         # 第二次调用返回关联的 blob
         mock_cursor.fetchone.side_effect = [
@@ -321,9 +328,9 @@ class TestGetBlobsFunctions:
                 "meta_json": {},
             }
         ]
-        
+
         results = get_blobs_by_attachment_id(mock_conn, 1)
-        
+
         assert len(results) == 1
         assert results[0]["blob_id"] == 1
         assert results[0]["sha256"] == "abc123"
@@ -334,9 +341,9 @@ class TestGetBlobsFunctions:
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
         mock_cursor.fetchall.return_value = []
-        
+
         results = get_blobs_by_attachment_kind(mock_conn, "unknown_kind")
-        
+
         assert results == []
 
 
@@ -352,11 +359,11 @@ class TestJsonOutputFormat:
             "skipped": 0,
             "failed": 0,
         }
-        
+
         # 验证可序列化
         json_str = json.dumps(output, ensure_ascii=False)
         parsed = json.loads(json_str)
-        
+
         assert parsed["success"] is True
         assert parsed["total"] == 2
 
@@ -379,10 +386,10 @@ class TestJsonOutputFormat:
                 }
             ],
         }
-        
+
         json_str = json.dumps(output, ensure_ascii=False)
         parsed = json.loads(json_str)
-        
+
         assert len(parsed["details"]) == 1
         assert parsed["details"][0]["blob_id"] == 1
 
@@ -393,9 +400,9 @@ class TestJsonOutputFormat:
             "type": "MATERIALIZE_ERROR",
             "message": "物化失败: 连接超时",
         }
-        
+
         json_str = json.dumps(output, ensure_ascii=False)
         parsed = json.loads(json_str)
-        
+
         assert parsed["error"] is True
         assert "message" in parsed

@@ -12,11 +12,8 @@ test_scm_sync_runs_ledger.py - scm.sync_runs 表的单元测试
 依赖: conftest.py 中的 db_conn fixture
 """
 
-import uuid
-import pytest
-from datetime import datetime, timezone
-
 import sys
+import uuid
 from pathlib import Path
 
 # 确保可以导入 db 模块
@@ -25,10 +22,10 @@ if str(scripts_dir) not in sys.path:
     sys.path.insert(0, str(scripts_dir))
 
 from db import (
-    insert_sync_run_start,
-    insert_sync_run_finish,
-    get_sync_run,
     get_latest_sync_run,
+    get_sync_run,
+    insert_sync_run_finish,
+    insert_sync_run_start,
     upsert_repo,
 )
 
@@ -46,7 +43,7 @@ class TestInsertSyncRunStart:
             project_key="test_project",
         )
         run_id = str(uuid.uuid4())
-        
+
         # Act
         result = insert_sync_run_start(
             conn=db_conn,
@@ -57,10 +54,10 @@ class TestInsertSyncRunStart:
             cursor_before={"last_commit_sha": "abc123", "last_commit_ts": "2024-01-01T00:00:00Z"},
             meta_json={"batch_size": 100},
         )
-        
+
         # Assert
         assert result == run_id
-        
+
         # 验证记录已插入
         record = get_sync_run(db_conn, run_id)
         assert record is not None
@@ -80,9 +77,9 @@ class TestInsertSyncRunStart:
             url="https://gitlab.example.com/test/repo2",
             project_key="test_project",
         )
-        
+
         job_types = ["gitlab_commits", "gitlab_mrs", "gitlab_reviews", "svn"]
-        
+
         for job_type in job_types:
             run_id = str(uuid.uuid4())
             result = insert_sync_run_start(
@@ -92,9 +89,9 @@ class TestInsertSyncRunStart:
                 job_type=job_type,
                 mode="incremental",
             )
-            
+
             assert result == run_id
-            
+
             record = get_sync_run(db_conn, run_id)
             assert record["job_type"] == job_type
 
@@ -107,8 +104,8 @@ class TestInsertSyncRunStart:
             project_key="test_project",
         )
         run_id = str(uuid.uuid4())
-        
-        result = insert_sync_run_start(
+
+        insert_sync_run_start(
             conn=db_conn,
             run_id=run_id,
             repo_id=repo_id,
@@ -116,7 +113,7 @@ class TestInsertSyncRunStart:
             mode="backfill",
             cursor_before={"last_rev": 100},
         )
-        
+
         record = get_sync_run(db_conn, run_id)
         assert record["mode"] == "backfill"
 
@@ -134,7 +131,7 @@ class TestInsertSyncRunFinish:
             project_key="test_project",
         )
         run_id = str(uuid.uuid4())
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=run_id,
@@ -143,7 +140,7 @@ class TestInsertSyncRunFinish:
             mode="incremental",
             cursor_before={"last_commit_sha": "abc123"},
         )
-        
+
         # Act
         result = insert_sync_run_finish(
             conn=db_conn,
@@ -153,10 +150,10 @@ class TestInsertSyncRunFinish:
             counts={"synced_count": 10, "diff_count": 8, "bulk_count": 2},
             logbook_item_id=12345,
         )
-        
+
         # Assert
         assert result is True
-        
+
         record = get_sync_run(db_conn, run_id)
         assert record["status"] == "completed"
         assert record["finished_at"] is not None
@@ -174,7 +171,7 @@ class TestInsertSyncRunFinish:
             project_key="test_project",
         )
         run_id = str(uuid.uuid4())
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=run_id,
@@ -182,16 +179,16 @@ class TestInsertSyncRunFinish:
             job_type="gitlab_mrs",
             mode="incremental",
         )
-        
+
         result = insert_sync_run_finish(
             conn=db_conn,
             run_id=run_id,
             status="failed",
             error_summary_json={"error_type": "API_ERROR", "message": "Rate limited"},
         )
-        
+
         assert result is True
-        
+
         record = get_sync_run(db_conn, run_id)
         assert record["status"] == "failed"
         assert record["error_summary_json"]["error_type"] == "API_ERROR"
@@ -205,7 +202,7 @@ class TestInsertSyncRunFinish:
             project_key="test_project",
         )
         run_id = str(uuid.uuid4())
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=run_id,
@@ -213,16 +210,16 @@ class TestInsertSyncRunFinish:
             job_type="gitlab_reviews",
             mode="incremental",
         )
-        
+
         result = insert_sync_run_finish(
             conn=db_conn,
             run_id=run_id,
             status="no_data",
             counts={"synced_count": 0},
         )
-        
+
         assert result is True
-        
+
         record = get_sync_run(db_conn, run_id)
         assert record["status"] == "no_data"
         assert record["synced_count"] == 0
@@ -236,7 +233,7 @@ class TestInsertSyncRunFinish:
             project_key="test_project",
         )
         run_id = str(uuid.uuid4())
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=run_id,
@@ -244,7 +241,7 @@ class TestInsertSyncRunFinish:
             job_type="gitlab_commits",
             mode="incremental",
         )
-        
+
         result = insert_sync_run_finish(
             conn=db_conn,
             run_id=run_id,
@@ -254,9 +251,9 @@ class TestInsertSyncRunFinish:
                 "degraded_reasons": {"timeout": 3, "content_too_large": 2},
             },
         )
-        
+
         assert result is True
-        
+
         record = get_sync_run(db_conn, run_id)
         assert record["degradation_json"]["degraded_reasons"]["timeout"] == 3
 
@@ -267,7 +264,7 @@ class TestInsertSyncRunFinish:
             run_id=str(uuid.uuid4()),
             status="completed",
         )
-        
+
         assert result is False
 
 
@@ -283,7 +280,7 @@ class TestGetSyncRun:
             project_key="test_project",
         )
         run_id = str(uuid.uuid4())
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=run_id,
@@ -291,9 +288,9 @@ class TestGetSyncRun:
             job_type="svn",
             mode="incremental",
         )
-        
+
         record = get_sync_run(db_conn, run_id)
-        
+
         assert record is not None
         assert record["run_id"] == uuid.UUID(run_id)
 
@@ -314,7 +311,7 @@ class TestGetLatestSyncRun:
             url="https://gitlab.example.com/test/latest-test",
             project_key="test_project",
         )
-        
+
         # 插入多条记录
         run_ids = []
         for i in range(3):
@@ -327,10 +324,10 @@ class TestGetLatestSyncRun:
                 job_type="gitlab_commits",
                 mode="incremental",
             )
-        
+
         # 获取最新的
         record = get_latest_sync_run(db_conn, repo_id)
-        
+
         assert record is not None
         assert record["run_id"] == uuid.UUID(run_ids[-1])
 
@@ -342,11 +339,11 @@ class TestGetLatestSyncRun:
             url="https://gitlab.example.com/test/latest-job-type-test",
             project_key="test_project",
         )
-        
+
         # 插入不同类型的记录
         commits_run_id = str(uuid.uuid4())
         mrs_run_id = str(uuid.uuid4())
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=commits_run_id,
@@ -354,7 +351,7 @@ class TestGetLatestSyncRun:
             job_type="gitlab_commits",
             mode="incremental",
         )
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=mrs_run_id,
@@ -362,11 +359,11 @@ class TestGetLatestSyncRun:
             job_type="gitlab_mrs",
             mode="incremental",
         )
-        
+
         # 按任务类型获取
         commits_record = get_latest_sync_run(db_conn, repo_id, job_type="gitlab_commits")
         mrs_record = get_latest_sync_run(db_conn, repo_id, job_type="gitlab_mrs")
-        
+
         assert commits_record["run_id"] == uuid.UUID(commits_run_id)
         assert mrs_record["run_id"] == uuid.UUID(mrs_run_id)
 
@@ -378,7 +375,7 @@ class TestGetLatestSyncRun:
             url="https://gitlab.example.com/test/empty-repo",
             project_key="test_project",
         )
-        
+
         record = get_latest_sync_run(db_conn, repo_id)
         assert record is None
 
@@ -395,14 +392,14 @@ class TestSyncRunIntegration:
             url="https://gitlab.example.com/test/lifecycle",
             project_key="test_project",
         )
-        
+
         # 2. 开始同步
         run_id = str(uuid.uuid4())
         cursor_before = {
             "last_commit_sha": "initial_sha",
             "last_commit_ts": "2024-01-01T00:00:00Z",
         }
-        
+
         insert_sync_run_start(
             conn=db_conn,
             run_id=run_id,
@@ -412,12 +409,12 @@ class TestSyncRunIntegration:
             cursor_before=cursor_before,
             meta_json={"batch_size": 100, "strict": True},
         )
-        
+
         # 验证运行中状态
         record = get_sync_run(db_conn, run_id)
         assert record["status"] == "running"
         assert record["finished_at"] is None
-        
+
         # 3. 完成同步
         cursor_after = {
             "last_commit_sha": "new_sha",
@@ -429,7 +426,7 @@ class TestSyncRunIntegration:
             "bulk_count": 5,
             "degraded_count": 2,
         }
-        
+
         insert_sync_run_finish(
             conn=db_conn,
             run_id=run_id,
@@ -439,7 +436,7 @@ class TestSyncRunIntegration:
             degradation_json={"degraded_reasons": {"timeout": 2}},
             logbook_item_id=99999,
         )
-        
+
         # 4. 验证最终状态
         record = get_sync_run(db_conn, run_id)
         assert record["status"] == "completed"
@@ -457,9 +454,9 @@ class TestSyncRunIntegration:
             url="https://gitlab.example.com/test/no-data-lifecycle",
             project_key="test_project",
         )
-        
+
         run_id = str(uuid.uuid4())
-        
+
         # 开始同步
         insert_sync_run_start(
             conn=db_conn,
@@ -468,7 +465,7 @@ class TestSyncRunIntegration:
             job_type="gitlab_commits",
             mode="incremental",
         )
-        
+
         # 没有新数据，直接完成
         insert_sync_run_finish(
             conn=db_conn,
@@ -476,7 +473,7 @@ class TestSyncRunIntegration:
             status="no_data",
             counts={"synced_count": 0},
         )
-        
+
         # 验证记录存在且状态正确
         record = get_sync_run(db_conn, run_id)
         assert record["status"] == "no_data"

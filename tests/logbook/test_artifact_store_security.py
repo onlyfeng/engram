@@ -19,8 +19,6 @@ test_artifact_store_security.py - ArtifactStore 安全测试
 import hashlib
 import os
 import sys
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -28,19 +26,18 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engram.logbook.artifact_store import (
-    LocalArtifactsStore,
-    FileUriStore,
-    ObjectStore,
-    PathTraversalError,
+    OVERWRITE_ALLOW,
+    OVERWRITE_ALLOW_SAME_HASH,
+    OVERWRITE_DENY,
+    ArtifactHashMismatchError,
     ArtifactNotFoundError,
     ArtifactOverwriteDeniedError,
-    ArtifactHashMismatchError,
     FileUriPathError,
-    OVERWRITE_ALLOW,
-    OVERWRITE_DENY,
-    OVERWRITE_ALLOW_SAME_HASH,
+    FileUriStore,
+    LocalArtifactsStore,
+    ObjectStore,
+    PathTraversalError,
 )
-
 
 # ============ 路径穿越攻击防护测试 ============
 
@@ -184,10 +181,7 @@ class TestLocalStoreAllowedPrefixes:
 
     def test_reject_path_outside_allowed_prefixes(self, tmp_path):
         """拒绝不在允许前缀列表中的路径"""
-        store = LocalArtifactsStore(
-            root=tmp_path,
-            allowed_prefixes=["scm/", "attachments/"]
-        )
+        store = LocalArtifactsStore(root=tmp_path, allowed_prefixes=["scm/", "attachments/"])
 
         with pytest.raises(PathTraversalError) as exc_info:
             store.put("unauthorized/file.txt", b"data")
@@ -196,10 +190,7 @@ class TestLocalStoreAllowedPrefixes:
 
     def test_accept_path_with_allowed_prefix(self, tmp_path):
         """接受在允许前缀列表中的路径"""
-        store = LocalArtifactsStore(
-            root=tmp_path,
-            allowed_prefixes=["scm/", "attachments/"]
-        )
+        store = LocalArtifactsStore(root=tmp_path, allowed_prefixes=["scm/", "attachments/"])
 
         result = store.put("scm/repo/test.diff", b"content")
         assert result["uri"] == "scm/repo/test.diff"
@@ -223,10 +214,7 @@ class TestLocalStoreAllowedPrefixes:
 
     def test_prefix_boundary_check(self, tmp_path):
         """前缀边界检查 - 避免 'scm' 匹配 'scm_backup'"""
-        store = LocalArtifactsStore(
-            root=tmp_path,
-            allowed_prefixes=["scm/"]
-        )
+        store = LocalArtifactsStore(root=tmp_path, allowed_prefixes=["scm/"])
 
         # 'scm_backup/' 不应该被 'scm/' 匹配
         with pytest.raises(PathTraversalError):
@@ -268,10 +256,7 @@ class TestLocalStoreOverwritePolicy:
 
     def test_overwrite_same_hash_allows_identical(self, tmp_path):
         """allow_same_hash 策略允许相同内容覆盖"""
-        store = LocalArtifactsStore(
-            root=tmp_path,
-            overwrite_policy=OVERWRITE_ALLOW_SAME_HASH
-        )
+        store = LocalArtifactsStore(root=tmp_path, overwrite_policy=OVERWRITE_ALLOW_SAME_HASH)
 
         content = b"identical content"
         store.put("test.txt", content)
@@ -282,10 +267,7 @@ class TestLocalStoreOverwritePolicy:
 
     def test_overwrite_same_hash_blocks_different(self, tmp_path):
         """allow_same_hash 策略阻止不同内容覆盖"""
-        store = LocalArtifactsStore(
-            root=tmp_path,
-            overwrite_policy=OVERWRITE_ALLOW_SAME_HASH
-        )
+        store = LocalArtifactsStore(root=tmp_path, overwrite_policy=OVERWRITE_ALLOW_SAME_HASH)
 
         store.put("test.txt", b"original content")
 
@@ -327,7 +309,7 @@ class TestLocalStoreFilePermissions:
         store.put("secure/nested/file.txt", b"data")
 
         dir_path = tmp_path / "secure" / "nested"
-        mode = dir_path.stat().st_mode & 0o777
+        dir_path.stat().st_mode & 0o777
 
         # 目录权限可能因创建方式而异
         # 只验证目录被创建
@@ -458,10 +440,7 @@ class TestFileUriStoreOverwritePolicy:
 
     def test_overwrite_deny_blocks_existing(self, tmp_path):
         """deny 策略阻止覆盖现有文件"""
-        store = FileUriStore(
-            allowed_roots=[str(tmp_path)],
-            overwrite_policy=OVERWRITE_DENY
-        )
+        store = FileUriStore(allowed_roots=[str(tmp_path)], overwrite_policy=OVERWRITE_DENY)
 
         uri = f"file://{tmp_path}/test.txt"
 
@@ -473,8 +452,7 @@ class TestFileUriStoreOverwritePolicy:
     def test_overwrite_same_hash_allows_identical(self, tmp_path):
         """allow_same_hash 策略允许相同内容"""
         store = FileUriStore(
-            allowed_roots=[str(tmp_path)],
-            overwrite_policy=OVERWRITE_ALLOW_SAME_HASH
+            allowed_roots=[str(tmp_path)], overwrite_policy=OVERWRITE_ALLOW_SAME_HASH
         )
 
         uri = f"file://{tmp_path}/test.txt"
@@ -579,7 +557,7 @@ class TestSymlinkEscapePrevention:
         # 由于 resolve() 会解析符号链接，应该检测到逃逸
         # 注意：这取决于实现细节，可能需要额外的安全检查
         try:
-            content = store.get("escape/secret.txt")
+            store.get("escape/secret.txt")
             # 如果能读取，检查是否真的是外部内容
             # 取决于安全策略，这可能是允许的或被阻止的
         except (PathTraversalError, ArtifactNotFoundError):
@@ -632,7 +610,7 @@ class TestEncodingHandling:
         store = LocalArtifactsStore(root=tmp_path)
 
         content_str = "你好，世界！Hello, World!"
-        result = store.put("unicode.txt", content_str)
+        store.put("unicode.txt", content_str)
 
         read_content = store.get("unicode.txt")
         assert read_content.decode("utf-8") == content_str
@@ -642,7 +620,7 @@ class TestEncodingHandling:
         store = LocalArtifactsStore(root=tmp_path)
 
         content_str = "Привет мир"
-        result = store.put("custom_encoding.txt", content_str, encoding="utf-8")
+        store.put("custom_encoding.txt", content_str, encoding="utf-8")
 
         read_content = store.get("custom_encoding.txt")
         assert read_content.decode("utf-8") == content_str
@@ -653,7 +631,7 @@ class TestEncodingHandling:
 
         # 包含所有可能字节值的内容
         binary_content = bytes(range(256))
-        result = store.put("binary.bin", binary_content)
+        store.put("binary.bin", binary_content)
 
         read_content = store.get("binary.bin")
         assert read_content == binary_content

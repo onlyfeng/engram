@@ -12,26 +12,26 @@ memory_card 模块单元测试
 """
 
 import hashlib
+
 import pytest
 
 from engram.gateway.memory_card import (
+    TTL,
+    Confidence,
+    Evidence,
     MemoryCard,
     MemoryKind,
-    Confidence,
-    Visibility,
-    TTL,
-    Evidence,
     TrimConfig,
-    TrimResult,
+    Visibility,
+    compute_content_sha,
     create_memory_card,
     generate_memory_markdown,
-    compute_content_sha,
     trim_diff_content,
     trim_log_content,
 )
 
-
 # ======================== Evidence 测试 ========================
+
 
 class TestEvidence:
     """Evidence 结构测试"""
@@ -100,6 +100,7 @@ class TestEvidence:
 
 
 # ======================== MemoryCard 测试 ========================
+
 
 class TestMemoryCard:
     """MemoryCard 结构测试"""
@@ -232,7 +233,7 @@ class TestMemoryCard:
     def test_to_markdown_format(self, valid_card):
         """Markdown 输出格式测试"""
         md = valid_card.to_markdown()
-        
+
         # 检查元数据头
         assert "[Kind] PROCEDURE" in md
         assert "[Owner] user_001" in md
@@ -240,17 +241,17 @@ class TestMemoryCard:
         assert "[Visibility] team" in md
         assert "[TTL] long" in md
         assert "[Confidence] high" in md
-        
+
         # 检查 Summary
         assert "[Summary]" in md
         assert "如何处理用户登录请求" in md
-        
+
         # 检查 Details
         assert "[Details]" in md
         assert "1) 步骤1：验证参数" in md
         assert "2) 步骤2：调用认证服务" in md
         assert "3) 步骤3：返回 token" in md
-        
+
         # 检查 Evidence
         assert "[Evidence]" in md
         assert "uri=memory://test/1" in md
@@ -258,11 +259,11 @@ class TestMemoryCard:
     def test_compute_payload_sha(self, valid_card):
         """SHA256 计算测试"""
         sha = valid_card.compute_payload_sha()
-        
+
         # 验证格式
         assert len(sha) == 64
         assert all(c in "0123456789abcdef" for c in sha)
-        
+
         # 验证一致性
         sha2 = valid_card.compute_payload_sha()
         assert sha == sha2
@@ -290,6 +291,7 @@ class TestMemoryCard:
 
 # ======================== 裁剪逻辑测试 ========================
 
+
 class TestTrimming:
     """裁剪逻辑测试"""
 
@@ -309,7 +311,7 @@ class TestTrimming:
             evidence=evidence,
         )
         md = card.to_markdown()
-        
+
         # Summary 应被截断
         logs = card.get_trim_logs()
         assert any("summary 超长截断" in log for log in logs)
@@ -326,8 +328,8 @@ class TestTrimming:
             details=[long_detail],
             evidence=evidence,
         )
-        md = card.to_markdown()
-        
+        card.to_markdown()
+
         logs = card.get_trim_logs()
         assert any("details[0] 超长截断" in log for log in logs)
 
@@ -343,7 +345,7 @@ class TestTrimming:
             evidence=evidence,
         )
         md = card.to_markdown()
-        
+
         logs = card.get_trim_logs()
         assert any("details 条目数截断" in log for log in logs)
         # 应该只有 10 条 detail
@@ -351,10 +353,7 @@ class TestTrimming:
 
     def test_evidence_count_limit(self):
         """Evidence 条目数限制"""
-        many_evidence = [
-            Evidence(uri=f"memory://test/{i}", sha256="a" * 64)
-            for i in range(15)
-        ]
+        many_evidence = [Evidence(uri=f"memory://test/{i}", sha256="a" * 64) for i in range(15)]
         card = MemoryCard(
             kind=MemoryKind.FACT,
             owner="user",
@@ -363,8 +362,8 @@ class TestTrimming:
             details=["detail"],
             evidence=many_evidence,
         )
-        md = card.to_markdown()
-        
+        card.to_markdown()
+
         logs = card.get_trim_logs()
         assert any("evidence 条目数截断" in log for log in logs)
 
@@ -386,7 +385,7 @@ class TestTrimming:
             evidence=evidence,
         )
         md = card.to_markdown()
-        
+
         logs = card.get_trim_logs()
         assert any("diff 内容替换为指针" in log for log in logs)
         assert "[diff 内容已移除，仅保留指针]" in md
@@ -404,8 +403,8 @@ class TestTrimming:
             details=[log_content],
             evidence=evidence,
         )
-        md = card.to_markdown()
-        
+        card.to_markdown()
+
         logs = card.get_trim_logs()
         assert any("log 内容替换为指针" in log for log in logs)
 
@@ -425,14 +424,15 @@ class TestTrimming:
             evidence=evidence,
         )
         card._trim_config = config
-        md = card.to_markdown()
-        
+        card.to_markdown()
+
         logs = card.get_trim_logs()
         assert any("summary 超长截断" in log for log in logs)
         assert any("details 条目数截断" in log for log in logs)
 
 
 # ======================== 便捷函数测试 ========================
+
 
 class TestConvenienceFunctions:
     """便捷函数测试"""
@@ -452,7 +452,7 @@ class TestConvenienceFunctions:
             visibility="private",
             ttl="short",
         )
-        
+
         assert card.kind == MemoryKind.FACT
         assert card.owner == "user_001"
         assert len(card.evidence) == 1
@@ -470,11 +470,11 @@ class TestConvenienceFunctions:
                 {"uri": "memory://test", "sha256": "b" * 64},
             ],
         )
-        
+
         assert isinstance(md, str)
         assert len(md) > 0
         assert "[Kind] PROCEDURE" in md
-        
+
         assert isinstance(sha, str)
         assert len(sha) == 64
 
@@ -482,7 +482,7 @@ class TestConvenienceFunctions:
         """compute_content_sha 函数"""
         content = "Hello, World!"
         sha = compute_content_sha(content)
-        
+
         expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
         assert sha == expected
 
@@ -490,7 +490,7 @@ class TestConvenienceFunctions:
         """trim_diff_content 函数"""
         diff = "diff --git a/x.py b/x.py\n+new line"
         trimmed, original_sha = trim_diff_content(diff)
-        
+
         assert "[diff 内容已移除，仅保留指针]" in trimmed
         assert original_sha == compute_content_sha(diff)
 
@@ -499,19 +499,20 @@ class TestConvenienceFunctions:
         diff = "diff content"
         uri = "svn://repo/r123"
         trimmed, _ = trim_diff_content(diff, uri)
-        
+
         assert uri in trimmed
 
     def test_trim_log_content(self):
         """trim_log_content 函数"""
         log = "[INFO] Server started\n[DEBUG] Loading"
         trimmed, original_sha = trim_log_content(log)
-        
+
         assert "[log 内容已移除，仅保留指针]" in trimmed
         assert original_sha == compute_content_sha(log)
 
 
 # ======================== 枚举类型测试 ========================
+
 
 class TestEnums:
     """枚举类型测试"""

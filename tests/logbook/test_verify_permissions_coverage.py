@@ -11,8 +11,9 @@
 """
 
 import re
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 def get_project_root() -> Path:
@@ -25,8 +26,9 @@ def get_project_root() -> Path:
 
 
 PROJECT_ROOT = get_project_root()
-VERIFY_PERMISSIONS_SQL = PROJECT_ROOT / "apps/logbook_postgres/sql/99_verify_permissions.sql"
-MAIN_VERIFY_SQL = PROJECT_ROOT / "sql/99_verify_permissions.sql"
+# 验证脚本位于 sql/verify/ 子目录（不被 initdb 自动执行）
+VERIFY_PERMISSIONS_SQL = PROJECT_ROOT / "sql/verify/99_verify_permissions.sql"
+MAIN_VERIFY_SQL = PROJECT_ROOT / "sql/verify/99_verify_permissions.sql"
 
 
 class TestVerifyPermissionsSqlCoverage:
@@ -127,9 +129,7 @@ class TestVerifyPermissionsSqlCoverage:
         assert "CONNECT" in self.verify_sql, (
             "99_verify_permissions.sql should check CONNECT permission"
         )
-        assert "TEMP" in self.verify_sql, (
-            "99_verify_permissions.sql should check TEMP permission"
-        )
+        assert "TEMP" in self.verify_sql, "99_verify_permissions.sql should check TEMP permission"
 
     def test_default_acl_check_exists(self):
         """验证 99_verify_permissions.sql 检查 pg_default_acl"""
@@ -150,13 +150,125 @@ class TestSectionNumbers:
     def test_section_numbers_exist(self):
         """验证 99_verify_permissions.sql 中存在 section 编号"""
         verify_sql = MAIN_VERIFY_SQL.read_text()
-        
+
         # 提取所有 section 编号（格式：=== N. 标题 ===）
         # 例如：RAISE NOTICE '=== 1. NOLOGIN 角色验证 ===';
         sections = re.findall(r"===\s*(\d+(?:\.\d+)?)[.\s]", verify_sql)
-        
+
         # 验证存在多个 section
         assert len(sections) >= 5, f"Should have at least 5 sections, found: {sections}"
+
+
+class TestStrictModeSupport:
+    """验证 99_verify_permissions.sql 支持 strict 模式"""
+
+    @pytest.fixture(autouse=True)
+    def load_sql_content(self):
+        """加载 SQL 文件内容"""
+        self.verify_sql = MAIN_VERIFY_SQL.read_text()
+
+    def test_strict_mode_config_variable_exists(self):
+        """验证 99_verify_permissions.sql 支持 engram.verify_strict 配置变量"""
+        assert "engram.verify_strict" in self.verify_sql, (
+            "99_verify_permissions.sql should support engram.verify_strict config variable"
+        )
+
+    def test_strict_mode_documentation_exists(self):
+        """验证 99_verify_permissions.sql 包含 strict 模式文档"""
+        assert "Strict 模式" in self.verify_sql or "strict" in self.verify_sql.lower(), (
+            "99_verify_permissions.sql should document strict mode"
+        )
+
+    def test_temp_table_for_fail_count_aggregation(self):
+        """验证 99_verify_permissions.sql 使用临时表汇总 fail_count"""
+        assert "_verify_fail_counts" in self.verify_sql, (
+            "99_verify_permissions.sql should use _verify_fail_counts temp table"
+        )
+
+    def test_raise_exception_in_strict_mode(self):
+        """验证 99_verify_permissions.sql 在 strict 模式下会 RAISE EXCEPTION"""
+        assert "RAISE EXCEPTION" in self.verify_sql, (
+            "99_verify_permissions.sql should RAISE EXCEPTION in strict mode"
+        )
+        assert "VERIFY_STRICT_FAILED" in self.verify_sql, (
+            "99_verify_permissions.sql should use VERIFY_STRICT_FAILED error code"
+        )
+
+    def test_strict_mode_triggers_on_warn(self):
+        """验证 strict 模式下 WARN 也会触发异常（CI 门禁）"""
+        # 检查 strict 模式条件包含 warn_count
+        assert "v_total_warn > 0" in self.verify_sql, (
+            "99_verify_permissions.sql should check warn_count in strict mode condition"
+        )
+        # 检查条件使用 OR 逻辑（FAIL 或 WARN 任一即触发）
+        assert "v_total_fail > 0 OR v_total_warn > 0" in self.verify_sql, (
+            "99_verify_permissions.sql should use OR logic for FAIL/WARN in strict mode"
+        )
+
+    def test_strict_mode_error_message_includes_warn_count(self):
+        """验证 strict 模式错误消息包含 WARN 计数"""
+        # 检查 RAISE EXCEPTION 消息中包含 WARN 计数
+        assert "% 项 WARN" in self.verify_sql, (
+            "99_verify_permissions.sql RAISE EXCEPTION should include WARN count"
+        )
+
+    def test_fail_count_inserted_to_temp_table(self):
+        """验证各 section 将 fail_count 插入到临时表"""
+        # 检查至少有 5 个 INSERT INTO _verify_fail_counts
+        insert_count = self.verify_sql.count("INSERT INTO _verify_fail_counts")
+        assert insert_count >= 5, (
+            f"Expected at least 5 INSERT INTO _verify_fail_counts, found {insert_count}"
+        )
+
+    def test_total_fail_count_aggregation(self):
+        """验证最终汇总 fail_count"""
+        assert "SUM(fail_count)" in self.verify_sql, (
+            "99_verify_permissions.sql should aggregate fail_count with SUM"
+        )
+
+    def test_total_warn_count_aggregation(self):
+        """验证最终汇总 warn_count"""
+        assert "SUM(warn_count)" in self.verify_sql, (
+            "99_verify_permissions.sql should aggregate warn_count with SUM"
+        )
+
+    def test_warn_sections_listed_in_output(self):
+        """验证有 WARN 的 section 会在输出中列出"""
+        assert "有 WARN 的验证项" in self.verify_sql, (
+            "99_verify_permissions.sql should list sections with WARN in output"
+        )
+
+    def test_cleanup_temp_table(self):
+        """验证清理临时表"""
+        assert "DROP TABLE IF EXISTS _verify_fail_counts" in self.verify_sql, (
+            "99_verify_permissions.sql should cleanup _verify_fail_counts temp table"
+        )
+
+
+class TestStrictModeCliIntegration:
+    """验证 strict 模式 CLI 集成（不需要数据库连接的测试）"""
+
+    def test_verify_strict_parameter_in_migrate_module(self):
+        """验证 migrate.py 中 run_migrate 支持 verify_strict 参数"""
+        import inspect
+
+        from engram.logbook.migrate import run_migrate
+
+        sig = inspect.signature(run_migrate)
+        params = list(sig.parameters.keys())
+
+        assert "verify_strict" in params, "run_migrate should have verify_strict parameter"
+
+    def test_verify_strict_env_var_support(self):
+        """验证环境变量 ENGRAM_VERIFY_STRICT 支持文档"""
+        from pathlib import Path
+
+        migrate_py = Path(__file__).parent.parent.parent / "src/engram/logbook/migrate.py"
+        content = migrate_py.read_text()
+
+        assert "ENGRAM_VERIFY_STRICT" in content, (
+            "migrate.py should support ENGRAM_VERIFY_STRICT environment variable"
+        )
 
 
 if __name__ == "__main__":
