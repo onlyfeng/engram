@@ -66,8 +66,8 @@ async def memory_query_impl(
     spaces: Optional[List[str]] = None,
     filters: Optional[Dict[str, Any]] = None,
     top_k: int = 10,
-    correlation_id: Optional[str] = None,
     *,
+    correlation_id: str,
     deps: GatewayDepsProtocol,
 ) -> MemoryQueryResponse:
     """
@@ -99,7 +99,10 @@ async def memory_query_impl(
 
     # 默认搜索空间
     if not spaces:
-        spaces = [config.default_team_space]
+        default_space = config.default_team_space
+        if default_space is None:
+            raise ValueError("config.default_team_space is None, cannot proceed")
+        spaces = [default_space]
 
     try:
         # 通过 deps 获取 OpenMemory client
@@ -125,10 +128,12 @@ async def memory_query_impl(
                 correlation_id=correlation_id,
             )
 
+        # 确保 results 不为 None（SearchResult.__post_init__ 会初始化为空列表）
+        results = result.results or []
         return MemoryQueryResponse(
             ok=True,
-            results=result.results,
-            total=len(result.results),
+            results=results,
+            total=len(results),
             spaces_searched=spaces,
             message=None,
             correlation_id=correlation_id,

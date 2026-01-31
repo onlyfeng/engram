@@ -99,7 +99,7 @@ gateway_event 稳定子结构定义（v1.1+）：
         - mode_reason: str - 模式判定说明
         - policy_version: str - 策略版本 "v1" | "v2"
         - is_pointerized: bool - 是否 pointerized（v2 特性）
-        - policy_source: str - 策略来源 "settings" | "default" | "override"
+        - policy_source: str - 策略来源 "settings" | "default" | "override" | "dedup"
 
     gateway_event.validation 子结构（校验状态上下文）：
         - validate_refs_effective: bool - 实际生效的 validate_refs 值
@@ -120,8 +120,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-# correlation_id 生成函数从 mcp_rpc 统一导入（单一来源）
-from .mcp_rpc import generate_correlation_id
+# correlation_id 生成和归一化函数从 mcp_rpc 统一导入（单一来源）
+from .mcp_rpc import generate_correlation_id, normalize_correlation_id
+
+# 重新导出以保持向后兼容（测试和外部代码可能从此模块导入）
+__all__ = ["generate_correlation_id", "normalize_correlation_id"]
 
 # ===================== 审计事件结构（兼容导出） =====================
 
@@ -337,7 +340,7 @@ def build_audit_event(
         policy_mode_reason: 模式判定说明（v1.1 新增）
         policy_version: 策略版本 v1/v2（v1.1 新增）
         policy_is_pointerized: 是否 pointerized（v1.1 新增）
-        policy_source: 策略来源 settings/default/override（v1.1 新增）
+        policy_source: 策略来源 settings/default/override/dedup（v1.1 新增）
         validate_refs_effective: 实际生效的 validate_refs 值（v1.1 新增）
         validate_refs_reason: validate_refs 决策原因（v1.1 新增）
         pointer_from_space: redirect 原始空间（v1.3 新增）
@@ -351,9 +354,8 @@ def build_audit_event(
     Returns:
         审计事件 dict，可直接传递给 evidence_refs_json 参数
     """
-    # 确保有 correlation_id
-    if correlation_id is None:
-        correlation_id = generate_correlation_id()
+    # 归一化 correlation_id（确保符合 schema 格式: corr-{16位十六进制}）
+    correlation_id = normalize_correlation_id(correlation_id)
 
     # 计算证据摘要
     evidence_summary = compute_evidence_summary(evidence)
@@ -565,8 +567,8 @@ def build_outbox_worker_audit_event(
     自动设置 source="outbox_worker"
     将 worker_id、attempt_id、correlation_id 放入 extra
     """
-    if correlation_id is None:
-        correlation_id = generate_correlation_id()
+    # 归一化 correlation_id（确保符合 schema 格式）
+    correlation_id = normalize_correlation_id(correlation_id)
     worker_extra = extra.copy() if extra else {}
     worker_extra.setdefault("correlation_id", correlation_id)
     if worker_id:

@@ -222,7 +222,7 @@ class ErrorSummary:
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典，排除空值"""
-        result = {}
+        result: Dict[str, Any] = {}
         if self.error_category:
             result["error_category"] = self.error_category
         if self.error_message:
@@ -292,7 +292,7 @@ class DegradationSnapshot:
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典，排除空值"""
-        result = {}
+        result: Dict[str, Any] = {}
         if self.is_degraded:
             result["is_degraded"] = self.is_degraded
         if self.degraded_reasons:
@@ -409,7 +409,7 @@ class RunFinishPayload:
         Returns:
             包含 status, counts, error_summary_json, degradation_json 等字段的字典
         """
-        result = {
+        result: Dict[str, Any] = {
             "status": self.status,
             "counts": self.counts.to_dict() if self.counts else {},
         }

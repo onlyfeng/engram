@@ -26,7 +26,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Protocol, Union, cast
 from urllib.parse import quote
 
 import requests
@@ -635,7 +635,8 @@ class PostgresRateLimiter:
 
         try:
             with self._get_conn() as conn:
-                return get_rate_limit_status(conn, self._instance_key)
+                result = get_rate_limit_status(conn, self._instance_key)
+                return cast(Optional[Dict[str, Any]], result)
         except Exception as e:
             logger.warning(f"Postgres 限流器: 获取状态失败: {e}")
             return None
@@ -894,7 +895,7 @@ class ClientStats:
         - avg_wait_time_ms: 平均等待时间（limiter）
         """
         with self._lock:
-            result = {
+            result: Dict[str, Any] = {
                 # 基础请求统计（稳定字段）
                 "total_requests": self.total_requests,
                 "successful_requests": self.successful_requests,
@@ -978,7 +979,7 @@ class GitLabAPIResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（用于日志/序列化），对敏感信息进行脱敏"""
-        result = {
+        result: Dict[str, Any] = {
             "success": self.success,
             "status_code": self.status_code,
             "endpoint": redact(self.endpoint) if self.endpoint else None,
@@ -1064,24 +1065,36 @@ class GitLabTimeoutError(GitLabAPIError):
 # ============ Token Provider ============
 
 # 复用 scm_auth 模块中的 TokenProvider（避免重复定义）
+# 使用延迟导入和 fallback 函数，确保类型签名一致
+if TYPE_CHECKING:
+    from .scm_auth import StaticTokenProvider, TokenProvider
+
+# 运行时导入，带 fallback
+_scm_auth_available = False
 try:
     from .scm_auth import StaticTokenProvider, TokenProvider, mask_token, redact, redact_headers
+    _scm_auth_available = True
 except ImportError:
-    # Fallback: 如果 scm_auth 不存在，使用 Protocol 定义
-    from typing import Protocol
+    pass
 
-    class TokenProvider(Protocol):
-        """Token 提供者协议（用于 token 失效时刷新/重试）"""
+if not _scm_auth_available:
+    # Fallback: 如果 scm_auth 不存在，定义本地实现
+    from abc import ABC, abstractmethod
 
+    class TokenProvider(ABC):  # type: ignore[no-redef]
+        """Token 提供者抽象基类（用于 token 失效时刷新/重试）"""
+
+        @abstractmethod
         def get_token(self) -> str:
             """获取当前有效的 token"""
             ...
 
+        @abstractmethod
         def invalidate(self) -> None:
             """标记当前 token 为无效，下次 get_token 应返回新 token"""
             ...
 
-    class StaticTokenProvider:
+    class StaticTokenProvider(TokenProvider):  # type: ignore[no-redef]
         """静态 Token 提供者（最简单的实现）"""
 
         def __init__(self, token: str):
@@ -1101,7 +1114,7 @@ except ImportError:
             return "empty"
         return f"len={len(token)}, ***"
 
-    def redact(text) -> str:
+    def redact(text: Union[str, None]) -> str:
         """简单的敏感信息脱敏"""
         if not text:
             return ""
@@ -1116,7 +1129,7 @@ except ImportError:
         )
         return result
 
-    def redact_headers(headers) -> dict:
+    def redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
         """简单的 header 脱敏"""
         if not headers:
             return {}
@@ -1315,15 +1328,15 @@ class GitLabClient:
         # 请求统计
         self.stats = ClientStats()
 
-        # 并发限制器
+        # 并发限制器（声明类型以支持 None）
+        self._concurrency_limiter: Optional[ConcurrencyLimiter] = None
         if concurrency_limiter is not None:
             self._concurrency_limiter = concurrency_limiter
         elif self.http_config.max_concurrency:
             self._concurrency_limiter = ConcurrencyLimiter(self.http_config.max_concurrency)
-        else:
-            self._concurrency_limiter = None
 
-        # 速率限制器（内存版）
+        # 速率限制器（内存版，声明类型以支持 None）
+        self._rate_limiter: Optional[RateLimiter] = None
         if rate_limiter is not None:
             self._rate_limiter = rate_limiter
         elif self.http_config.rate_limit_enabled:
@@ -1331,10 +1344,9 @@ class GitLabClient:
                 requests_per_second=self.http_config.rate_limit_requests_per_second,
                 burst_size=self.http_config.rate_limit_burst_size,
             )
-        else:
-            self._rate_limiter = None
 
-        # Postgres 限流器（分布式版，实例维度）
+        # Postgres 限流器（分布式版，实例维度，声明类型以支持 None）
+        self._postgres_rate_limiter: Optional[PostgresRateLimiter] = None
         if postgres_rate_limiter is not None:
             self._postgres_rate_limiter = postgres_rate_limiter
         elif self.http_config.postgres_rate_limit_enabled:
@@ -1347,12 +1359,11 @@ class GitLabClient:
                 burst=self.http_config.postgres_rate_limit_burst,
                 max_wait_seconds=self.http_config.postgres_rate_limit_max_wait,
             )
-        else:
-            self._postgres_rate_limiter = None
 
-        # Postgres 限流器（分布式版，tenant 维度）
+        # Postgres 限流器（分布式版，tenant 维度，声明类型以支持 None）
         # key 形如: gitlab:<host>:tenant:<id>
         self._tenant_id = tenant_id
+        self._tenant_rate_limiter: Optional[PostgresRateLimiter] = None
         if tenant_rate_limiter is not None:
             self._tenant_rate_limiter = tenant_rate_limiter
         elif self.http_config.tenant_rate_limit_enabled and tenant_id:
@@ -1365,8 +1376,6 @@ class GitLabClient:
                 burst=self.http_config.tenant_rate_limit_burst,
                 max_wait_seconds=self.http_config.tenant_rate_limit_max_wait,
             )
-        else:
-            self._tenant_rate_limiter = None
 
     def _extract_instance_key(self, url: str) -> str:
         """
@@ -1635,7 +1644,7 @@ class GitLabClient:
 
         exp_backoff = base * (2 ** (attempt - 1))
         jitter = random.uniform(0, base)
-        backoff = min(exp_backoff + jitter, max_backoff)
+        backoff: float = min(exp_backoff + jitter, max_backoff)
 
         return backoff
 
@@ -1718,11 +1727,12 @@ class GitLabClient:
             status_code = response.status_code
 
             # 提取错误消息
-            error_msg = ""
+            error_msg: str = ""
             try:
                 error_data = response.json()
                 if isinstance(error_data, dict):
-                    error_msg = error_data.get("message", error_data.get("error", str(error_data)))
+                    raw_msg = error_data.get("message", error_data.get("error", str(error_data)))
+                    error_msg = str(raw_msg) if raw_msg is not None else str(error_data)
                 else:
                     error_msg = str(error_data)
             except Exception:
@@ -2014,31 +2024,54 @@ class GitLabClient:
 
     def _raise_error(self, result: GitLabAPIResult) -> None:
         """根据结果抛出对应的异常"""
-        kwargs = {
-            "details": result.to_dict(),
-            "status_code": result.status_code,
-            "endpoint": result.endpoint,
-        }
+        # 提取公共参数，避免 dict invariance 问题
+        details = result.to_dict()
+        status_code = result.status_code
+        endpoint = result.endpoint
 
         if result.error_category == GitLabErrorCategory.RATE_LIMITED:
             raise GitLabRateLimitError(
                 result.error_message or "限流",
                 retry_after=result.retry_after,
-                **kwargs,
+                details=details,
+                status_code=status_code,
+                endpoint=endpoint,
             )
         elif result.error_category == GitLabErrorCategory.AUTH_ERROR:
-            raise GitLabAuthError(result.error_message or "认证失败", **kwargs)
+            raise GitLabAuthError(
+                result.error_message or "认证失败",
+                details=details,
+                status_code=status_code,
+                endpoint=endpoint,
+            )
         elif result.error_category == GitLabErrorCategory.SERVER_ERROR:
-            raise GitLabServerError(result.error_message or "服务器错误", **kwargs)
+            raise GitLabServerError(
+                result.error_message or "服务器错误",
+                details=details,
+                status_code=status_code,
+                endpoint=endpoint,
+            )
         elif result.error_category == GitLabErrorCategory.TIMEOUT:
-            raise GitLabTimeoutError(result.error_message or "请求超时", **kwargs)
+            raise GitLabTimeoutError(
+                result.error_message or "请求超时",
+                details=details,
+                status_code=status_code,
+                endpoint=endpoint,
+            )
         elif result.error_category == GitLabErrorCategory.NETWORK_ERROR:
-            raise GitLabNetworkError(result.error_message or "网络错误", **kwargs)
+            raise GitLabNetworkError(
+                result.error_message or "网络错误",
+                details=details,
+                status_code=status_code,
+                endpoint=endpoint,
+            )
         else:
             raise GitLabAPIError(
                 result.error_message or "API 错误",
                 category=result.error_category,
-                **kwargs,
+                details=details,
+                status_code=status_code,
+                endpoint=endpoint,
             )
 
     def request_safe(self, method: str, endpoint: str, **kwargs) -> GitLabAPIResult:

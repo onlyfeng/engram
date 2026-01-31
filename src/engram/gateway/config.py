@@ -50,6 +50,23 @@ class ConfigError(Exception):
     pass
 
 
+class UnknownActorPolicy:
+    """
+    未知 actor_user_id 处理策略
+
+    用于配置当 actor_user_id 提供但用户不存在时的行为。
+
+    策略说明:
+    - REJECT: 拒绝请求
+    - DEGRADE: 降级到 private:unknown 空间
+    - AUTO_CREATE: 自动创建用户
+    """
+
+    REJECT = "reject"
+    DEGRADE = "degrade"
+    AUTO_CREATE = "auto_create"
+
+
 @dataclass
 class GatewayConfig:
     """

@@ -25,51 +25,59 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional
 
-from engram.logbook.errors import ValidationError
 from engram.logbook.config import get_svn_auth
 from engram.logbook.cursor import load_svn_cursor, save_svn_cursor
+from engram.logbook.errors import ValidationError
 from engram.logbook.scm_db import (
     get_conn as get_connection,
-    upsert_svn_revision,
-    upsert_repo,
 )
-
+from engram.logbook.scm_db import (
+    upsert_repo,
+    upsert_svn_revision,
+)
 
 # ============ 异常定义 ============
 
 
 class SvnCommandError(Exception):
     """SVN 命令执行错误"""
+
     pass
 
 
 class SvnTimeoutError(Exception):
     """SVN 命令超时"""
+
     pass
 
 
 class SvnParseError(Exception):
     """SVN 输出解析错误"""
+
     pass
 
 
 class PatchFetchError(Exception):
     """Patch 获取基础错误"""
+
     error_category = "error"
 
 
 class PatchFetchTimeoutError(PatchFetchError):
     """Patch 获取超时"""
+
     error_category = "timeout"
 
 
 class PatchFetchContentTooLargeError(PatchFetchError):
     """Patch 内容过大"""
+
     error_category = "content_too_large"
 
 
 class PatchFetchCommandError(PatchFetchError):
     """Patch 命令执行错误"""
+
     error_category = "command_error"
 
 
@@ -79,6 +87,7 @@ class PatchFetchCommandError(PatchFetchError):
 @dataclass
 class FetchDiffResult:
     """Diff 获取结果"""
+
     success: bool
     content: str = ""
     error: Optional[Exception] = None
@@ -90,6 +99,7 @@ class FetchDiffResult:
 @dataclass
 class SvnRevision:
     """SVN revision 数据类"""
+
     revision: int
     author: str
     date: Optional[datetime]
@@ -100,6 +110,7 @@ class SvnRevision:
 @dataclass
 class SyncConfig:
     """同步配置"""
+
     svn_url: str
     batch_size: int
     overlap: int = 0
@@ -282,32 +293,32 @@ def fetch_svn_diff(
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True)
         content = proc.stdout or ""
         if max_size_bytes is not None and len(content.encode("utf-8")) > max_size_bytes:
-            err = PatchFetchContentTooLargeError("内容过大")
+            size_err = PatchFetchContentTooLargeError("内容过大")
             return FetchDiffResult(
                 success=False,
                 content="",
-                error=err,
-                error_category=err.error_category,
-                error_message=str(err),
+                error=size_err,
+                error_category=size_err.error_category,
+                error_message=str(size_err),
                 endpoint=endpoint,
             )
         return FetchDiffResult(success=True, content=content, endpoint=endpoint)
-    except subprocess.TimeoutExpired as exc:
-        err = PatchFetchTimeoutError("timeout")
+    except subprocess.TimeoutExpired:
+        timeout_err = PatchFetchTimeoutError("timeout")
         return FetchDiffResult(
             success=False,
-            error=err,
-            error_category=err.error_category,
-            error_message=str(err),
+            error=timeout_err,
+            error_category=timeout_err.error_category,
+            error_message=str(timeout_err),
             endpoint=endpoint,
         )
-    except subprocess.CalledProcessError as exc:
-        err = PatchFetchCommandError("command_error")
+    except subprocess.CalledProcessError:
+        cmd_err = PatchFetchCommandError("command_error")
         return FetchDiffResult(
             success=False,
-            error=err,
-            error_category=err.error_category,
-            error_message=str(err),
+            error=cmd_err,
+            error_category=cmd_err.error_category,
+            error_message=str(cmd_err),
             endpoint=endpoint,
         )
 
@@ -359,7 +370,12 @@ def generate_diffstat(diff_content: str) -> str:
             continue
         if current_file is None:
             continue
-        if line.startswith("+++ ") or line.startswith("--- ") or line.startswith("@@") or line.startswith("==="):
+        if (
+            line.startswith("+++ ")
+            or line.startswith("--- ")
+            or line.startswith("@@")
+            or line.startswith("===")
+        ):
             continue
         if line.startswith("+"):
             stats[current_file]["insertions"] += 1
@@ -484,7 +500,7 @@ def sync_svn_revisions(
         同步结果字典
     """
     import os
-    
+
     # 获取或创建数据库连接
     dsn = dsn or os.environ.get("LOGBOOK_DSN") or os.environ.get("POSTGRES_DSN") or ""
     conn = get_connection(dsn)
@@ -558,7 +574,7 @@ def backfill_svn_revisions(
         同步结果字典
     """
     import os
-    
+
     if end_rev is not None and start_rev > end_rev:
         raise ValidationError("起始 revision 大于结束 revision", {})
 
@@ -608,9 +624,7 @@ def backfill_svn_revisions(
             result["last_rev"] = max_rev
 
         if fetch_patches:
-            result["patch_stats"] = sync_patches_for_revisions(
-                sync_config.svn_url, revisions
-            )
+            result["patch_stats"] = sync_patches_for_revisions(sync_config.svn_url, revisions)
 
         return result
     finally:

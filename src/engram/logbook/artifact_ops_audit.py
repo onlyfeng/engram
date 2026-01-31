@@ -54,16 +54,17 @@ engram_logbook.artifact_ops_audit - 制品操作审计 API
     write_gc_summary_audit_event(
         gc_mode="orphan",
         backend="object",
-        bucket="engram-artifacts",
         prefix="scm/",
         scanned=1000,
-        protected=800,
         candidates=200,
         deleted=150,
         trashed=50,
         failed=0,
+        protected=800,
+        skipped_by_age=10,
+        dry_run=False,
+        bucket="engram-artifacts",
         using_ops_credentials=True,
-        details={"dry_run": False},
     )
 """
 
@@ -312,12 +313,14 @@ def write_gc_summary_audit_event(
     backend: str,
     prefix: str,
     scanned: int,
-    protected: int,
     candidates: int,
     deleted: int,
     trashed: int,
     failed: int,
     success: bool = True,
+    protected: int = 0,
+    skipped_by_age: int = 0,
+    dry_run: bool = False,
     bucket: Optional[str] = None,
     using_ops_credentials: Optional[bool] = None,
     require_ops: Optional[bool] = None,
@@ -333,12 +336,14 @@ def write_gc_summary_audit_event(
         backend: 存储后端类型
         prefix: 扫描前缀
         scanned: 扫描的文件总数
-        protected: 被保护的文件数
         candidates: 待删除候选数
         deleted: 硬删除数
         trashed: 软删除数
         failed: 删除失败数
         success: 整体操作是否成功
+        protected: 被保护的文件数
+        skipped_by_age: 因年龄不足跳过的文件数
+        dry_run: 是否为演练模式
         bucket: 存储桶名称（object 后端）
         using_ops_credentials: 是否使用运维凭据
         require_ops: 是否要求 ops 凭证
@@ -360,6 +365,8 @@ def write_gc_summary_audit_event(
             "deleted": deleted,
             "trashed": trashed,
             "failed": failed,
+            "skipped_by_age": skipped_by_age,
+            "dry_run": dry_run,
         }
     )
 
@@ -400,6 +407,7 @@ def write_gc_delete_audit_event(
     error: Optional[str] = None,
     size_bytes: Optional[int] = None,
     age_days: Optional[float] = None,
+    dry_run: bool = False,
     dsn: Optional[str] = None,
 ) -> Optional[int]:
     """
@@ -418,6 +426,7 @@ def write_gc_delete_audit_event(
         error: 错误信息
         size_bytes: 文件大小
         age_days: 文件年龄（天）
+        dry_run: 是否为演练模式
         dsn: 数据库连接字符串
 
     Returns:
@@ -432,6 +441,8 @@ def write_gc_delete_audit_event(
         event_details["size_bytes"] = size_bytes
     if age_days is not None:
         event_details["age_days"] = round(age_days, 2)
+    if dry_run:
+        event_details["dry_run"] = dry_run
 
     event = AuditEvent(
         tool="artifact_gc",

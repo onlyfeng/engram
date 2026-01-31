@@ -1,0 +1,42 @@
+src/engram/gateway/app.py: note: In function "create_app":
+src/engram/gateway/app.py:20: error: Missing named argument "error_code"
+src/engram/gateway/evidence_store.py: note: In member "to_evidence_object" of class "EvidenceUploadResult":
+src/engram/gateway/evidence_store.py:29: error: Incompatible types in
+src/engram/logbook/artifact_delete.py: note: In function "_delete_file_uri_artifact":
+src/engram/logbook/artifact_delete.py: note: In function "_delete_object_store_artifact":
+src/engram/logbook/artifact_delete.py: note: In function "delete_physical_uri":
+src/engram/logbook/artifact_delete.py:12: error: "ParsedUri" has no
+src/engram/logbook/artifact_delete.py:22: error: "ParsedUri" has no
+src/engram/logbook/artifact_delete.py:24: error: Argument "Bucket" to
+src/engram/logbook/artifact_delete.py:26: error: Unsupported operand types
+src/engram/logbook/artifact_delete.py:26: note: Right operand is of type "Path | None"
+src/engram/logbook/artifact_delete.py:28: error: Argument "CopySource" to
+src/engram/logbook/artifact_delete.py:41: error: Argument "Bucket" to
+src/engram/logbook/artifact_gc.py: note: In function "run_gc":
+src/engram/logbook/artifact_gc.py:17: error: Incompatible types in
+src/engram/logbook/artifact_gc.py:25: error: Incompatible types in
+src/engram/logbook/artifact_gc.py:43: error: Argument 1 to
+src/engram/logbook/artifact_gc.py:55: error: Argument 1 to
+src/engram/logbook/backfill_chunking_version.py: note: In function "get_attachments_to_update":
+src/engram/logbook/backfill_chunking_version.py: note: In function "get_patch_blobs_to_update":
+src/engram/logbook/backfill_chunking_version.py:18: error: Incompatible
+src/engram/logbook/cli/db_bootstrap.py:29: error: Argument 1 to "append" of
+src/engram/logbook/cli/db_bootstrap.py:33: error: Argument 1 to "append" of
+src/engram/logbook/cli/db_bootstrap.py:37: error: No overload variant of
+src/engram/logbook/cli/db_bootstrap.py:37: note:     def [_T] get(self, str, _T, /) -> str | _T
+src/engram/logbook/cli/db_bootstrap.py:37: note:     def get(self, str, None = ..., /) -> str | None
+src/engram/logbook/cli/db_bootstrap.py:37: note:     def get(self, str, str, /) -> str
+src/engram/logbook/cli/db_bootstrap.py:37: note: Possible overload variants:
+src/engram/logbook/cli/db_bootstrap.py:62: error: Argument 1 to "join" of
+src/engram/logbook/cli/scm.py: note: In function "_get_dsn":
+src/engram/logbook/cli/scm.py: note: In function "_handle_get_repo":
+src/engram/logbook/cli/scm.py:17: error: Incompatible types in assignment
+src/engram/logbook/cli/scm.py:17: error: Returning Any from function
+src/engram/logbook/cli/scm.py:21: error: "dict[str, Any]" has no attribute
+src/engram/logbook/cli/scm.py:9: error: Returning Any from function declared
+src/engram/logbook/materialize_patch_blob.py: note: In function "_build_ministat_from_stats":
+src/engram/logbook/materialize_patch_blob.py:38: error: Argument 1 to
+src/engram/logbook/scm_auth.py:27: error: Incompatible types in assignment
+src/engram/logbook/views.py: note: In function "render_views":
+src/engram/logbook/views.py:36: error: Argument 1 to "generate_index_md"
+src/engram/logbook/views.py:43: error: Argument 1 to

@@ -345,44 +345,6 @@ def _gitlab_mrs_handler(
         return _make_error_result(error_message, error_category)
 
 
-def _gitlab_reviews_handler(
-    repo_id: int,
-    mode: str,
-    payload: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    GitLab reviews 同步处理器
-    """
-    try:
-        if mode == "probe":
-            # probe 模式 - 熔断器 half_open 状态的受限同步
-            probe_budget = payload.get("probe_budget", 10)
-            return {
-                "success": True,
-                "synced_count": 0,
-                "synced_mr_count": 0,
-                "synced_event_count": 0,
-                "mode": "probe",
-                "probe_budget": probe_budget,
-                "message": "gitlab_reviews probe sync executed with limited budget",
-            }
-
-        # Reviews 同步目前返回 stub 结果
-        return {
-            "success": True,
-            "synced_count": 0,
-            "synced_mr_count": 0,
-            "synced_event_count": 0,
-            "message": "gitlab_reviews sync handler stub",
-        }
-
-    except Exception as exc:
-        from engram.logbook.scm_sync_errors import classify_exception
-
-        error_category, error_message = classify_exception(exc)
-        return _make_error_result(error_message, error_category)
-
-
 def _svn_handler(
     repo_id: int,
     mode: str,
@@ -456,7 +418,6 @@ def _svn_handler(
 DEFAULT_HANDLERS: Dict[str, SyncHandler] = {
     PhysicalJobType.GITLAB_COMMITS.value: _gitlab_commits_handler,
     PhysicalJobType.GITLAB_MRS.value: _gitlab_mrs_handler,
-    PhysicalJobType.GITLAB_REVIEWS.value: _gitlab_reviews_handler,
     PhysicalJobType.SVN.value: _svn_handler,
 }
 
@@ -586,7 +547,7 @@ class SyncExecutor:
 
         # contract 校验
         contract_valid = True
-        contract_errors = []
+        contract_errors: list[str] = []
         if self._validate_contract and not skip_contract_validation:
             contract_valid, contract_errors = validate_sync_result_contract(result)
             if not contract_valid:

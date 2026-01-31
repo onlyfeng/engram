@@ -36,10 +36,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from engram.logbook.config import get_config
 from engram.logbook.db import get_connection as _get_db_connection
+
+if TYPE_CHECKING:
+    from engram.logbook.scm_sync_executor import SyncExecutor
 
 __all__ = [
     # 常量
@@ -48,7 +51,6 @@ __all__ = [
     "VALID_REPO_TYPES",
     "JOB_TYPE_COMMITS",
     "JOB_TYPE_MRS",
-    "JOB_TYPE_REVIEWS",
     "VALID_JOB_TYPES",
     "DEFAULT_REPAIR_WINDOW_HOURS",
     "DEFAULT_LOOP_INTERVAL_SECONDS",
@@ -97,8 +99,7 @@ VALID_REPO_TYPES = {REPO_TYPE_GITLAB, REPO_TYPE_SVN}
 
 JOB_TYPE_COMMITS = "commits"
 JOB_TYPE_MRS = "mrs"
-JOB_TYPE_REVIEWS = "reviews"
-VALID_JOB_TYPES = {JOB_TYPE_COMMITS, JOB_TYPE_MRS, JOB_TYPE_REVIEWS}
+VALID_JOB_TYPES = {JOB_TYPE_COMMITS, JOB_TYPE_MRS}
 
 DEFAULT_REPAIR_WINDOW_HOURS = 24
 DEFAULT_LOOP_INTERVAL_SECONDS = 60
@@ -516,8 +517,6 @@ def get_script_path(repo_type: str, job_type: str) -> str:
             return str(repo_root / "scm_sync_gitlab_commits.py")
         if job_type == JOB_TYPE_MRS:
             return str(repo_root / "scm_sync_gitlab_mrs.py")
-        if job_type == JOB_TYPE_REVIEWS:
-            return str(repo_root / "scm_sync_gitlab_reviews.py")
     if repo_type == REPO_TYPE_SVN and job_type == JOB_TYPE_COMMITS:
         return str(repo_root / "scm_sync_svn.py")
     raise ValueError("不支持的仓库/任务组合")
@@ -754,9 +753,9 @@ class SyncRunner:
 
     def __init__(self, ctx: RunnerContext) -> None:
         self.ctx = ctx
-        self._executor = None
+        self._executor: Optional["SyncExecutor"] = None
 
-    def _get_executor(self):
+    def _get_executor(self) -> "SyncExecutor":
         """获取或创建 SyncExecutor 实例"""
         if self._executor is None:
             from engram.logbook.scm_sync_executor import get_default_executor
@@ -784,8 +783,6 @@ class SyncRunner:
                 physical_job_type = PhysicalJobType.GITLAB_COMMITS.value
             elif job_type == JOB_TYPE_MRS:
                 physical_job_type = PhysicalJobType.GITLAB_MRS.value
-            elif job_type == JOB_TYPE_REVIEWS:
-                physical_job_type = PhysicalJobType.GITLAB_REVIEWS.value
             else:
                 physical_job_type = PhysicalJobType.GITLAB_COMMITS.value
         elif repo_type == REPO_TYPE_SVN:

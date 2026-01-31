@@ -87,17 +87,20 @@ class PolicyEngine:
     @property
     def evidence_mode(self) -> str:
         """获取 evidence 验证模式"""
-        return self.policy.get("evidence_mode", "compat")
+        mode: str = self.policy.get("evidence_mode", "compat")
+        return mode
 
     @property
     def require_evidence(self) -> bool:
         """获取是否要求证据链"""
-        return self.policy.get("require_evidence", True)
+        required: bool = self.policy.get("require_evidence", True)
+        return required
 
     @property
     def bulk_max_chars(self) -> int:
         """获取 bulk 模式字符限制"""
-        return self.policy.get("bulk_max_chars", 200)
+        limit: int = self.policy.get("bulk_max_chars", 200)
+        return limit
 
     def decide(
         self,

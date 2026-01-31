@@ -82,10 +82,11 @@ try:
     from engram.logbook import governance, outbox
     from engram.logbook.config import Config
     from engram.logbook.db import (
-        create_item as _create_item,
+        KnowledgeCandidateRow,
+        get_connection,
     )
     from engram.logbook.db import (
-        get_connection,
+        create_item as _create_item,
     )
     from engram.logbook.db import (
         query_knowledge_candidates as _query_knowledge_candidates,
@@ -96,30 +97,27 @@ except ImportError as e:
         f'logbook_adapter 需要 engram_logbook 模块: {e}\n请先安装:\n  pip install -e ".[full]"'
     )
 
-# ======================== 用户校验策略枚举 ========================
+# ======================== 用户校验策略枚举（弃用兼容别名） ========================
 
-
-class UnknownActorPolicy:
-    """
-    未知 actor_user_id 处理策略
-
-    用于配置当 actor_user_id 提供但用户不存在时的行为。
-    """
-
-    REJECT = "reject"  # 拒绝请求
-    DEGRADE = "degrade"  # 降级到 private:unknown 空间
-    AUTO_CREATE = "auto_create"  # 自动创建用户
-
+# [已弃用] UnknownActorPolicy 已移至 engram.gateway.config 模块
+# 此处保留兼容别名，确保向后兼容
+# 新代码请使用: from engram.gateway.config import UnknownActorPolicy
+#
+# 迁移指南:
+#   旧: from engram.gateway.logbook_adapter import UnknownActorPolicy
+#   新: from engram.gateway.config import UnknownActorPolicy
+from engram.gateway.config import UnknownActorPolicy  # noqa: F401, E402 - 兼容别名
 
 # 从 engram_logbook.migrate 导入数据库检查和迁移函数
 _DB_MIGRATE_AVAILABLE = False
+run_all_checks: Any = None
+run_migrate: Any = None
 try:
     from engram.logbook.migrate import run_all_checks, run_migrate
 
     _DB_MIGRATE_AVAILABLE = True
 except ImportError:
-    run_all_checks = None
-    run_migrate = None
+    pass
 
 
 class LogbookDBErrorCode:
@@ -339,6 +337,8 @@ class LogbookAdapter:
                 row = cur.fetchone()
                 conn.commit()
 
+                if row is None:
+                    raise DatabaseError("ensure_user 失败: RETURNING 未返回数据")
                 return {
                     "user_id": row[0],
                     "display_name": row[1],
@@ -347,6 +347,9 @@ class LogbookAdapter:
                     "created_at": row[4],
                     "updated_at": row[5],
                 }
+        except DatabaseError:
+            conn.rollback()
+            raise
         except Exception as e:
             conn.rollback()
             raise DatabaseError(f"ensure_user 失败: {e}")
@@ -408,6 +411,8 @@ class LogbookAdapter:
                 row = cur.fetchone()
                 conn.commit()
 
+                if row is None:
+                    raise DatabaseError("ensure_account 失败: RETURNING 未返回数据")
                 return {
                     "account_id": row[0],
                     "user_id": row[1],
@@ -418,6 +423,9 @@ class LogbookAdapter:
                     "verified": row[6],
                     "updated_at": row[7],
                 }
+        except DatabaseError:
+            conn.rollback()
+            raise
         except Exception as e:
             conn.rollback()
             raise DatabaseError(f"ensure_account 失败: {e}")
@@ -437,7 +445,8 @@ class LogbookAdapter:
             设置字典 {project_key, team_write_enabled, policy_json, updated_by, updated_at}
             如果不存在返回 None
         """
-        return governance.get_settings(project_key, config=self._config)
+        result = governance.get_settings(project_key, config=self._config)
+        return dict(result) if result else None
 
     def get_or_create_settings(self, project_key: str) -> Dict[str, Any]:
         """
@@ -452,10 +461,11 @@ class LogbookAdapter:
         Returns:
             设置字典
         """
-        return governance.get_or_create_settings(
+        result = governance.get_or_create_settings(
             project_key=project_key,
             config=self._config,
         )
+        return dict(result)
 
     def upsert_settings(
         self,
@@ -545,7 +555,7 @@ class LogbookAdapter:
         Returns:
             审计记录列表
         """
-        return governance.query_write_audit(
+        results = governance.query_write_audit(
             since=since,
             limit=limit,
             actor=actor,
@@ -554,6 +564,7 @@ class LogbookAdapter:
             reason_prefix=reason_prefix,
             config=self._config,
         )
+        return [dict(r) for r in results]
 
     # ======================== logbook.items ========================
 
@@ -604,11 +615,12 @@ class LogbookAdapter:
         Returns:
             如果存在已成功写入的记录，返回该记录的字典，否则返回 None
         """
-        return outbox.check_dedup(
+        result = outbox.check_dedup(
             target_space=target_space,
             payload_sha=payload_sha,
             config=self._config,
         )
+        return dict(result) if result else None
 
     def enqueue_outbox(
         self,
@@ -647,7 +659,8 @@ class LogbookAdapter:
         Returns:
             pending 状态的 outbox 记录列表
         """
-        return outbox.get_pending(limit=limit, config=self._config)
+        results = outbox.get_pending(limit=limit, config=self._config)
+        return [dict(r) for r in results]
 
     def get_outbox_by_id(self, outbox_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -659,7 +672,8 @@ class LogbookAdapter:
         Returns:
             outbox 记录字典，不存在返回 None
         """
-        return outbox.get_by_id(outbox_id=outbox_id, config=self._config)
+        result = outbox.get_by_id(outbox_id=outbox_id, config=self._config)
+        return dict(result) if result else None
 
     def mark_outbox_sent(self, outbox_id: int) -> bool:
         """
@@ -729,12 +743,13 @@ class LogbookAdapter:
         Returns:
             已锁定的 outbox 记录列表（字典格式）
         """
-        return outbox.claim_outbox(
+        results = outbox.claim_outbox(
             worker_id=worker_id,
             limit=limit,
             lease_seconds=lease_seconds,
             config=self._config,
         )
+        return [dict(r) for r in results]
 
     def ack_sent(
         self,
@@ -864,7 +879,7 @@ class LogbookAdapter:
         top_k: int = 10,
         evidence_filter: Optional[str] = None,
         space_filter: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[KnowledgeCandidateRow]:
         """
         从 analysis.knowledge_candidates 表按关键词查询知识候选项
 
@@ -924,7 +939,7 @@ class LogbookAdapter:
         finally:
             conn.close()
 
-    def _get_outbox_stats(self, conn) -> Dict[str, Any]:
+    def _get_outbox_stats(self, conn: Any) -> Dict[str, Any]:
         """获取 outbox_memory 表统计"""
         with conn.cursor() as cur:
             # 总数和按状态分组
@@ -954,7 +969,7 @@ class LogbookAdapter:
                 "oldest_pending_age_seconds": float(row[5]) if row[5] else 0.0,
             }
 
-    def _get_audit_stats(self, conn) -> Dict[str, Any]:
+    def _get_audit_stats(self, conn: Any) -> Dict[str, Any]:
         """获取 write_audit 表统计"""
         with conn.cursor() as cur:
             # 总数和按 action 分组
@@ -1013,7 +1028,7 @@ class LogbookAdapter:
                 "by_reason": by_reason,
             }
 
-    def _get_v2_evidence_stats(self, conn) -> Dict[str, Any]:
+    def _get_v2_evidence_stats(self, conn: Any) -> Dict[str, Any]:
         """
         获取 v2 evidence 覆盖率统计
 
@@ -1161,7 +1176,7 @@ class LogbookAdapter:
                 "audit_mode_stats_7d": audit_mode_stats,
             }
 
-    def _get_content_intercept_stats(self, conn) -> Dict[str, Any]:
+    def _get_content_intercept_stats(self, conn: Any) -> Dict[str, Any]:
         """
         获取内容拦截统计（diff/log 拦截次数）
 
@@ -1259,7 +1274,7 @@ class LogbookAdapter:
             }
 
         try:
-            result = run_migrate(
+            result: Dict[str, Any] = run_migrate(
                 dsn=self._dsn,
                 quiet=quiet,
             )
@@ -1325,12 +1340,13 @@ class LogbookAdapter:
         else:
             # 不自动迁移，返回错误信息和修复指令
             repair_hint = (
-                "请执行以下命令修复数据库结构:\n"
-                "  cd logbook_postgres/scripts\n"
-                "  python db_migrate.py --dsn <your_postgres_dsn>\n"
-                "或在项目根目录执行:\n"
-                "  python logbook_postgres/scripts/db_migrate.py --dsn <your_postgres_dsn>\n"
-                "或设置环境变量 AUTO_MIGRATE_ON_STARTUP=true 启用自动迁移"
+                "请执行以下命令修复数据库结构:\n\n"
+                "# 方案 1: 使用 CLI 命令（推荐）\n"
+                "engram-migrate --dsn <your_postgres_dsn>\n\n"
+                "# 方案 2: 使用 Python 模块入口（兼容路径）\n"
+                "python -m engram.logbook.cli.db_migrate --dsn <your_postgres_dsn>\n\n"
+                "# 方案 3: 设置环境变量启用自动迁移\n"
+                "export AUTO_MIGRATE_ON_STARTUP=true"
             )
             raise LogbookDBCheckError(
                 message=f"Logbook DB 结构不完整: {check_result.get_missing_summary()}\n\n{repair_hint}",
@@ -1650,7 +1666,7 @@ def query_knowledge_candidates(
     top_k: int = 10,
     evidence_filter: Optional[str] = None,
     space_filter: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> List[KnowledgeCandidateRow]:
     """
     从 analysis.knowledge_candidates 表按关键词查询知识候选项
 

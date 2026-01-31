@@ -35,15 +35,20 @@ S3 凭证选择（与 docker-compose.unified.yml 对齐）:
         3. ENGRAM_S3_USE_OPS=false 时: APP_ACCESS_KEY -> ACCESS_KEY (回退)
 """
 
+from __future__ import annotations
+
 import hashlib
 import os
 import secrets
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union
 from urllib.parse import urlparse
 
 from .errors import EngramIOError
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
 
 # =============================================================================
 # 错误定义
@@ -719,13 +724,17 @@ class LocalArtifactsStore(ArtifactStore):
 
             # 对于 DENY 策略，使用 os.link() 实现原子性创建
             # os.link() 在目标存在时会抛出 FileExistsError，避免竞态条件
+            # 注意: 此处 temp_path 一定已被赋值为 Path（line 689）
+            assert temp_path is not None, "temp_path must be assigned before this point"
+            created_temp: Path = temp_path  # 类型收窄：从此处开始 created_temp 总是 Path
+
             if self._overwrite_policy == OVERWRITE_DENY:
                 try:
                     # 使用硬链接原子性地创建目标文件
-                    os.link(temp_path, full_path)
+                    os.link(created_temp, full_path)
                     # 删除临时文件（保留目标文件）
                     try:
-                        temp_path.unlink()
+                        created_temp.unlink()
                     except OSError:
                         pass
                     temp_path = None
@@ -742,14 +751,14 @@ class LocalArtifactsStore(ArtifactStore):
                     # 硬链接可能因跨文件系统等原因失败，回退到检查+replace
                     # 但这仍有竞态风险，只是作为兼容性回退
                     self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
-                    os.replace(temp_path, full_path)
+                    os.replace(created_temp, full_path)
                     temp_path = None
             elif self._overwrite_policy == OVERWRITE_ALLOW_SAME_HASH:
                 try:
                     # 尝试原子创建，避免并发写入覆盖
-                    os.link(temp_path, full_path)
+                    os.link(created_temp, full_path)
                     try:
-                        temp_path.unlink()
+                        created_temp.unlink()
                     except OSError:
                         pass
                     temp_path = None
@@ -757,7 +766,7 @@ class LocalArtifactsStore(ArtifactStore):
                     # 已存在则比较 hash；一致则视为成功（不覆盖）
                     self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
                     try:
-                        temp_path.unlink()
+                        created_temp.unlink()
                     except OSError:
                         pass
                     temp_path = None
@@ -766,18 +775,18 @@ class LocalArtifactsStore(ArtifactStore):
                     if full_path.exists():
                         self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
                         try:
-                            temp_path.unlink()
+                            created_temp.unlink()
                         except OSError:
                             pass
                         temp_path = None
                     else:
-                        os.replace(temp_path, full_path)
+                        os.replace(created_temp, full_path)
                         temp_path = None
             else:
                 # 其他策略：先检查后 replace
                 self._check_overwrite_policy(full_path, new_sha256, normalized_uri)
                 # 原子 rename（同文件系统内为原子操作）
-                os.replace(temp_path, full_path)
+                os.replace(created_temp, full_path)
                 temp_path = None  # 标记为已处理，避免 finally 中删除
 
             return {
@@ -1321,15 +1330,16 @@ class FileUriStore(ArtifactStore):
             if self._use_atomic_write:
                 # 生成临时文件路径
                 temp_path = self._generate_temp_filename(file_path)
+                created_temp: Path = temp_path  # 类型收窄：从此处开始 created_temp 总是 Path
 
                 # 写入临时文件
-                with open(temp_path, "wb") as f:
+                with open(created_temp, "wb") as f:
                     f.write(data)
 
                 # 设置文件权限（在 rename 之前）
                 if self._file_mode is not None:
                     try:
-                        os.chmod(temp_path, self._file_mode)
+                        os.chmod(created_temp, self._file_mode)
                     except OSError:
                         pass
 
@@ -1337,9 +1347,9 @@ class FileUriStore(ArtifactStore):
                 if self._overwrite_policy == OVERWRITE_DENY:
                     try:
                         # 使用硬链接原子性地创建目标文件
-                        os.link(temp_path, file_path)
+                        os.link(created_temp, file_path)
                         try:
-                            temp_path.unlink()
+                            created_temp.unlink()
                         except OSError:
                             pass
                         temp_path = None
@@ -1356,12 +1366,12 @@ class FileUriStore(ArtifactStore):
                         # 硬链接失败，回退到检查+replace（有竞态风险，仅兼容性回退）
                         self._check_overwrite_policy(file_path, new_sha256, file_uri)
                         try:
-                            os.replace(temp_path, file_path)
+                            os.replace(created_temp, file_path)
                             temp_path = None
                         except OSError:
-                            if temp_path and temp_path.exists():
+                            if created_temp.exists():
                                 try:
-                                    temp_path.unlink()
+                                    created_temp.unlink()
                                 except OSError:
                                     pass
                             temp_path = None
@@ -1376,13 +1386,13 @@ class FileUriStore(ArtifactStore):
                     # 其他策略：检查覆盖策略后原子 rename
                     self._check_overwrite_policy(file_path, new_sha256, file_uri)
                     try:
-                        os.replace(temp_path, file_path)
+                        os.replace(created_temp, file_path)
                         temp_path = None  # 标记为已处理
                     except OSError:
                         # 原子写入失败（可能是跨设备），清理后回退到直接写入
-                        if temp_path and temp_path.exists():
+                        if created_temp.exists():
                             try:
-                                temp_path.unlink()
+                                created_temp.unlink()
                             except OSError:
                                 pass
                         temp_path = None
@@ -1594,11 +1604,13 @@ class ObjectStore(ArtifactStore):
         #   1. 构造函数显式传入的 access_key/secret_key（最高）
         #   2. 根据 ENGRAM_S3_USE_OPS 选择 ops 或 app 凭证
         #   3. 回退到 ENGRAM_S3_ACCESS_KEY/SECRET_KEY
+        self.access_key: str | None
+        self.secret_key: str | None
         if access_key is not None and secret_key is not None:
             # 显式传入凭证，直接使用
             self.access_key = access_key
             self.secret_key = secret_key
-            self._using_ops_credentials = None  # 未知，由调用方决定
+            self._using_ops_credentials: bool | None = None  # 未知，由调用方决定
         else:
             # 从环境变量选择凭证
             use_ops = os.environ.get(ENV_S3_USE_OPS, "false").lower() in ("1", "true", "yes")
@@ -1673,7 +1685,7 @@ class ObjectStore(ArtifactStore):
         # 只读模式
         self.read_only = read_only
 
-        self._client = None
+        self._client: S3Client | None = None
 
     @property
     def allowed_prefixes(self) -> Optional[list]:
@@ -1759,7 +1771,16 @@ class ObjectStore(ArtifactStore):
                 {"missing": missing},
             )
 
-    def _get_client(self):
+    def _get_bucket(self) -> str:
+        """获取存储桶名称（确保已配置）"""
+        if self.bucket is None:
+            raise ObjectStoreNotConfiguredError(
+                "对象存储配置不完整，缺少: bucket (ENGRAM_S3_BUCKET)",
+                {"missing": ["bucket"]},
+            )
+        return self.bucket
+
+    def _get_client(self) -> S3Client:
         """
         获取 S3 客户端（惰性初始化）
 
@@ -1771,6 +1792,8 @@ class ObjectStore(ArtifactStore):
             return self._client
 
         self._check_configured()
+        # 类型收窄：_check_configured 确保 bucket 不为 None
+        assert self.bucket is not None
 
         # 安全检查: verify_ssl=True 时不允许使用 http:// 端点
         if self.verify_ssl and self.endpoint:
@@ -1797,6 +1820,9 @@ class ObjectStore(ArtifactStore):
 
         try:
             # 配置超时、重试和 S3 地址寻址风格
+            s3_config: dict[str, str] = {
+                "addressing_style": self.addressing_style,
+            }
             config = BotoConfig(
                 signature_version="s3v4",
                 connect_timeout=self.connect_timeout,
@@ -1805,15 +1831,14 @@ class ObjectStore(ArtifactStore):
                     "max_attempts": self.retries,
                     "mode": "adaptive",
                 },
-                s3={
-                    "addressing_style": self.addressing_style,
-                },
+                s3=s3_config,  # type: ignore[arg-type]
             )
 
             # 确定 verify 参数值
             # - ca_bundle 路径优先（即使 verify_ssl=False 也使用 ca_bundle）
             # - verify_ssl=True 时使用系统 CA
             # - verify_ssl=False 时跳过验证
+            verify_param: str | bool
             if self.ca_bundle:
                 # 使用自定义 CA 证书
                 verify_param = self.ca_bundle
@@ -1821,7 +1846,7 @@ class ObjectStore(ArtifactStore):
                 # 使用布尔值
                 verify_param = self.verify_ssl
 
-            self._client = boto3.client(
+            client: S3Client = boto3.client(
                 "s3",
                 endpoint_url=self.endpoint,
                 aws_access_key_id=self.access_key,
@@ -1830,6 +1855,7 @@ class ObjectStore(ArtifactStore):
                 config=config,
                 verify=verify_param,
             )
+            self._client = client
             return self._client
         except Exception as e:
             raise ObjectStoreConnectionError(
@@ -1970,6 +1996,7 @@ class ObjectStore(ArtifactStore):
             )
 
         client = self._get_client()
+        bucket = self._get_bucket()
         key = self._object_key(uri)
         extra_args = self._build_put_extra_args()
 
@@ -1991,7 +2018,7 @@ class ObjectStore(ArtifactStore):
 
             try:
                 client.put_object(
-                    Bucket=self.bucket,
+                    Bucket=bucket,
                     Key=key,
                     Body=data,
                     ContentLength=total_size,
@@ -2001,7 +2028,7 @@ class ObjectStore(ArtifactStore):
             except Exception as e:
                 raise ObjectStoreUploadError(
                     f"上传制品失败: {uri}",
-                    {"uri": uri, "key": key, "bucket": self.bucket, "error": str(e)},
+                    {"uri": uri, "key": key, "bucket": bucket, "error": str(e)},
                 )
 
         elif isinstance(content, bytes):
@@ -2017,7 +2044,7 @@ class ObjectStore(ArtifactStore):
 
             try:
                 client.put_object(
-                    Bucket=self.bucket,
+                    Bucket=bucket,
                     Key=key,
                     Body=content,
                     ContentLength=total_size,
@@ -2027,14 +2054,14 @@ class ObjectStore(ArtifactStore):
             except Exception as e:
                 raise ObjectStoreUploadError(
                     f"上传制品失败: {uri}",
-                    {"uri": uri, "key": key, "bucket": self.bucket, "error": str(e)},
+                    {"uri": uri, "key": key, "bucket": bucket, "error": str(e)},
                 )
 
         else:
             # 迭代器 -> 流式上传 (streaming multipart)
             # 策略: 先缓存至多 multipart_threshold 的数据，一旦超过则切换到 multipart
             total_size, sha256_hex = self._streaming_iterator_upload(
-                client, key, content, encoding, extra_args, uri
+                client, bucket, key, content, encoding, extra_args, uri
             )
             return {
                 "uri": uri,
@@ -2050,13 +2077,14 @@ class ObjectStore(ArtifactStore):
 
     def _streaming_iterator_upload(
         self,
-        client,
+        client: S3Client,
+        bucket: str,
         key: str,
         content: Iterator[bytes],
         encoding: str,
         extra_args: Dict[str, Any],
         uri: str,
-    ) -> tuple:
+    ) -> tuple[int, str]:
         """
         流式处理 Iterator 输入的上传
 
@@ -2070,6 +2098,7 @@ class ObjectStore(ArtifactStore):
 
         Args:
             client: S3 客户端
+            bucket: 存储桶名称
             key: 对象键
             content: bytes 迭代器
             encoding: 字符串编码
@@ -2116,7 +2145,7 @@ class ObjectStore(ArtifactStore):
         except Exception as e:
             raise ObjectStoreUploadError(
                 f"读取内容失败: {uri}",
-                {"uri": uri, "key": key, "bucket": self.bucket, "error": str(e)},
+                {"uri": uri, "key": key, "bucket": bucket, "error": str(e)},
             )
 
         # 阶段 2: 判断走单次 put 还是 multipart
@@ -2125,7 +2154,7 @@ class ObjectStore(ArtifactStore):
             data = bytes(buffer)
             try:
                 client.put_object(
-                    Bucket=self.bucket,
+                    Bucket=bucket,
                     Key=key,
                     Body=data,
                     ContentLength=total_size,
@@ -2135,7 +2164,7 @@ class ObjectStore(ArtifactStore):
             except Exception as e:
                 raise ObjectStoreUploadError(
                     f"上传制品失败: {uri}",
-                    {"uri": uri, "key": key, "bucket": self.bucket, "error": str(e)},
+                    {"uri": uri, "key": key, "bucket": bucket, "error": str(e)},
                 )
             return (total_size, hasher.hexdigest())
 
@@ -2143,8 +2172,8 @@ class ObjectStore(ArtifactStore):
         upload_id = None
         try:
             # 开始 multipart upload
-            create_args = {
-                "Bucket": self.bucket,
+            create_args: Dict[str, Any] = {
+                "Bucket": bucket,
                 "Key": key,
             }
             create_args.update(extra_args)
@@ -2152,7 +2181,7 @@ class ObjectStore(ArtifactStore):
             mpu = client.create_multipart_upload(**create_args)
             upload_id = mpu["UploadId"]
 
-            parts = []
+            parts: list[dict[str, Any]] = []
             part_number = 1
 
             # 上传缓冲区中已有的数据（按 chunk_size 切片）
@@ -2192,7 +2221,7 @@ class ObjectStore(ArtifactStore):
                 # 上传 part
                 if chunk_data:
                     response = client.upload_part(
-                        Bucket=self.bucket,
+                        Bucket=bucket,
                         Key=key,
                         UploadId=upload_id,
                         PartNumber=part_number,
@@ -2231,7 +2260,7 @@ class ObjectStore(ArtifactStore):
                     pending_data = pending_data[self.multipart_chunk_size :]
 
                     response = client.upload_part(
-                        Bucket=self.bucket,
+                        Bucket=bucket,
                         Key=key,
                         UploadId=upload_id,
                         PartNumber=part_number,
@@ -2248,7 +2277,7 @@ class ObjectStore(ArtifactStore):
             # 上传剩余数据（最后一个 part 可以小于 chunk_size）
             if pending_data:
                 response = client.upload_part(
-                    Bucket=self.bucket,
+                    Bucket=bucket,
                     Key=key,
                     UploadId=upload_id,
                     PartNumber=part_number,
@@ -2265,21 +2294,24 @@ class ObjectStore(ArtifactStore):
             # 注意：complete_multipart_upload 不支持 Metadata，需要在 create 时设置
             # 但我们此时才知道最终 sha256，所以需要用 copy_object 更新 metadata
             client.complete_multipart_upload(
-                Bucket=self.bucket,
+                Bucket=bucket,
                 Key=key,
                 UploadId=upload_id,
-                MultipartUpload={"Parts": parts},
+                MultipartUpload={"Parts": parts},  # type: ignore[typeddict-item]
             )
 
             # 使用 copy_object 更新 metadata（self-copy with MetadataDirective=REPLACE）
             sha256_hex = hasher.hexdigest()
             try:
-                copy_source = {"Bucket": self.bucket, "Key": key}
-                copy_extra = {"Metadata": {"sha256": sha256_hex}, "MetadataDirective": "REPLACE"}
+                copy_source = f"{bucket}/{key}"
+                copy_extra: Dict[str, Any] = {
+                    "Metadata": {"sha256": sha256_hex},
+                    "MetadataDirective": "REPLACE",
+                }
                 copy_extra.update(extra_args)
                 client.copy_object(
                     CopySource=copy_source,
-                    Bucket=self.bucket,
+                    Bucket=bucket,
                     Key=key,
                     **copy_extra,
                 )
@@ -2294,7 +2326,7 @@ class ObjectStore(ArtifactStore):
             if upload_id:
                 try:
                     client.abort_multipart_upload(
-                        Bucket=self.bucket,
+                        Bucket=bucket,
                         Key=key,
                         UploadId=upload_id,
                     )
@@ -2307,7 +2339,7 @@ class ObjectStore(ArtifactStore):
             if upload_id:
                 try:
                     client.abort_multipart_upload(
-                        Bucket=self.bucket,
+                        Bucket=bucket,
                         Key=key,
                         UploadId=upload_id,
                     )
@@ -2315,12 +2347,13 @@ class ObjectStore(ArtifactStore):
                     pass  # 忽略 abort 失败
             raise ObjectStoreUploadError(
                 f"Streaming multipart 上传失败: {uri}",
-                {"uri": uri, "key": key, "bucket": self.bucket, "error": str(e)},
+                {"uri": uri, "key": key, "bucket": bucket, "error": str(e)},
             )
 
     def _multipart_upload(
         self,
-        client,
+        client: S3Client,
+        bucket: str,
         key: str,
         data: bytes,
         sha256_hex: str,
@@ -2331,14 +2364,15 @@ class ObjectStore(ArtifactStore):
 
         Args:
             client: S3 客户端
+            bucket: 存储桶名称
             key: 对象键
             data: 完整数据
             sha256_hex: SHA256 哈希
             extra_args: 额外参数
         """
         # 开始 multipart upload
-        create_args = {
-            "Bucket": self.bucket,
+        create_args: Dict[str, Any] = {
+            "Bucket": bucket,
             "Key": key,
             "Metadata": {"sha256": sha256_hex},
         }
@@ -2347,7 +2381,7 @@ class ObjectStore(ArtifactStore):
         mpu = client.create_multipart_upload(**create_args)
         upload_id = mpu["UploadId"]
 
-        parts = []
+        parts: list[dict[str, Any]] = []
         part_number = 1
 
         try:
@@ -2356,7 +2390,7 @@ class ObjectStore(ArtifactStore):
             while offset < len(data):
                 chunk = data[offset : offset + self.multipart_chunk_size]
                 response = client.upload_part(
-                    Bucket=self.bucket,
+                    Bucket=bucket,
                     Key=key,
                     UploadId=upload_id,
                     PartNumber=part_number,
@@ -2373,17 +2407,17 @@ class ObjectStore(ArtifactStore):
 
             # 完成 multipart upload
             client.complete_multipart_upload(
-                Bucket=self.bucket,
+                Bucket=bucket,
                 Key=key,
                 UploadId=upload_id,
-                MultipartUpload={"Parts": parts},
+                MultipartUpload={"Parts": parts},  # type: ignore[typeddict-item]
             )
 
         except Exception as e:
             # 取消 multipart upload
             try:
                 client.abort_multipart_upload(
-                    Bucket=self.bucket,
+                    Bucket=bucket,
                     Key=key,
                     UploadId=upload_id,
                 )
@@ -2407,12 +2441,13 @@ class ObjectStore(ArtifactStore):
             ObjectStoreDownloadError: 下载失败
         """
         client = self._get_client()
+        bucket = self._get_bucket()
         key = self._object_key(uri)
 
         try:
             # 先检查对象大小
             if self.max_size_bytes > 0:
-                head = client.head_object(Bucket=self.bucket, Key=key)
+                head = client.head_object(Bucket=bucket, Key=key)
                 content_length = head.get("ContentLength", 0)
                 if content_length > self.max_size_bytes:
                     raise ArtifactSizeLimitExceededError(
@@ -2420,8 +2455,9 @@ class ObjectStore(ArtifactStore):
                         {"uri": uri, "size": content_length, "limit": self.max_size_bytes},
                     )
 
-            response = client.get_object(Bucket=self.bucket, Key=key)
-            return response["Body"].read()
+            response = client.get_object(Bucket=bucket, Key=key)
+            content: bytes = response["Body"].read()
+            return content
 
         except ArtifactSizeLimitExceededError:
             raise
@@ -2436,7 +2472,7 @@ class ObjectStore(ArtifactStore):
             # 否则抛出下载错误
             raise ObjectStoreDownloadError(
                 f"下载制品失败: {uri}",
-                {"uri": uri, "key": key, "bucket": self.bucket, "error": str(e)},
+                {"uri": uri, "key": key, "bucket": bucket, "error": str(e)},
             )
 
     def get_stream(self, uri: str, chunk_size: int = BUFFER_SIZE) -> Iterator[bytes]:
@@ -2456,12 +2492,13 @@ class ObjectStore(ArtifactStore):
             ObjectStoreDownloadError: 下载失败
         """
         client = self._get_client()
+        bucket = self._get_bucket()
         key = self._object_key(uri)
 
         try:
             # 先检查对象大小
             if self.max_size_bytes > 0:
-                head = client.head_object(Bucket=self.bucket, Key=key)
+                head = client.head_object(Bucket=bucket, Key=key)
                 content_length = head.get("ContentLength", 0)
                 if content_length > self.max_size_bytes:
                     raise ArtifactSizeLimitExceededError(
@@ -2469,7 +2506,7 @@ class ObjectStore(ArtifactStore):
                         {"uri": uri, "size": content_length, "limit": self.max_size_bytes},
                     )
 
-            response = client.get_object(Bucket=self.bucket, Key=key)
+            response = client.get_object(Bucket=bucket, Key=key)
             body = response["Body"]
 
             # 流式读取
@@ -2491,16 +2528,17 @@ class ObjectStore(ArtifactStore):
                 raise classified
             raise ObjectStoreDownloadError(
                 f"流式下载制品失败: {uri}",
-                {"uri": uri, "key": key, "bucket": self.bucket, "error": str(e)},
+                {"uri": uri, "key": key, "bucket": bucket, "error": str(e)},
             )
 
     def exists(self, uri: str) -> bool:
         """检查对象是否存在"""
         client = self._get_client()
+        bucket = self._get_bucket()
         key = self._object_key(uri)
 
         try:
-            client.head_object(Bucket=self.bucket, Key=key)
+            client.head_object(Bucket=bucket, Key=key)
             return True
         except Exception:
             return False
@@ -2536,11 +2574,12 @@ class ObjectStore(ArtifactStore):
         key = self._object_key(uri)
 
         try:
-            return client.generate_presigned_url(
+            url: str = client.generate_presigned_url(
                 ClientMethod=operation,
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=expires_in,
             )
+            return url
         except Exception as e:
             raise ObjectStoreError(
                 f"生成预签名 URL 失败: {uri}",
@@ -2561,11 +2600,12 @@ class ObjectStore(ArtifactStore):
             ArtifactNotFoundError: 制品不存在
         """
         client = self._get_client()
+        bucket = self._get_bucket()
         key = self._object_key(uri)
 
         try:
             # 先尝试从元数据获取 sha256
-            head = client.head_object(Bucket=self.bucket, Key=key)
+            head = client.head_object(Bucket=bucket, Key=key)
             size_bytes = head.get("ContentLength", 0)
 
             # 检查元数据中是否有 sha256

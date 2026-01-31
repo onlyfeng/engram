@@ -16,9 +16,168 @@ import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional, TypedDict
 
 from .errors import ConfigError, ConfigNotFoundError, ConfigParseError
+
+# === 类型定义 ===
+
+# 有效的 artifacts 后端类型
+ArtifactsBackendType = Literal["local", "file", "object"]
+
+# 有效的覆盖策略类型
+OverwritePolicyType = Literal["allow", "deny", "allow_same_hash"]
+
+# 有效的 SSE 类型
+SSEType = Literal["AES256", "aws:kms"]
+
+# 有效的 S3 地址寻址风格
+AddressingStyleType = Literal["auto", "path", "virtual"]
+
+# 有效的 SCM 同步模式
+SCMSyncModeType = Literal["best_effort", "strict"]
+
+
+class BackfillWindowExceededDetails(TypedDict, total=False):
+    """BackfillWindowExceededError 的详情类型"""
+
+    errors: list[dict[str, Any]]
+    total_window_seconds: int
+    chunk_count: int
+    limits: dict[str, int]
+
+
+class GitLabConfigDict(TypedDict, total=False):
+    """GitLab 配置字典类型"""
+
+    url: Optional[str]
+    project_id: Optional[str]
+    ref_name: Optional[str]
+    batch_size: Optional[int]
+    request_timeout: Optional[float]
+    mr_state_filter: Optional[str]
+    auth: dict[str, Any]
+
+
+class SVNConfigDict(TypedDict, total=False):
+    """SVN 配置字典类型"""
+
+    url: Optional[str]
+    username: Optional[str]
+    batch_size: Optional[int]
+    overlap: Optional[int]
+    non_interactive: bool
+    trust_server_cert: bool
+    command_timeout: int
+    password_env: Optional[str]
+    password_file: Optional[str]
+
+
+class IncrementalConfigDict(TypedDict):
+    """增量同步配置字典类型"""
+
+    overlap_seconds: int
+    time_window_days: int
+    forward_window_seconds: int
+    forward_window_min_seconds: int
+    adaptive_shrink_factor: float
+    adaptive_grow_factor: float
+    adaptive_commit_threshold: int
+
+
+class SCMSyncConfigDict(TypedDict):
+    """SCM 同步配置字典类型"""
+
+    mode: str
+    is_strict: bool
+    strict_on_auth_error: bool
+    strict_on_rate_limit: bool
+    strict_on_server_error: bool
+    strict_on_timeout: bool
+
+
+class BackfillConfigDict(TypedDict):
+    """回填配置字典类型"""
+
+    repair_window_hours: int
+    cron_hint: str
+    max_concurrent_jobs: int
+    default_update_watermark: bool
+    max_total_window_seconds: int
+    max_chunks_per_request: int
+
+
+class SchedulerConfigDict(TypedDict):
+    """Scheduler 配置字典类型"""
+
+    global_concurrency: int
+    per_instance_concurrency: int
+    per_tenant_concurrency: int
+    scan_interval_seconds: int
+    max_enqueue_per_scan: int
+    error_budget_threshold: float
+    pause_duration_seconds: int
+    enable_tenant_fairness: bool
+    tenant_fairness_max_per_round: int
+
+
+class ClaimConfigDict(TypedDict):
+    """Claim 配置字典类型"""
+
+    enable_tenant_fair_claim: bool
+    max_consecutive_same_tenant: int
+    max_tenants_per_round: int
+
+
+class WorkerConfigDict(TypedDict):
+    """Worker 配置字典类型"""
+
+    lease_seconds: int
+    renew_interval_seconds: int
+    max_renew_failures: int
+
+
+class HTTPConfigDict(TypedDict, total=False):
+    """HTTP 配置字典类型"""
+
+    timeout_seconds: float
+    max_attempts: int
+    backoff_base_seconds: float
+    backoff_max_seconds: float
+    max_concurrency: Optional[int]
+
+
+class RateLimitConfigDict(TypedDict):
+    """速率限制配置字典类型"""
+
+    rate_limit_enabled: bool
+    rate_limit_requests_per_second: float
+    rate_limit_burst_size: Optional[float]
+    postgres_rate_limit_enabled: bool
+    postgres_rate_limit_rate: float
+    postgres_rate_limit_burst: int
+    postgres_rate_limit_max_wait: float
+    tenant_rate_limit_enabled: bool
+    tenant_rate_limit_rate: float
+    tenant_rate_limit_burst: int
+    tenant_rate_limit_max_wait: float
+
+
+class BulkThresholdsDict(TypedDict):
+    """Bulk 阈值配置字典类型"""
+
+    svn_changed_paths_threshold: int
+    git_total_changes_threshold: int
+    git_files_changed_threshold: int
+    diff_size_threshold: int
+
+
+class GCGovernanceConfigDict(TypedDict):
+    """GC 治理配置字典类型"""
+
+    require_trash_default: bool
+    require_ops_default: bool
+
 
 # 敏感信息日志 logger
 _auth_logger = logging.getLogger(__name__ + ".auth")
@@ -48,7 +207,7 @@ class PostgresConfig:
     # 当目标数据库不存在时，使用此 DSN 连接服务器创建数据库
     admin_dsn: Optional[str] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.dsn:
             raise ConfigError(
                 "配置项 [postgres].dsn 不能为空",
@@ -74,9 +233,9 @@ class ProjectConfig:
 
     project_key: str
     description: str = ""
-    tags: list = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.project_key:
             raise ConfigError(
                 "配置项 [project].project_key 不能为空",
@@ -154,7 +313,7 @@ class ArtifactsPolicyConfig:
     dir_mode: Optional[int] = None
 
     # 覆盖策略: allow | deny | allow_same_hash
-    overwrite_policy: str = "allow"
+    overwrite_policy: OverwritePolicyType = "allow"
 
     # 最大制品大小限制（字节），0 = 无限制
     max_size_bytes: int = 0
@@ -166,7 +325,7 @@ class ArtifactsPolicyConfig:
     # 优先级: 环境变量 ENGRAM_ARTIFACTS_READ_ONLY > 配置文件
     read_only: bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # 校验覆盖策略
         if self.overwrite_policy not in VALID_OVERWRITE_POLICIES:
             raise ConfigError(
@@ -227,12 +386,12 @@ class ArtifactsFileConfig:
     # - None: 允许所有路径（默认，适合开发环境）
     # - []: 拒绝所有路径
     # - ["path1", "path2"]: 只允许这些根路径
-    allowed_roots: Optional[list] = None
+    allowed_roots: Optional[list[str]] = None
 
     # 是否使用原子写入（临时文件 + rename）
     use_atomic_write: bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # 校验 allowed_roots 类型
         if self.allowed_roots is not None:
             if not isinstance(self.allowed_roots, list):
@@ -280,13 +439,13 @@ class ArtifactsObjectConfig:
     # - []: 拒绝所有路径
     # - ["scm/", "attachments/"]: 只允许这些前缀
     # 注意：验证时使用 prefix + uri 的完整 key
-    allowed_prefixes: Optional[list] = None
+    allowed_prefixes: Optional[list[str]] = None
 
     # 存储区域（非敏感）
     region: str = "us-east-1"
 
     # 服务端加密类型: AES256 | aws:kms
-    sse: Optional[str] = None
+    sse: Optional[SSEType] = None
 
     # 存储类别: STANDARD | STANDARD_IA | GLACIER 等
     storage_class: Optional[str] = None
@@ -324,9 +483,9 @@ class ArtifactsObjectConfig:
     # - auto: 自动选择（默认，boto3 根据 endpoint 和 bucket 决定）
     # - path: 路径风格 (http://endpoint/bucket/key)，适用于 MinIO 等兼容存储
     # - virtual: 虚拟主机风格 (http://bucket.endpoint/key)，AWS S3 默认
-    addressing_style: str = "auto"
+    addressing_style: AddressingStyleType = "auto"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # 校验 allowed_prefixes 类型
         if self.allowed_prefixes is not None:
             if not isinstance(self.allowed_prefixes, list):
@@ -468,11 +627,11 @@ class ArtifactsConfig:
         ENGRAM_S3_REGION          对象存储区域
     """
 
-    backend: str = "local"  # local | file | object
+    backend: ArtifactsBackendType = "local"  # local | file | object
     root: str = "./.agentx/artifacts"  # local 后端的根目录
 
     # local 后端: 允许的路径前缀（可选，安全策略）
-    allowed_prefixes: Optional[list] = None
+    allowed_prefixes: Optional[list[str]] = None
 
     # 子配置对象
     policy: ArtifactsPolicyConfig = field(default_factory=ArtifactsPolicyConfig)
@@ -498,7 +657,7 @@ class ArtifactsConfig:
     object_multipart_threshold: int = 5242880  # Multipart 阈值 (5MB)
     object_multipart_chunk_size: int = 8388608  # Multipart 分片大小 (8MB)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         valid_backends = {"local", "file", "object"}
         if self.backend not in valid_backends:
             raise ConfigError(
@@ -704,7 +863,7 @@ class AppConfig:
 # === TOML 解析工具 ===
 
 
-def _get_toml_parser():
+def _get_toml_parser() -> Any:
     """获取 TOML 解析器（兼容 Python 3.11 以下版本）"""
     if sys.version_info >= (3, 11):
         import tomllib
@@ -722,12 +881,13 @@ def _get_toml_parser():
             )
 
 
-def _parse_toml_file(path: Path) -> dict:
+def _parse_toml_file(path: Path) -> dict[str, Any]:
     """解析 TOML 文件"""
     tomllib = _get_toml_parser()
     try:
         with open(path, "rb") as f:
-            return tomllib.load(f)
+            result: dict[str, Any] = tomllib.load(f)
+            return result
     except Exception as e:
         raise ConfigParseError(
             f"配置文件解析失败: {e}",
@@ -753,8 +913,8 @@ class Config:
                 4. ~/.agentx/config.toml
         """
         self._config_path: Optional[Path] = None
-        self._data: dict = {}
-        self._loaded = False
+        self._data: dict[str, Any] = {}
+        self._loaded: bool = False
         self._app_config: Optional[AppConfig] = None
 
         # 确定配置文件路径
@@ -939,7 +1099,7 @@ class Config:
         return self._config_path
 
     @property
-    def data(self) -> dict:
+    def data(self) -> dict[str, Any]:
         """原始配置数据"""
         if not self._loaded:
             self.load()
@@ -954,7 +1114,8 @@ class Config:
         try:
             return self.to_app_config().postgres.dsn
         except Exception:
-            return self.get("postgres.dsn")
+            result = self.get("postgres.dsn")
+            return str(result) if result is not None else None
 
     @property
     def project_key(self) -> Optional[str]:
@@ -962,7 +1123,8 @@ class Config:
         try:
             return self.to_app_config().project.project_key
         except Exception:
-            return self.get("project.project_key")
+            result = self.get("project.project_key")
+            return str(result) if result is not None else None
 
 
 # 全局配置实例（延迟初始化）
@@ -1009,7 +1171,7 @@ def get_app_config(config_path: Optional[str] = None, reload: bool = False) -> A
     return _global_app_config
 
 
-def add_config_argument(parser) -> None:
+def add_config_argument(parser: Any) -> None:
     """
     为 argparse.ArgumentParser 添加 --config 参数
 
@@ -1025,7 +1187,7 @@ def add_config_argument(parser) -> None:
     )
 
 
-def init_config_from_args(args) -> AppConfig:
+def init_config_from_args(args: Any) -> AppConfig:
     """
     从 CLI 参数初始化配置（CLI 复用函数）
 
@@ -1085,9 +1247,10 @@ def get_artifacts_root_from_config() -> Optional[str]:
         # 优先 [artifacts].root
         root = _global_config.get("artifacts.root")
         if root:
-            return root
+            return str(root)
         # 回退 [paths].artifacts_root（向后兼容）
-        return _global_config.get("paths.artifacts_root")
+        legacy_root = _global_config.get("paths.artifacts_root")
+        return str(legacy_root) if legacy_root else None
 
     return None
 
@@ -1107,7 +1270,8 @@ def get_artifacts_backend_from_config() -> Optional[str]:
         return _global_app_config.artifacts.backend
 
     if _global_config is not None and _global_config._loaded:
-        return _global_config.get("artifacts.backend")
+        backend = _global_config.get("artifacts.backend")
+        return str(backend) if backend else None
 
     return None
 
@@ -1126,7 +1290,7 @@ DEFAULT_ARTIFACTS_BACKEND = "local"
 _deprecation_logger = logging.getLogger(__name__ + ".deprecation")
 
 # 已发出警告的标记（避免重复警告）
-_deprecation_warned = {
+_deprecation_warned: dict[str, bool] = {
     "artifacts_root": False,
     "paths.artifacts_root": False,
 }
@@ -1183,19 +1347,19 @@ def get_effective_artifacts_root() -> str:
         # 优先 [artifacts].root
         root = _global_config.get("artifacts.root")
         if root:
-            return root
+            return str(root)
 
         # 回退 [paths].artifacts_root（已弃用）
         legacy_paths_root = _global_config.get("paths.artifacts_root")
         if legacy_paths_root:
             _emit_deprecation_warning("paths.artifacts_root", "artifacts.root")
-            return legacy_paths_root
+            return str(legacy_paths_root)
 
         # 回退顶层 artifacts_root（已弃用）
         legacy_root = _global_config.get("artifacts_root")
         if legacy_root:
             _emit_deprecation_warning("artifacts_root", "artifacts.root")
-            return legacy_root
+            return str(legacy_root)
 
     # 4. 默认值
     return DEFAULT_ARTIFACTS_ROOT
@@ -1230,7 +1394,7 @@ def get_effective_artifacts_backend() -> str:
     if _global_config is not None and _global_config._loaded:
         backend = _global_config.get("artifacts.backend")
         if backend:
-            return backend
+            return str(backend)
 
     # 4. 默认值
     return DEFAULT_ARTIFACTS_BACKEND
@@ -1270,7 +1434,7 @@ SCM_KEY_FALLBACK_MAPPING = {
 SCM_KEY_REVERSE_MAPPING = {v: k for k, v in SCM_KEY_FALLBACK_MAPPING.items()}
 
 # SCM 配置弃用警告状态
-_scm_deprecation_warned: dict = {}
+_scm_deprecation_warned: dict[str, bool] = {}
 
 
 def _emit_scm_deprecation_warning(legacy_key: str, new_key: str) -> None:
@@ -1386,7 +1550,7 @@ def require_scm_config(key: str, config: Optional["Config"] = None) -> Any:
     return value
 
 
-def get_gitlab_config(config: Optional["Config"] = None) -> dict:
+def get_gitlab_config(config: Optional["Config"] = None) -> dict[str, Any]:
     """
     获取 GitLab 配置（兼容新旧配置格式）
 
@@ -1434,7 +1598,7 @@ def get_gitlab_config(config: Optional["Config"] = None) -> dict:
     return result
 
 
-def get_svn_config(config: Optional["Config"] = None) -> dict:
+def get_svn_config(config: Optional["Config"] = None) -> dict[str, Any]:
     """
     获取 SVN 配置（兼容新旧配置格式）
 
@@ -1504,7 +1668,7 @@ DEFAULT_ADAPTIVE_GROW_FACTOR = 1.5  # 自适应增长因子
 DEFAULT_ADAPTIVE_COMMIT_THRESHOLD = 200  # commit 数阈值，超过则缩小窗口
 
 
-def get_incremental_config(config: Optional["Config"] = None) -> dict:
+def get_incremental_config(config: Optional["Config"] = None) -> IncrementalConfigDict:
     """
     获取 SCM 增量同步配置
 
@@ -1657,12 +1821,13 @@ def get_scm_sync_mode(config: Optional["Config"] = None, cli_override: Optional[
 
     mode = config.get("scm.sync.mode")
     if mode:
-        mode_lower = mode.lower()
+        mode_str = str(mode)
+        mode_lower = mode_str.lower()
         if mode_lower in VALID_SCM_SYNC_MODES:
             return mode_lower
         _deprecation_logger.warning(
             "配置项 scm.sync.mode 值无效: %s，使用默认值 %s",
-            mode,
+            mode_str,
             DEFAULT_SCM_SYNC_MODE,
         )
 
@@ -1684,7 +1849,7 @@ def is_strict_mode(config: Optional["Config"] = None, cli_override: Optional[str
     return get_scm_sync_mode(config, cli_override) == SCM_SYNC_MODE_STRICT
 
 
-def get_scm_sync_config(config: Optional["Config"] = None) -> dict:
+def get_scm_sync_config(config: Optional["Config"] = None) -> SCMSyncConfigDict:
     """
     获取 SCM 同步配置
 
@@ -1792,12 +1957,12 @@ class BackfillWindowExceededError(Exception):
         details: 结构化错误详情，用于 JSON 输出
     """
 
-    def __init__(self, message: str, details: Optional[dict] = None):
+    def __init__(self, message: str, details: Optional[BackfillWindowExceededDetails] = None):
         super().__init__(message)
-        self.error_type = "BACKFILL_WINDOW_EXCEEDED"
-        self.details = details or {}
+        self.error_type: str = "BACKFILL_WINDOW_EXCEEDED"
+        self.details: BackfillWindowExceededDetails = details or {}
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """转换为结构化字典，便于 JSON 输出"""
         return {
             "error_type": self.error_type,
@@ -1806,7 +1971,7 @@ class BackfillWindowExceededError(Exception):
         }
 
 
-def get_backfill_config(config: Optional["Config"] = None) -> dict:
+def get_backfill_config(config: Optional["Config"] = None) -> BackfillConfigDict:
     """
     获取 SCM 回填配置
 
@@ -1911,7 +2076,7 @@ def validate_backfill_window(
 
     if errors:
         # 构建详细错误信息
-        messages = [e["message"] for e in errors]
+        messages: list[str] = [str(e["message"]) for e in errors]
         raise BackfillWindowExceededError(
             f"回填窗口超限: {'; '.join(messages)}",
             details={
@@ -2051,7 +2216,7 @@ DEFAULT_GITLAB_TENANT_RATE_LIMIT_BURST = 10
 DEFAULT_GITLAB_TENANT_RATE_LIMIT_MAX_WAIT = 30.0
 
 
-def get_scheduler_config(config: Optional["Config"] = None) -> dict:
+def get_scheduler_config(config: Optional["Config"] = None) -> SchedulerConfigDict:
     """
     获取 SCM Scheduler 配置
 
@@ -2099,7 +2264,9 @@ def get_scheduler_config(config: Optional["Config"] = None) -> dict:
     if config is None:
         config = get_config()
 
-    def _get_env_or_config(env_key: str, config_key: str, default, value_type=int):
+    def _get_env_or_config(
+        env_key: str, config_key: str, default: Any, value_type: type = int
+    ) -> Any:
         """优先环境变量，否则配置文件，最后默认值"""
         env_val = os.environ.get(env_key)
         if env_val:
@@ -2175,7 +2342,7 @@ def get_scheduler_config(config: Optional["Config"] = None) -> dict:
 # === SCM Claim 配置 ===
 
 
-def get_claim_config(config: Optional["Config"] = None) -> dict:
+def get_claim_config(config: Optional["Config"] = None) -> ClaimConfigDict:
     """
     获取 SCM Claim 配置（租户公平调度）
 
@@ -2204,7 +2371,9 @@ def get_claim_config(config: Optional["Config"] = None) -> dict:
     if config is None:
         config = get_config()
 
-    def _get_env_or_config(env_key: str, config_key: str, default, value_type=int):
+    def _get_env_or_config(
+        env_key: str, config_key: str, default: Any, value_type: type = int
+    ) -> Any:
         """优先环境变量，否则配置文件，最后默认值"""
         env_val = os.environ.get(env_key)
         if env_val:
@@ -2253,7 +2422,7 @@ DEFAULT_WORKER_RENEW_INTERVAL_SECONDS = 60  # 1 分钟
 DEFAULT_WORKER_MAX_RENEW_FAILURES = 3  # 最大续租失败次数
 
 
-def get_worker_config(config: Optional["Config"] = None) -> dict:
+def get_worker_config(config: Optional["Config"] = None) -> WorkerConfigDict:
     """
     获取 SCM Worker 配置
 
@@ -2283,32 +2452,39 @@ def get_worker_config(config: Optional["Config"] = None) -> dict:
         config = get_config()
 
     # 优先环境变量
-    lease_seconds = os.environ.get("SCM_WORKER_LEASE_SECONDS")
-    if lease_seconds:
-        lease_seconds = int(lease_seconds)
+    lease_seconds_env = os.environ.get("SCM_WORKER_LEASE_SECONDS")
+    if lease_seconds_env:
+        lease_seconds_val = int(lease_seconds_env)
     else:
-        lease_seconds = config.get("scm.worker.lease_seconds", DEFAULT_WORKER_LEASE_SECONDS)
+        lease_seconds_cfg = config.get("scm.worker.lease_seconds", DEFAULT_WORKER_LEASE_SECONDS)
+        lease_seconds_val = (
+            int(lease_seconds_cfg) if lease_seconds_cfg else DEFAULT_WORKER_LEASE_SECONDS
+        )
 
-    renew_interval_seconds = os.environ.get("SCM_WORKER_RENEW_INTERVAL_SECONDS")
-    if renew_interval_seconds:
-        renew_interval_seconds = int(renew_interval_seconds)
+    renew_interval_env = os.environ.get("SCM_WORKER_RENEW_INTERVAL_SECONDS")
+    if renew_interval_env:
+        renew_interval_val = int(renew_interval_env)
     else:
-        renew_interval_seconds = config.get(
+        renew_interval_cfg = config.get(
             "scm.worker.renew_interval_seconds", DEFAULT_WORKER_RENEW_INTERVAL_SECONDS
         )
-
-    max_renew_failures = os.environ.get("SCM_WORKER_MAX_RENEW_FAILURES")
-    if max_renew_failures:
-        max_renew_failures = int(max_renew_failures)
-    else:
-        max_renew_failures = config.get(
-            "scm.worker.max_renew_failures", DEFAULT_WORKER_MAX_RENEW_FAILURES
+        renew_interval_val = (
+            int(renew_interval_cfg) if renew_interval_cfg else DEFAULT_WORKER_RENEW_INTERVAL_SECONDS
         )
 
+    max_renew_env = os.environ.get("SCM_WORKER_MAX_RENEW_FAILURES")
+    if max_renew_env:
+        max_renew_val = int(max_renew_env)
+    else:
+        max_renew_cfg = config.get(
+            "scm.worker.max_renew_failures", DEFAULT_WORKER_MAX_RENEW_FAILURES
+        )
+        max_renew_val = int(max_renew_cfg) if max_renew_cfg else DEFAULT_WORKER_MAX_RENEW_FAILURES
+
     return {
-        "lease_seconds": int(lease_seconds),
-        "renew_interval_seconds": int(renew_interval_seconds),
-        "max_renew_failures": int(max_renew_failures),
+        "lease_seconds": lease_seconds_val,
+        "renew_interval_seconds": renew_interval_val,
+        "max_renew_failures": max_renew_val,
     }
 
 
@@ -2321,7 +2497,7 @@ DEFAULT_HTTP_BACKOFF_BASE_SECONDS = 1.0
 DEFAULT_HTTP_BACKOFF_MAX_SECONDS = 60.0
 
 
-def get_http_config(config: Optional["Config"] = None) -> dict:
+def get_http_config(config: Optional["Config"] = None) -> HTTPConfigDict:
     """
     获取 SCM HTTP 请求配置
 
@@ -2364,7 +2540,7 @@ def get_http_config(config: Optional["Config"] = None) -> dict:
     }
 
 
-def get_gitlab_rate_limit_config(config: Optional["Config"] = None) -> dict:
+def get_gitlab_rate_limit_config(config: Optional["Config"] = None) -> RateLimitConfigDict:
     """
     获取 GitLab 速率限制配置（统一入口）
 
@@ -2414,7 +2590,7 @@ def get_gitlab_rate_limit_config(config: Optional["Config"] = None) -> dict:
             return val.lower() in ("true", "1", "yes", "on")
         return default
 
-    def _get_with_default(key: str, default):
+    def _get_with_default(key: str, default: Any) -> Any:
         """获取配置值，None 时返回默认值"""
         val = config.get(key)
         return default if val is None else val
@@ -2489,10 +2665,10 @@ BULK_THRESHOLDS_KEY_MAPPING = {
 }
 
 # Bulk 阈值弃用警告状态
-_bulk_deprecation_warned: dict = {}
+_bulk_deprecation_warned: dict[str, bool] = {}
 
 
-def get_bulk_thresholds(config: Optional["Config"] = None) -> dict:
+def get_bulk_thresholds(config: Optional["Config"] = None) -> BulkThresholdsDict:
     """
     获取 SCM Bulk Commit 阈值配置
 
@@ -2837,7 +3013,7 @@ def _parse_bool_env(env_var: str, default: bool = False) -> bool:
     return default
 
 
-def get_gc_governance_config(config: Optional["Config"] = None) -> dict:
+def get_gc_governance_config(config: Optional["Config"] = None) -> GCGovernanceConfigDict:
     """
     获取 GC 治理开关配置
 
@@ -2922,7 +3098,8 @@ def get_gc_require_trash_default() -> bool:
     Returns:
         是否默认要求软删除
     """
-    return get_gc_governance_config()["require_trash_default"]
+    result = get_gc_governance_config()["require_trash_default"]
+    return bool(result)
 
 
 def get_gc_require_ops_default() -> bool:
@@ -2934,7 +3111,8 @@ def get_gc_require_ops_default() -> bool:
     Returns:
         是否默认要求 ops 凭证
     """
-    return get_gc_governance_config()["require_ops_default"]
+    result = get_gc_governance_config()["require_ops_default"]
+    return bool(result)
 
 
 def get_svn_auth(config: Optional["Config"] = None) -> Optional[SVNAuth]:
@@ -2973,7 +3151,7 @@ def get_svn_auth(config: Optional["Config"] = None) -> Optional[SVNAuth]:
 
     username: Optional[str] = None
     password: Optional[str] = None
-    source_parts: list = []
+    source_parts: list[str] = []
 
     # === 读取用户名 ===
 

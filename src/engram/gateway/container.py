@@ -232,6 +232,51 @@ class GatewayContainer:
 _container: Optional[GatewayContainer] = None
 
 
+def get_container_or_none() -> Optional[GatewayContainer]:
+    """
+    获取全局 GatewayContainer 实例（如果已初始化）
+
+    线程安全: 是（只读操作）
+
+    用于检查全局容器状态，不触发延迟初始化。
+    适用于 lifespan 中检查 container 是否已由测试代码注入。
+
+    Returns:
+        已初始化的 GatewayContainer 实例，或 None
+    """
+    return _container
+
+
+def is_container_set() -> bool:
+    """
+    检查全局容器是否已设置（无副作用）
+
+    线程安全: 是（只读操作）
+    无副作用: 是 - 仅检查内部状态，不触发 load_config() 或任何初始化
+
+    此函数用于在不触发任何配置加载的情况下检查容器状态。
+    与 get_container_or_none() 相比，返回布尔值更适合条件判断。
+
+    设计原则:
+    - 完全只读：不修改任何全局状态
+    - 不依赖环境变量：即使 PROJECT_KEY/POSTGRES_DSN 未设置也可安全调用
+    - 适用于 lifespan 早期检查、测试 setup 等场景
+
+    Returns:
+        True 如果全局容器已设置，False 否则
+
+    Usage:
+        # 在 lifespan 中检查 container 是否由测试代码注入
+        if is_container_set():
+            logger.info("Container 已预先初始化")
+        else:
+            # 执行正常初始化流程
+            container = GatewayContainer.create()
+            set_container(container)
+    """
+    return _container is not None
+
+
 def get_container() -> GatewayContainer:
     """
     获取全局 GatewayContainer 实例（单例模式）
@@ -241,15 +286,21 @@ def get_container() -> GatewayContainer:
     **使用场景**:
     - 入口层（app.py, startup.py）：用于初始化和预热依赖
     - FastAPI 依赖注入函数（本模块内）：如 get_gateway_deps() 等
+    - handlers 中获取 deps: get_container().deps
 
-    **禁止场景**:
-    - handlers/ 模块内禁止直接调用此函数
-    - handlers 应通过 `deps: GatewayDepsProtocol` 参数获取依赖
+    **注意**:
+    - 如果 container 未初始化，会调用 GatewayContainer.create() → get_config()
+    - 生产环境应在 lifespan 中预先初始化，避免请求时触发配置加载
+    - 测试环境应使用 set_container() 注入 mock container
 
     Returns:
         GatewayContainer 实例
 
+    Raises:
+        ConfigError: 配置加载失败（缺少必填环境变量等）
+
     See Also:
+        - get_container_or_none(): 不触发自动创建的检查函数
         - get_gateway_deps(): handlers 推荐使用的依赖获取方式
         - GatewayDeps.for_testing(): 测试时的依赖注入方式
     """
@@ -359,7 +410,7 @@ def get_gateway_config() -> GatewayConfig:
     return get_container().config
 
 
-def get_logbook_db():
+def get_logbook_db() -> "LogbookDatabase":
     """
     FastAPI 依赖注入函数：获取 LogbookDatabase
 
@@ -371,7 +422,7 @@ def get_logbook_db():
     return get_container().db
 
 
-def get_logbook_adapter_dep():
+def get_logbook_adapter_dep() -> "LogbookAdapter":
     """
     FastAPI 依赖注入函数：获取 LogbookAdapter
 
@@ -383,7 +434,7 @@ def get_logbook_adapter_dep():
     return get_container().logbook_adapter
 
 
-def get_openmemory_client_dep():
+def get_openmemory_client_dep() -> "OpenMemoryClient":
     """
     FastAPI 依赖注入函数：获取 OpenMemoryClient
 

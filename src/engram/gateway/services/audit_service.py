@@ -56,7 +56,7 @@ def write_audit_or_raise(
             validate_refs=validate_refs,
         )
         logger.debug(f"审计记录写入成功: audit_id={audit_id}, correlation_id={correlation_id}")
-        return audit_id
+        return int(audit_id)
     except Exception as e:
         logger.error(f"审计写入失败，阻断操作: {e}, correlation_id={correlation_id}")
         raise AuditWriteError(

@@ -104,7 +104,7 @@ class RequestContext:
 
         # 测试时直接构造
         ctx = RequestContext(
-            correlation_id="corr-test0000000000",
+            correlation_id="corr-0000000000000000",
             actor_user_id="test-user",
         )
     """
@@ -146,7 +146,7 @@ class RequestContext:
     @classmethod
     def for_testing(
         cls,
-        correlation_id: str = "corr-test0000000000",
+        correlation_id: str = "corr-0000000000000000",
         actor_user_id: Optional[str] = "test-user",
         target_space: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
@@ -157,8 +157,8 @@ class RequestContext:
         提供稳定的默认值，方便测试断言。
 
         Args:
-            correlation_id: 请求追踪 ID（默认 "corr-test0000000000"，
-                            与 generate_correlation_id() 的 corr- 前缀格式一致）
+            correlation_id: 请求追踪 ID（默认 "corr-0000000000000000"，
+                            符合 schema 定义: corr-{16位十六进制}）
             actor_user_id: 操作者用户 ID（默认 "test-user"）
             target_space: 目标空间
             extra: 额外的上下文数据

@@ -19,22 +19,12 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
-from ..di import GatewayDepsProtocol
-
 # 导入统一错误码
-try:
-    from engram.logbook.errors import ErrorCode
-except ImportError:
+from engram.logbook.errors import ErrorCode
 
-    class ErrorCode:
-        GOVERNANCE_UPDATE_MISSING_CREDENTIALS = "governance_update:missing_credentials"
-        GOVERNANCE_UPDATE_ADMIN_KEY_NOT_CONFIGURED = "governance_update:admin_key_not_configured"
-        GOVERNANCE_UPDATE_INVALID_ADMIN_KEY = "governance_update:invalid_admin_key"
-        GOVERNANCE_UPDATE_USER_NOT_IN_ALLOWLIST = "governance_update:user_not_in_allowlist"
-        GOVERNANCE_UPDATE_ADMIN_KEY = "governance_update:admin_key"
-        GOVERNANCE_UPDATE_ALLOWLIST_USER = "governance_update:allowlist_user"
-        GOVERNANCE_UPDATE_INTERNAL_ERROR = "governance_update:internal_error"
-
+from ..audit_event import AuditWriteError
+from ..di import GatewayDepsProtocol
+from ..services.audit_service import write_audit_or_raise
 
 logger = logging.getLogger("gateway.handlers.governance_update")
 
@@ -114,19 +104,36 @@ async def governance_update_impl(
         else:
             reject_reason = ErrorCode.GOVERNANCE_UPDATE_USER_NOT_IN_ALLOWLIST
 
-        # 写入审计日志（拒绝）
-        db.insert_audit(
-            actor_user_id=actor_user_id,
-            target_space=f"governance:{config.project_key}",
-            action="reject",
-            reason=reject_reason,
-            payload_sha=None,
-            evidence_refs_json={
-                "source": "gateway",
-                "operation": "governance_update",
-                "auth_method_attempted": "admin_key" if admin_key else "allowlist",
-            },
-        )
+        # 生成 correlation_id 用于追踪
+        from ..mcp_rpc import generate_correlation_id
+
+        correlation_id = generate_correlation_id()
+
+        # 写入审计日志（拒绝）- audit-first 策略：失败时阻断主操作
+        try:
+            write_audit_or_raise(
+                db=db,
+                actor_user_id=actor_user_id,
+                target_space=f"governance:{config.project_key}",
+                action="reject",
+                reason=reject_reason,
+                payload_sha=None,
+                evidence_refs_json={
+                    "source": "gateway",
+                    "operation": "governance_update",
+                    "auth_method_attempted": "admin_key" if admin_key else "allowlist",
+                    "correlation_id": correlation_id,
+                },
+                correlation_id=correlation_id,
+            )
+        except AuditWriteError as e:
+            logger.error(f"governance_update 审计写入失败: {e}, correlation_id={correlation_id}")
+            return GovernanceSettingsUpdateResponse(
+                ok=False,
+                action="error",
+                settings=None,
+                message=f"审计写入失败，操作已阻断 (correlation_id={correlation_id})",
+            )
 
         logger.warning(f"governance_update 鉴权失败: {reject_reason}, actor={actor_user_id}")
 
@@ -138,6 +145,11 @@ async def governance_update_impl(
         )
 
     # 鉴权通过，执行更新
+    # 生成 correlation_id 用于追踪
+    from ..mcp_rpc import generate_correlation_id
+
+    correlation_id = generate_correlation_id()
+
     try:
         # 合并策略变更
         new_team_write_enabled = (
@@ -176,23 +188,35 @@ async def governance_update_impl(
         else:
             auth_reason = ErrorCode.GOVERNANCE_UPDATE_ALLOWLIST_USER
 
-        # 写入审计日志（允许）
-        db.insert_audit(
-            actor_user_id=actor_user_id,
-            target_space=f"governance:{config.project_key}",
-            action="allow",
-            reason=auth_reason,
-            payload_sha=None,
-            evidence_refs_json={
-                "source": "gateway",
-                "operation": "governance_update",
-                "auth_method": auth_method,
-                "changes": {
-                    "team_write_enabled": team_write_enabled,
-                    "policy_json_updated": policy_json is not None,
+        # 写入审计日志（允许）- audit-first 策略：失败时阻断主操作
+        try:
+            write_audit_or_raise(
+                db=db,
+                actor_user_id=actor_user_id,
+                target_space=f"governance:{config.project_key}",
+                action="allow",
+                reason=auth_reason,
+                payload_sha=None,
+                evidence_refs_json={
+                    "source": "gateway",
+                    "operation": "governance_update",
+                    "auth_method": auth_method,
+                    "changes": {
+                        "team_write_enabled": team_write_enabled,
+                        "policy_json_updated": policy_json is not None,
+                    },
+                    "correlation_id": correlation_id,
                 },
-            },
-        )
+                correlation_id=correlation_id,
+            )
+        except AuditWriteError as e:
+            logger.error(f"governance_update 审计写入失败: {e}, correlation_id={correlation_id}")
+            return GovernanceSettingsUpdateResponse(
+                ok=False,
+                action="error",
+                settings=None,
+                message=f"审计写入失败，操作已阻断 (correlation_id={correlation_id})",
+            )
 
         logger.info(
             f"governance_update 成功: project={config.project_key}, actor={actor_user_id}, auth_method={auth_method}"
@@ -205,22 +229,40 @@ async def governance_update_impl(
             message=None,
         )
 
+    except AuditWriteError:
+        # AuditWriteError 已在上方处理，此处重新抛出以避免被下方 catch-all 捕获
+        raise
+
     except Exception as e:
         logger.exception(f"governance_update 执行失败: {e}")
 
-        # 写入审计日志（错误）
-        db.insert_audit(
-            actor_user_id=actor_user_id,
-            target_space=f"governance:{config.project_key}",
-            action="reject",
-            reason=ErrorCode.GOVERNANCE_UPDATE_INTERNAL_ERROR,
-            payload_sha=None,
-            evidence_refs_json={
-                "source": "gateway",
-                "operation": "governance_update",
-                "error": str(e)[:500],
-            },
-        )
+        # 写入审计日志（错误）- audit-first 策略：失败时返回 error
+        try:
+            write_audit_or_raise(
+                db=db,
+                actor_user_id=actor_user_id,
+                target_space=f"governance:{config.project_key}",
+                action="reject",
+                reason=ErrorCode.GOVERNANCE_UPDATE_INTERNAL_ERROR,
+                payload_sha=None,
+                evidence_refs_json={
+                    "source": "gateway",
+                    "operation": "governance_update",
+                    "error": str(e)[:500],
+                    "correlation_id": correlation_id,
+                },
+                correlation_id=correlation_id,
+            )
+        except AuditWriteError as audit_err:
+            logger.error(
+                f"governance_update 错误审计写入也失败: {audit_err}, correlation_id={correlation_id}"
+            )
+            return GovernanceSettingsUpdateResponse(
+                ok=False,
+                action="error",
+                settings=None,
+                message=f"操作失败且审计写入失败 (correlation_id={correlation_id})",
+            )
 
         return GovernanceSettingsUpdateResponse(
             ok=False,

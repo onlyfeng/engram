@@ -85,6 +85,13 @@ ENV_EXAMPLE_ONLY_VARS: Set[str] = {
 
 # 允许只在文档中存在的变量（高级配置/上游组件/历史兼容）
 DOC_ONLY_VARS: Set[str] = {
+    # CI 门禁配置（脚本专用，不在 .env.example 中设置，由 CI 环境变量显式传递）
+    "ENGRAM_MYPY_GATE",
+    "ENGRAM_MYPY_BASELINE_FILE",
+    "ENGRAM_MYPY_PATH",
+    "MYPY_GATE",  # [已废弃] 兼容别名，将在未来版本移除
+    "ENGRAM_VERIFY_GATE",
+    "ENGRAM_VERIFY_STRICT",
     # OpenMemory 上游组件详细配置（不在 engram 代码中读取）
     "OM_MODE",
     "OM_TIER",

@@ -23,10 +23,11 @@ from typing import Any, Dict, List, Optional
 from engram.logbook.gitlab_client import GitLabClient
 from engram.logbook.scm_db import (
     get_conn as get_connection,
+)
+from engram.logbook.scm_db import (
     upsert_mr,
     upsert_repo,
 )
-
 
 # ============ 数据类定义 ============
 
@@ -34,6 +35,7 @@ from engram.logbook.scm_db import (
 @dataclass
 class GitLabMergeRequest:
     """GitLab Merge Request 数据类"""
+
     iid: int
     project_id: int
     title: str
@@ -191,8 +193,8 @@ def backfill_gitlab_mrs(
         同步结果字典
     """
     import os
-    
-    client = GitLabClient(gitlab_url, token=token)
+
+    client = GitLabClient(gitlab_url, private_token=token)
 
     # 获取 MRs
     raw_mrs = client.get_merge_requests(

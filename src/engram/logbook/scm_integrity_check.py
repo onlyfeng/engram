@@ -8,9 +8,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from typing_extensions import TypedDict
 
 from .artifact_store import get_default_store
 from .uri import parse_evidence_uri
+
+
+class PatchBlobRowDict(TypedDict):
+    """Database row for patch_blobs table."""
+
+    blob_id: int
+    source_type: str
+    source_id: str
+    uri: Optional[str]
+    evidence_uri: Optional[str]
+    sha256: Optional[str]
 
 
 def artifact_exists(uri: str) -> bool:
@@ -67,17 +79,39 @@ class IntegrityCheckResult:
         }
 
 
-def _normalize_row(row: Any) -> Dict[str, Any]:
+def _normalize_row(row: Any) -> PatchBlobRowDict:
+    """Normalize a database row to PatchBlobRowDict."""
     if isinstance(row, dict):
-        return row
-    return {
-        "blob_id": row[0],
-        "source_type": row[1],
-        "source_id": row[2],
-        "uri": row[3],
-        "evidence_uri": row[4],
-        "sha256": row[5],
-    }
+        blob_id = row["blob_id"]
+        source_type = row["source_type"]
+        source_id = row["source_id"]
+    else:
+        blob_id = row[0]
+        source_type = row[1]
+        source_id = row[2]
+
+    # blob_id, source_type, source_id are NOT NULL columns in schema
+    assert blob_id is not None, "blob_id must not be None"
+    assert source_type is not None, "source_type must not be None"
+    assert source_id is not None, "source_id must not be None"
+
+    if isinstance(row, dict):
+        return PatchBlobRowDict(
+            blob_id=int(blob_id),
+            source_type=str(source_type),
+            source_id=str(source_id),
+            uri=row.get("uri"),
+            evidence_uri=row.get("evidence_uri"),
+            sha256=row.get("sha256"),
+        )
+    return PatchBlobRowDict(
+        blob_id=int(blob_id),
+        source_type=str(source_type),
+        source_id=str(source_id),
+        uri=row[3],
+        evidence_uri=row[4],
+        sha256=row[5],
+    )
 
 
 def check_patch_blobs(
@@ -104,13 +138,15 @@ def check_patch_blobs(
 
     issues: List[PatchBlobIssue] = []
     for row in rows:
-        item = _normalize_row(row)
-        blob_id = item.get("blob_id")
-        source_type = item.get("source_type")
-        source_id = item.get("source_id")
-        uri = item.get("uri")
-        evidence_uri = item.get("evidence_uri")
-        sha256 = item.get("sha256")
+        item: PatchBlobRowDict = _normalize_row(row)
+        # Required fields (NOT NULL in schema) - already validated in _normalize_row
+        blob_id: int = item["blob_id"]
+        source_type: str = item["source_type"]
+        source_id: str = item["source_id"]
+        # Optional fields (nullable in schema)
+        uri: Optional[str] = item["uri"]
+        evidence_uri: Optional[str] = item["evidence_uri"]
+        sha256: Optional[str] = item["sha256"]
 
         if not evidence_uri:
             issues.append(

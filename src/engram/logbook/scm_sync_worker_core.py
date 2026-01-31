@@ -148,7 +148,10 @@ def read_cursor_before(
     """
     # 如果 payload 中显式指定了 cursor，使用它
     if payload and payload.get("cursor_before"):
-        return payload["cursor_before"]
+        cursor_val = payload["cursor_before"]
+        if isinstance(cursor_val, dict):
+            return cursor_val
+        return None
 
     # 从 kv 表读取
     db_conn, should_close = get_db_connection(conn)
@@ -160,7 +163,9 @@ def read_cursor_before(
 
         cursor_data = db_module.get_cursor_value(db_conn, repo_id, job_type)
         if cursor_data and cursor_data.get("value"):
-            return cursor_data["value"]
+            value = cursor_data["value"]
+            if isinstance(value, dict):
+                return value
         return None
     except Exception:
         return None
@@ -548,10 +553,16 @@ def process_one_job(
         return False
 
     job_id = str(job.get("job_id"))
-    repo_id = job.get("repo_id")
-    job_type = job.get("job_type")
-    mode = job.get("mode", "incremental")
+    repo_id_raw = job.get("repo_id")
+    job_type_raw = job.get("job_type")
+    mode = str(job.get("mode", "incremental") or "incremental")
     payload = job.get("payload") or {}
+
+    # 类型守卫：确保 repo_id 和 job_type 是有效值
+    if not isinstance(repo_id_raw, int) or not isinstance(job_type_raw, str):
+        return False
+    repo_id: int = repo_id_raw
+    job_type: str = job_type_raw
 
     # 尝试获取 (repo_id, job_type) 分布式锁
     # 锁确保同一 repo 的同一类型任务只有一个 worker 在执行
@@ -658,8 +669,8 @@ def process_one_job(
             fail_retry(
                 job_id=job_id,
                 worker_id=worker_id,
-                error=abort_error.get("error"),
-                error_category=abort_error.get("error_category"),
+                error=str(abort_error.get("error") or ""),
+                error_category=str(abort_error.get("error_category") or "") or None,
                 backoff_seconds=0,
                 conn=conn,
             )

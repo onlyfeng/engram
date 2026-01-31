@@ -23,6 +23,11 @@
 环境变量:
     ENGRAM_LOGBOOK_CONFIG: 配置文件路径
     ENGRAM_TESTING: 设置为 "1" 启用测试模式（允许使用 --schema-prefix）
+    ENGRAM_VERIFY_GATE: 验证门禁级别，可选值:
+        - strict: FAIL 或 WARN 任一项存在即触发异常（CI 门禁推荐）
+        - warn: 仅 FAIL 触发异常，WARN 仅输出警告（默认值）
+        - off: 关闭门禁检查
+    ENGRAM_VERIFY_STRICT: 设置为 "1" 等价于 ENGRAM_VERIFY_GATE=strict（已废弃，建议迁移到 ENGRAM_VERIFY_GATE）
 
 架构约束（路线A - 多库方案）:
     - 生产模式下不允许使用 schema_prefix
@@ -130,13 +135,26 @@ def main():
         help="执行权限验证脚本 99_verify_permissions.sql。用于验证角色和权限配置是否正确",
     )
 
-    # 添加 --verify-strict 参数（严格模式，验证失败时抛出异常）
+    # 添加 --verify-strict 参数（--verify-gate=strict 的别名，已废弃）
     parser.add_argument(
         "--verify-strict",
         action="store_true",
         default=False,
-        help="启用验证严格模式。当验证脚本检测到 FAIL 时抛出异常导致迁移失败。"
-        "也可通过环境变量 ENGRAM_VERIFY_STRICT=1 启用",
+        help="[已废弃] --verify-gate=strict 的别名。"
+        "FAIL 或 WARN 任一项存在即触发异常。建议迁移到 --verify-gate=strict",
+    )
+
+    # 添加 --verify-gate 参数（验证门禁级别）
+    parser.add_argument(
+        "--verify-gate",
+        type=str,
+        choices=["strict", "warn", "off"],
+        default=None,
+        help="验证脚本的门禁级别: "
+        "strict=FAIL 或 WARN 任一项存在即触发异常（CI 门禁推荐）; "
+        "warn=仅 FAIL 触发异常，WARN 仅输出警告（默认）; "
+        "off=关闭门禁检查。"
+        "也可通过环境变量 ENGRAM_VERIFY_GATE 设置",
     )
 
     # 添加 --plan 参数（查看迁移计划，不连接数据库）
@@ -223,6 +241,7 @@ def main():
         precheck_only=args.precheck_only,
         verify=args.verify,
         verify_strict=args.verify_strict,
+        verify_gate=args.verify_gate,
         post_backfill=args.post_backfill,
         backfill_chunking_version=args.backfill_chunking_version,
         backfill_batch_size=args.backfill_batch_size,

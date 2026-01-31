@@ -40,9 +40,10 @@ router = APIRouter(prefix="/minio", tags=["minio"])
 class MinioAuditError(Exception):
     """MinIO Audit 处理错误"""
 
-    def __init__(self, message: str, status_code: int = 500):
+    def __init__(self, message: str, status_code: int = 500, request_id: str = ""):
         self.message = message
         self.status_code = status_code
+        self.request_id = request_id  # 用于追踪
         super().__init__(message)
 
 
@@ -149,7 +150,9 @@ def _parse_minio_audit_event(body: bytes) -> Dict[str, Any]:
 
     try:
         # 尝试解析 JSON
-        data = json.loads(body.decode("utf-8"))
+        data: dict[str, Any] = json.loads(body.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise MinioAuditError("JSON 必须是对象类型", status_code=400)
         return data
     except json.JSONDecodeError as e:
         raise MinioAuditError(f"JSON 解析失败: {e}", status_code=400)
@@ -288,14 +291,19 @@ def _insert_audit_to_db(audit_data: Dict[str, Any]) -> int:
 
     Returns:
         创建的 event_id
+
+    Raises:
+        MinioAuditError: 审计写入失败时抛出，包含 request_id 用于追踪
+            - audit-first 策略: 审计写入失败阻断整个请求处理
     """
     import psycopg
 
     config = get_config()
+    request_id = audit_data.get("request_id") or ""
 
     # 记录 schema_version 用于日志追踪
     schema_version = audit_data.get("schema_version", "1.0")
-    logger.debug(f"插入审计数据，schema_version={schema_version}")
+    logger.debug(f"插入审计数据，schema_version={schema_version}, request_id={request_id}")
 
     try:
         conn = psycopg.connect(config.postgres_dsn, autocommit=True)
@@ -320,7 +328,7 @@ def _insert_audit_to_db(audit_data: Dict[str, Any]) -> int:
                         audit_data.get("object_key"),
                         audit_data.get("operation", "unknown"),
                         audit_data.get("status_code"),
-                        audit_data.get("request_id"),
+                        request_id,
                         audit_data.get("principal"),
                         audit_data.get("remote_ip"),
                         json.dumps(audit_data.get("raw", {})),
@@ -331,12 +339,16 @@ def _insert_audit_to_db(audit_data: Dict[str, Any]) -> int:
         finally:
             conn.close()
     except psycopg.Error as e:
-        logger.error(f"写入审计日志失败: {e}")
-        raise MinioAuditError(f"数据库写入失败: {e}", status_code=500)
+        logger.error(f"写入审计日志失败: {e}, request_id={request_id}")
+        raise MinioAuditError(
+            f"数据库写入失败: {e}",
+            status_code=500,
+            request_id=request_id,
+        )
 
 
 @router.post("/audit")
-async def minio_audit_webhook(request: Request):
+async def minio_audit_webhook(request: Request) -> JSONResponse:
     """
     MinIO Audit Webhook 端点
 
@@ -395,18 +407,27 @@ async def minio_audit_webhook(request: Request):
         # - 503 未配置：info（配置问题，不应产生告警噪声）
         # - 401/403 认证失败：debug（正常的认证拒绝）
         # - 400 请求格式错误：debug（客户端错误）
-        # - 500+ 服务端错误：warning
+        # - 500+ 服务端错误：warning（审计写入失败需要告警）
         if e.status_code == 503:
             logger.info(f"MinIO audit webhook 未配置: {e.message}")
         elif e.status_code in (401, 403, 400, 413):
             logger.debug(f"MinIO audit webhook 请求被拒绝: {e.message} (status={e.status_code})")
         else:
-            logger.warning(f"MinIO audit webhook 错误: {e.message} (status={e.status_code})")
+            logger.warning(
+                f"MinIO audit webhook 错误: {e.message} (status={e.status_code}, request_id={e.request_id})"
+            )
+
+        # 构建错误响应，包含追踪信息
+        error_response: Dict[str, Any] = {
+            "ok": False,
+            "error": e.message,
+        }
+        # 包含 request_id 用于追踪（audit-first 策略：便于定位失败的审计事件）
+        if e.request_id:
+            error_response["request_id"] = e.request_id
+
         return JSONResponse(
-            content={
-                "ok": False,
-                "error": e.message,
-            },
+            content=error_response,
             status_code=e.status_code,
         )
     except Exception as e:

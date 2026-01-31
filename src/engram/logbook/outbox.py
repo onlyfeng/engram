@@ -15,21 +15,68 @@ Lease 协议:
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Literal, Optional, Union, cast
 
 import psycopg
+from typing_extensions import TypedDict
 
 from .config import Config
 from .db import get_connection
 from .errors import DatabaseError
 from .hashing import sha256
 
+# === TypedDict 定义：outbox_memory 行结构 ===
+
+# Outbox 状态字面量类型
+OutboxStatus = Literal["pending", "sent", "dead"]
+
+
+class OutboxRowBase(TypedDict):
+    """outbox_memory 表行结构（必需字段）"""
+
+    outbox_id: int
+    target_space: str  # team:<project> | private:<user> | org:shared
+    payload_sha: str
+    status: OutboxStatus
+    retry_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class OutboxRow(OutboxRowBase, total=False):
+    """outbox_memory 表行结构（完整字段）"""
+
+    item_id: Optional[int]
+    payload_md: str
+    next_attempt_at: Optional[datetime]
+    locked_at: Optional[datetime]
+    locked_by: Optional[str]
+    last_error: Optional[str]
+
+
+class OutboxRowWithConn(OutboxRow, total=False):
+    """outbox_memory 表行结构（含数据库连接，用于 claim_pending）"""
+
+    _conn: Any  # psycopg.Connection
+
+
+class DedupResult(TypedDict, total=False):
+    """check_dedup 返回结果"""
+
+    outbox_id: int
+    target_space: str
+    payload_sha: str
+    status: OutboxStatus
+    last_error: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
 
 def check_dedup(
     target_space: str,
     payload_sha: str,
     config: Optional[Config] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[DedupResult]:
     """
     检查是否存在已成功写入的重复记录（幂等去重）
 
@@ -41,17 +88,7 @@ def check_dedup(
         config: 配置实例
 
     Returns:
-        如果存在已成功写入的记录，返回该记录的字典：
-        {
-            "outbox_id": int,
-            "target_space": str,
-            "payload_sha": str,
-            "status": str,
-            "created_at": datetime,
-            "updated_at": datetime,
-            "last_error": str | None (可能包含 memory_id=xxx)
-        }
-        不存在返回 None
+        如果存在已成功写入的记录，返回 DedupResult；不存在返回 None
     """
     conn = get_connection(config=config)
     try:
@@ -69,15 +106,16 @@ def check_dedup(
             )
             row = cur.fetchone()
             if row:
-                return {
-                    "outbox_id": row[0],
-                    "target_space": row[1],
-                    "payload_sha": row[2],
-                    "status": row[3],
-                    "last_error": row[4],  # 可能包含 memory_id=xxx
+                result: DedupResult = {
+                    "outbox_id": int(row[0]),
+                    "target_space": str(row[1]),
+                    "payload_sha": str(row[2]),
+                    "status": cast(OutboxStatus, row[3]),
+                    "last_error": str(row[4]) if row[4] else None,
                     "created_at": row[5],
                     "updated_at": row[6],
                 }
+                return result
             return None
     except psycopg.Error as e:
         raise DatabaseError(
@@ -142,7 +180,12 @@ def enqueue_memory(
             )
             result = cur.fetchone()
             conn.commit()
-            return result[0]
+            if result is None:
+                raise DatabaseError(
+                    "入队 outbox_memory 失败: 未返回 outbox_id",
+                    {"target_space": target_space, "payload_sha": payload_sha},
+                )
+            return int(result[0])
     except psycopg.Error as e:
         conn.rollback()
         raise DatabaseError(
@@ -237,7 +280,7 @@ def get_pending(
     limit: int = 100,
     config: Optional[Config] = None,
     dsn: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> List[OutboxRow]:
     """
     获取待处理的 outbox 记录 (status = 'pending')
 
@@ -246,9 +289,10 @@ def get_pending(
     Args:
         limit: 返回记录数量上限
         config: 配置实例
+        dsn: 数据库 DSN（可选）
 
     Returns:
-        pending 状态的 outbox 记录列表
+        pending 状态的 outbox 记录列表（List[OutboxRow]）
     """
     conn = get_connection(dsn=dsn, config=config)
     try:
@@ -267,23 +311,22 @@ def get_pending(
             )
             rows = cur.fetchall()
 
-            results = []
+            results: List[OutboxRow] = []
             for row in rows:
-                results.append(
-                    {
-                        "outbox_id": row[0],
-                        "item_id": row[1],
-                        "target_space": row[2],
-                        "payload_md": row[3],
-                        "payload_sha": row[4],
-                        "status": row[5],
-                        "retry_count": row[6],
-                        "next_attempt_at": row[7],
-                        "last_error": row[8],
-                        "created_at": row[9],
-                        "updated_at": row[10],
-                    }
-                )
+                outbox_row: OutboxRow = {
+                    "outbox_id": int(row[0]),
+                    "item_id": int(row[1]) if row[1] is not None else None,
+                    "target_space": str(row[2]),
+                    "payload_md": str(row[3]) if row[3] else "",
+                    "payload_sha": str(row[4]),
+                    "status": cast(OutboxStatus, row[5]),
+                    "retry_count": int(row[6]),
+                    "next_attempt_at": row[7],
+                    "last_error": str(row[8]) if row[8] else None,
+                    "created_at": row[9],
+                    "updated_at": row[10],
+                }
+                results.append(outbox_row)
 
             return results
     except psycopg.Error as e:
@@ -298,7 +341,7 @@ def get_pending(
 def claim_pending(
     limit: int = 10,
     config: Optional[Config] = None,
-) -> List[Dict[str, Any]]:
+) -> List[OutboxRowWithConn]:
     """
     并发安全地获取并锁定待处理的 outbox 记录
 
@@ -313,7 +356,7 @@ def claim_pending(
         config: 配置实例
 
     Returns:
-        pending 状态且已锁定的 outbox 记录列表
+        pending 状态且已锁定的 outbox 记录列表（List[OutboxRowWithConn]）
     """
     conn = get_connection(config=config)
     try:
@@ -333,24 +376,23 @@ def claim_pending(
             )
             rows = cur.fetchall()
 
-            results = []
+            results: List[OutboxRowWithConn] = []
             for row in rows:
-                results.append(
-                    {
-                        "outbox_id": row[0],
-                        "item_id": row[1],
-                        "target_space": row[2],
-                        "payload_md": row[3],
-                        "payload_sha": row[4],
-                        "status": row[5],
-                        "retry_count": row[6],
-                        "next_attempt_at": row[7],
-                        "last_error": row[8],
-                        "created_at": row[9],
-                        "updated_at": row[10],
-                        "_conn": conn,  # 返回连接以便调用方在同一事务中操作
-                    }
-                )
+                outbox_row: OutboxRowWithConn = {
+                    "outbox_id": int(row[0]),
+                    "item_id": int(row[1]) if row[1] is not None else None,
+                    "target_space": str(row[2]),
+                    "payload_md": str(row[3]) if row[3] else "",
+                    "payload_sha": str(row[4]),
+                    "status": cast(OutboxStatus, row[5]),
+                    "retry_count": int(row[6]),
+                    "next_attempt_at": row[7],
+                    "last_error": str(row[8]) if row[8] else None,
+                    "created_at": row[9],
+                    "updated_at": row[10],
+                    "_conn": conn,  # 返回连接以便调用方在同一事务中操作
+                }
+                results.append(outbox_row)
 
             return results
     except psycopg.Error as e:
@@ -412,7 +454,7 @@ def increment_retry(
 def get_by_id(
     outbox_id: int,
     config: Optional[Config] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[OutboxRow]:
     """
     根据 outbox_id 获取单条记录
 
@@ -421,7 +463,7 @@ def get_by_id(
         config: 配置实例
 
     Returns:
-        outbox 记录字典，不存在返回 None
+        outbox 记录（OutboxRow），不存在返回 None
     """
     conn = get_connection(config=config)
     try:
@@ -438,21 +480,22 @@ def get_by_id(
             )
             row = cur.fetchone()
             if row:
-                return {
-                    "outbox_id": row[0],
-                    "item_id": row[1],
-                    "target_space": row[2],
-                    "payload_md": row[3],
-                    "payload_sha": row[4],
-                    "status": row[5],
-                    "retry_count": row[6],
+                result: OutboxRow = {
+                    "outbox_id": int(row[0]),
+                    "item_id": int(row[1]) if row[1] is not None else None,
+                    "target_space": str(row[2]),
+                    "payload_md": str(row[3]) if row[3] else "",
+                    "payload_sha": str(row[4]),
+                    "status": cast(OutboxStatus, row[5]),
+                    "retry_count": int(row[6]),
                     "next_attempt_at": row[7],
                     "locked_at": row[8],
-                    "locked_by": row[9],
-                    "last_error": row[10],
+                    "locked_by": str(row[9]) if row[9] else None,
+                    "last_error": str(row[10]) if row[10] else None,
                     "created_at": row[11],
                     "updated_at": row[12],
                 }
+                return result
             return None
     except psycopg.Error as e:
         raise DatabaseError(
@@ -471,7 +514,7 @@ def claim_outbox(
     limit: int = 10,
     lease_seconds: int = 60,
     config: Optional[Config] = None,
-) -> List[Dict[str, Any]]:
+) -> List[OutboxRow]:
     """
     并发安全地获取并锁定待处理的 outbox 记录（Lease 协议）
 
@@ -491,7 +534,7 @@ def claim_outbox(
         config: 配置实例
 
     Returns:
-        已锁定的 outbox 记录列表（字典格式）
+        已锁定的 outbox 记录列表（List[OutboxRow]）
     """
     conn = get_connection(config=config)
     try:
@@ -526,25 +569,24 @@ def claim_outbox(
             rows = cur.fetchall()
             conn.commit()
 
-            results = []
+            results: List[OutboxRow] = []
             for row in rows:
-                results.append(
-                    {
-                        "outbox_id": row[0],
-                        "item_id": row[1],
-                        "target_space": row[2],
-                        "payload_md": row[3],
-                        "payload_sha": row[4],
-                        "status": row[5],
-                        "retry_count": row[6],
-                        "next_attempt_at": row[7],
-                        "locked_at": row[8],
-                        "locked_by": row[9],
-                        "last_error": row[10],
-                        "created_at": row[11],
-                        "updated_at": row[12],
-                    }
-                )
+                outbox_row: OutboxRow = {
+                    "outbox_id": int(row[0]),
+                    "item_id": int(row[1]) if row[1] is not None else None,
+                    "target_space": str(row[2]),
+                    "payload_md": str(row[3]) if row[3] else "",
+                    "payload_sha": str(row[4]),
+                    "status": cast(OutboxStatus, row[5]),
+                    "retry_count": int(row[6]),
+                    "next_attempt_at": row[7],
+                    "locked_at": row[8],
+                    "locked_by": str(row[9]) if row[9] else None,
+                    "last_error": str(row[10]) if row[10] else None,
+                    "created_at": row[11],
+                    "updated_at": row[12],
+                }
+                results.append(outbox_row)
 
             return results
     except psycopg.Error as e:

@@ -21,17 +21,88 @@ evidence_refs_json 统一结构规范:
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union, cast
 
 import psycopg
+from typing_extensions import NotRequired, TypedDict
 
 from .config import Config
 from .db import get_connection
 from .errors import DatabaseError, ValidationError
 from .uri import (
+    EvidenceRefsJson as UriEvidenceRefsJson,
+)
+from .uri import (
+    PatchRef,
     build_evidence_refs_json,
     validate_evidence_ref,
 )
+
+# === TypedDict 定义：settings 表行结构 ===
+
+
+class SettingsRow(TypedDict, total=False):
+    """settings 表行结构"""
+
+    project_key: str
+    team_write_enabled: bool
+    policy_json: Dict[str, Any]
+    updated_by: Optional[str]
+    updated_at: datetime
+
+
+# === TypedDict 定义：evidence_refs_json 结构 ===
+
+
+class PatchEvidenceRef(TypedDict, total=False):
+    """Patch 证据引用"""
+
+    artifact_uri: str  # memory://patch_blobs/<source_type>/<source_id>/<sha256>
+    sha256: str
+    source_id: str  # <repo_id>:<rev/sha>
+    source_type: str  # svn | git
+    kind: str  # patch
+
+
+class AttachmentEvidenceRef(TypedDict, total=False):
+    """附件证据引用"""
+
+    artifact_uri: str
+    sha256: str
+    filename: str
+    content_type: str
+
+
+class ExternalEvidenceRef(TypedDict):
+    """外部证据引用"""
+
+    uri: str
+    description: NotRequired[str]
+
+
+class EvidenceRefsJson(TypedDict, total=False):
+    """evidence_refs_json 完整结构"""
+
+    patches: List[PatchEvidenceRef]
+    attachments: List[AttachmentEvidenceRef]
+    external: List[ExternalEvidenceRef]
+
+
+# === TypedDict 定义：write_audit 表行结构 ===
+
+
+class WriteAuditRow(TypedDict, total=False):
+    """write_audit 表行结构"""
+
+    audit_id: int
+    actor_user_id: Optional[str]
+    target_space: str
+    action: str  # allow | redirect | reject
+    reason: Optional[str]
+    payload_sha: Optional[str]
+    evidence_refs_json: EvidenceRefsJson
+    created_at: datetime
 
 
 def _validate_policy_json(policy_json: Any) -> Dict:
@@ -61,23 +132,17 @@ def get_settings(
     project_key: str,
     config: Optional[Config] = None,
     dsn: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[SettingsRow]:
     """
     从 settings 获取项目设置
 
     Args:
         project_key: 项目键名
         config: 配置实例
+        dsn: 数据库 DSN（可选）
 
     Returns:
-        设置字典，不存在返回 None
-        {
-            "project_key": str,
-            "team_write_enabled": bool,
-            "policy_json": dict,
-            "updated_by": str | None,
-            "updated_at": datetime
-        }
+        设置字典（SettingsRow），不存在返回 None
     """
     conn = get_connection(dsn=dsn, config=config)
     try:
@@ -92,13 +157,14 @@ def get_settings(
             )
             row = cur.fetchone()
             if row:
-                return {
-                    "project_key": row[0],
-                    "team_write_enabled": row[1],
-                    "policy_json": row[2],
-                    "updated_by": row[3],
+                result: SettingsRow = {
+                    "project_key": str(row[0]),
+                    "team_write_enabled": bool(row[1]),
+                    "policy_json": row[2] if isinstance(row[2], dict) else {},
+                    "updated_by": str(row[3]) if row[3] else None,
                     "updated_at": row[4],
                 }
+                return result
             return None
     except psycopg.Error as e:
         raise DatabaseError(
@@ -113,7 +179,7 @@ def get_or_create_settings(
     project_key: str,
     config: Optional[Config] = None,
     dsn: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> SettingsRow:
     """
     获取或创建项目设置（若不存在则插入默认行）
 
@@ -122,16 +188,10 @@ def get_or_create_settings(
     Args:
         project_key: 项目键名
         config: 配置实例
+        dsn: 数据库 DSN（可选）
 
     Returns:
-        设置字典:
-        {
-            "project_key": str,
-            "team_write_enabled": bool,  # 默认 false
-            "policy_json": dict,         # 默认 {}
-            "updated_by": str | None,
-            "updated_at": datetime
-        }
+        设置字典（SettingsRow）
 
     Raises:
         DatabaseError: 数据库操作失败时抛出
@@ -163,21 +223,23 @@ def get_or_create_settings(
             )
             row = cur.fetchone()
             if row:
-                return {
-                    "project_key": row[0],
-                    "team_write_enabled": row[1],
-                    "policy_json": row[2],
-                    "updated_by": row[3],
+                result: SettingsRow = {
+                    "project_key": str(row[0]),
+                    "team_write_enabled": bool(row[1]),
+                    "policy_json": row[2] if isinstance(row[2], dict) else {},
+                    "updated_by": str(row[3]) if row[3] else None,
                     "updated_at": row[4],
                 }
+                return result
             # 理论上不应到达这里，因为刚刚插入或已存在
-            return {
+            default_result: SettingsRow = {
                 "project_key": project_key,
                 "team_write_enabled": False,
                 "policy_json": {},
                 "updated_by": None,
-                "updated_at": None,
+                "updated_at": None,  # type: ignore[typeddict-item]
             }
+            return default_result
     except psycopg.Error as e:
         conn.rollback()
         raise DatabaseError(
@@ -295,7 +357,7 @@ def query_write_audit(
     target_space: Optional[str] = None,
     reason_prefix: Optional[str] = None,
     config: Optional[Config] = None,
-) -> list:
+) -> List[WriteAuditRow]:
     """
     查询 write_audit 审计记录
 
@@ -309,20 +371,7 @@ def query_write_audit(
         config: 配置实例
 
     Returns:
-        审计记录列表
-        [
-            {
-                "audit_id": int,
-                "actor_user_id": str | None,
-                "target_space": str,
-                "action": str,
-                "reason": str | None,
-                "payload_sha": str | None,
-                "evidence_refs_json": dict,
-                "created_at": datetime
-            },
-            ...
-        ]
+        审计记录列表（List[WriteAuditRow]）
     """
     # 限制最大返回数量
     limit = min(limit, 1000)
@@ -331,8 +380,8 @@ def query_write_audit(
     try:
         with conn.cursor() as cur:
             # 构建查询条件
-            conditions = []
-            params = []
+            conditions: List[str] = []
+            params: List[Any] = []
 
             if since:
                 conditions.append("created_at >= %s")
@@ -371,19 +420,20 @@ def query_write_audit(
             cur.execute(query, params)
             rows = cur.fetchall()
 
-            return [
-                {
-                    "audit_id": row[0],
-                    "actor_user_id": row[1],
-                    "target_space": row[2],
-                    "action": row[3],
-                    "reason": row[4],
-                    "payload_sha": row[5],
-                    "evidence_refs_json": row[6] if row[6] else {},
+            results: List[WriteAuditRow] = []
+            for row in rows:
+                audit_row: WriteAuditRow = {
+                    "audit_id": int(row[0]),
+                    "actor_user_id": str(row[1]) if row[1] else None,
+                    "target_space": str(row[2]),
+                    "action": str(row[3]),
+                    "reason": str(row[4]) if row[4] else None,
+                    "payload_sha": str(row[5]) if row[5] else None,
+                    "evidence_refs_json": cast(EvidenceRefsJson, row[6]) if row[6] else {},
                     "created_at": row[7],
                 }
-                for row in rows
-            ]
+                results.append(audit_row)
+            return results
     except psycopg.Error as e:
         raise DatabaseError(
             f"查询 write_audit 失败: {e}",
@@ -393,7 +443,7 @@ def query_write_audit(
         conn.close()
 
 
-def _validate_evidence_refs_json(evidence_refs: Dict) -> None:
+def _validate_evidence_refs_json(evidence_refs: Union[EvidenceRefsJson, Dict[str, Any]]) -> None:
     """
     验证 evidence_refs_json 结构是否符合规范
 
@@ -497,7 +547,7 @@ def insert_write_audit(
     action: str,
     reason: Optional[str] = None,
     payload_sha: Optional[str] = None,
-    evidence_refs_json: Optional[Dict] = None,
+    evidence_refs_json: Optional[Union[EvidenceRefsJson, Dict[str, Any]]] = None,
     config: Optional[Config] = None,
     validate_refs: bool = False,
 ) -> int:
@@ -577,7 +627,12 @@ def insert_write_audit(
             )
             result = cur.fetchone()
             conn.commit()
-            return result[0]
+            if result is None:
+                raise DatabaseError(
+                    "插入 write_audit 失败: 未返回 audit_id",
+                    {"target_space": target_space, "action": action},
+                )
+            return int(result[0])
     except psycopg.Error as e:
         conn.rollback()
         raise DatabaseError(
@@ -594,8 +649,8 @@ def write_audit(
     actor_user_id: Optional[str] = None,
     reason: Optional[str] = None,
     payload_sha: Optional[str] = None,
-    patch_refs: Optional[List[Dict]] = None,
-    extra_evidence: Optional[Dict] = None,
+    patch_refs: Optional[List[PatchRef]] = None,
+    extra_evidence: Optional[Dict[str, Any]] = None,
     config: Optional[Config] = None,
 ) -> int:
     """
@@ -632,10 +687,13 @@ def write_audit(
         )
     """
     # 使用统一的构建函数
-    evidence_refs = build_evidence_refs_json(
+    evidence_refs: UriEvidenceRefsJson = build_evidence_refs_json(
         patches=patch_refs,
         extra=extra_evidence,
     )
+
+    # 转换为本地 EvidenceRefsJson 类型（兼容 insert_write_audit 参数类型）
+    evidence_dict: Dict[str, Any] = dict(evidence_refs) if evidence_refs else {}
 
     return insert_write_audit(
         actor_user_id=actor_user_id,
@@ -643,6 +701,6 @@ def write_audit(
         action=action,
         reason=reason,
         payload_sha=payload_sha,
-        evidence_refs_json=evidence_refs if evidence_refs else None,
+        evidence_refs_json=evidence_dict if evidence_dict else None,
         config=config,
     )

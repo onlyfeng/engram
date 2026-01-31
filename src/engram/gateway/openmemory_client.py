@@ -64,7 +64,7 @@ class RetryConfig:
 
     def calculate_delay(self, attempt: int) -> float:
         """计算指数退避延迟（含抖动）"""
-        delay = self.base_delay * (2**attempt)
+        delay: float = self.base_delay * (2**attempt)
         delay = min(delay, self.max_delay)
         jitter_range = delay * self.jitter
         delay += random.uniform(-jitter_range, jitter_range)
@@ -137,10 +137,10 @@ class SearchResult:
     """搜索结果"""
 
     success: bool
-    results: list[dict[str, Any]] = None
+    results: Optional[list[dict[str, Any]]] = None
     error: Optional[str] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.results is None:
             self.results = []
 
@@ -514,7 +514,8 @@ class OpenMemoryClient:
                 response = client.get(url, headers=self._get_headers())
                 response.raise_for_status()
                 data = response.json()
-                return data.get("status") == "ok"
+                status: str = data.get("status", "")
+                return status == "ok"
 
         except Exception as e:
             logger.warning(f"OpenMemory health check failed: {e}")
@@ -621,7 +622,12 @@ def store_memory(
     metadata: Optional[dict[str, Any]] = None,
 ) -> StoreResult:
     """便捷函数：存储记忆"""
-    return get_client().store(content, user_id, tags, metadata)
+    return get_client().store(
+        content=content,
+        user_id=user_id,
+        tags=tags,
+        metadata=metadata,
+    )
 
 
 def search_memory(

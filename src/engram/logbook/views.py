@@ -184,7 +184,7 @@ def render_views(
     status: Optional[str] = None,
     log_event: bool = False,
     item_id_for_log: Optional[int] = None,
-    config=None,
+    config: Optional[Any] = None,
     quiet: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -233,7 +233,7 @@ def render_views(
 
     rendered_at = _utc_now_iso_z()
 
-    result = {
+    result: Dict[str, Any] = {
         "out_dir": str(out_path.resolve()),
         "items_count": len(items),
         "files": {

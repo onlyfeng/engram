@@ -48,6 +48,7 @@ register_tool_executor() 是传统的全局注册模式，目前保留用于向�
 import contextvars
 import json
 import logging
+import re
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -71,14 +72,19 @@ except ImportError:
     OpenMemoryAPIError = None  # type: ignore[misc, assignment]
 
 # Logbook DB 检查异常
+# 使用可选类型变量来避免类型赋值问题
+_LogbookDBCheckError: Optional[type] = None
 try:
-    from engram.gateway.logbook_adapter import LogbookDBCheckError
+    from engram.gateway.logbook_adapter import LogbookDBCheckError as _ImportedLogbookDBCheckError
 
     # 验证它确实是一个类型（防止被 mock 替换）
-    if not isinstance(LogbookDBCheckError, type):
-        LogbookDBCheckError = None  # type: ignore[misc, assignment]
+    if isinstance(_ImportedLogbookDBCheckError, type):
+        _LogbookDBCheckError = _ImportedLogbookDBCheckError
 except ImportError:
-    LogbookDBCheckError = None  # type: ignore[misc, assignment]
+    pass
+
+# 导出兼容的别名（用于 isinstance 检查）
+LogbookDBCheckError = _LogbookDBCheckError
 
 
 def _is_exception_type(obj: Any, type_name: str) -> bool:
@@ -156,14 +162,61 @@ class ErrorData(BaseModel):
     correlation_id: Optional[str] = Field(None, description="请求追踪 ID")
     details: Optional[Dict[str, Any]] = Field(None, description="附加详情")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, *, strict: bool = False) -> Dict[str, Any]:
         """
         转换为 dict
 
-        契约要求：correlation_id 必须始终存在，若未提供则自动生成
+        契约要求：
+        1. correlation_id 必须始终存在
+        2. correlation_id 必须符合 schema 格式 (corr-{16位十六进制})
+        3. 若未提供或不合规，则自动生成合规的 correlation_id
+
+        ================================================================================
+                           correlation_id 单一来源规则 (重要)
+        ================================================================================
+
+        在真实 dispatch 链路中（HTTP 入口 -> dispatch -> handler）：
+        - correlation_id 由 HTTP 入口层（app.py mcp_endpoint）统一生成
+        - 通过 dispatch(correlation_id=...) 参数传入
+        - 通过 contextvars 传递给 handler（set_current_correlation_id）
+        - ErrorData 构造时必须传入已有的 correlation_id
+
+        因此，在正确的调用链路中，to_dict() 不应触发重新生成 correlation_id。
+
+        若调用时 correlation_id 为 None 或不合规：
+        - strict=False（默认）：兼容模式，自动生成合规的 correlation_id
+        - strict=True：严格模式，抛出 AssertionError，用于测试时钉死契约
+
+        这确保了：
+        - X-Correlation-ID header 与 error.data.correlation_id 始终一致
+        - 审计日志可追踪到唯一请求
+
+        ================================================================================
+
+        Args:
+            strict: 严格模式开关。为 True 时，若 correlation_id 缺失或不合规则抛出 AssertionError
+
+        Returns:
+            包含所有字段的字典
+
+        Raises:
+            AssertionError: strict=True 且 correlation_id 缺失或不合规时抛出
         """
-        # correlation_id 必须始终存在（契约要求）
-        corr_id = self.correlation_id or generate_correlation_id()
+        # 严格模式：用于测试时断言 correlation_id 单一来源契约
+        if strict:
+            assert self.correlation_id is not None, (
+                "契约违反: ErrorData.to_dict(strict=True) 要求 correlation_id 必须已设置。"
+                "在真实 dispatch 链路中，correlation_id 应由 HTTP 入口层生成并通过 dispatch 传递。"
+            )
+            assert is_valid_correlation_id(self.correlation_id), (
+                f"契约违反: correlation_id 格式不合规: {self.correlation_id!r}。"
+                "期望格式: corr-{{16位十六进制}}"
+            )
+            corr_id = self.correlation_id
+        else:
+            # 归一化 correlation_id（确保符合 schema 格式: corr-{16位十六进制}）
+            # 对外返回（HTTP/JSON-RPC/audit）必须是合规格式
+            corr_id = normalize_correlation_id(self.correlation_id)
 
         d = {
             "category": self.category,
@@ -205,6 +258,7 @@ class ErrorReason:
     OPENMEMORY_API_ERROR = "OPENMEMORY_API_ERROR"
     LOGBOOK_DB_UNAVAILABLE = "LOGBOOK_DB_UNAVAILABLE"
     LOGBOOK_DB_CHECK_FAILED = "LOGBOOK_DB_CHECK_FAILED"
+    DEPENDENCY_MISSING = "DEPENDENCY_MISSING"  # 依赖模块缺失（如 engram_logbook 未安装）
 
     # 内部错误
     INTERNAL_ERROR = "INTERNAL_ERROR"
@@ -215,6 +269,57 @@ class ErrorReason:
 def generate_correlation_id() -> str:
     """生成关联 ID"""
     return f"corr-{uuid.uuid4().hex[:16]}"
+
+
+# correlation_id 格式校验正则表达式（与 schemas/audit_event_v1.schema.json 对齐）
+# 格式: corr-{16位十六进制}
+CORRELATION_ID_PATTERN = re.compile(r"^corr-[a-fA-F0-9]{16}$")
+
+
+def is_valid_correlation_id(correlation_id: Optional[str]) -> bool:
+    """
+    校验 correlation_id 是否符合 schema 规范
+
+    格式要求: ^corr-[a-fA-F0-9]{16}$
+
+    Args:
+        correlation_id: 待校验的 correlation_id
+
+    Returns:
+        True 如果格式合规，False 否则
+    """
+    if not correlation_id:
+        return False
+    return bool(CORRELATION_ID_PATTERN.match(correlation_id))
+
+
+def normalize_correlation_id(correlation_id: Optional[str]) -> str:
+    """
+    归一化 correlation_id
+
+    如果传入的 correlation_id 不合规，则重新生成一个合规的。
+    这确保系统内部始终使用合规格式的 correlation_id。
+
+    Args:
+        correlation_id: 外部传入的 correlation_id（可能不合规）
+
+    Returns:
+        合规的 correlation_id
+
+    Example:
+        >>> normalize_correlation_id("corr-a1b2c3d4e5f67890")
+        'corr-a1b2c3d4e5f67890'  # 合规，直接返回
+
+        >>> normalize_correlation_id("corr-test123")
+        'corr-abc123def456789a'  # 不合规，重新生成
+
+        >>> normalize_correlation_id(None)
+        'corr-abc123def456789a'  # 空值，生成新的
+    """
+    if is_valid_correlation_id(correlation_id):
+        return correlation_id  # type: ignore[return-value]
+    # 不合规或为空，生成新的
+    return generate_correlation_id()
 
 
 # ===================== Correlation ID 上下文传递 =====================
@@ -301,14 +406,16 @@ def make_jsonrpc_error(
 ) -> JsonRpcResponse:
     """构造 JSON-RPC 错误响应"""
     return JsonRpcResponse(
+        jsonrpc="2.0",
         id=id,
+        result=None,
         error=JsonRpcError(code=code, message=message, data=data),
     )
 
 
 def make_jsonrpc_result(id: Optional[Any], result: Any) -> JsonRpcResponse:
     """构造 JSON-RPC 成功响应"""
-    return JsonRpcResponse(id=id, result=result)
+    return JsonRpcResponse(jsonrpc="2.0", id=id, result=result, error=None)
 
 
 # ===================== 请求格式检测 =====================
@@ -370,10 +477,10 @@ class JsonRpcRouter:
         response = await router.dispatch(request)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._handlers: Dict[str, MethodHandler] = {}
 
-    def method(self, name: str):
+    def method(self, name: str) -> Callable[[MethodHandler], MethodHandler]:
         """
         方法装饰器，用于注册 JSON-RPC 方法处理器
 
@@ -387,7 +494,7 @@ class JsonRpcRouter:
 
         return decorator
 
-    def register(self, name: str, handler: MethodHandler):
+    def register(self, name: str, handler: MethodHandler) -> None:
         """
         手动注册方法处理器
 
@@ -415,9 +522,36 @@ class JsonRpcRouter:
 
         所有错误都通过 to_jsonrpc_error() 转换，确保返回结构化的 ErrorData。
 
+        ================================================================================
+                           correlation_id 单一来源规则 (关键设计)
+        ================================================================================
+
+        在真实 HTTP 请求链路中（app.py mcp_endpoint）：
+
+        1. HTTP 入口层生成 correlation_id:
+           correlation_id = generate_correlation_id()
+
+        2. 传递给 dispatch:
+           response = await mcp_router.dispatch(rpc_request, correlation_id=correlation_id)
+
+        3. dispatch 通过 contextvars 传递给 handler:
+           token = set_current_correlation_id(corr_id)
+           # ... handler 通过 get_current_correlation_id() 获取
+
+        4. 所有 ErrorData 构造时传入已有的 correlation_id
+
+        因此，ErrorData.to_dict() 不应在真实链路中触发重新生成。
+        若 correlation_id 为 None，说明是独立测试场景，dispatch 会自动生成一个。
+
+        契约保证：X-Correlation-ID header 与 error.data.correlation_id 一致。
+
+        ================================================================================
+
         Args:
             request: 已解析的 JSON-RPC 请求
-            correlation_id: 可选的关联 ID，用于追踪
+            correlation_id: 关联 ID，用于追踪。
+                           在真实链路中由 HTTP 入口层传入（必传）。
+                           若为 None，dispatch 会自动生成（用于独立测试）。
 
         Returns:
             JSON-RPC 响应（成功或错误）
@@ -426,8 +560,8 @@ class JsonRpcRouter:
         params = request.params or {}
         req_id = request.id
 
-        # 生成或使用提供的 correlation_id
-        corr_id = correlation_id or generate_correlation_id()
+        # 归一化 correlation_id（确保符合 schema 格式，不合规则重新生成）
+        corr_id = normalize_correlation_id(correlation_id)
 
         # 提取工具名（如果是 tools/call）
         tool_name = params.get("name") if method == "tools/call" else None
@@ -759,8 +893,9 @@ def to_jsonrpc_error(
         >>> to_jsonrpc_error(OpenMemoryConnectionError("连接超时"), req_id=1)
         JsonRpcResponse(error={"code": -32001, "message": "...", "data": {"category": "dependency", "retryable": true, ...}})
     """
-    # 确保有 correlation_id
-    corr_id = correlation_id or generate_correlation_id()
+    # 归一化 correlation_id（确保符合 schema 格式: corr-{16位十六进制}）
+    # 对外返回（HTTP/JSON-RPC/audit）必须是合规格式
+    corr_id = normalize_correlation_id(correlation_id)
 
     # 构建 details 基础信息
     base_details: Dict[str, Any] = {}
@@ -834,12 +969,14 @@ def to_jsonrpc_error(
             details["api_response"] = error.response
 
         # 5xx 错误可重试，4xx 不可重试
-        retryable = hasattr(error, "status_code") and error.status_code and error.status_code >= 500
+        is_retryable: bool = bool(
+            hasattr(error, "status_code") and error.status_code and error.status_code >= 500
+        )
 
         error_data = ErrorData(
             category=ErrorCategory.DEPENDENCY,
             reason=ErrorReason.OPENMEMORY_API_ERROR,
-            retryable=retryable,
+            retryable=is_retryable,
             correlation_id=corr_id,
             details=details,
         )
@@ -1148,14 +1285,16 @@ def make_dependency_error_result(
 
 
 # 工具执行器类型：接收工具名、参数和 correlation_id，返回结果 dict
-# 签名: executor(tool_name, tool_args, *, correlation_id) -> result_dict
-ToolExecutor = Callable[[str, Dict[str, Any], str], Awaitable[Dict[str, Any]]]
+# 签名: async def executor(tool_name: str, tool_args: dict, *, correlation_id: str) -> dict
+# 注意: 使用 Protocol 无法表达 keyword-only 参数，故使用 Callable 近似定义
+# 实际调用时使用 correlation_id=... 关键字参数
+ToolExecutor = Callable[..., Awaitable[Dict[str, Any]]]
 
 # 全局工具执行器（由 main.py 注册）
 _tool_executor: Optional[ToolExecutor] = None
 
 
-def register_tool_executor(executor: ToolExecutor):
+def register_tool_executor(executor: ToolExecutor) -> None:
     """
     注册工具执行器
 
@@ -1221,7 +1360,17 @@ async def handle_tools_call(params: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("工具执行器未注册")
 
     # 4. 获取 correlation_id（从 dispatch 通过 contextvars 传递）
-    # 契约：correlation_id 必须由 HTTP 入口层生成，handler 不再自行生成
+    # ================================================================================
+    #                    correlation_id 单一来源契约 (handle_tools_call)
+    # ================================================================================
+    # 契约要求：
+    # - correlation_id 必须由 HTTP 入口层（app.py mcp_endpoint）生成
+    # - 通过 dispatch(correlation_id=...) 传入
+    # - dispatch 通过 set_current_correlation_id() 设置到 contextvars
+    # - handler 通过 get_current_correlation_id() 获取，绝不自行生成
+    #
+    # 若 correlation_id 为 None，说明调用链路违反契约（未经过 dispatch 或 dispatch 未设置）
+    # ================================================================================
     correlation_id = get_current_correlation_id()
     if correlation_id is None:
         raise RuntimeError(

@@ -45,6 +45,8 @@ handler 不再自行生成 correlation_id，确保同一请求使用同一 ID。
 错误响应中的 correlation_id 必须与请求保持一致。
 """
 
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -70,29 +72,10 @@ from ..services.audit_service import write_audit_or_raise
 from ..services.hash_utils import compute_payload_sha
 
 if TYPE_CHECKING:
-    from ..logbook_db import LogbookDatabase
-    from ..openmemory_client import OpenMemoryClient
+    pass
 
 # 导入统一错误码
-try:
-    from engram.logbook.errors import ErrorCode
-except ImportError:
-
-    class ErrorCode:
-        DEDUP_HIT = "dedup_hit"
-
-        @staticmethod
-        def policy_reason(reason):
-            return f"policy:{reason}"
-
-        @staticmethod
-        def openmemory_api_error(status_code):
-            return f"openmemory_api_error:{status_code}"
-
-        OPENMEMORY_WRITE_FAILED_CONNECTION = "openmemory_write_failed:connection"
-        OPENMEMORY_WRITE_FAILED_GENERIC = "openmemory_write_failed:generic"
-        OPENMEMORY_WRITE_FAILED_UNKNOWN = "openmemory_write_failed:unknown"
-
+from engram.logbook.errors import ErrorCode
 
 logger = logging.getLogger("gateway.handlers.memory_store")
 
@@ -125,8 +108,6 @@ class MemoryStoreResponse(BaseModel):
 
 async def memory_store_impl(
     payload_md: str,
-    correlation_id: str,
-    deps: GatewayDepsProtocol,
     target_space: Optional[str] = None,
     meta_json: Optional[Dict[str, Any]] = None,
     kind: Optional[str] = None,
@@ -135,6 +116,9 @@ async def memory_store_impl(
     is_bulk: bool = False,
     item_id: Optional[int] = None,
     actor_user_id: Optional[str] = None,
+    *,
+    correlation_id: str,
+    deps: GatewayDepsProtocol,
 ) -> MemoryStoreResponse:
     """
     memory_store 核心实现
@@ -166,12 +150,24 @@ async def memory_store_impl(
         item_id: 关联的 item ID
         actor_user_id: 操作者用户 ID
     """
+    # correlation_id 必须由调用方提供（单一来源原则）
+    if correlation_id is None:
+        raise ValueError(
+            "correlation_id 是必需参数：必须由 HTTP 入口层生成后传入，"
+            "handler 不再自行生成 correlation_id"
+        )
+
     # 从 deps 获取配置
     config = deps.config
 
-    # 默认目标空间
+    # 默认目标空间：收敛 str | None -> str
     if not target_space:
         target_space = config.default_team_space
+    if target_space is None:
+        raise ValueError("target_space is None and config.default_team_space is also None")
+
+    # 此时 target_space 确保为 str 类型，使用类型收敛后的变量
+    current_target_space: str = target_space
 
     payload_sha = compute_payload_sha(payload_md)
 
@@ -185,7 +181,7 @@ async def memory_store_impl(
             actor_check_result = validate_actor_user(
                 actor_user_id=actor_user_id,
                 config=config,
-                target_space=target_space,
+                target_space=current_target_space,
                 payload_sha=payload_sha,
                 evidence_refs=evidence_refs,
                 correlation_id=correlation_id,
@@ -196,10 +192,10 @@ async def memory_store_impl(
             if not actor_check_result.should_continue and actor_check_result.response_data:
                 return MemoryStoreResponse(**actor_check_result.response_data)
 
-            # 如果是降级（redirect），更新 target_space 并继续处理
+            # 如果是降级（redirect），更新 current_target_space 并继续处理
             if actor_check_result.degraded_space:
-                target_space = actor_check_result.degraded_space
-                logger.info(f"Actor 降级: {actor_user_id} -> space={target_space}")
+                current_target_space = actor_check_result.degraded_space
+                logger.info(f"Actor 降级: {actor_user_id} -> space={current_target_space}")
 
         # 获取 DB 实例（统一通过 deps 获取，支持依赖注入）
         db = deps.db
@@ -209,13 +205,13 @@ async def memory_store_impl(
 
         # 1. Dedupe Check：检查是否已成功写入过
         dedup_record = adapter.check_dedup(
-            target_space=target_space,
+            target_space=current_target_space,
             payload_sha=payload_sha,
         )
         if dedup_record:
             return _handle_dedup_hit(
                 dedup_record=dedup_record,
-                target_space=target_space,
+                target_space=current_target_space,
                 payload_md=payload_md,
                 payload_sha=payload_sha,
                 actor_user_id=actor_user_id,
@@ -265,7 +261,7 @@ async def memory_store_impl(
             if not evidence_validation.is_valid:
                 return _handle_evidence_validation_failure(
                     evidence_validation=evidence_validation,
-                    target_space=target_space,
+                    target_space=current_target_space,
                     payload_md=payload_md,
                     payload_sha=payload_sha,
                     actor_user_id=actor_user_id,
@@ -284,7 +280,7 @@ async def memory_store_impl(
 
         engine = create_engine_from_settings(settings)
         decision = engine.decide(
-            target_space=target_space,
+            target_space=current_target_space,
             actor_user_id=actor_user_id,
             payload_md=payload_md,
             kind=kind,
@@ -300,7 +296,7 @@ async def memory_store_impl(
         if decision.action == PolicyAction.REJECT:
             return _handle_policy_reject(
                 decision=decision,
-                target_space=target_space,
+                target_space=current_target_space,
                 payload_md=payload_md,
                 payload_sha=payload_sha,
                 actor_user_id=actor_user_id,
@@ -337,6 +333,12 @@ async def memory_store_impl(
                 )
 
             memory_id = result.memory_id
+            if memory_id is None:
+                raise OpenMemoryError(
+                    message="OpenMemory 返回成功但 memory_id 为空",
+                    status_code=None,
+                    response=None,
+                )
             logger.info(f"OpenMemory 写入成功: memory_id={memory_id}, space={final_space}")
 
             # 写入成功审计
@@ -345,7 +347,7 @@ async def memory_store_impl(
                 decision=decision,
                 final_space=final_space,
                 action=action,
-                target_space=target_space,
+                target_space=current_target_space,
                 payload_md=payload_md,
                 payload_sha=payload_sha,
                 actor_user_id=actor_user_id,
@@ -366,7 +368,7 @@ async def memory_store_impl(
                 error=e,
                 decision=decision,
                 final_space=final_space,
-                target_space=target_space,
+                target_space=current_target_space,
                 payload_md=payload_md,
                 payload_sha=payload_sha,
                 actor_user_id=actor_user_id,

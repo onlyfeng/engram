@@ -115,7 +115,8 @@ def extract_tenant_id(
     if payload_json and isinstance(payload_json, dict):
         tenant_id = payload_json.get("tenant_id")
         if tenant_id and isinstance(tenant_id, str) and tenant_id.strip():
-            return tenant_id.strip()
+            result: str = tenant_id.strip()
+            return result
 
     # 从 project_key 解析
     if project_key and isinstance(project_key, str):

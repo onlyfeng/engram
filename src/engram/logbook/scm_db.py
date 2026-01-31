@@ -16,10 +16,10 @@ import json
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 
 from engram.logbook.scm_sync_policy import build_circuit_breaker_key as _build_cb_key
 
@@ -78,7 +78,8 @@ class RepoPauseRecord:
         )
 
 
-def _dict_cursor(conn):
+def _dict_cursor(conn: psycopg.Connection[Any]) -> psycopg.Cursor[DictRow]:
+    """返回 dict_row 工厂的游标，行为 DictRow 类型"""
     return conn.cursor(row_factory=dict_row)
 
 
@@ -140,19 +141,22 @@ def upsert_repo(
             """,
             (repo_type, url, project_key, default_branch),
         )
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        assert row is not None, "RETURNING repo_id must return a row"
+        return int(row[0])
 
 
-def get_repo_by_url(conn, repo_type: str, url: str) -> Optional[Dict[str, Any]]:
+def get_repo_by_url(conn: psycopg.Connection[Any], repo_type: str, url: str) -> Optional[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
             "SELECT repo_id, repo_type, url, project_key, default_branch, created_at FROM scm.repos WHERE repo_type=%s AND url=%s",
             (repo_type, url),
         )
-        return cur.fetchone()
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
-def get_repo_by_id(conn, repo_id: int) -> Optional[Dict[str, Any]]:
+def get_repo_by_id(conn: psycopg.Connection[Any], repo_id: int) -> Optional[Dict[str, Any]]:
     """
     通过 repo_id 查询仓库
 
@@ -168,7 +172,8 @@ def get_repo_by_id(conn, repo_id: int) -> Optional[Dict[str, Any]]:
             "SELECT repo_id, repo_type, url, project_key, default_branch, created_at FROM scm.repos WHERE repo_id=%s",
             (repo_id,),
         )
-        return cur.fetchone()
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def upsert_mr(
@@ -273,7 +278,9 @@ def upsert_svn_revision(
                 source_id,
             ),
         )
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        assert row is not None, "RETURNING svn_rev_id must return a row"
+        return int(row[0])
 
 
 def upsert_git_commit(
@@ -321,7 +328,9 @@ def upsert_git_commit(
                 source_id,
             ),
         )
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        assert row is not None, "RETURNING git_commit_id must return a row"
+        return int(row[0])
 
 
 def upsert_patch_blob(
@@ -369,7 +378,7 @@ def upsert_patch_blob(
         )
         row = cur.fetchone()
         if row:
-            return row[0]
+            return int(row[0])
         cur.execute(
             """
             SELECT blob_id FROM scm.patch_blobs
@@ -377,10 +386,12 @@ def upsert_patch_blob(
             """,
             (source_type, source_id, sha256),
         )
-        return cur.fetchone()[0]
+        existing_row = cur.fetchone()
+        assert existing_row is not None, "patch_blob must exist after ON CONFLICT"
+        return int(existing_row[0])
 
 
-def get_patch_blob(conn, source_type: str, source_id: str, sha256: str) -> Optional[Dict[str, Any]]:
+def get_patch_blob(conn: psycopg.Connection[Any], source_type: str, source_id: str, sha256: str) -> Optional[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
             """
@@ -391,7 +402,8 @@ def get_patch_blob(conn, source_type: str, source_id: str, sha256: str) -> Optio
             """,
             (source_type, source_id, sha256),
         )
-        return cur.fetchone()
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def update_patch_blob_materialize_status(
@@ -423,7 +435,7 @@ def update_patch_blob_materialize_status(
 
 
 def select_pending_blobs_for_materialize(
-    conn,
+    conn: psycopg.Connection[Any],
     *,
     batch_size: int = 100,
     retry_failed: bool = False,
@@ -446,7 +458,7 @@ def select_pending_blobs_for_materialize(
             """,
             (MATERIALIZE_STATUS_PENDING, status_list, max_attempts, batch_size),
         )
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def mark_blob_done(
@@ -590,7 +602,7 @@ def insert_sync_run_finish(
         return cur.fetchone() is not None
 
 
-def get_sync_run(conn, run_id: str) -> Optional[Dict[str, Any]]:
+def get_sync_run(conn: psycopg.Connection[Any], run_id: str) -> Optional[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
             """
@@ -604,11 +616,12 @@ def get_sync_run(conn, run_id: str) -> Optional[Dict[str, Any]]:
             """,
             (run_id,),
         )
-        return cur.fetchone()
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def get_latest_sync_run(
-    conn, repo_id: int, job_type: Optional[str] = None
+    conn: psycopg.Connection[Any], repo_id: int, job_type: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     query = """
         SELECT run_id, repo_id, job_type, mode, status,
@@ -619,18 +632,19 @@ def get_latest_sync_run(
         FROM scm.sync_runs
         WHERE repo_id=%s
     """
-    params = [repo_id]
+    params: List[object] = [repo_id]
     if job_type:
         query += " AND job_type=%s"
         params.append(job_type)
     query += " ORDER BY started_at DESC LIMIT 1"
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        return cur.fetchone()
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def list_sync_runs(
-    conn, *, repo_id: Optional[int] = None, status: Optional[str] = None, limit: int = 100
+    conn: psycopg.Connection[Any], *, repo_id: Optional[int] = None, status: Optional[str] = None, limit: int = 100
 ) -> List[Dict[str, Any]]:
     query = """
         SELECT run_id, repo_id, job_type, mode, status,
@@ -641,7 +655,7 @@ def list_sync_runs(
         FROM scm.sync_runs
         WHERE 1=1
     """
-    params: List[Any] = []
+    params: List[object] = []
     if repo_id is not None:
         query += " AND repo_id=%s"
         params.append(repo_id)
@@ -652,7 +666,7 @@ def list_sync_runs(
     params.append(limit)
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def enqueue_sync_job(
@@ -679,7 +693,7 @@ def enqueue_sync_job(
 
 
 def list_sync_jobs(
-    conn, *, repo_id: Optional[int] = None, limit: int = 100
+    conn: psycopg.Connection[Any], *, repo_id: Optional[int] = None, limit: int = 100
 ) -> List[Dict[str, Any]]:
     query = """
         SELECT job_id, repo_id, job_type, mode, status,
@@ -690,7 +704,7 @@ def list_sync_jobs(
         FROM scm.sync_jobs
         WHERE 1=1
     """
-    params: List[Any] = []
+    params: List[object] = []
     if repo_id is not None:
         query += " AND repo_id=%s"
         params.append(repo_id)
@@ -698,18 +712,18 @@ def list_sync_jobs(
     params.append(limit)
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def list_sync_locks(
-    conn, *, repo_id: Optional[int] = None, limit: int = 100
+    conn: psycopg.Connection[Any], *, repo_id: Optional[int] = None, limit: int = 100
 ) -> List[Dict[str, Any]]:
     query = """
         SELECT lock_id, repo_id, job_type, locked_by, locked_at, lease_seconds, updated_at, created_at
         FROM scm.sync_locks
         WHERE 1=1
     """
-    params: List[Any] = []
+    params: List[object] = []
     if repo_id is not None:
         query += " AND repo_id=%s"
         params.append(repo_id)
@@ -717,7 +731,7 @@ def list_sync_locks(
     params.append(limit)
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        rows = cur.fetchall()
+        rows: List[Dict[str, Any]] = [dict(row) for row in cur.fetchall()]
     now_ts = time.time()
     for row in rows:
         row["is_locked"] = row["locked_by"] is not None
@@ -730,14 +744,14 @@ def list_sync_locks(
 
 
 def list_kv_cursors(
-    conn, *, namespace: str = "scm.sync", key_prefix: Optional[str] = None, limit: int = 200
+    conn: psycopg.Connection[Any], *, namespace: str = "scm.sync", key_prefix: Optional[str] = None, limit: int = 200
 ) -> List[Dict[str, Any]]:
     query = """
         SELECT namespace, key, value_json, updated_at
         FROM logbook.kv
         WHERE namespace=%s
     """
-    params: List[Any] = [namespace]
+    params: List[object] = [namespace]
     if key_prefix:
         query += " AND key LIKE %s"
         params.append(f"{key_prefix}%")
@@ -745,16 +759,16 @@ def list_kv_cursors(
     params.append(limit)
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
-def list_repos(conn, *, repo_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+def list_repos(conn: psycopg.Connection[Any], *, repo_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
     query = """
         SELECT repo_id, repo_type, url, project_key, default_branch, created_at
         FROM scm.repos
         WHERE 1=1
     """
-    params: List[Any] = []
+    params: List[object] = []
     if repo_type:
         query += " AND repo_type=%s"
         params.append(repo_type)
@@ -762,15 +776,18 @@ def list_repos(conn, *, repo_type: Optional[str] = None, limit: int = 100) -> Li
     params.append(limit)
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
-def get_sync_status_summary(conn) -> Dict[str, Any]:
+def get_sync_status_summary(conn: psycopg.Connection[Any]) -> Dict[str, Any]:
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM scm.repos")
-        repos_count = cur.fetchone()[0]
+        row = cur.fetchone()
+        repos_count = int(row[0]) if row else 0
+
         cur.execute("SELECT repo_type, COUNT(*) FROM scm.repos GROUP BY repo_type")
         repos_by_type = {row[0]: row[1] for row in cur.fetchall()}
+
         cur.execute(
             """
             SELECT status, COUNT(*)
@@ -780,24 +797,31 @@ def get_sync_status_summary(conn) -> Dict[str, Any]:
             """
         )
         runs_24h_by_status = {row[0]: row[1] for row in cur.fetchall()}
+
         cur.execute("SELECT status, COUNT(*) FROM scm.sync_jobs GROUP BY status")
         jobs_by_status = {row[0]: row[1] for row in cur.fetchall()}
+
         cur.execute(
             """
             SELECT COUNT(*) FROM scm.sync_locks
             WHERE locked_by IS NOT NULL
             """
         )
-        active_locks = cur.fetchone()[0]
+        row = cur.fetchone()
+        active_locks = int(row[0]) if row else 0
+
         cur.execute(
             """
             SELECT COUNT(*) FROM scm.sync_locks
             WHERE locked_by IS NOT NULL AND locked_at + lease_seconds * interval '1 second' < now()
             """
         )
-        expired_locks = cur.fetchone()[0]
+        row = cur.fetchone()
+        expired_locks = int(row[0]) if row else 0
+
         cur.execute("SELECT COUNT(*) FROM logbook.kv WHERE namespace = %s", ("scm.sync",))
-        cursors_count = cur.fetchone()[0]
+        row = cur.fetchone()
+        cursors_count = int(row[0]) if row else 0
 
     return {
         "repos_count": repos_count,
@@ -810,7 +834,7 @@ def get_sync_status_summary(conn) -> Dict[str, Any]:
 
 
 def list_expired_running_jobs(
-    conn, *, grace_seconds: int = 60, limit: int = 100
+    conn: psycopg.Connection[Any], *, grace_seconds: int = 60, limit: int = 100
 ) -> List[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
@@ -826,11 +850,11 @@ def list_expired_running_jobs(
             """,
             (grace_seconds, limit),
         )
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def list_expired_running_runs(
-    conn, *, max_duration_seconds: int = 1800, limit: int = 100
+    conn: psycopg.Connection[Any], *, max_duration_seconds: int = 1800, limit: int = 100
 ) -> List[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
@@ -844,10 +868,10 @@ def list_expired_running_runs(
             """,
             (max_duration_seconds, limit),
         )
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
-def list_expired_locks(conn, *, grace_seconds: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
+def list_expired_locks(conn: psycopg.Connection[Any], *, grace_seconds: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
             """
@@ -860,7 +884,7 @@ def list_expired_locks(conn, *, grace_seconds: int = 0, limit: int = 100) -> Lis
             """,
             (grace_seconds, limit),
         )
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def mark_job_as_failed_by_reaper(
@@ -1151,7 +1175,7 @@ def get_pause_snapshot(conn) -> Dict[str, Any]:
 
 
 def list_repos_for_scheduling(
-    conn,
+    conn: psycopg.Connection[Any],
     *,
     repo_type: Optional[str] = None,
     limit: int = 1000,
@@ -1172,7 +1196,7 @@ def list_repos_for_scheduling(
         FROM scm.repos r
         WHERE 1=1
     """
-    params: List[Any] = []
+    params: List[object] = []
     if repo_type:
         query += " AND r.repo_type = %s"
         params.append(repo_type)
@@ -1181,11 +1205,11 @@ def list_repos_for_scheduling(
 
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def get_repo_sync_stats(
-    conn,
+    conn: psycopg.Connection[Any],
     repo_id: int,
     *,
     window_count: int = 10,
@@ -1209,7 +1233,7 @@ def get_repo_sync_stats(
             """,
             (repo_id, window_count),
         )
-        runs = cur.fetchall()
+        runs: List[Dict[str, Any]] = [dict(row) for row in cur.fetchall()]
 
         if not runs:
             return {
@@ -1292,7 +1316,7 @@ def get_active_job_pairs(conn) -> List[Tuple[int, str]]:
         return [(row[0], row[1]) for row in cur.fetchall()]
 
 
-def get_budget_snapshot(conn) -> Dict[str, Any]:
+def get_budget_snapshot(conn: psycopg.Connection[Any]) -> Dict[str, Any]:
     """
     获取当前预算快照
 
@@ -1310,7 +1334,8 @@ def get_budget_snapshot(conn) -> Dict[str, Any]:
             WHERE status IN ('pending', 'running')
             """
         )
-        global_counts = cur.fetchone()
+        global_counts_row = cur.fetchone()
+        global_counts: Dict[str, Any] = dict(global_counts_row) if global_counts_row else {}
 
         # 按 instance 分组统计（从 payload_json 或 gitlab_instance 列）
         cur.execute(
@@ -1341,16 +1366,16 @@ def get_budget_snapshot(conn) -> Dict[str, Any]:
         by_tenant = {row["tenant_key"]: row["active_count"] for row in cur.fetchall()}
 
     return {
-        "global_running": global_counts["global_running"] or 0,
-        "global_pending": global_counts["global_pending"] or 0,
-        "global_active": global_counts["global_active"] or 0,
+        "global_running": global_counts.get("global_running") or 0,
+        "global_pending": global_counts.get("global_pending") or 0,
+        "global_active": global_counts.get("global_active") or 0,
         "by_instance": by_instance,
         "by_tenant": by_tenant,
     }
 
 
 def get_rate_limit_bucket_status(
-    conn,
+    conn: psycopg.Connection[Any],
     instance_key: str,
     *,
     namespace: str = "scm.rate_limit",
@@ -1368,11 +1393,12 @@ def get_rate_limit_bucket_status(
         row = cur.fetchone()
         if not row:
             return None
-        return row["value_json"]
+        value = row["value_json"]
+        return cast(Dict[str, Any], value) if value else None
 
 
 def get_sync_runs_health_stats(
-    conn,
+    conn: psycopg.Connection[Any],
     *,
     window_minutes: int = 30,
     window_count: int = 20,
@@ -1406,23 +1432,24 @@ def get_sync_runs_health_stats(
             """,
             (window_minutes, window_count),
         )
-        row = cur.fetchone()
+        fetched_row = cur.fetchone()
+        row: Dict[str, Any] = dict(fetched_row) if fetched_row else {}
 
-        total_runs = row["total_runs"] or 0
-        failed_count = row["failed_count"] or 0
-        total_requests = row["total_requests"] or 0
-        total_429_hits = row["total_429_hits"] or 0
+        total_runs = row.get("total_runs") or 0
+        failed_count = row.get("failed_count") or 0
+        total_requests = row.get("total_requests") or 0
+        total_429_hits = row.get("total_429_hits") or 0
 
         return {
             "total_runs": total_runs,
             "failed_count": failed_count,
-            "completed_count": row["completed_count"] or 0,
-            "no_data_count": row["no_data_count"] or 0,
+            "completed_count": row.get("completed_count") or 0,
+            "no_data_count": row.get("no_data_count") or 0,
             "failed_rate": failed_count / total_runs if total_runs > 0 else 0.0,
             "rate_limit_rate": total_429_hits / total_requests if total_requests > 0 else 0.0,
             "total_429_hits": total_429_hits,
             "total_requests": total_requests,
-            "total_timeout_count": row["total_timeout_count"] or 0,
+            "total_timeout_count": row.get("total_timeout_count") or 0,
         }
 
 
@@ -1723,7 +1750,7 @@ def unpause_rate_limit_bucket(
 
 
 def reset_dead_jobs(
-    conn,
+    conn: psycopg.Connection[Any],
     *,
     job_ids: Optional[List[str]] = None,
     repo_id: Optional[int] = None,
@@ -1795,7 +1822,7 @@ def reset_dead_jobs(
                 (limit,),
             )
 
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def mark_job_dead(
@@ -1833,7 +1860,7 @@ def mark_job_dead(
 
 
 def list_jobs_by_status(
-    conn,
+    conn: psycopg.Connection[Any],
     status: str,
     *,
     repo_id: Optional[int] = None,
@@ -1862,7 +1889,7 @@ def list_jobs_by_status(
         FROM scm.sync_jobs
         WHERE status = %s
     """
-    params: List[Any] = [status]
+    params: List[object] = [status]
 
     if repo_id is not None:
         query += " AND repo_id = %s"
@@ -1877,13 +1904,13 @@ def list_jobs_by_status(
 
     with _dict_cursor(conn) as cur:
         cur.execute(query, params)
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 # ============ 健康检查辅助函数 ============
 
 
-def count_expired_running_jobs(conn, *, grace_seconds: int = 0) -> int:
+def count_expired_running_jobs(conn: psycopg.Connection[Any], *, grace_seconds: int = 0) -> int:
     """
     统计 running 状态但租约已过期的任务数量
 
@@ -1908,10 +1935,11 @@ def count_expired_running_jobs(conn, *, grace_seconds: int = 0) -> int:
             """,
             (grace_seconds,),
         )
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
 
 
-def count_orphan_locks(conn) -> int:
+def count_orphan_locks(conn: psycopg.Connection[Any]) -> int:
     """
     统计孤立锁数量
 
@@ -1938,10 +1966,11 @@ def count_orphan_locks(conn) -> int:
               )
             """
         )
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
 
 
-def list_orphan_locks(conn, *, limit: int = 100) -> List[Dict[str, Any]]:
+def list_orphan_locks(conn: psycopg.Connection[Any], *, limit: int = 100) -> List[Dict[str, Any]]:
     """
     列出孤立锁详情
 
@@ -1969,10 +1998,10 @@ def list_orphan_locks(conn, *, limit: int = 100) -> List[Dict[str, Any]]:
             """,
             (limit,),
         )
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
-def count_gitlab_jobs_missing_dimensions(conn) -> int:
+def count_gitlab_jobs_missing_dimensions(conn: psycopg.Connection[Any]) -> int:
     """
     统计 active gitlab_* jobs 缺失维度列的数量
 
@@ -1999,10 +2028,11 @@ def count_gitlab_jobs_missing_dimensions(conn) -> int:
               )
             """
         )
-        return cur.fetchone()[0]
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
 
 
-def list_gitlab_jobs_missing_dimensions(conn, *, limit: int = 100) -> List[Dict[str, Any]]:
+def list_gitlab_jobs_missing_dimensions(conn: psycopg.Connection[Any], *, limit: int = 100) -> List[Dict[str, Any]]:
     """
     列出缺失维度列的 gitlab jobs 详情
 
@@ -2029,7 +2059,7 @@ def list_gitlab_jobs_missing_dimensions(conn, *, limit: int = 100) -> List[Dict[
             """,
             (limit,),
         )
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
 
 
 def count_expired_pauses_affecting_scheduling(conn) -> int:
@@ -2076,7 +2106,7 @@ def list_expired_pauses(conn, *, limit: int = 100) -> List[Dict[str, Any]]:
     return expired[:limit]
 
 
-def get_circuit_breaker_inconsistencies(conn) -> List[Dict[str, Any]]:
+def get_circuit_breaker_inconsistencies(conn: psycopg.Connection[Any]) -> List[Dict[str, Any]]:
     """
     检查熔断器状态与 error_budget 的不一致
 
@@ -2090,7 +2120,7 @@ def get_circuit_breaker_inconsistencies(conn) -> List[Dict[str, Any]]:
     Returns:
         List[Dict]: 不一致状态列表
     """
-    inconsistencies = []
+    inconsistencies: List[Dict[str, Any]] = []
 
     # 加载所有熔断器状态
     with _dict_cursor(conn) as cur:
@@ -2098,7 +2128,7 @@ def get_circuit_breaker_inconsistencies(conn) -> List[Dict[str, Any]]:
             "SELECT key, value_json FROM logbook.kv WHERE namespace = %s",
             ("scm.sync_health",),
         )
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
 
     for row in rows:
         key = row["key"]

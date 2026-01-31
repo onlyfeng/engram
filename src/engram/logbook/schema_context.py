@@ -37,8 +37,9 @@ engram_logbook.schema_context - Schema 上下文模块
     ctx.search_path  # ["test_abc_logbook", "test_abc_scm", ..., "public"]
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import List, Optional
 
 # 标准 Schema 后缀名（按 search_path 推荐顺序）
 SCHEMA_SUFFIXES = ["logbook", "scm", "identity", "analysis", "governance"]
@@ -54,8 +55,8 @@ class SchemaContext:
         tenant: 租户标识（可选，用于日志/调试）
     """
 
-    schema_prefix: Optional[str] = None
-    tenant: Optional[str] = None
+    schema_prefix: str | None = None
+    tenant: str | None = None
 
     def __post_init__(self):
         # 规范化空字符串为 None
@@ -94,7 +95,7 @@ class SchemaContext:
         return self._build_schema_name("governance")
 
     @property
-    def all_schemas(self) -> dict:
+    def all_schemas(self) -> dict[str, str]:
         """
         返回所有 schema 名称字典
 
@@ -116,7 +117,7 @@ class SchemaContext:
         }
 
     @property
-    def search_path(self) -> List[str]:
+    def search_path(self) -> list[str]:
         """
         返回 PostgreSQL search_path 列表
 
@@ -174,12 +175,12 @@ class SchemaContext:
 
 # ============ 全局 SchemaContext 管理 ============
 
-_global_schema_context: Optional[SchemaContext] = None
+_global_schema_context: SchemaContext | None = None
 
 
 def get_schema_context(
-    schema_prefix: Optional[str] = None,
-    tenant: Optional[str] = None,
+    schema_prefix: str | None = None,
+    tenant: str | None = None,
     reload: bool = False,
 ) -> SchemaContext:
     """
@@ -225,9 +226,9 @@ def set_schema_context(ctx: SchemaContext) -> None:
 
 
 def build_search_path(
-    schema_prefix: Optional[str] = None,
+    schema_prefix: str | None = None,
     include_public: bool = True,
-) -> List[str]:
+) -> list[str]:
     """
     快速构建 search_path 列表
 
@@ -245,7 +246,7 @@ def build_search_path(
     return path
 
 
-def build_schema_names(schema_prefix: Optional[str] = None) -> dict:
+def build_schema_names(schema_prefix: str | None = None) -> dict[str, str]:
     """
     快速构建 schema 名称字典
 

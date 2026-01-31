@@ -28,7 +28,11 @@ from typing import Optional
 import psycopg
 
 from . import logbook_adapter, openmemory_client
-from .audit_event import build_evidence_refs_json, build_outbox_worker_audit_event
+from .audit_event import (
+    build_evidence_refs_json,
+    build_outbox_worker_audit_event,
+    generate_correlation_id,
+)
 
 # 导入统一错误码
 try:
@@ -348,9 +352,9 @@ def process_single_item(
     if attempt_id is None:
         attempt_id = f"attempt-{uuid.uuid4().hex[:12]}"
 
-    # 如果没有传入 correlation_id，使用 attempt_id 作为 correlation
+    # 如果没有传入 correlation_id，生成新的（单一来源：generate_correlation_id）
     if correlation_id is None:
-        correlation_id = f"corr-{uuid.uuid4().hex[:16]}"
+        correlation_id = generate_correlation_id()
 
     # 解析 target_space 获取 user_id（private:xxx -> xxx, team:xxx -> None）
     user_id = None
@@ -699,8 +703,8 @@ def process_batch(config: WorkerConfig, worker_id: Optional[str] = None) -> list
     if worker_id is None:
         worker_id = f"worker-{uuid.uuid4().hex[:8]}"
 
-    # 生成 correlation_id 用于追踪本批次处理
-    correlation_id = f"corr-{uuid.uuid4().hex[:16]}"
+    # 生成 correlation_id 用于追踪本批次处理（单一来源：generate_correlation_id）
+    correlation_id = generate_correlation_id()
 
     # 使用 claim_outbox 领取一批待处理记录（Lease 协议）
     raw_items = logbook_adapter.claim_outbox(

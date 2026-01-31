@@ -19,32 +19,32 @@ gitlab_commits - GitLab commits 同步核心实现
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from engram.logbook.config import DEFAULT_FORWARD_WINDOW_SECONDS
+from engram.logbook.cursor import save_gitlab_cursor
 from engram.logbook.gitlab_client import (
     GitLabClient,
     GitLabErrorCategory,
-    GitLabAPIError,
 )
-from engram.logbook.cursor import save_gitlab_cursor
 from engram.logbook.scm_db import (
     get_conn as get_connection,
+)
+from engram.logbook.scm_db import (
     upsert_git_commit,
     upsert_repo,
 )
-from engram.logbook.hashing import sha256 as compute_sha256
-from engram.logbook.config import DEFAULT_FORWARD_WINDOW_SECONDS
-
 
 # ============ 异常定义 ============
 
 
 class PatchFetchError(Exception):
     """Patch 获取基础错误"""
+
     error_category = "unknown"
 
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
@@ -54,21 +54,25 @@ class PatchFetchError(Exception):
 
 class PatchFetchTimeoutError(PatchFetchError):
     """Patch 获取超时"""
+
     error_category = "timeout"
 
 
 class PatchFetchHttpError(PatchFetchError):
     """Patch 获取 HTTP 错误"""
+
     error_category = "http_error"
 
 
 class PatchFetchContentTooLargeError(PatchFetchError):
     """Patch 内容过大"""
+
     error_category = "content_too_large"
 
 
 class PatchFetchParseError(PatchFetchError):
     """Patch 解析错误"""
+
     error_category = "parse_error"
 
 
@@ -78,6 +82,7 @@ class PatchFetchParseError(PatchFetchError):
 @dataclass
 class FetchDiffResult:
     """Diff 获取结果"""
+
     success: bool
     diffs: Optional[List[Dict[str, Any]]] = None
     error: Optional[Exception] = None
@@ -90,6 +95,7 @@ class FetchDiffResult:
 @dataclass
 class GitCommit:
     """Git 提交记录"""
+
     sha: str
     author_name: str = ""
     author_email: str = ""
@@ -105,6 +111,7 @@ class GitCommit:
 
 class DiffMode(str, Enum):
     """Diff 获取模式"""
+
     ALWAYS = "always"
     BEST_EFFORT = "best_effort"
     NONE = "none"
@@ -113,6 +120,7 @@ class DiffMode(str, Enum):
 @dataclass
 class SyncConfig:
     """同步配置"""
+
     gitlab_url: str
     project_id: str
     token_provider: Any
@@ -126,6 +134,7 @@ class SyncConfig:
 @dataclass
 class FetchWindow:
     """获取时间窗口"""
+
     since: datetime
     until: datetime
 
@@ -133,6 +142,7 @@ class FetchWindow:
 @dataclass
 class AdaptiveWindowState:
     """自适应窗口状态"""
+
     current_window_seconds: int
     min_window_seconds: int
     max_window_seconds: int
@@ -480,8 +490,10 @@ def backfill_gitlab_commits(
         同步结果字典
     """
     import os
-    
-    client = GitLabClient(sync_config.gitlab_url, token=sync_config.token_provider.get_token())
+
+    client = GitLabClient(
+        sync_config.gitlab_url, private_token=sync_config.token_provider.get_token()
+    )
     raw_commits = client.get_commits(
         sync_config.project_id,
         since=since,
@@ -565,3 +577,78 @@ def sync_gitlab_commits_incremental(
 def build_mr_id(repo_id: int | str, mr_iid: int | str) -> str:
     """构建 MR ID"""
     return f"{repo_id}:{mr_iid}"
+
+
+def insert_patch_blob(
+    conn,
+    repo_id: int,
+    commit_sha: str,
+    content: str,
+    patch_format: str = "diff",
+    is_degraded: bool = False,
+    degrade_reason: Optional[str] = None,
+    source_fetch_error: Optional[str] = None,
+    original_endpoint: Optional[str] = None,
+) -> int:
+    """
+    插入 patch blob 到数据库
+
+    Args:
+        conn: 数据库连接
+        repo_id: 仓库 ID
+        commit_sha: commit SHA
+        content: patch 内容
+        patch_format: patch 格式（diff/diffstat/ministat）
+        is_degraded: 是否为降级内容
+        degrade_reason: 降级原因
+        source_fetch_error: 源获取错误信息
+        original_endpoint: 原始端点 URL
+
+    Returns:
+        创建的 blob_id
+    """
+    from engram.logbook import scm_db
+    from engram.logbook.hashing import sha256 as compute_sha256
+    from engram.logbook.scm_artifacts import write_text_artifact
+
+    # 计算 SHA256
+    content_bytes = content.encode("utf-8") if isinstance(content, str) else content
+    content_sha256 = compute_sha256(content_bytes)
+
+    # 构建 meta_json
+    meta_json: Dict[str, Any] = {
+        "materialize_status": "done",
+    }
+    if is_degraded:
+        meta_json["degraded"] = True
+        if degrade_reason:
+            meta_json["degrade_reason"] = degrade_reason
+        if source_fetch_error:
+            meta_json["source_fetch_error"] = source_fetch_error
+        if original_endpoint:
+            meta_json["original_endpoint"] = original_endpoint
+
+    # 写入制品
+    write_result = write_text_artifact(
+        project_key="default",
+        repo_id=repo_id,
+        source_type="git",
+        rev_or_sha=commit_sha,
+        content=content,
+        sha256=content_sha256,
+        ext=patch_format,
+    )
+
+    # 写入数据库
+    blob_id = scm_db.upsert_patch_blob(
+        conn,
+        source_type="git",
+        source_id=f"{repo_id}:{commit_sha}",
+        sha256=content_sha256,
+        uri=write_result["uri"],
+        size_bytes=write_result["size_bytes"],
+        format=patch_format,
+        meta_json=meta_json,
+    )
+
+    return blob_id

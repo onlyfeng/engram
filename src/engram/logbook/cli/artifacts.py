@@ -206,11 +206,7 @@ def artifacts_gc(
     prefix: str = typer.Option(..., "--prefix", help="GC 前缀"),
 ):
     """执行制品垃圾回收"""
-    # 延迟导入 gc 模块
-    # 优先从根目录的 artifact_gc 模块导入（支持测试 mock）
-    import artifact_gc
-
-    run_gc = artifact_gc.run_gc
+    from engram.logbook.artifact_gc import run_gc
 
     result = run_gc(prefix=prefix, dry_run=True, delete=False)
     _emit_json(make_ok_result(gc_prefix=prefix, **result.to_dict()), exit_code=0)

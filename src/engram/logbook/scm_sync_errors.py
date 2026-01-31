@@ -25,7 +25,7 @@ scm_sync_errors.py - SCM 同步错误分类模块
 """
 
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 
 class ErrorCategory(str, Enum):
@@ -102,7 +102,7 @@ TRANSIENT_ERROR_KEYWORDS = [
 ]
 
 # 不同错误类型的退避时间配置（秒）
-TRANSIENT_ERROR_BACKOFF = {
+TRANSIENT_ERROR_BACKOFF: Dict[str, int] = {
     ErrorCategory.RATE_LIMIT.value: 120,  # 速率限制：2 分钟
     ErrorCategory.TIMEOUT.value: 30,  # 超时：30 秒
     ErrorCategory.NETWORK.value: 60,  # 网络错误：1 分钟
@@ -219,10 +219,10 @@ def calculate_backoff_seconds(
 
     # 计算指数退避：base * 2^(attempts-1)，最小为 attempts=1
     effective_attempts = max(1, attempts)
-    backoff = effective_base * (2 ** (effective_attempts - 1))
+    backoff: int = effective_base * (2 ** (effective_attempts - 1))
 
     # 限制在 max_seconds 范围内
-    return min(backoff, max_seconds)
+    return int(min(backoff, max_seconds))
 
 
 def is_transient_error(error_category: Optional[str], error_message: str) -> bool:

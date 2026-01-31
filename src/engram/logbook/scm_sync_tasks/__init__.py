@@ -16,26 +16,30 @@ scm_sync_tasks - SCM 同步任务核心实现
 """
 
 from engram.logbook.scm_sync_tasks.gitlab_commits import (
-    backfill_gitlab_commits,
-    GitCommit,
-    SyncConfig as GitLabCommitsSyncConfig,
     DiffMode,
-    parse_commit,
-    insert_git_commits,
+    GitCommit,
+    backfill_gitlab_commits,
     format_diff_content,
+    insert_git_commits,
+    parse_commit,
+)
+from engram.logbook.scm_sync_tasks.gitlab_commits import (
+    SyncConfig as GitLabCommitsSyncConfig,
 )
 from engram.logbook.scm_sync_tasks.gitlab_mrs import (
     GitLabMergeRequest,
-    parse_merge_request,
     map_gitlab_state_to_status,
+    parse_merge_request,
 )
 from engram.logbook.scm_sync_tasks.svn import (
     SvnRevision,
-    SyncConfig as SvnSyncConfig,
     backfill_svn_revisions,
-    sync_svn_revisions,
-    parse_svn_log_xml,
     insert_svn_revisions,
+    parse_svn_log_xml,
+    sync_svn_revisions,
+)
+from engram.logbook.scm_sync_tasks.svn import (
+    SyncConfig as SvnSyncConfig,
 )
 
 __all__ = [

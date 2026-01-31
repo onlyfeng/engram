@@ -198,7 +198,9 @@ def is_testing_mode() -> bool:
 # ============================================================================
 
 
-def get_repair_commands_hint(error_code: Optional[str] = None, target_db: Optional[str] = None) -> dict:
+def get_repair_commands_hint(
+    error_code: Optional[str] = None, target_db: Optional[str] = None
+) -> dict:
     """
     根据错误代码生成修复命令提示。
 
@@ -212,10 +214,10 @@ def get_repair_commands_hint(error_code: Optional[str] = None, target_db: Option
     db_suffix = f" (数据库: {target_db})" if target_db else ""
 
     base_commands = {
-        "bootstrap": "python logbook_postgres/scripts/db_bootstrap.py",
-        "migrate": "python logbook_postgres/scripts/db_migrate.py",
-        "migrate_with_roles": "python logbook_postgres/scripts/db_migrate.py --apply-roles --apply-openmemory-grants",
-        "verify": "python logbook_postgres/scripts/db_migrate.py --verify",
+        "bootstrap": "engram-bootstrap-roles  # 或 python -m engram.logbook.cli.db_bootstrap",
+        "migrate": "engram-migrate  # 或 python -m engram.logbook.cli.db_migrate",
+        "migrate_with_roles": "engram-migrate --apply-roles --apply-openmemory-grants",
+        "verify": "engram-migrate --verify",
         "docker_bootstrap": "docker compose -f docker-compose.unified.yml up bootstrap_roles",
         "docker_migrate": "docker compose -f docker-compose.unified.yml up logbook_migrate openmemory_migrate",
     }
@@ -249,7 +251,7 @@ def get_repair_commands_hint(error_code: Optional[str] = None, target_db: Option
             "repair_hint": f"OpenMemory schema 未创建{db_suffix}",
             "recommended_commands": [
                 "# 执行 OpenMemory 权限脚本",
-                "python logbook_postgres/scripts/db_migrate.py --apply-openmemory-grants",
+                "engram-migrate --apply-openmemory-grants",
                 "",
                 "# 或完整初始化",
                 base_commands["bootstrap"],
@@ -266,7 +268,7 @@ def get_repair_commands_hint(error_code: Optional[str] = None, target_db: Option
                 "export OM_PG_SCHEMA=openmemory  # 不能是 public",
                 "",
                 "# 重新运行预检",
-                "python logbook_postgres/scripts/db_migrate.py --precheck-only",
+                "engram-migrate --precheck-only  # 或 python -m engram.logbook.cli.db_migrate --precheck-only",
             ],
         }
     elif error_code == "INSUFFICIENT_PRIVILEGE":
@@ -1346,6 +1348,7 @@ def run_migrate(
     precheck_only: bool = False,
     verify: bool = False,
     verify_strict: bool = False,
+    verify_gate: Optional[str] = None,
     post_backfill: bool = False,
     backfill_chunking_version: Optional[str] = None,
     backfill_batch_size: int = 1000,
@@ -1367,6 +1370,12 @@ def run_migrate(
         precheck_only: 仅执行预检
         verify: 是否执行权限验证脚本 99_verify_permissions.sql
         verify_strict: 严格模式，验证失败时抛出异常（也可通过 ENGRAM_VERIFY_STRICT=1 启用）
+            已废弃，建议使用 verify_gate="strict" 代替
+        verify_gate: 验证脚本的 gate 级别（优先于 verify_strict）
+            - "strict": 严格模式，验证失败抛出异常
+            - "warn": 警告模式，验证失败仅警告（默认）
+            - "off": 关闭验证检查
+            也可通过 ENGRAM_VERIFY_GATE 环境变量设置
         post_backfill: 是否在迁移后执行 backfill（evidence_uri 回填）
         backfill_chunking_version: 若指定，同时执行 chunking_version 回填
         backfill_batch_size: backfill 每批处理记录数（默认 1000）
@@ -1546,6 +1555,9 @@ def run_migrate(
         executed_files = []
         openmemory_script_applied = False
         openmemory_target_schema = None
+        effective_verify_gate: Optional[str] = (
+            None  # 实际生效的 verify gate（仅在 verify=True 时设置）
+        )
 
         with get_connection(dsn=dsn, config=config, autocommit=True) as conn:
             # 获取咨询锁
@@ -1616,14 +1628,55 @@ def run_migrate(
                                         sql.Literal(schema_prefix)
                                     )
                                 )
-                        # 设置 verify_strict 模式（环境变量或参数）
-                        effective_verify_strict = (
-                            verify_strict or os.environ.get("ENGRAM_VERIFY_STRICT", "") == "1"
-                        )
-                        if effective_verify_strict:
-                            log_info("启用 verify strict 模式", quiet=quiet)
+
+                        # ========================================
+                        # Gate 解析逻辑
+                        # 优先级：verify_gate 参数 > ENGRAM_VERIFY_GATE 环境变量
+                        #        > verify_strict 参数 > ENGRAM_VERIFY_STRICT 环境变量
+                        #        > 默认值 "warn"
+                        # ========================================
+                        # 注意：effective_verify_gate 已在外层定义，此处直接赋值
+                        if verify_gate is not None:
+                            # 显式传入 verify_gate 参数，直接使用
+                            effective_verify_gate = verify_gate
+                        elif os.environ.get("ENGRAM_VERIFY_GATE"):
+                            # 环境变量设置了 gate
+                            effective_verify_gate = os.environ["ENGRAM_VERIFY_GATE"]
+                        elif verify_strict:
+                            # 兼容旧参数 verify_strict=True -> gate="strict"
+                            effective_verify_gate = "strict"
+                        elif os.environ.get("ENGRAM_VERIFY_STRICT", "") == "1":
+                            # 兼容旧环境变量 ENGRAM_VERIFY_STRICT=1 -> gate="strict"
+                            effective_verify_gate = "strict"
+                        else:
+                            # 默认值
+                            effective_verify_gate = "warn"
+
+                        # 验证 gate 值合法性
+                        valid_gates = {"strict", "warn", "off"}
+                        if effective_verify_gate not in valid_gates:
+                            log_warning(
+                                f"无效的 verify_gate 值 '{effective_verify_gate}'，"
+                                f"允许的值: {valid_gates}，使用默认值 'warn'",
+                                quiet=quiet,
+                            )
+                            effective_verify_gate = "warn"
+
+                        log_info(f"verify gate: {effective_verify_gate}", quiet=quiet)
+
+                        # 设置 engram.verify_gate（新机制）
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                sql.SQL("SET engram.verify_gate = {}").format(
+                                    sql.Literal(effective_verify_gate)
+                                )
+                            )
+
+                        # 兼容性：同时设置 engram.verify_strict（供旧 SQL 脚本使用）
+                        if effective_verify_gate == "strict":
                             with conn.cursor() as cur:
                                 cur.execute("SET engram.verify_strict = '1'")
+
                         execute_sql_file(conn, sql_file, schema_context=schema_context)
                         executed_files.append(str(sql_file))
                     elif prefix in PERMISSION_SCRIPT_PREFIXES:
@@ -1841,7 +1894,10 @@ def run_migrate(
             openmemory_schema_applied=openmemory_script_applied,
             openmemory_target_schema=openmemory_target_schema,
             verify_executed=verify,
-            verify_strict=verify_strict or os.environ.get("ENGRAM_VERIFY_STRICT", "") == "1",
+            # 实际生效的 verify gate（仅在 verify=True 时有值，便于 CI/运维可观测）
+            verify_gate=effective_verify_gate,
+            # 已废弃字段，保留兼容性，建议使用 verify_gate
+            verify_strict=effective_verify_gate == "strict" if effective_verify_gate else False,
             verified={
                 "tables": [f"{s}.{t}" for s, t in required_tables],
                 "columns": [f"{s}.{t}.{c}" for s, t, c in required_columns],

@@ -2,16 +2,19 @@
 """
 Gateway DI 边界检查脚本
 
-扫描 src/engram/gateway/handlers/**/*.py 中禁止的 import/调用模式。
-确保 handlers 模块遵循依赖注入原则，不直接调用全局容器/配置获取函数。
+扫描以下目录中禁止的 import/调用模式：
+- src/engram/gateway/handlers/**/*.py
+- src/engram/gateway/services/**/*.py
+
+确保 handlers 和 services 模块遵循依赖注入原则，不直接调用全局容器/配置获取函数。
 
 禁止的模式:
-- get_container( : handlers 应通过 deps 获取依赖，不应直接调用容器
-- get_config(    : handlers 应通过 deps.config 获取配置
-- get_client(    : handlers 应通过 deps.openmemory_client 获取客户端
-- logbook_adapter.get_adapter( : handlers 应通过 deps.logbook_adapter 获取适配器
-- GatewayDeps.create( : handlers 不应直接创建依赖容器
-- deps is None   : handlers 不应检查 deps 是否为 None（依赖必须由调用方提供）
+- get_container( : handlers/services 应通过 deps 获取依赖，不应直接调用容器
+- get_config(    : handlers/services 应通过 deps.config 获取配置
+- get_client(    : handlers/services 应通过 deps.openmemory_client 获取客户端
+- logbook_adapter.get_adapter( : handlers/services 应通过 deps.logbook_adapter 获取适配器
+- GatewayDeps.create( : handlers/services 不应直接创建依赖容器
+- deps is None   : handlers/services 不应检查 deps 是否为 None（依赖必须由调用方提供）
 
 例外:
 - 类型注释 (TYPE_CHECKING 块) 中的 import 不计入
@@ -63,6 +66,12 @@ ALLOWED_EXCEPTIONS: dict[str, Set[str]] = {}
 DI_BOUNDARY_ALLOW_MARKER = "# DI-BOUNDARY-ALLOW:"
 
 # 扫描目标目录（相对于项目根）
+SCAN_DIRECTORIES = [
+    Path("src/engram/gateway/handlers"),
+    Path("src/engram/gateway/services"),
+]
+
+# 向后兼容别名
 HANDLERS_DIR = Path("src/engram/gateway/handlers")
 
 
@@ -314,25 +323,27 @@ def scan_file(file_path: Path, relative_path: str) -> List[Violation]:
 
 
 def scan_handlers_directory(project_root: Path) -> CheckResult:
-    """扫描 handlers 目录中的所有 Python 文件"""
+    """扫描 handlers 和 services 目录中的所有 Python 文件"""
     result = CheckResult()
-    handlers_path = project_root / HANDLERS_DIR
 
-    if not handlers_path.exists():
-        print(f"[WARN] handlers 目录不存在: {handlers_path}", file=sys.stderr)
-        return result
+    for scan_dir in SCAN_DIRECTORIES:
+        dir_path = project_root / scan_dir
 
-    # 递归查找所有 .py 文件
-    py_files = list(handlers_path.rglob("*.py"))
-    result.files_scanned = len(py_files)
+        if not dir_path.exists():
+            print(f"[WARN] 目录不存在: {dir_path}", file=sys.stderr)
+            continue
 
-    for py_file in py_files:
-        relative_path = str(py_file.relative_to(project_root))
-        violations = scan_file(py_file, relative_path)
+        # 递归查找所有 .py 文件
+        py_files = list(dir_path.rglob("*.py"))
+        result.files_scanned += len(py_files)
 
-        if violations:
-            result.violations.extend(violations)
-            result.files_with_violations.add(relative_path)
+        for py_file in py_files:
+            relative_path = str(py_file.relative_to(project_root))
+            violations = scan_file(py_file, relative_path)
+
+            if violations:
+                result.violations.extend(violations)
+                result.files_with_violations.add(relative_path)
 
     return result
 
@@ -386,7 +397,9 @@ def main() -> int:
         print("Gateway DI 边界检查")
         print("=" * 70)
         print()
-        print(f"扫描目录: {project_root / HANDLERS_DIR}")
+        print("扫描目录:")
+        for scan_dir in SCAN_DIRECTORIES:
+            print(f"  - {project_root / scan_dir}")
         print(f"扫描文件数: {result.files_scanned}")
         print()
 

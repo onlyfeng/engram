@@ -46,10 +46,19 @@ from .container import (
     get_container,
     set_container,
 )
-from .di import GatewayDepsProtocol
-from .logbook_adapter import get_reliability_report
 
 logger = logging.getLogger("gateway")
+
+
+# ===================== 错误码常量 =====================
+
+
+class ReliabilityReportErrorCode:
+    """reliability_report 相关错误码"""
+
+    IMPORT_FAILED = "RELIABILITY_REPORT_IMPORT_FAILED"
+    EXECUTION_FAILED = "RELIABILITY_REPORT_EXECUTION_FAILED"
+    DEPENDENCY_UNAVAILABLE = "RELIABILITY_REPORT_DEPENDENCY_UNAVAILABLE"
 
 
 # ===================== 请求/响应模型 =====================
@@ -102,16 +111,34 @@ class ReliabilityReportResponse(BaseModel):
     """
     可靠性报告响应模型
 
-    结构与 schemas/reliability_report_v1.schema.json 保持一致
+    结构与 schemas/reliability_report_v1.schema.json 保持一致。
+
+    降级语义（依赖缺失时的行为）：
+    =================================
+    当 logbook_adapter 或其依赖不可用时，reliability_report 端点会返回降级响应：
+    - ok=false：表示报告生成失败
+    - message：包含具体错误描述
+    - error_code：标准化错误码，便于客户端处理
+    - 各统计字段返回空字典 {}
+
+    错误码说明：
+    - RELIABILITY_REPORT_IMPORT_FAILED：logbook_adapter 导入失败（依赖缺失）
+    - RELIABILITY_REPORT_EXECUTION_FAILED：报告生成执行失败（DB 连接等问题）
+    - RELIABILITY_REPORT_DEPENDENCY_UNAVAILABLE：依赖服务不可用
     """
 
     ok: bool
-    outbox_stats: Dict[str, Any] = Field(..., description="outbox_memory 表统计")
-    audit_stats: Dict[str, Any] = Field(..., description="write_audit 表统计")
-    v2_evidence_stats: Dict[str, Any] = Field(..., description="v2 evidence 覆盖率统计")
-    content_intercept_stats: Dict[str, Any] = Field(..., description="内容拦截统计")
-    generated_at: str = Field(..., description="报告生成时间 (ISO 8601)")
+    outbox_stats: Dict[str, Any] = Field(default_factory=dict, description="outbox_memory 表统计")
+    audit_stats: Dict[str, Any] = Field(default_factory=dict, description="write_audit 表统计")
+    v2_evidence_stats: Dict[str, Any] = Field(
+        default_factory=dict, description="v2 evidence 覆盖率统计"
+    )
+    content_intercept_stats: Dict[str, Any] = Field(
+        default_factory=dict, description="内容拦截统计"
+    )
+    generated_at: str = Field(default="", description="报告生成时间 (ISO 8601)")
     message: Optional[str] = None
+    error_code: Optional[str] = Field(None, description="错误码（仅在 ok=false 时返回）")
 
 
 class GovernanceSettingsUpdateRequest(BaseModel):
@@ -161,17 +188,25 @@ def create_app(
     创建并配置 FastAPI 应用实例
 
     这是 Gateway 的应用工厂函数，负责：
-    1. 组装 GatewayContainer（仅用于组装依赖，不作为业务依赖来源）
-    2. 从 container 获取 GatewayDeps，作为统一依赖传递给所有 handler
-    3. 创建 FastAPI 应用
-    4. 注册所有路由（/mcp, /memory/*, /health, /reliability/report, /governance/*）
-    5. 注册 MinIO Audit Webhook 路由
+    1. 创建 FastAPI 应用
+    2. 注册所有路由（/mcp, /memory/*, /health, /reliability/report, /governance/*）
+    3. 注册 MinIO Audit Webhook 路由
+
+    依赖初始化策略（方案 A：延迟初始化）：
+    ================================================
+    - import-time: 仅创建 FastAPI 应用，不触发 get_config()/get_container()
+    - lifespan: 负责配置验证、container 初始化、依赖预热
+    - 请求时: handler 通过 get_container().deps 获取依赖
+
+    这确保了：
+    - 模块导入时不依赖环境变量（支持测试环境）
+    - uvicorn 可以正常加载 app
+    - lifespan 启动时才进行完整初始化
 
     Args:
-        config: 可选的配置对象。如果不提供，从环境变量加载。
+        config: 可选的配置对象。如果提供，立即初始化 container。
         skip_db_check: 是否跳过 DB 检查（用于测试）。
-        container: 可选的 GatewayContainer 实例。如果提供，使用该实例；
-                   否则创建新实例。
+        container: 可选的 GatewayContainer 实例。如果提供，立即设置为全局容器。
         lifespan: 可选的 lifespan 上下文管理器。如果提供，用于管理应用生命周期。
                   lifespan 可用于生产环境的增强初始化（如 DB 检查、依赖预热等）。
 
@@ -179,30 +214,30 @@ def create_app(
         配置好的 FastAPI 应用实例
 
     Raises:
-        ConfigError: 配置无效
+        ConfigError: 配置无效（仅在显式传入 config 时）
 
     Note:
-        - container 仅负责组装依赖，不直接暴露给业务逻辑
-        - deps 通过 container.deps 获取，作为统一依赖接口
-        - 所有 handler 调用都显式传入 deps=deps，确保依赖来源单一可控
+        - 如果传入 config 或 container，会立即初始化（用于测试场景）
+        - 如果不传入，延迟到 lifespan/请求时初始化
+        - handler 通过 get_container().deps 获取依赖
         - lifespan 中会预热 deps.logbook_adapter/deps.openmemory_client
     """
-    # 1. 组装容器（仅用于依赖组装，不作为业务依赖来源）
-    # lifespan 提供额外的增强功能（预热等），但 container 组装不依赖它
+    # =================================================================
+    # Import-Safe 策略（关键设计决策）
+    # =================================================================
+    # 1. 如果显式传入 container 或 config，立即初始化（用于测试场景）
+    # 2. 否则延迟到 lifespan/请求时初始化（支持无环境变量的 import）
+    #
+    # 重要：不传参时绝不调用 get_container()/get_config()，确保：
+    # - from engram.gateway.main import app 不依赖环境变量
+    # - uvicorn engram.gateway.main:app 可正常加载
+    # - 仅在 lifespan startup 或首次请求时才触发配置加载
+    # =================================================================
     if container is not None:
         set_container(container)
     elif config is not None:
         set_container(GatewayContainer.create(config))
-    else:
-        # 使用默认配置创建容器
-        container = get_container()
-
-    # 获取容器引用
-    container = get_container()
-
-    # 2. 从 container 获取 GatewayDeps，作为统一依赖传递给所有 handler
-    # 注意：deps 绑定到 container，共享依赖实例
-    deps: GatewayDepsProtocol = container.deps
+    # 注意：不传参时不调用 get_container()，保持 import-safe
 
     # 2. 创建 FastAPI 应用
     app = FastAPI(
@@ -240,20 +275,18 @@ def create_app(
         register_tool_executor,
     )
 
-    # 5. 定义工具执行器（闭包捕获 deps，确保统一依赖来源）
+    # 5. 定义工具执行器（延迟获取 deps，支持无环境变量 import）
     # NOTE: 使用位置参数 correlation_id 以匹配 ToolExecutor 类型定义
-    async def _execute_tool(
-        tool: str, args: Dict[str, Any], correlation_id: str
-    ) -> Dict[str, Any]:
+    async def _execute_tool(tool: str, args: Dict[str, Any], correlation_id: str) -> Dict[str, Any]:
         """
         执行工具调用的内部实现
 
         此函数实现 ToolExecutor 协议，签名为 (tool_name, tool_args, correlation_id)。
 
-        依赖注入：
-        - 通过闭包捕获 create_app() 中创建的 deps 实例
-        - 所有 handler 调用都显式传入 deps=deps，确保依赖来源单一可控
-        - 不再依赖 handler 内部的延迟初始化或全局获取
+        依赖注入（延迟获取）：
+        - 在每次调用时通过 get_container().deps 获取依赖
+        - 这支持 import-time 不触发 get_config()（方案 A）
+        - lifespan 负责预热，首次请求时依赖已初始化
 
         契约：所有工具的返回结果都必须包含 correlation_id 字段（单一来源原则）。
 
@@ -266,6 +299,9 @@ def create_app(
             Dict[str, Any]: 工具执行结果，必须包含 correlation_id 字段
         """
         logger.debug(f"执行工具: tool={tool}, correlation_id={correlation_id}")
+
+        # 延迟获取 deps（lifespan 中已预热，此处仅获取引用）
+        deps = get_container().deps
 
         result_dict: Dict[str, Any]
 
@@ -281,7 +317,7 @@ def create_app(
                 item_id=args.get("item_id"),
                 actor_user_id=args.get("actor_user_id"),
                 correlation_id=correlation_id,
-                deps=deps,  # 显式传入依赖
+                deps=deps,
             )
             result_dict = {"ok": store_result.ok, **store_result.model_dump()}
 
@@ -292,13 +328,42 @@ def create_app(
                 filters=args.get("filters"),
                 top_k=args.get("top_k", 10),
                 correlation_id=correlation_id,
-                deps=deps,  # 显式传入依赖
+                deps=deps,
             )
             result_dict = {"ok": query_result.ok, **query_result.model_dump()}
 
         elif tool == "reliability_report":
-            report = get_reliability_report()
-            result_dict = {"ok": True, **report}
+            # 函数内导入：仅在 reliability_report 工具被调用时才导入依赖
+            # 这支持依赖缺失时的优雅降级（返回 ok=false + error_code）
+            try:
+                from .logbook_adapter import get_reliability_report
+
+                report = get_reliability_report()
+                result_dict = {"ok": True, **report}
+            except ImportError as e:
+                logger.warning(f"reliability_report 依赖导入失败: {e}")
+                result_dict = {
+                    "ok": False,
+                    "message": f"reliability_report 依赖不可用: {e}",
+                    "error_code": ReliabilityReportErrorCode.IMPORT_FAILED,
+                    "outbox_stats": {},
+                    "audit_stats": {},
+                    "v2_evidence_stats": {},
+                    "content_intercept_stats": {},
+                    "generated_at": "",
+                }
+            except Exception as e:
+                logger.exception(f"reliability_report 执行失败: {e}")
+                result_dict = {
+                    "ok": False,
+                    "message": f"报告生成失败: {e}",
+                    "error_code": ReliabilityReportErrorCode.EXECUTION_FAILED,
+                    "outbox_stats": {},
+                    "audit_stats": {},
+                    "v2_evidence_stats": {},
+                    "content_intercept_stats": {},
+                    "generated_at": "",
+                }
 
         elif tool == "governance_update":
             gov_result = await governance_update_impl(
@@ -306,7 +371,7 @@ def create_app(
                 policy_json=args.get("policy_json"),
                 admin_key=args.get("admin_key"),
                 actor_user_id=args.get("actor_user_id"),
-                deps=deps,  # 显式传入依赖
+                deps=deps,
             )
             result_dict = {"ok": gov_result.ok, **gov_result.model_dump()}
 
@@ -318,7 +383,7 @@ def create_app(
                 actor_user_id=args.get("actor_user_id"),
                 project_key=args.get("project_key"),
                 item_id=args.get("item_id"),
-                deps=deps,  # 显式传入依赖
+                deps=deps,
             )
 
         else:
@@ -480,6 +545,8 @@ def create_app(
         """直接调用 memory_store（REST 风格）"""
         # 在 REST 入口处生成 correlation_id，确保同一请求使用同一 ID
         correlation_id = generate_correlation_id()
+        # 延迟获取 deps（支持无环境变量 import）
+        deps = get_container().deps
         return await memory_store_impl(
             payload_md=request.payload_md,
             target_space=request.target_space,
@@ -491,7 +558,7 @@ def create_app(
             item_id=request.item_id,
             actor_user_id=request.actor_user_id,
             correlation_id=correlation_id,
-            deps=deps,  # 显式传入依赖
+            deps=deps,
         )
 
     @app.post("/memory/query", response_model=MemoryQueryResponse)
@@ -499,18 +566,39 @@ def create_app(
         """直接调用 memory_query（REST 风格）"""
         # 在 REST 入口处生成 correlation_id，确保同一请求使用同一 ID
         correlation_id = generate_correlation_id()
+        # 延迟获取 deps（支持无环境变量 import）
+        deps = get_container().deps
         return await memory_query_impl(
             query=request.query,
             spaces=request.spaces,
             filters=request.filters,
             top_k=request.top_k,
             correlation_id=correlation_id,
-            deps=deps,  # 显式传入依赖
+            deps=deps,
         )
 
     @app.get("/reliability/report", response_model=ReliabilityReportResponse)
     async def reliability_report_endpoint():
-        """获取可靠性统计报告"""
+        """
+        获取可靠性统计报告
+
+        降级语义：
+        - 当 logbook_adapter 依赖缺失时，返回 ok=false + IMPORT_FAILED 错误码
+        - 当报告生成执行失败时，返回 ok=false + EXECUTION_FAILED 错误码
+        - 降级响应中各统计字段返回空字典，generated_at 返回空字符串
+        """
+        # 函数内导入：仅在路由触发时才导入依赖
+        # 这支持依赖缺失时的优雅降级
+        try:
+            from .logbook_adapter import get_reliability_report
+        except ImportError as e:
+            logger.warning(f"reliability_report 依赖导入失败: {e}")
+            return ReliabilityReportResponse(
+                ok=False,
+                message=f"reliability_report 依赖不可用: {e}",
+                error_code=ReliabilityReportErrorCode.IMPORT_FAILED,
+            )
+
         try:
             report = get_reliability_report()
             return ReliabilityReportResponse(
@@ -520,29 +608,26 @@ def create_app(
                 v2_evidence_stats=report["v2_evidence_stats"],
                 content_intercept_stats=report["content_intercept_stats"],
                 generated_at=report["generated_at"],
-                message=None,
             )
         except Exception as e:
             logger.exception(f"获取可靠性报告失败: {e}")
             return ReliabilityReportResponse(
                 ok=False,
-                outbox_stats={},
-                audit_stats={},
-                v2_evidence_stats={},
-                content_intercept_stats={},
-                generated_at="",
-                message=f"获取报告失败: {str(e)}",
+                message=f"报告生成失败: {str(e)}",
+                error_code=ReliabilityReportErrorCode.EXECUTION_FAILED,
             )
 
     @app.post("/governance/settings/update", response_model=GovernanceSettingsUpdateResponse)
     async def governance_settings_update_endpoint(request: GovernanceSettingsUpdateRequest):
         """更新治理设置（受保护端点）"""
+        # 延迟获取 deps（支持无环境变量 import）
+        deps = get_container().deps
         return await governance_update_impl(
             team_write_enabled=request.team_write_enabled,
             policy_json=request.policy_json,
             admin_key=request.admin_key,
             actor_user_id=request.actor_user_id,
-            deps=deps,  # 显式传入依赖
+            deps=deps,
         )
 
     return app

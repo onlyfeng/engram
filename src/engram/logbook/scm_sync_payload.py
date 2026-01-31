@@ -96,7 +96,6 @@ class PhysicalJobType(str, Enum):
     SVN = "svn"
     GITLAB_COMMITS = "gitlab_commits"
     GITLAB_MRS = "gitlab_mrs"
-    GITLAB_REVIEWS = "gitlab_reviews"
 
 
 # =============================================================================
@@ -443,8 +442,6 @@ MIN_REQUIRED_FIELDS: Dict[str, List[str]] = {
     PhysicalJobType.GITLAB_COMMITS.value: [],
     # GitLab MRs 同步
     PhysicalJobType.GITLAB_MRS.value: [],
-    # GitLab Reviews 同步
-    PhysicalJobType.GITLAB_REVIEWS.value: [],
 }
 """
 每种 PhysicalJobType 的最小必需字段集合
@@ -465,7 +462,6 @@ BACKFILL_RECOMMENDED_FIELDS: Dict[str, List[str]] = {
     PhysicalJobType.SVN.value: ["start_rev", "end_rev", "update_watermark"],
     PhysicalJobType.GITLAB_COMMITS.value: ["since", "until", "update_watermark", "gitlab_instance"],
     PhysicalJobType.GITLAB_MRS.value: ["since", "until", "update_watermark", "gitlab_instance"],
-    PhysicalJobType.GITLAB_REVIEWS.value: ["since", "until", "update_watermark", "gitlab_instance"],
 }
 
 # Incremental 场景推荐字段
@@ -473,7 +469,6 @@ INCREMENTAL_RECOMMENDED_FIELDS: Dict[str, List[str]] = {
     PhysicalJobType.SVN.value: [],
     PhysicalJobType.GITLAB_COMMITS.value: ["gitlab_instance", "tenant_id"],
     PhysicalJobType.GITLAB_MRS.value: ["gitlab_instance", "tenant_id"],
-    PhysicalJobType.GITLAB_REVIEWS.value: ["gitlab_instance", "tenant_id"],
 }
 
 

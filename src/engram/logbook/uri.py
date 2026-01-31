@@ -82,8 +82,106 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import NewType, Optional, TypedDict, Union
 from urllib.parse import urlparse
+
+# ============ 类型别名定义 ============
+#
+# 使用 NewType 定义语义化类型，增强类型安全性：
+# - 编译时区分不同用途的字符串
+# - IDE 提供更好的代码补全和检查
+# - 函数签名更清晰地表达意图
+#
+
+# Artifact Key: 逻辑键，用于 DB 存储，与物理后端解耦
+# 格式: 无 scheme 的相对路径，如 "scm/proj_a/1/svn/r100.diff"
+ArtifactKey = NewType("ArtifactKey", str)
+
+# Physical URI: 物理地址，直接指向存储位置
+# 格式: 带 scheme 的完整 URI，如 "s3://bucket/key" 或 "file:///path"
+PhysicalUri = NewType("PhysicalUri", str)
+
+# Evidence URI: 逻辑引用，用于 evidence_refs_json
+# 格式: memory:// scheme，如 "memory://patch_blobs/git/1:abc/sha256"
+EvidenceUri = NewType("EvidenceUri", str)
+
+
+# ============ TypedDict 结构定义 ============
+#
+# 用于 evidence_refs_json 的结构化类型，确保字段完整性
+#
+
+
+class PatchRefRequired(TypedDict):
+    """Patch Reference 必需字段"""
+
+    artifact_uri: str  # memory://patch_blobs/<source_type>/<source_id>/<sha256>
+    sha256: str  # 64 位十六进制内容哈希
+    source_id: str  # 格式: <repo_id>:<rev/sha>
+    source_type: str  # 'svn' | 'git' | 'gitlab'
+    kind: str  # 通常为 'patch'
+
+
+class PatchRef(PatchRefRequired, total=False):
+    """
+    Patch Reference 完整结构
+
+    用于 evidence_refs_json.patches 数组元素
+    必需字段: artifact_uri, sha256, source_id, source_type, kind
+    可选字段: size_bytes
+    """
+
+    size_bytes: int  # 内容大小（字节）
+
+
+class AttachmentRefRequired(TypedDict):
+    """Attachment Reference 必需字段"""
+
+    artifact_uri: str  # memory://attachments/<attachment_id>/<sha256>
+    sha256: str  # 64 位十六进制内容哈希
+    attachment_id: int  # 数据库主键
+    kind: str  # 'screenshot' | 'document' | 'patch' 等
+
+
+class AttachmentRef(AttachmentRefRequired, total=False):
+    """
+    Attachment Reference 完整结构
+
+    用于 evidence_refs_json.attachments 数组元素
+    必需字段: artifact_uri, sha256, attachment_id, kind
+    可选字段: item_id, size_bytes
+    """
+
+    item_id: int  # 关联的 logbook item_id
+    size_bytes: int  # 内容大小（字节）
+
+
+class EvidenceRefsJson(TypedDict, total=False):
+    """
+    Evidence References JSON 结构
+
+    用于 governance.write_audit.evidence_refs_json 和
+    analysis.knowledge_candidates.evidence_refs_json
+
+    所有字段均为可选，至少应包含 patches 或 attachments 之一
+    """
+
+    patches: list[PatchRef]  # Patch 证据引用列表
+    attachments: list[AttachmentRef]  # 附件证据引用列表
+
+
+# ============ Prefix Mapping 类型 ============
+#
+# 用于 try_convert_to_artifact_key 的映射配置
+#
+
+# 单个 scheme 的前缀映射: {物理前缀: artifact 前缀}
+# 例如: {"/mnt/artifacts/": ""} 表示 /mnt/artifacts/scm/1.diff -> scm/1.diff
+PrefixMapping = dict[str, str]
+
+# 完整的前缀映射配置: {scheme://: PrefixMapping}
+# 例如: {"file://": {"/mnt/artifacts/": ""}, "s3://": {"bucket/engram/": ""}}
+PrefixMappings = dict[str, PrefixMapping]
 
 
 class UriType(Enum):
@@ -535,9 +633,12 @@ def is_physical_uri(uri: str) -> bool:
     return parsed.scheme in PHYSICAL_URI_SCHEMES
 
 
-def normalize_to_artifact_key(uri: str) -> str:
+def normalize_to_artifact_key(uri: str) -> ArtifactKey:
     """
     将 URI 规范化为 artifact key 格式
+
+    **异常行为**: 此函数在无法转换时抛出 ValueError。
+    如需无异常版本，请使用 try_convert_to_artifact_key()。
 
     规范化规则:
     - artifact:// scheme -> 移除 scheme，保留路径
@@ -548,17 +649,17 @@ def normalize_to_artifact_key(uri: str) -> str:
         uri: URI 字符串
 
     Returns:
-        规范化的 artifact key（无 scheme）
+        ArtifactKey: 规范化的 artifact key（无 scheme）
 
     Raises:
         ValueError: 如果 URI 是 physical uri，无法自动转换
 
     示例:
         normalize_to_artifact_key("artifact://scm/1/r100.diff")
-        # => "scm/1/r100.diff"
+        # => ArtifactKey("scm/1/r100.diff")
 
         normalize_to_artifact_key("scm/1/r100.diff")
-        # => "scm/1/r100.diff"
+        # => ArtifactKey("scm/1/r100.diff")
 
         normalize_to_artifact_key("s3://bucket/key")
         # => ValueError
@@ -572,7 +673,7 @@ def normalize_to_artifact_key(uri: str) -> str:
         )
 
     # artifact:// 或无 scheme -> 返回规范化路径
-    return normalize_uri(parsed.path)
+    return ArtifactKey(normalize_uri(parsed.path))
 
 
 def classify_uri_type(uri: str) -> str:
@@ -602,26 +703,63 @@ def classify_uri_type(uri: str) -> str:
 
 @dataclass
 class UriConversionResult:
-    """URI 转换结果"""
+    """
+    URI 转换结果
+
+    这是一个结果对象，用于返回转换操作的详细信息。
+    使用结果对象而非抛异常，便于调用方决定如何处理失败情况。
+
+    成功时: success=True, converted_uri 有值
+    失败时: success=False, error 有值，converted_uri 为 None
+
+    字段类型:
+    - success: bool - 是否成功转换
+    - original_uri: str - 原始 URI（可能是任意格式）
+    - converted_uri: Optional[ArtifactKey] - 转换后的 artifact key（成功时有值）
+    - error: Optional[str] - 错误信息（失败时有值）
+    - uri_type: Literal["artifact_key", "physical_uri", "evidence_uri"] - 原始 URI 类型
+    """
 
     success: bool  # 是否成功转换
     original_uri: str  # 原始 URI
-    converted_uri: Optional[str]  # 转换后的 URI（成功时有值）
+    converted_uri: Optional[str]  # 转换后的 artifact key（成功时有值）
     error: Optional[str] = None  # 错误信息（失败时有值）
-    uri_type: str = ""  # 原始 URI 类型
+    uri_type: str = ""  # 原始 URI 类型: "artifact_key" | "physical_uri" | "evidence_uri"
 
     def __repr__(self) -> str:
         if self.success:
             return f"UriConversionResult(success=True, {self.original_uri!r} -> {self.converted_uri!r})"
         return f"UriConversionResult(success=False, {self.original_uri!r}, error={self.error!r})"
 
+    def unwrap(self) -> str:
+        """
+        获取转换后的 artifact key，失败时抛出 ValueError
+
+        这是一个便捷方法，用于调用方确信转换应该成功的场景。
+        如果需要处理失败情况，应直接检查 success 字段。
+
+        Returns:
+            转换后的 artifact key
+
+        Raises:
+            ValueError: 如果转换失败
+        """
+        if not self.success:
+            raise ValueError(f"URI 转换失败: {self.error}")
+        assert self.converted_uri is not None
+        return self.converted_uri
+
 
 def try_convert_to_artifact_key(
     uri: str,
-    prefix_mappings: Optional[dict] = None,
+    prefix_mappings: Optional[PrefixMappings] = None,
 ) -> UriConversionResult:
     """
     尝试将 URI 转换为 artifact key
+
+    **返回值行为**: 此函数返回结果对象而非抛异常。
+    调用方应检查 result.success 判断是否成功。
+    如需抛异常版本，请使用 normalize_to_artifact_key()。
 
     转换规则:
     1. artifact:// scheme -> 移除 scheme，保留路径（规范化）
@@ -633,29 +771,32 @@ def try_convert_to_artifact_key(
     Args:
         uri: 原始 URI
         prefix_mappings: 物理路径前缀到 artifact key 前缀的映射
+            类型: PrefixMappings = dict[str, dict[str, str]]
             格式: {
                 "file://": {"/mnt/artifacts/": ""},  # file:///mnt/artifacts/scm/1.diff -> scm/1.diff
                 "s3://": {"bucket/engram/": ""},     # s3://bucket/engram/scm/1.diff -> scm/1.diff
             }
 
     Returns:
-        UriConversionResult 结构
+        UriConversionResult: 转换结果
+        - success=True, converted_uri=ArtifactKey: 转换成功
+        - success=False, error=str: 转换失败，error 包含原因
 
     示例:
         # artifact:// 转换
         try_convert_to_artifact_key("artifact://scm/1/r100.diff")
-        # => UriConversionResult(success=True, "scm/1/r100.diff")
+        # => UriConversionResult(success=True, converted_uri="scm/1/r100.diff")
 
         # 已是 artifact key
         try_convert_to_artifact_key("scm/1/r100.diff")
-        # => UriConversionResult(success=True, "scm/1/r100.diff")
+        # => UriConversionResult(success=True, converted_uri="scm/1/r100.diff")
 
         # file:// 需要映射
         try_convert_to_artifact_key(
             "file:///mnt/artifacts/scm/1/r100.diff",
             prefix_mappings={"file://": {"/mnt/artifacts/": ""}}
         )
-        # => UriConversionResult(success=True, "scm/1/r100.diff")
+        # => UriConversionResult(success=True, converted_uri="scm/1/r100.diff")
 
         # 无法确定映射
         try_convert_to_artifact_key("s3://unknown-bucket/key")
@@ -884,9 +1025,12 @@ def build_artifact_uri(*parts: str) -> str:
 #   patch_blobs.uri: scm/1/git/commits/abc123def.diff
 
 
-def build_evidence_uri(source_type: str, source_id: str, sha256: str) -> str:
+def build_evidence_uri(source_type: str, source_id: str, sha256: str) -> EvidenceUri:
     """
     构建 canonical evidence URI
+
+    **无异常**: 此函数不抛异常，始终返回有效的 EvidenceUri。
+    输入参数会被自动规范化（小写、去空格）。
 
     格式: memory://patch_blobs/<source_type>/<source_id>/<sha256>
 
@@ -896,37 +1040,51 @@ def build_evidence_uri(source_type: str, source_id: str, sha256: str) -> str:
         sha256: 内容 SHA256 哈希
 
     Returns:
-        规范化的 evidence URI
+        EvidenceUri: 规范化的 evidence URI
 
     示例:
         build_evidence_uri("git", "1:abc123def", "e3b0c44...")
-        # => "memory://patch_blobs/git/1:abc123def/e3b0c44..."
+        # => EvidenceUri("memory://patch_blobs/git/1:abc123def/e3b0c44...")
 
         build_evidence_uri("svn", "2:1234", "a1b2c3d4...")
-        # => "memory://patch_blobs/svn/2:1234/a1b2c3d4..."
+        # => EvidenceUri("memory://patch_blobs/svn/2:1234/a1b2c3d4...")
     """
     # 规范化参数
     source_type = source_type.strip().lower()
     source_id = source_id.strip()
     sha256 = sha256.strip().lower()
 
-    return f"memory://patch_blobs/{source_type}/{source_id}/{sha256}"
+    return EvidenceUri(f"memory://patch_blobs/{source_type}/{source_id}/{sha256}")
 
 
-def parse_evidence_uri(evidence_uri: str) -> Optional[dict]:
+class ParsedEvidenceUri(TypedDict):
+    """parse_evidence_uri 返回的结构"""
+
+    source_type: str  # 'svn' | 'git' | 'gitlab'
+    source_id: str  # 格式: <repo_id>:<rev/sha>
+    sha256: str  # 64 位十六进制
+
+
+def parse_evidence_uri(evidence_uri: str) -> Optional[ParsedEvidenceUri]:
     """
     解析 evidence URI，提取其中的 source_type、source_id、sha256
+
+    **返回值行为**: 返回 None 表示不是有效的 evidence URI。
+    不抛异常，调用方应检查返回值是否为 None。
 
     Args:
         evidence_uri: evidence URI 字符串
 
     Returns:
-        解析结果字典，包含 source_type、source_id、sha256；
-        如果不是有效的 evidence URI，返回 None
+        ParsedEvidenceUri: 解析结果，包含 source_type、source_id、sha256；
+        None: 如果不是有效的 patch_blobs evidence URI
 
     示例:
         parse_evidence_uri("memory://patch_blobs/git/1:abc123/sha256hash")
         # => {"source_type": "git", "source_id": "1:abc123", "sha256": "sha256hash"}
+
+        parse_evidence_uri("memory://attachments/123/sha256")
+        # => None (不是 patch_blobs URI)
     """
     parsed = parse_uri(evidence_uri)
 
@@ -939,11 +1097,11 @@ def parse_evidence_uri(evidence_uri: str) -> Optional[dict]:
     if len(parts) < 4 or parts[0] != "patch_blobs":
         return None
 
-    return {
-        "source_type": parts[1],
-        "source_id": parts[2],
-        "sha256": parts[3],
-    }
+    return ParsedEvidenceUri(
+        source_type=parts[1],
+        source_id=parts[2],
+        sha256=parts[3],
+    )
 
 
 def build_evidence_uri_from_patch_blob(
@@ -951,11 +1109,11 @@ def build_evidence_uri_from_patch_blob(
     repo_id: int,
     rev_or_sha: str,
     sha256: str,
-) -> str:
+) -> EvidenceUri:
     """
     从 patch_blob 参数构建 evidence URI（便捷方法）
 
-    自动构建 source_id 格式: <repo_id>:<rev_or_sha>
+    **无异常**: 此函数不抛异常，自动构建 source_id 格式: <repo_id>:<rev_or_sha>
 
     Args:
         source_type: 源类型 ('svn' 或 'git')
@@ -964,11 +1122,11 @@ def build_evidence_uri_from_patch_blob(
         sha256: 内容 SHA256 哈希
 
     Returns:
-        规范化的 evidence URI
+        EvidenceUri: 规范化的 evidence URI
 
     示例:
         build_evidence_uri_from_patch_blob("git", 1, "abc123def", "e3b0c44...")
-        # => "memory://patch_blobs/git/1:abc123def/e3b0c44..."
+        # => EvidenceUri("memory://patch_blobs/git/1:abc123def/e3b0c44...")
     """
     source_id = f"{repo_id}:{rev_or_sha}"
     return build_evidence_uri(source_type, source_id, sha256)
@@ -999,10 +1157,13 @@ def build_evidence_ref_for_patch_blob(
     content_sha256: Optional[str] = None,
     size_bytes: Optional[int] = None,
     kind: str = "patch",
-    extra: Optional[dict] = None,
-) -> dict:
+    extra: Optional[dict[str, object]] = None,
+) -> PatchRef:
     """
     构建统一的 evidence reference 结构，用于 evidence_refs_json
+
+    **异常行为**: 当 sha256 为空时抛出 ValueError。
+    其他参数会被自动规范化。
 
     此函数生成的字典结构可以被同步脚本与治理/分析模块复用，
     确保 evidence_refs_json 结构的一致性。
@@ -1011,29 +1172,26 @@ def build_evidence_ref_for_patch_blob(
         source_type: 源类型 ('svn' 或 'git')
         source_id: 源标识符（格式: <repo_id>:<revision/sha>）
         sha256: 内容 SHA256 哈希
+        content_sha256: sha256 的别名（向后兼容）
         size_bytes: 可选，内容大小（字节）
         kind: 附件类型，默认 'patch'
         extra: 可选，额外的元数据字段（会合并到结果中）
 
     Returns:
-        统一的 evidence reference 字典，包含:
-        {
-            "artifact_uri": "memory://patch_blobs/<source_type>/<source_id>/<sha256>",
-            "sha256": "<sha256>",
-            "source_id": "<source_id>",
-            "source_type": "<source_type>",
-            "kind": "<kind>"
-        }
+        PatchRef: 符合 TypedDict 结构的 evidence reference
+
+    Raises:
+        ValueError: 如果 sha256 为空
 
     示例:
         build_evidence_ref_for_patch_blob("git", "1:abc123", "e3b0c44...")
-        # => {
+        # => PatchRef({
         #     "artifact_uri": "memory://patch_blobs/git/1:abc123/e3b0c44...",
         #     "sha256": "e3b0c44...",
         #     "source_id": "1:abc123",
         #     "source_type": "git",
         #     "kind": "patch"
-        # }
+        # })
 
     使用场景:
         # 在同步脚本中构建 attachment 元数据
@@ -1058,8 +1216,8 @@ def build_evidence_ref_for_patch_blob(
     # 构建 canonical artifact_uri
     artifact_uri = build_evidence_uri(source_type, source_id, sha256)
 
-    # 构建基础结构
-    ref = {
+    # 构建基础结构（使用 dict 然后转换，以便添加可选字段）
+    ref: dict[str, object] = {
         "artifact_uri": artifact_uri,
         "sha256": sha256,
         "source_id": source_id,
@@ -1075,42 +1233,45 @@ def build_evidence_ref_for_patch_blob(
     if extra:
         ref.update(extra)
 
-    return ref
+    # 类型断言：返回符合 PatchRef 结构的字典
+    return ref  # type: ignore[return-value]
 
 
 def build_evidence_refs_json(
-    patches: Optional[list] = None,
-    attachments: Optional[list] = None,
-    extra: Optional[dict] = None,
-) -> dict:
+    patches: Optional[list[PatchRef]] = None,
+    attachments: Optional[list[AttachmentRef]] = None,
+    extra: Optional[dict[str, object]] = None,
+) -> EvidenceRefsJson:
     """
     构建完整的 evidence_refs_json 结构
+
+    **无异常**: 此函数不抛异常，空输入返回空字典。
 
     这是 evidence_refs_json 的标准构建函数，用于 governance/analysis 模块。
 
     Args:
         patches: patch evidence 引用列表（每项由 build_evidence_ref_for_patch_blob 生成）
-        attachments: 其他附件引用列表
+        attachments: 其他附件引用列表（每项由 build_attachment_evidence_ref 生成）
         extra: 额外的元数据字段
 
     Returns:
-        完整的 evidence_refs_json 字典
+        EvidenceRefsJson: 符合 TypedDict 结构的 evidence_refs_json
 
     示例:
         refs = build_evidence_refs_json(
             patches=[
-                build_evidence_ref_for_patch_blob("git", "1:abc", "sha1"),
-                build_evidence_ref_for_patch_blob("git", "1:def", "sha2"),
+                build_evidence_ref_for_patch_blob("git", "1:abc", "sha1..."),
+                build_evidence_ref_for_patch_blob("git", "1:def", "sha2..."),
             ]
         )
-        # => {
+        # => EvidenceRefsJson({
         #     "patches": [
-        #         {"artifact_uri": "...", "sha256": "sha1", ...},
-        #         {"artifact_uri": "...", "sha256": "sha2", ...}
+        #         {"artifact_uri": "...", "sha256": "sha1...", ...},
+        #         {"artifact_uri": "...", "sha256": "sha2...", ...}
         #     ]
-        # }
+        # })
     """
-    result = {}
+    result: dict[str, object] = {}
 
     if patches:
         result["patches"] = patches
@@ -1121,7 +1282,7 @@ def build_evidence_refs_json(
     if extra:
         result.update(extra)
 
-    return result
+    return result  # type: ignore[return-value]
 
 
 # ============ SCM 路径解析与回退 ============
@@ -1352,15 +1513,33 @@ def resolve_scm_artifact_path(
     return None
 
 
-def validate_evidence_ref(ref: dict) -> tuple:
+class EvidenceRefValidationResult(TypedDict):
+    """validate_evidence_ref 返回的验证结果"""
+
+    is_valid: bool
+    error_message: Optional[str]
+
+
+def validate_evidence_ref(ref: dict[str, object]) -> tuple[bool, Optional[str]]:
     """
     验证 evidence reference 结构是否符合规范
+
+    **返回值行为**: 返回元组 (is_valid, error_message)，不抛异常。
+    调用方应检查 is_valid 判断验证结果。
+
+    验证规则:
+    - 必需字段: artifact_uri, sha256, source_id
+    - sha256 必须为 64 位十六进制
+    - artifact_uri 必须以 memory:// 开头
+    - source_id 必须包含 : 分隔符
 
     Args:
         ref: evidence reference 字典
 
     Returns:
-        (is_valid: bool, error_message: Optional[str])
+        tuple[bool, Optional[str]]: (is_valid, error_message)
+        - is_valid=True, error_message=None: 验证通过
+        - is_valid=False, error_message=str: 验证失败，包含原因
 
     示例:
         valid, error = validate_evidence_ref({"artifact_uri": "...", "sha256": "..."})
@@ -1377,7 +1556,7 @@ def validate_evidence_ref(ref: dict) -> tuple:
             return (False, f"字段不能为空: {field}")
 
     # 验证 sha256 格式 (64 位十六进制)
-    sha256 = ref.get("sha256", "")
+    sha256 = str(ref.get("sha256", ""))
     if len(sha256) != 64:
         return (False, f"sha256 长度应为 64 位，实际 {len(sha256)} 位")
 
@@ -1387,12 +1566,12 @@ def validate_evidence_ref(ref: dict) -> tuple:
         return (False, "sha256 格式无效（应为 64 位十六进制）")
 
     # 验证 artifact_uri 格式
-    artifact_uri = ref.get("artifact_uri", "")
+    artifact_uri = str(ref.get("artifact_uri", ""))
     if not artifact_uri.startswith("memory://"):
         return (False, "artifact_uri 应以 memory:// 开头")
 
     # 验证 source_id 格式 (应包含 : 分隔符)
-    source_id = ref.get("source_id", "")
+    source_id = str(ref.get("source_id", ""))
     if ":" not in source_id:
         return (False, "source_id 格式无效（应为 <repo_id>:<rev/sha>）")
 
@@ -1460,9 +1639,11 @@ class AttachmentUriParseResult:
         return f"AttachmentUriParseResult(success=False, error_code={self.error_code!r}, error={self.error_message!r})"
 
 
-def build_attachment_evidence_uri(attachment_id: int, sha256: str) -> str:
+def build_attachment_evidence_uri(attachment_id: int, sha256: str) -> EvidenceUri:
     """
     构建 canonical attachment evidence URI
+
+    **异常行为**: 当 attachment_id 不是整数或 sha256 格式无效时抛出 ValueError。
 
     格式: memory://attachments/<attachment_id>/<sha256>
 
@@ -1471,14 +1652,14 @@ def build_attachment_evidence_uri(attachment_id: int, sha256: str) -> str:
         sha256: 内容 SHA256 哈希（必须为 64 位十六进制字符串）
 
     Returns:
-        规范化的 attachment evidence URI
+        EvidenceUri: 规范化的 attachment evidence URI
 
     Raises:
         ValueError: 如果 attachment_id 不是整数或 sha256 格式无效
 
     示例:
         build_attachment_evidence_uri(12345, "e3b0c44...")
-        # => "memory://attachments/12345/e3b0c44..."
+        # => EvidenceUri("memory://attachments/12345/e3b0c44...")
     """
     # 验证 attachment_id
     if not isinstance(attachment_id, int):
@@ -1493,23 +1674,30 @@ def build_attachment_evidence_uri(attachment_id: int, sha256: str) -> str:
     if not re.match(r"^[a-f0-9]{64}$", sha256):
         raise ValueError(f"sha256 必须为 64 位十六进制字符串，got: {sha256!r}")
 
-    return f"memory://attachments/{attachment_id}/{sha256}"
+    return EvidenceUri(f"memory://attachments/{attachment_id}/{sha256}")
 
 
-def parse_attachment_evidence_uri(evidence_uri: str) -> Optional[dict]:
+class ParsedAttachmentUri(TypedDict):
+    """parse_attachment_evidence_uri 返回的结构"""
+
+    attachment_id: int  # 数据库主键
+    sha256: str  # 64 位十六进制
+
+
+def parse_attachment_evidence_uri(evidence_uri: str) -> Optional[ParsedAttachmentUri]:
     """
     解析 attachment evidence URI，提取其中的 attachment_id、sha256
+
+    **返回值行为**: 返回 None 表示不是有效的 attachment evidence URI。
+    不抛异常，调用方应检查返回值是否为 None。
+    如需详细错误信息，请使用 parse_attachment_evidence_uri_strict()。
 
     Args:
         evidence_uri: attachment evidence URI 字符串
 
     Returns:
-        解析结果字典，包含 attachment_id、sha256；
-        如果不是有效的 attachment evidence URI，返回 None
-
-    注意:
-        此函数为向后兼容的简化接口。如需详细错误信息，请使用
-        parse_attachment_evidence_uri_strict() 函数。
+        ParsedAttachmentUri: 解析结果，包含 attachment_id、sha256；
+        None: 如果不是有效的 attachment evidence URI
 
     示例:
         parse_attachment_evidence_uri("memory://attachments/12345/sha256hash")
@@ -1519,7 +1707,12 @@ def parse_attachment_evidence_uri(evidence_uri: str) -> Optional[dict]:
         # => None（不是 attachment URI）
     """
     result = parse_attachment_evidence_uri_strict(evidence_uri)
-    return result.to_dict() if result.success else None
+    if result.success:
+        return ParsedAttachmentUri(
+            attachment_id=result.attachment_id,  # type: ignore[typeddict-item]
+            sha256=result.sha256,  # type: ignore[typeddict-item]
+        )
+    return None
 
 
 def parse_attachment_evidence_uri_strict(evidence_uri: str) -> AttachmentUriParseResult:
@@ -1658,38 +1851,44 @@ def build_attachment_evidence_ref(
     kind: str,
     item_id: Optional[int] = None,
     size_bytes: Optional[int] = None,
-    extra: Optional[dict] = None,
-) -> dict:
+    extra: Optional[dict[str, object]] = None,
+) -> AttachmentRef:
     """
     构建 attachment evidence reference 结构
+
+    **异常行为**: 当 attachment_id 不是整数或 sha256 格式无效时抛出 ValueError
+    （通过 build_attachment_evidence_uri 抛出）。
 
     此函数生成的字典结构用于 evidence_refs_json 中的 attachments 数组。
 
     Args:
-        attachment_id: 附件 ID
-        sha256: 内容 SHA256 哈希
+        attachment_id: 附件 ID（必须为整数）
+        sha256: 内容 SHA256 哈希（必须为 64 位十六进制）
         kind: 附件类型（如 'screenshot', 'document', 'patch' 等）
         item_id: 可选，关联的 logbook item_id
         size_bytes: 可选，内容大小（字节）
         extra: 可选，额外的元数据字段
 
     Returns:
-        统一的 attachment evidence reference 字典
+        AttachmentRef: 符合 TypedDict 结构的 attachment evidence reference
+
+    Raises:
+        ValueError: 如果 attachment_id 不是整数或 sha256 格式无效
 
     示例:
         build_attachment_evidence_ref(12345, "e3b0c44...", "screenshot", item_id=100)
-        # => {
+        # => AttachmentRef({
         #     "artifact_uri": "memory://attachments/12345/e3b0c44...",
         #     "sha256": "e3b0c44...",
         #     "attachment_id": 12345,
         #     "kind": "screenshot",
         #     "item_id": 100
-        # }
+        # })
     """
     sha256 = sha256.strip().lower()
     artifact_uri = build_attachment_evidence_uri(attachment_id, sha256)
 
-    ref = {
+    ref: dict[str, object] = {
         "artifact_uri": artifact_uri,
         "sha256": sha256,
         "attachment_id": attachment_id,
@@ -1705,7 +1904,7 @@ def build_attachment_evidence_ref(
     if extra:
         ref.update(extra)
 
-    return ref
+    return ref  # type: ignore[return-value]
 
 
 def is_patch_blob_evidence_uri(uri: str) -> bool:

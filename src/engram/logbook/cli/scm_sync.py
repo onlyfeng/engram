@@ -849,8 +849,8 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
 
     Note:
         使用 engram.logbook.scm_sync_runner.create_parser() 创建解析器，
-        确保所有入口点（engram-scm-sync runner、engram-scm-runner、
-        python scm_sync_runner.py）使用一致的参数定义。
+        确保所有入口点（engram-scm-sync runner、engram-scm-runner）
+        使用一致的参数定义。
     """
     from datetime import datetime as dt
 

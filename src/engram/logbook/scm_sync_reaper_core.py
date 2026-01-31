@@ -30,7 +30,7 @@ scm_sync_reaper_core - SCM 同步任务回收器核心实现
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, TypedDict
 
 from engram.logbook.scm_auth import redact
 from engram.logbook.scm_sync_errors import (
@@ -39,12 +39,56 @@ from engram.logbook.scm_sync_errors import (
     classify_last_error,
 )
 
+
+# ============ 类型定义 ============
+
+
+class JobStats(TypedDict):
+    """Job 处理统计"""
+
+    processed: int
+    to_failed: int
+    to_dead: int
+    to_pending: int
+    errors: int
+
+
+class RunStats(TypedDict):
+    """Run 处理统计"""
+
+    processed: int
+    failed: int
+    errors: int
+
+
+class LockStats(TypedDict):
+    """Lock 处理统计"""
+
+    processed: int
+    released: int
+    errors: int
+
+
+class ReaperResult(TypedDict):
+    """Reaper 执行结果"""
+
+    jobs: JobStats
+    runs: RunStats
+    locks: LockStats
+    dry_run: bool
+
 __all__ = [
     # 常量
+    "DEFAULT_BACKOFF_BASE",
     "DEFAULT_GRACE_SECONDS",
     "DEFAULT_MAX_DURATION_SECONDS",
     "DEFAULT_RETRY_DELAY_SECONDS",
     "DEFAULT_MAX_REAPER_BACKOFF_SECONDS",
+    # 类型
+    "JobStats",
+    "RunStats",
+    "LockStats",
+    "ReaperResult",
     # 枚举
     "JobRecoveryPolicy",
     # 函数
@@ -174,7 +218,7 @@ def process_expired_jobs(
     transient_retry_delay_multiplier: float = 1.0,
     max_reaper_backoff_seconds: int = DEFAULT_MAX_REAPER_BACKOFF_SECONDS,
     db_api=None,
-) -> Dict[str, int]:
+) -> JobStats:
     """
     处理过期的任务
 
@@ -193,7 +237,7 @@ def process_expired_jobs(
     if db_api is None:
         from engram.logbook import scm_db as db_api
 
-    stats = {
+    stats: JobStats = {
         "processed": 0,
         "to_failed": 0,
         "to_dead": 0,
@@ -276,7 +320,7 @@ def process_expired_runs(
     expired_runs: Iterable[Dict[str, Any]],
     *,
     db_api=None,
-) -> Dict[str, int]:
+) -> RunStats:
     """
     处理过期的 sync_runs
 
@@ -291,7 +335,7 @@ def process_expired_runs(
     if db_api is None:
         from engram.logbook import scm_db as db_api
 
-    stats = {"processed": 0, "failed": 0, "errors": 0}
+    stats: RunStats = {"processed": 0, "failed": 0, "errors": 0}
     for run in expired_runs:
         stats["processed"] += 1
         run_id = str(run.get("run_id"))
@@ -315,7 +359,7 @@ def process_expired_locks(
     expired_locks: Iterable[Dict[str, Any]],
     *,
     db_api=None,
-) -> Dict[str, int]:
+) -> LockStats:
     """
     处理过期的锁
 
@@ -330,7 +374,7 @@ def process_expired_locks(
     if db_api is None:
         from engram.logbook import scm_db as db_api
 
-    stats = {"processed": 0, "released": 0, "errors": 0}
+    stats: LockStats = {"processed": 0, "released": 0, "errors": 0}
     for lock in expired_locks:
         stats["processed"] += 1
         lock_id = lock.get("lock_id")
@@ -357,7 +401,7 @@ def run_reaper(
     dry_run: bool = False,
     logger=None,
     db_api=None,
-) -> Dict[str, Any]:
+) -> ReaperResult:
     """
     执行 reaper 主流程
 
@@ -378,7 +422,7 @@ def run_reaper(
         from engram.logbook import scm_db as db_api
 
     conn = db_api.get_conn(dsn)
-    result = {
+    result: ReaperResult = {
         "jobs": {"processed": 0, "to_failed": 0, "to_dead": 0, "to_pending": 0, "errors": 0},
         "runs": {"processed": 0, "failed": 0, "errors": 0},
         "locks": {"processed": 0, "released": 0, "errors": 0},

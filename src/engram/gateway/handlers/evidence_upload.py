@@ -10,24 +10,33 @@ evidence_upload handler - evidence_upload 工具核心实现
 依赖注入：
 - deps 参数为必传，调用方需显式传入 GatewayDeps 实例
 - 统一通过 deps.logbook_adapter 获取依赖，确保依赖来源单一可控
+
+导入策略：
+- evidence_store 依赖 engram_logbook 模块，采用函数内延迟导入
+- 导入失败时返回结构化错误 DEPENDENCY_MISSING，不抛出到 app 工厂层
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..di import GatewayDepsProtocol
-from ..evidence_store import (
-    ALLOWED_CONTENT_TYPES,
-    EvidenceContentTypeError,
-    EvidenceItemRequiredError,
-    EvidenceSizeLimitExceededError,
-    EvidenceUploadError,
-    EvidenceUploadResult,
-    EvidenceWriteError,
-    upload_evidence,
-)
 
 logger = logging.getLogger("gateway.handlers.evidence_upload")
+
+# 默认允许的内容类型列表（当 evidence_store 导入失败时使用）
+_DEFAULT_ALLOWED_CONTENT_TYPES: List[str] = [
+    "text/plain",
+    "text/markdown",
+    "text/x-diff",
+    "text/x-patch",
+    "application/json",
+    "application/xml",
+    "text/xml",
+    "text/html",
+    "text/csv",
+    "text/yaml",
+    "application/x-yaml",
+]
 
 
 async def execute_evidence_upload(
@@ -58,6 +67,40 @@ async def execute_evidence_upload(
     Raises:
         TypeError: 如果未提供 deps 参数
     """
+    # ===== 延迟导入 evidence_store（依赖 engram_logbook）=====
+    # 导入失败时返回结构化错误，不抛出到 app 工厂层
+    try:
+        from ..evidence_store import (
+            ALLOWED_CONTENT_TYPES,
+            EvidenceContentTypeError,
+            EvidenceItemRequiredError,
+            EvidenceSizeLimitExceededError,
+            EvidenceUploadError,
+            EvidenceUploadResult,
+            EvidenceWriteError,
+            upload_evidence,
+        )
+    except ImportError as import_err:
+        logger.warning(f"evidence_store 导入失败: {import_err}")
+        return {
+            "ok": False,
+            "error_code": "DEPENDENCY_MISSING",
+            "retryable": False,
+            "message": "evidence_upload 功能依赖 engram_logbook 模块，当前未安装或配置不正确",
+            "suggestion": (
+                "请确保 engram_logbook 模块已正确安装：\n"
+                '  pip install -e ".[full]"\n'
+                "或检查 POSTGRES_DSN 环境变量是否正确配置"
+            ),
+            "details": {
+                "missing_module": "engram_logbook",
+                "import_error": str(import_err),
+            },
+        }
+
+    # 获取允许的内容类型列表（导入成功后使用实际值）
+    allowed_types = list(ALLOWED_CONTENT_TYPES)
+
     # 参数校验
     if not content:
         return {
@@ -73,7 +116,7 @@ async def execute_evidence_upload(
             "error_code": "MISSING_REQUIRED_PARAMETER",
             "retryable": False,
             "suggestion": "参数 'content_type' 为必填项，请提供内容类型",
-            "allowed_types": list(ALLOWED_CONTENT_TYPES),
+            "allowed_types": allowed_types,
         }
 
     try:

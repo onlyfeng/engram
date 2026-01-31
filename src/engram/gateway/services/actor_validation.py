@@ -18,15 +18,15 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..audit_event import build_evidence_refs_json, build_gateway_audit_event
+from ..config import UnknownActorPolicy
 from ..di import GatewayDepsProtocol
-from ..logbook_adapter import UnknownActorPolicy
 
 # 导入统一错误码
 try:
     from engram.logbook.errors import ErrorCode
 except ImportError:
     # Fallback for testing
-    class ErrorCode:
+    class ErrorCode:  # type: ignore[no-redef]
         ACTOR_UNKNOWN_REJECT = "actor_unknown:reject"
         ACTOR_UNKNOWN_DEGRADE = "actor_unknown:degrade"
         ACTOR_AUTOCREATED = "actor_autocreated"

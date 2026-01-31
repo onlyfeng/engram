@@ -9,11 +9,11 @@ engram_logbook.cli.scm - SCM CLI 入口
     engram-scm list-repos [--repo-type git]
     engram-scm get-repo --repo-type git --repo-url https://gitlab.com/ns/proj
     engram-scm get-repo --repo-id 123
-    engram-scm sync-svn --repo-url svn://example.com/repo
-    engram-scm sync-gitlab-commits --project-id 123
-    engram-scm sync-gitlab-mrs --project-id 123
-    engram-scm sync-gitlab-reviews --project-id 123
-    engram-scm refresh-vfacts
+
+SCM 同步操作请使用 engram-scm-sync 命令:
+    engram-scm-sync scheduler --once
+    engram-scm-sync worker --worker-id worker-1
+    engram-scm-sync runner incremental --repo gitlab:123
 
 安装后可直接使用:
     pip install -e .
@@ -346,16 +346,6 @@ def main() -> int:
     _add_dsn_config_args(get_parser)
     add_output_arguments(get_parser)
 
-    # sync 子命令（重定向到 engram-scm-sync）
-    sync_parser = subparsers.add_parser(
-        "sync",
-        help="同步仓库数据 (请使用 engram-scm-sync 命令)",
-        description="此子命令已迁移。请使用 engram-scm-sync 命令进行同步操作。",
-    )
-    sync_parser.add_argument("--repo-id", help="仓库 ID")
-    _add_dsn_config_args(sync_parser)
-    add_output_arguments(sync_parser)
-
     args = parser.parse_args()
     opts = get_output_options(args)
 
@@ -365,25 +355,6 @@ def main() -> int:
         return _handle_list_repos(args, opts)
     elif args.command == "get-repo":
         return _handle_get_repo(args, opts)
-    elif args.command == "sync":
-        # sync 功能已迁移到 engram-scm-sync 命令
-        output_json(
-            make_success_result(
-                message="sync 功能已迁移，请使用 engram-scm-sync 命令",
-                data={
-                    "hint": "使用 engram-scm-sync runner incremental --repo <repo_spec> 进行增量同步",
-                    "examples": [
-                        "engram-scm-sync runner incremental --repo gitlab:123",
-                        "engram-scm-sync runner backfill --repo svn:456 --last-days 7",
-                        "engram-scm-sync status --health",
-                    ],
-                    "help": "engram-scm-sync --help",
-                },
-            ),
-            pretty=opts["pretty"],
-            quiet=opts["quiet"],
-        )
-        return EXIT_SUCCESS
     elif args.command is None:
         parser.print_help()
         return EXIT_SUCCESS

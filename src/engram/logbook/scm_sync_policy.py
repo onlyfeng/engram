@@ -348,7 +348,7 @@ class DegradationController:
         if rate_limit_count > 0:
             # 指数退避: base * 2^(count-1)
             sleep = self._config.base_sleep_seconds * (2 ** (rate_limit_count - 1))
-            return min(sleep, self._config.max_sleep_seconds)
+            return float(min(sleep, self._config.max_sleep_seconds))
 
         return 0.0
 
@@ -1720,9 +1720,10 @@ def select_jobs_to_enqueue(
             break
 
         # 查找对应的 state
-        state = next((s for s in states if s.repo_id == candidate.repo_id), None)
-        if state is None:
+        found_state = next((s for s in states if s.repo_id == candidate.repo_id), None)
+        if found_state is None:
             continue
+        state = found_state
 
         # 检查实例并发限制
         if state.gitlab_instance:
@@ -1974,11 +1975,9 @@ def should_generate_backfill(
         return True
 
     # 检查游标滞后
-    if config is not None and now is None:
-        now = time.time()
-
     if last_successful_cursor_ts is not None and config is not None:
-        cursor_age = now - last_successful_cursor_ts
+        current_time = now if now is not None else time.time()
+        cursor_age = current_time - last_successful_cursor_ts
         # 如果滞后超过 backfill_repair_window_hours，需要 backfill
         if cursor_age > config.backfill_repair_window_hours * 3600:
             return True

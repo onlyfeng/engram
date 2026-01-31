@@ -189,7 +189,7 @@ class MemoryCard:
     _trim_config: TrimConfig = field(default_factory=TrimConfig)
     _trim_logs: List[str] = field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """规范化枚举值"""
         if isinstance(self.kind, str):
             self.kind = MemoryKind(self.kind.upper())
@@ -311,12 +311,22 @@ class MemoryCard:
         lines = []
 
         # 元数据头
-        lines.append(f"[Kind] {self.kind.value}")
+        # 注意: __post_init__ 已将 str 转换为 Enum，此处断言类型安全
+        kind_value = self.kind.value if isinstance(self.kind, MemoryKind) else self.kind
+        visibility_value = (
+            self.visibility.value if isinstance(self.visibility, Visibility) else self.visibility
+        )
+        ttl_value = self.ttl.value if isinstance(self.ttl, TTL) else self.ttl
+        confidence_value = (
+            self.confidence.value if isinstance(self.confidence, Confidence) else self.confidence
+        )
+
+        lines.append(f"[Kind] {kind_value}")
         lines.append(f"[Owner] {self.owner}")
         lines.append(f"[Module] {self.module}")
-        lines.append(f"[Visibility] {self.visibility.value}")
-        lines.append(f"[TTL] {self.ttl.value}")
-        lines.append(f"[Confidence] {self.confidence.value}")
+        lines.append(f"[Visibility] {visibility_value}")
+        lines.append(f"[TTL] {ttl_value}")
+        lines.append(f"[Confidence] {confidence_value}")
         lines.append("")
 
         # Summary（带裁剪）

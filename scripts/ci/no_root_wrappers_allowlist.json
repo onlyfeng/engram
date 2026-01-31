@@ -1,0 +1,5 @@
+{
+  "version": "1",
+  "description": "根目录 wrapper 导入/调用例外允许列表。支持两种 scope: import（Python 导入语句）和 subprocess（子进程调用）。过期或无 owner 的条目会导致 CI 检查失败。注意：db、kv、artifacts 模块已标记为 preserved（在 import_migration_map.json 中 deprecated=false），不需要 allowlist 条目。",
+  "entries": []
+}

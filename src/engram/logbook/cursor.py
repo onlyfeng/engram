@@ -27,9 +27,145 @@ engram_logbook.cursor - 游标工具模块
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
+
+from typing_extensions import TypedDict
 
 from .db import get_kv, set_kv
+
+# === TypedDict 定义：区分不同游标类型的 watermark 与 stats ===
+
+
+class SvnWatermark(TypedDict, total=False):
+    """SVN 游标水位线"""
+
+    last_rev: int
+
+
+class GitLabWatermark(TypedDict, total=False):
+    """GitLab commit 游标水位线"""
+
+    last_commit_sha: str
+    last_commit_ts: str
+
+
+class GitLabMRWatermark(TypedDict, total=False):
+    """GitLab MR 游标水位线"""
+
+    last_mr_updated_at: str
+    last_mr_iid: int
+
+
+class GitLabReviewsWatermark(TypedDict, total=False):
+    """GitLab Reviews 游标水位线"""
+
+    last_mr_updated_at: str
+    last_mr_iid: int
+    last_event_ts: str
+
+
+# 联合类型：所有可能的 watermark 类型
+WatermarkType = Union[
+    SvnWatermark,
+    GitLabWatermark,
+    GitLabMRWatermark,
+    GitLabReviewsWatermark,
+    Dict[str, Any],  # 兼容空 dict 和未知类型
+]
+
+
+class CursorStats(TypedDict, total=False):
+    """游标统计信息"""
+
+    last_sync_at: str  # ISO 8601 格式
+    last_sync_count: int
+    # GitLab Reviews 特有
+    last_sync_mr_count: int
+    last_sync_event_count: int
+
+
+class CursorDict(TypedDict, total=False):
+    """游标的完整字典结构"""
+
+    version: int
+    watermark: WatermarkType
+    stats: CursorStats
+
+
+# === 类型守卫函数：用于 KV 存取边界校验 ===
+
+
+def _validate_watermark_type(watermark: Dict[str, Any], cursor_type: str) -> WatermarkType:
+    """
+    校验并返回类型化的 watermark
+
+    Args:
+        watermark: 原始 watermark 字典
+        cursor_type: 游标类型
+
+    Returns:
+        类型化的 watermark
+    """
+    if not watermark:
+        return {}
+
+    if cursor_type == "svn":
+        # SVN: 校验 last_rev 为 int
+        if "last_rev" in watermark:
+            watermark["last_rev"] = int(watermark["last_rev"])
+
+    elif cursor_type == "gitlab":
+        # GitLab: 校验 last_commit_sha 和 last_commit_ts 为 str
+        if "last_commit_sha" in watermark:
+            watermark["last_commit_sha"] = str(watermark["last_commit_sha"])
+        if "last_commit_ts" in watermark:
+            watermark["last_commit_ts"] = str(watermark["last_commit_ts"])
+
+    elif cursor_type == "gitlab_mr":
+        # GitLab MR: 校验字段类型
+        if "last_mr_updated_at" in watermark:
+            watermark["last_mr_updated_at"] = str(watermark["last_mr_updated_at"])
+        if "last_mr_iid" in watermark:
+            watermark["last_mr_iid"] = int(watermark["last_mr_iid"])
+
+    elif cursor_type == "gitlab_reviews":
+        # GitLab Reviews: 校验字段类型
+        if "last_mr_updated_at" in watermark:
+            watermark["last_mr_updated_at"] = str(watermark["last_mr_updated_at"])
+        if "last_mr_iid" in watermark:
+            watermark["last_mr_iid"] = int(watermark["last_mr_iid"])
+        if "last_event_ts" in watermark:
+            watermark["last_event_ts"] = str(watermark["last_event_ts"])
+
+    # 所有分支共用的返回，watermark 已被原地修改
+    return watermark
+
+
+def _validate_stats(stats: Dict[str, Any]) -> CursorStats:
+    """
+    校验并返回类型化的 stats
+
+    Args:
+        stats: 原始 stats 字典
+
+    Returns:
+        类型化的 CursorStats
+    """
+    result: CursorStats = {}
+    if not stats:
+        return result
+
+    if "last_sync_at" in stats:
+        result["last_sync_at"] = str(stats["last_sync_at"])
+    if "last_sync_count" in stats:
+        result["last_sync_count"] = int(stats["last_sync_count"])
+    if "last_sync_mr_count" in stats:
+        result["last_sync_mr_count"] = int(stats["last_sync_mr_count"])
+    if "last_sync_event_count" in stats:
+        result["last_sync_event_count"] = int(stats["last_sync_event_count"])
+
+    return result
+
 
 # === 时间戳解析与标准化 ===
 
@@ -115,16 +251,18 @@ class Cursor:
         watermark: 水位线数据，根据类型不同包含不同字段
             - SVN: {"last_rev": int}
             - GitLab: {"last_commit_sha": str, "last_commit_ts": str}
+            - GitLab MR: {"last_mr_updated_at": str, "last_mr_iid": int}
+            - GitLab Reviews: {"last_mr_updated_at": str, "last_mr_iid": int, "last_event_ts": str}
         stats: 同步统计信息
             - last_sync_at: 最后同步时间 (ISO 8601)
             - last_sync_count: 最后同步的记录数
     """
 
     version: int = CURSOR_VERSION
-    watermark: Dict[str, Any] = field(default_factory=dict)
-    stats: Dict[str, Any] = field(default_factory=dict)
+    watermark: WatermarkType = field(default_factory=dict)
+    stats: CursorStats = field(default_factory=dict)  # type: ignore[assignment]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> CursorDict:
         """转换为字典（用于存储）"""
         return {
             "version": self.version,
@@ -139,6 +277,27 @@ class Cursor:
             version=data.get("version", CURSOR_VERSION),
             watermark=data.get("watermark", {}),
             stats=data.get("stats", {}),
+        )
+
+    @classmethod
+    def from_dict_validated(cls, data: Dict[str, Any], cursor_type: str) -> "Cursor":
+        """
+        从字典创建 Cursor 对象，并进行类型校验
+
+        Args:
+            data: 游标数据字典
+            cursor_type: 游标类型 (svn/gitlab/gitlab_mr/gitlab_reviews)
+
+        Returns:
+            校验后的 Cursor 对象
+        """
+        raw_watermark = data.get("watermark", {})
+        raw_stats = data.get("stats", {})
+
+        return cls(
+            version=data.get("version", CURSOR_VERSION),
+            watermark=_validate_watermark_type(dict(raw_watermark), cursor_type),
+            stats=_validate_stats(dict(raw_stats)),
         )
 
     # === 便捷访问方法 ===
@@ -157,35 +316,50 @@ class Cursor:
     @property
     def last_rev(self) -> int:
         """获取最后同步的 SVN revision（仅 SVN 游标）"""
-        return self.watermark.get("last_rev", 0)
+        value = self.watermark.get("last_rev", 0)
+        if value is None:
+            return 0
+        if isinstance(value, int):
+            return value
+        # value 可能是 str 或其他类型，转换为 str 后再转 int
+        return int(str(value)) if value else 0
 
     # GitLab 专用
     @property
     def last_commit_sha(self) -> Optional[str]:
         """获取最后同步的 commit SHA（仅 GitLab 游标）"""
-        return self.watermark.get("last_commit_sha")
+        value = self.watermark.get("last_commit_sha")
+        return str(value) if value is not None else None
 
     @property
     def last_commit_ts(self) -> Optional[str]:
         """获取最后同步的 commit 时间戳（仅 GitLab 游标）"""
-        return self.watermark.get("last_commit_ts")
+        value = self.watermark.get("last_commit_ts")
+        return str(value) if value is not None else None
 
     # GitLab MR 专用
     @property
     def last_mr_updated_at(self) -> Optional[str]:
         """获取最后同步的 MR 更新时间（仅 gitlab_mr/gitlab_reviews 游标）"""
-        return self.watermark.get("last_mr_updated_at")
+        value = self.watermark.get("last_mr_updated_at")
+        return str(value) if value is not None else None
 
     @property
     def last_mr_iid(self) -> Optional[int]:
         """获取最后同步的 MR IID（仅 gitlab_mr/gitlab_reviews 游标，用于同一 updated_at 的 tie-break）"""
-        return self.watermark.get("last_mr_iid")
+        value = self.watermark.get("last_mr_iid")
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        return int(str(value))
 
     # GitLab Reviews 专用（可扩展为事件级水位线）
     @property
     def last_event_ts(self) -> Optional[str]:
         """获取最后同步的事件时间戳（仅 gitlab_reviews 游标，可选的事件级水位线）"""
-        return self.watermark.get("last_event_ts")
+        value = self.watermark.get("last_event_ts")
+        return str(value) if value is not None else None
 
 
 def _build_cursor_key(cursor_type: str, repo_id: int) -> str:
@@ -213,7 +387,7 @@ def _detect_cursor_version(data: Dict[str, Any]) -> int:
         版本号 (1 或 2)
     """
     if "version" in data:
-        return data["version"]
+        return int(data["version"])
     # 无 version 字段说明是 v1 格式
     return 1
 
@@ -238,95 +412,108 @@ def upgrade_cursor(data: Dict[str, Any], cursor_type: str) -> Cursor:
 
     Args:
         data: 原始游标数据
-        cursor_type: 游标类型 (svn/gitlab)
+        cursor_type: 游标类型 (svn/gitlab/gitlab_mr/gitlab_reviews)
 
     Returns:
-        升级后的 Cursor 对象
+        升级后的 Cursor 对象（已进行类型校验）
     """
     version = _detect_cursor_version(data)
 
     if version >= CURSOR_VERSION:
-        # 已是最新版本，直接返回
-        return Cursor.from_dict(data)
+        # 已是最新版本，使用类型校验方式返回
+        return Cursor.from_dict_validated(data, cursor_type)
 
     # v1 → v2 升级
     if version == 1:
-        watermark = {}
-        stats = {}
+        watermark: Dict[str, Any] = {}
+        stats: Dict[str, Any] = {}
 
         if cursor_type == CURSOR_TYPE_SVN:
             # SVN: last_rev 移入 watermark
             if "last_rev" in data:
-                watermark["last_rev"] = data["last_rev"]
+                watermark["last_rev"] = int(data["last_rev"])
         elif cursor_type == CURSOR_TYPE_GITLAB:
             # GitLab: last_commit_sha, last_commit_ts 移入 watermark
             if "last_commit_sha" in data:
-                watermark["last_commit_sha"] = data["last_commit_sha"]
+                watermark["last_commit_sha"] = str(data["last_commit_sha"])
             if "last_commit_ts" in data:
-                watermark["last_commit_ts"] = data["last_commit_ts"]
+                watermark["last_commit_ts"] = str(data["last_commit_ts"])
         elif cursor_type == CURSOR_TYPE_GITLAB_MR:
             # GitLab MR: last_mr_updated_at, last_mr_iid 移入 watermark
             if "last_mr_updated_at" in data:
-                watermark["last_mr_updated_at"] = data["last_mr_updated_at"]
+                watermark["last_mr_updated_at"] = str(data["last_mr_updated_at"])
             if "last_mr_iid" in data:
-                watermark["last_mr_iid"] = data["last_mr_iid"]
+                watermark["last_mr_iid"] = int(data["last_mr_iid"])
         elif cursor_type == CURSOR_TYPE_GITLAB_REVIEWS:
             # GitLab Reviews: last_mr_updated_at, last_mr_iid 移入 watermark（MR 列表驱动）
             # 可选支持 last_event_ts（事件级水位线）
             if "last_mr_updated_at" in data or "last_updated_at" in data:
-                watermark["last_mr_updated_at"] = data.get("last_mr_updated_at") or data.get(
-                    "last_updated_at"
-                )
+                raw_ts = data.get("last_mr_updated_at") or data.get("last_updated_at")
+                if raw_ts:
+                    watermark["last_mr_updated_at"] = str(raw_ts)
             if "last_mr_iid" in data:
-                watermark["last_mr_iid"] = data["last_mr_iid"]
+                watermark["last_mr_iid"] = int(data["last_mr_iid"])
             if "last_event_ts" in data:
-                watermark["last_event_ts"] = data["last_event_ts"]
+                watermark["last_event_ts"] = str(data["last_event_ts"])
 
-        # 通用 stats 字段
+        # 通用 stats 字段（类型强制转换）
         if "last_sync_at" in data:
-            stats["last_sync_at"] = data["last_sync_at"]
+            stats["last_sync_at"] = str(data["last_sync_at"])
         if "last_sync_count" in data:
-            stats["last_sync_count"] = data["last_sync_count"]
+            stats["last_sync_count"] = int(data["last_sync_count"])
         # gitlab_reviews 特有的统计字段迁移
         if "last_sync_mr_count" in data:
-            stats["last_sync_mr_count"] = data["last_sync_mr_count"]
+            stats["last_sync_mr_count"] = int(data["last_sync_mr_count"])
         if "last_sync_event_count" in data:
-            stats["last_sync_event_count"] = data["last_sync_event_count"]
+            stats["last_sync_event_count"] = int(data["last_sync_event_count"])
 
         return Cursor(
             version=CURSOR_VERSION,
-            watermark=watermark,
-            stats=stats,
+            watermark=_validate_watermark_type(watermark, cursor_type),
+            stats=_validate_stats(stats),
         )
 
-    # 未知版本，尝试作为 v2 解析
-    return Cursor.from_dict(data)
+    # 未知版本，尝试作为 v2 解析（带类型校验）
+    return Cursor.from_dict_validated(data, cursor_type)
 
 
 def load_cursor(
     cursor_type: str,
     repo_id: int,
-    config=None,
+    config: Optional[Any] = None,
 ) -> Cursor:
     """
-    加载游标（自动升级旧格式）
+    加载游标（自动升级旧格式，含 KV 边界类型校验）
 
     Args:
-        cursor_type: 游标类型 (svn/gitlab)
+        cursor_type: 游标类型 (svn/gitlab/gitlab_mr/gitlab_reviews)
         repo_id: 仓库 ID
         config: 可选的 Config 实例
 
     Returns:
-        Cursor 对象，如果不存在返回空 Cursor
+        Cursor 对象（已进行类型校验），如果不存在返回空 Cursor
     """
     key = _build_cursor_key(cursor_type, repo_id)
     data = get_kv(KV_NAMESPACE, key, config=config)
 
     if not data:
-        # 不存在，返回空游标
-        return Cursor(version=CURSOR_VERSION, watermark={}, stats={})
+        # 不存在，返回空游标（类型安全的空字典）
+        return Cursor(
+            version=CURSOR_VERSION,
+            watermark={},
+            stats={},
+        )
 
-    # 检测版本并升级
+    # 确保 data 是 dict 类型（get_kv 返回 JsonValue）
+    if not isinstance(data, dict):
+        # 非 dict 类型（如 str/int/list），返回空游标
+        return Cursor(
+            version=CURSOR_VERSION,
+            watermark={},
+            stats={},
+        )
+
+    # 检测版本并升级（upgrade_cursor 内部已包含类型校验）
     return upgrade_cursor(data, cursor_type)
 
 
@@ -334,7 +521,7 @@ def save_cursor(
     cursor_type: str,
     repo_id: int,
     cursor: Cursor,
-    config=None,
+    config: Optional[Any] = None,
 ) -> bool:
     """
     保存游标
@@ -349,13 +536,15 @@ def save_cursor(
         True 表示成功
     """
     key = _build_cursor_key(cursor_type, repo_id)
-    return set_kv(KV_NAMESPACE, key, cursor.to_dict(), config=config)
+    # cursor.to_dict() 返回 CursorDict，转换为 dict[str, Any] 以匹配 JsonValue
+    cursor_data: Dict[str, Any] = dict(cursor.to_dict())
+    return set_kv(KV_NAMESPACE, key, cursor_data, config=config)
 
 
 # === 便捷函数（保持向后兼容）===
 
 
-def load_svn_cursor(repo_id: int, config=None) -> Cursor:
+def load_svn_cursor(repo_id: int, config: Optional[Any] = None) -> Cursor:
     """
     加载 SVN 游标
 
@@ -373,7 +562,7 @@ def save_svn_cursor(
     repo_id: int,
     last_rev: int,
     synced_count: int,
-    config=None,
+    config: Optional[Any] = None,
 ) -> bool:
     """
     保存 SVN 游标
@@ -387,18 +576,19 @@ def save_svn_cursor(
     Returns:
         True 表示成功
     """
+    now_str = normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()) or ""
     cursor = Cursor(
         version=CURSOR_VERSION,
         watermark={"last_rev": last_rev},
         stats={
-            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
+            "last_sync_at": now_str,
             "last_sync_count": synced_count,
         },
     )
     return save_cursor(CURSOR_TYPE_SVN, repo_id, cursor, config)
 
 
-def load_gitlab_cursor(repo_id: int, config=None) -> Cursor:
+def load_gitlab_cursor(repo_id: int, config: Optional[Any] = None) -> Cursor:
     """
     加载 GitLab 游标
 
@@ -417,7 +607,7 @@ def save_gitlab_cursor(
     last_commit_sha: str,
     last_commit_ts: str,
     synced_count: int,
-    config=None,
+    config: Optional[Any] = None,
 ) -> bool:
     """
     保存 GitLab 游标
@@ -432,6 +622,7 @@ def save_gitlab_cursor(
     Returns:
         True 表示成功
     """
+    now_str = normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()) or ""
     cursor = Cursor(
         version=CURSOR_VERSION,
         watermark={
@@ -439,7 +630,7 @@ def save_gitlab_cursor(
             "last_commit_ts": last_commit_ts,
         },
         stats={
-            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
+            "last_sync_at": now_str,
             "last_sync_count": synced_count,
         },
     )
@@ -449,7 +640,7 @@ def save_gitlab_cursor(
 # === GitLab MR 游标便捷函数 ===
 
 
-def load_gitlab_mr_cursor(repo_id: int, config=None) -> Cursor:
+def load_gitlab_mr_cursor(repo_id: int, config: Optional[Any] = None) -> Cursor:
     """
     加载 GitLab MR 游标
 
@@ -470,7 +661,7 @@ def save_gitlab_mr_cursor(
     last_mr_updated_at: str,
     last_mr_iid: int,
     synced_count: int,
-    config=None,
+    config: Optional[Any] = None,
 ) -> bool:
     """
     保存 GitLab MR 游标
@@ -488,6 +679,7 @@ def save_gitlab_mr_cursor(
     Returns:
         True 表示成功
     """
+    now_str = normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()) or ""
     cursor = Cursor(
         version=CURSOR_VERSION,
         watermark={
@@ -495,7 +687,7 @@ def save_gitlab_mr_cursor(
             "last_mr_iid": last_mr_iid,
         },
         stats={
-            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
+            "last_sync_at": now_str,
             "last_sync_count": synced_count,
         },
     )
@@ -505,7 +697,7 @@ def save_gitlab_mr_cursor(
 # === GitLab Reviews 游标便捷函数 ===
 
 
-def load_gitlab_reviews_cursor(repo_id: int, config=None) -> Cursor:
+def load_gitlab_reviews_cursor(repo_id: int, config: Optional[Any] = None) -> Cursor:
     """
     加载 GitLab Reviews 游标
 
@@ -529,7 +721,7 @@ def save_gitlab_reviews_cursor(
     synced_mr_count: int,
     synced_event_count: int,
     last_event_ts: Optional[str] = None,
-    config=None,
+    config: Optional[Any] = None,
 ) -> bool:
     """
     保存 GitLab Reviews 游标
@@ -549,7 +741,7 @@ def save_gitlab_reviews_cursor(
     Returns:
         True 表示成功
     """
-    watermark = {
+    watermark: Dict[str, Any] = {
         "last_mr_updated_at": last_mr_updated_at,
     }
     if last_mr_iid is not None:
@@ -557,11 +749,12 @@ def save_gitlab_reviews_cursor(
     if last_event_ts is not None:
         watermark["last_event_ts"] = last_event_ts
 
+    now_str = normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()) or ""
     cursor = Cursor(
         version=CURSOR_VERSION,
         watermark=watermark,
         stats={
-            "last_sync_at": normalize_iso_ts_z(datetime.now(timezone.utc).isoformat()),
+            "last_sync_at": now_str,
             "last_sync_mr_count": synced_mr_count,
             "last_sync_event_count": synced_event_count,
         },

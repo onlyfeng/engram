@@ -83,9 +83,9 @@ try:
 except ImportError:
     # 如果 engram_logbook 包未安装，回退到旧实现
     _USE_ADAPTER = False
-    _LogbookAdapter = None  # type: ignore[misc, assignment]
-    _get_adapter = None  # type: ignore[assignment]
-    _reset_adapter = None  # type: ignore[assignment]
+    _LogbookAdapter = None  # type: ignore[misc, assignment]  # 可选依赖未安装时的 fallback
+    _get_adapter = None  # type: ignore[assignment]  # 可选依赖未安装时的 fallback
+    _reset_adapter = None  # type: ignore[assignment]  # 可选依赖未安装时的 fallback
 
 
 class LogbookDatabase:
@@ -117,13 +117,13 @@ class LogbookDatabase:
             self._dsn = dsn or os.environ.get("POSTGRES_DSN") or os.environ.get("TEST_PG_DSN", "")
             if not self._dsn:
                 raise ValueError("需要设置 POSTGRES_DSN 或 TEST_PG_DSN 环境变量或传入 dsn 参数")
-            self._adapter = None  # type: ignore[assignment]
+            self._adapter = None  # type: ignore[assignment]  # 回退模式下不使用 adapter
             self._hashlib = hashlib
             self._json = json
             self._timedelta = timedelta
             self._psycopg = psycopg
 
-    def _get_connection(self, autocommit: bool = False):
+    def _get_connection(self, autocommit: bool = False) -> Any:
         """获取数据库连接"""
         if self._adapter:
             raise NotImplementedError("使用适配器时不应调用此方法")
@@ -283,7 +283,9 @@ class LogbookDatabase:
                 )
                 result = cur.fetchone()
                 conn.commit()
-                return result[0]
+                if result is None:
+                    raise RuntimeError("INSERT RETURNING 失败，未获取到 audit_id")
+                return int(result[0])
         except self._psycopg.Error as e:
             conn.rollback()
             raise RuntimeError(f"写入审计日志失败: {e}")
@@ -342,7 +344,9 @@ class LogbookDatabase:
                 )
                 result = cur.fetchone()
                 conn.commit()
-                return result[0]
+                if result is None:
+                    raise RuntimeError("INSERT RETURNING 失败，未获取到 outbox_id")
+                return int(result[0])
         except self._psycopg.Error as e:
             conn.rollback()
             raise RuntimeError(f"入队 outbox_memory 失败: {e}")
@@ -619,5 +623,5 @@ def reset_db(dsn: Optional[str] = None) -> None:
         if _default_dsn == dsn:
             _default_dsn = None
 
-    if _USE_ADAPTER and _reset_adapter:
+    if _USE_ADAPTER and _reset_adapter is not None:
         _reset_adapter()
