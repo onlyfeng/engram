@@ -61,11 +61,27 @@ jobs:
       - name: Run database migrations
         env:
           POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram_test
+          ENGRAM_TESTING: "1"
         run: |
-          for f in sql/*.sql; do
-            echo "执行: $f"
-            psql "$POSTGRES_DSN" -f "$f" || true
-          done
+          python -m engram.logbook.cli.db_migrate \
+            --dsn "$POSTGRES_DSN" \
+            --apply-roles \
+            --apply-openmemory-grants \
+            2>&1 | tee migration-output-${{ matrix.python-version }}.log
+          # 检查 Python 脚本的退出码（tee 会返回成功，需要用 PIPESTATUS）
+          exit ${PIPESTATUS[0]}
+
+      - name: Verify database migrations (strict mode)
+        env:
+          POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram_test
+          ENGRAM_TESTING: "1"
+        run: |
+          python -m engram.logbook.cli.db_migrate \
+            --dsn "$POSTGRES_DSN" \
+            --verify \
+            --verify-strict \
+            2>&1 | tee verify-output-${{ matrix.python-version }}.log
+          exit ${PIPESTATUS[0]}
 
       - name: Run unit and integration tests
         env:
@@ -95,6 +111,16 @@ jobs:
             acceptance-results-${{ matrix.python-version }}.xml
           retention-days: 14
 
+      - name: Upload migration logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-logs-${{ matrix.python-version }}
+          path: |
+            migration-output-${{ matrix.python-version }}.log
+            verify-output-${{ matrix.python-version }}.log
+          retention-days: 14
+
   # ============================================================================
   # 代码质量检查
   # ============================================================================
@@ -112,15 +138,41 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install linting tools
+      - name: Install dependencies
         run: |
-          pip install ruff mypy
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
 
-      - name: Run ruff check
-        run: ruff check src/ tests/ || true
+      - name: Run ruff check (lint)
+        run: ruff check src/ tests/
 
       - name: Run ruff format check
-        run: ruff format --check src/ tests/ || true
+        run: ruff format --check src/ tests/
+
+      - name: Run mypy (type check)
+        run: mypy src/engram/
+
+  # ============================================================================
+  # 环境变量一致性检查
+  # ============================================================================
+  env-var-consistency:
+    name: Environment Variable Consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check environment variable consistency
+        run: |
+          python scripts/ci/check_env_var_consistency.py --verbose
+          echo "Environment variable consistency check passed"
 
   # ============================================================================
   # Schema 校验
@@ -140,12 +192,132 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install jsonschema
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          # 验证 jsonschema 已安装
+          python -c "import jsonschema; print(f'jsonschema {jsonschema.__version__} installed')"
 
       - name: Run schema validation
         run: |
-          if [ -f scripts/validate_schemas.py ]; then
-            python scripts/validate_schemas.py --verbose --validate-fixtures || true
-          else
-            echo "Schema validation script not found, skipping"
+          python scripts/validate_schemas.py --validate-fixtures --verbose --output schema-validation-results.json
+
+      - name: Upload validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-validation-results
+          path: schema-validation-results.json
+          retention-days: 14
+
+  # ============================================================================
+  # Logbook 配置一致性检查
+  # ============================================================================
+  logbook-consistency:
+    name: Logbook Consistency Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check logbook configuration consistency
+        run: |
+          python scripts/verify_logbook_consistency.py --verbose
+          echo "Logbook consistency check passed"
+
+  # ============================================================================
+  # 迁移 Sanity 检查（SQL 文件存在性和基本语法）
+  # ============================================================================
+  migration-sanity:
+    name: Migration Sanity Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check SQL migration files exist
+        run: |
+          echo "Checking SQL migration files..."
+          required_files=(
+            "sql/01_logbook_schema.sql"
+            "sql/02_scm_migration.sql"
+            "sql/04_roles_and_grants.sql"
+            "sql/05_openmemory_roles_and_grants.sql"
+          )
+          missing=0
+          for f in "${required_files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "[ERROR] Missing: $f"
+              missing=$((missing + 1))
+            else
+              echo "[OK] Found: $f"
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo "Missing $missing required migration files"
+            exit 1
           fi
+          echo "All required migration files present"
+
+      - name: Check SQL syntax (basic validation)
+        run: |
+          echo "Checking SQL files for common syntax issues..."
+          errors=0
+          for f in sql/*.sql; do
+            if [ -f "$f" ]; then
+              # 检查文件非空
+              if [ ! -s "$f" ]; then
+                echo "[WARN] Empty file: $f"
+              fi
+              # 检查是否包含至少一个 SQL 语句关键字
+              if ! grep -qiE '(CREATE|ALTER|INSERT|SELECT|DROP|GRANT|REVOKE)' "$f"; then
+                echo "[WARN] No SQL statements found in: $f"
+              else
+                echo "[OK] $f"
+              fi
+            fi
+          done
+          echo "SQL sanity check completed"
+
+  # ============================================================================
+  # SQL 迁移安全性检查（高危语句检测）
+  # ============================================================================
+  sql-safety:
+    name: SQL Migration Safety Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run SQL safety check
+        run: |
+          echo "=== SQL 迁移安全性检查 ==="
+          echo ""
+          echo "检查规则："
+          echo "  - Denylist: 绝对禁止的危险语句（DROP TABLE 无 IF EXISTS, TRUNCATE 等）"
+          echo "  - Allowlist: 需要 -- SAFE: 或 -- BREAKING: 标记的语句"
+          echo ""
+          python -m pytest tests/logbook/test_sql_migrations_safety.py -v --tb=short
+          echo ""
+          echo "SQL 迁移安全性检查通过"

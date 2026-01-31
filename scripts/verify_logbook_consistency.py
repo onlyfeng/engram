@@ -200,9 +200,12 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
     
     # 检查 4: 验证文档中描述的 SKIP 模式注释存在
     skip_mode_indicators = [
-        'SKIP',
-        '不设置.*PASSWORD',
-        '服务账号创建被跳过',
+        r'SKIP\s*模式',
+        r'logbook-only\s*模式',
+        r'跳过.*服务账号',
+        r'服务账号.*跳过',
+        r'不设置.*PASSWORD',
+        r'全部不设置',
     ]
     
     has_skip_mode_doc = any(
@@ -211,7 +214,7 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
     )
     
     if not has_skip_mode_doc:
-        details.append("警告: 缺少 SKIP 模式的文档说明注释")
+        details.append("警告: 缺少 SKIP 模式的文档说明注释（预期包含 'SKIP 模式' 或 'logbook-only 模式' 等描述）")
     
     # 判断结果
     has_errors = bool(problematic_vars) or bool(missing_defaults) or bool(missing_empty_default)
