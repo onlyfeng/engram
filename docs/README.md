@@ -79,6 +79,20 @@ docs/
 
 ---
 
+## 测试与标记
+
+项目使用 pytest 标记来区分测试级别，标记在 `pyproject.toml` 的 `tool.pytest.ini_options` 中注册：
+
+- `unit`：单元测试（`pytest -m unit`）
+- `integration`：集成测试（`pytest -m integration`）
+
+常见组合用法：
+
+- 只跑单元：`pytest -m unit`
+- 排除集成：`pytest -m "not integration"`
+
+---
+
 ## 文档贡献指南
 
 ### 文档风格

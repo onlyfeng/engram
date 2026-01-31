@@ -187,6 +187,11 @@ make test          # 运行所有测试
 make test-logbook  # 仅运行 Logbook 测试
 make test-gateway  # 仅运行 Gateway 测试
 make test-cov      # 运行测试并生成覆盖率报告
+
+# pytest 标记筛选
+pytest -m unit                # 只跑单元测试
+pytest -m integration         # 只跑集成测试
+pytest -m "not integration"   # 排除集成测试
 ```
 
 #### 代码质量
