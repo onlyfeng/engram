@@ -20,7 +20,7 @@
 | 07 | 07_scm_sync_locks.sql | SCM Sync + Governance | DDL | sync_locks 分布式锁表 + security_events |
 | 08 | 08_scm_sync_jobs.sql | SCM Sync | DDL | sync_jobs 任务队列表 |
 | 09 | 09_evidence_uri_column.sql | SCM Migration | DDL | patch_blobs 添加 evidence_uri 列 |
-| ~~10~~ | *(已废弃)* | - | - | 编号保留，不再使用 |
+| ~~10~~ | -- 已废弃 | - | - | 编号保留，不再使用 |
 | 11 | 11_sync_jobs_dimension_columns.sql | SCM Sync | DDL | sync_jobs 添加维度列 |
 | 12 | 12_governance_artifact_ops_audit.sql | Governance | DDL | artifact 操作审计表 |
 | 13 | 13_governance_object_store_audit_events.sql | Governance | DDL | 对象存储审计事件表 |
@@ -82,11 +82,91 @@
 
 **执行条件**: 仅通过 `--verify` 参数显式触发
 
+#### SSOT + Wrapper 策略
+
+| 文件位置 | 角色 | 说明 |
+|---------|------|------|
+| `sql/verify/99_verify_permissions.sql` | **SSOT**（唯一真实来源） | 所有验证逻辑的权威版本 |
+| `apps/logbook_postgres/sql/99_verify_permissions.sql` | **薄包装器** | 仅通过 `\i` 引用 SSOT |
+
+**核心原则**：
+
+1. **SSOT 永远在** `sql/verify/99_verify_permissions.sql`
+2. **app 目录只允许薄包装器**（使用 `\i` 引用 SSOT）
+3. **禁止复制粘贴形成双源**（任何修改必须在 SSOT 文件中进行）
+
+**为什么包装器需要 psql？**
+
+包装器使用 psql 的 `\i` (include) 元命令引用 SSOT 文件。`\i` 是 psql 特有的命令，无法通过 Python/JDBC/libpq 等数据库驱动执行。因此从 `apps/` 目录执行验证**必须使用 psql 客户端**。
+
+**从 app 目录执行 verify 的正确示例**：
+
+```bash
+# 方式 1: 进入 apps 目录后执行（推荐）
+cd apps/logbook_postgres/sql
+psql -d <your_db> -f 99_verify_permissions.sql
+
+# 方式 2: 从项目根目录执行
+psql -d <your_db> -f apps/logbook_postgres/sql/99_verify_permissions.sql
+
+# 方式 3: 指定 OpenMemory schema
+psql -d <your_db> \
+     -c "SET om.target_schema = 'openmemory'" \
+     -f apps/logbook_postgres/sql/99_verify_permissions.sql
+```
+
 ---
 
-## 3. 编号规范
+## 3. 兼容期规则
 
-### 3.1 当前编号状态
+### 3.1 背景
+
+自 2026-01-31 版本起，SQL 迁移文件进行了重新编号（详见 [sql_renumbering_map.md](sql_renumbering_map.md)）。部分旧编号文件被删除或整合到新编号文件中。
+
+### 3.2 为何存在该分支
+
+重编号的目的是：
+
+1. **腾出编号空位**：在 04（权限角色）之后插入 05（OpenMemory 权限），原 05-11 依次后移
+2. **目录隔离**：将验证脚本（99_verify_permissions.sql）移动到 `sql/verify/` 子目录，避免被 PostgreSQL initdb 自动执行
+3. **编号连续性**：统一编号风格，保留 10 作为废弃占位
+
+### 3.3 支持的旧文件命名
+
+迁移模块（`migrate.py`）的 `scan_sql_files()` 函数**不支持**旧编号文件名的自动兼容。如果您的环境中存在以下旧文件，它们将被**忽略**：
+
+| 旧编号 | 旧文件名（已废弃） | 新编号 | 新文件名（当前） |
+|--------|-------------------|--------|-----------------|
+| `05` | `05_scm_sync_runs.sql` | `06` | `06_scm_sync_runs.sql` |
+| `06` | `06_scm_sync_locks.sql` | `07` | `07_scm_sync_locks.sql` |
+| `07` | `07_scm_sync_jobs.sql` | `08` | `08_scm_sync_jobs.sql` |
+| `08` | `08_evidence_uri_column.sql` | `09` | `09_evidence_uri_column.sql` |
+| `09` | `09_sync_jobs_dimension_columns.sql` | `11` | `11_sync_jobs_dimension_columns.sql` |
+| `10` | `10_governance_artifact_ops_audit.sql` | `12` | `12_governance_artifact_ops_audit.sql` |
+| `11` | `11_governance_object_store_audit_events.sql` | `13` | `13_governance_object_store_audit_events.sql` |
+
+### 3.4 推荐做法
+
+> **生产环境建议使用随版本发布的 `sql/` 目录，不要混用两套编号。**
+
+| 场景 | 推荐操作 |
+|------|----------|
+| 新部署 | 直接使用当前版本的 `sql/` 目录，无需关心旧编号 |
+| 已部署升级 | 1. 删除本地旧编号文件副本<br>2. 使用版本控制同步最新 `sql/` 目录<br>3. 执行 `engram-migrate` 完成升级 |
+| 自定义 SQL 目录 | 不推荐。如必须使用自定义目录，请确保文件编号与当前版本一致 |
+| CI/CD 流水线 | 使用 Git checkout 或版本发布包获取 SQL 文件，避免手动维护 |
+
+### 3.5 为何不支持旧编号兼容
+
+1. **幂等设计**：所有 SQL 脚本使用 `CREATE ... IF NOT EXISTS`，新编号文件完全覆盖旧编号功能
+2. **避免歧义**：同一前缀多文件会触发警告（`scan_sql_files()` 的 duplicates 检测）
+3. **维护成本**：兼容代码增加复杂性，且旧编号仅存在于历史版本中
+
+---
+
+## 4. 编号规范
+
+### 4.1 当前编号状态
 
 - **无重复编号**: 每个前缀对应唯一文件
 - **缺失编号**: 10（已废弃保留）
@@ -101,7 +181,7 @@
   - 90-98: 保留
   - 99: Verification（位于 `sql/verify/` 子目录）
 
-### 3.2 新文件编号指南
+### 4.2 新文件编号指南
 
 添加新 SQL 文件时：
 1. 使用下一个可用编号（当前为 14）
@@ -110,9 +190,9 @@
 
 ---
 
-## 4. 入口点与执行顺序
+## 5. 入口点与执行顺序
 
-### 4.1 Python 迁移入口 (推荐)
+### 5.1 Python 迁移入口 (推荐)
 
 ```bash
 # 默认执行 DDL 脚本
@@ -133,7 +213,7 @@ python -m engram.logbook.cli.db_migrate --plan
 python -m engram.logbook.cli.db_migrate --plan --apply-roles --verify
 ```
 
-#### 4.1.1 迁移计划模式 (`--plan`)
+#### 5.1.1 迁移计划模式 (`--plan`)
 
 使用 `--plan` 参数可在**不连接数据库**的情况下查看迁移计划：
 
@@ -217,7 +297,7 @@ PERMISSION_SCRIPT_PREFIXES = {"04", "05"}
 VERIFY_SCRIPT_PREFIXES = {"99"}
 ```
 
-### 4.2 Makefile 入口
+### 5.2 Makefile 入口
 
 ```bash
 # 一键初始化（推荐）
@@ -240,7 +320,7 @@ make bootstrap-roles
 4. `engram.logbook.cli.db_migrate --apply-roles --apply-openmemory-grants` - 完整迁移
 5. `engram.logbook.cli.db_migrate --verify` - 验证权限
 
-### 4.3 Docker initdb 入口
+### 5.3 Docker initdb 入口
 
 通过 `docker-compose.unified.yml` 配置：
 
@@ -270,7 +350,7 @@ services:
 2. 验证操作由用户在适当时机显式触发
 3. 清晰分离初始化脚本与验证脚本
 
-### 4.4 手动 psql 执行
+### 5.4 手动 psql 执行
 
 ```bash
 # 按顺序执行初始化脚本
@@ -293,9 +373,9 @@ psql -d <db> -f sql/verify/99_verify_permissions.sql
 
 ---
 
-## 5. 文件详细说明
+## 6. 文件详细说明
 
-### 5.1 01_logbook_schema.sql
+### 6.1 01_logbook_schema.sql
 
 **功能**: 创建所有核心 schema 和表
 
@@ -318,7 +398,7 @@ psql -d <db> -f sql/verify/99_verify_permissions.sql
 - `logbook.sync_events_payload()` - 触发器函数
 - `scm.update_patch_blobs_updated_at()` - 触发器函数
 
-### 5.2 scm.repos 兼容字段
+### 6.2 scm.repos 兼容字段
 
 **背景**: `scm.repos` 表历史上使用了两套不同的字段名：
 - **新字段**（推荐）: `repo_type`, `url`
@@ -345,7 +425,7 @@ psql -d <db> -f sql/verify/99_verify_permissions.sql
 - 新代码应使用 `repo_type`, `url`
 - 旧代码可继续使用 `vcs_type`, `remote_url`（将自动同步）
 
-### 5.3 04_roles_and_grants.sql
+### 6.3 04_roles_and_grants.sql
 
 **功能**: 创建 NOLOGIN 权限角色并配置默认权限
 
@@ -361,7 +441,7 @@ openmemory_app        (DML)       <- openmemory_svc
 
 **public schema 策略**: 所有角色 REVOKE CREATE，仅保留 USAGE
 
-### 5.4 05_openmemory_roles_and_grants.sql
+### 6.4 05_openmemory_roles_and_grants.sql
 
 **功能**: 创建 OpenMemory 专用 schema 并配置权限
 
@@ -371,7 +451,7 @@ openmemory_app        (DML)       <- openmemory_svc
 
 ---
 
-## 6. 常见问题
+## 7. 常见问题
 
 ### Q1: 迁移失败后如何重试？
 
@@ -416,10 +496,12 @@ psql -d <db> -f sql/verify/99_verify_permissions.sql
 
 ---
 
-## 7. 相关文档
+## 8. 相关文档
 
 | 文档 | 说明 |
 |------|------|
+| [sql_renumbering_map.md](sql_renumbering_map.md) | SQL 文件重编号映射表（旧编号 → 新编号对照） |
+| [upgrade_after_sql_renumbering.md](upgrade_after_sql_renumbering.md) | SQL 重编号后升级 Runbook（兼容期规则与升级步骤） |
 | [03_deploy_verify_troubleshoot.md](03_deploy_verify_troubleshoot.md) | 部署、验收与排错指南 |
 | [03_deploy_verify_troubleshoot.md#部署入口职责边界](03_deploy_verify_troubleshoot.md#部署入口职责边界) | Compose/Makefile/CLI 职责边界对比 |
 | [03_deploy_verify_troubleshoot.md#推荐部署流程](03_deploy_verify_troubleshoot.md#推荐部署流程) | 新库初始化/升级/验证流程 |
@@ -427,10 +509,12 @@ psql -d <db> -f sql/verify/99_verify_permissions.sql
 
 ---
 
-## 8. 变更历史
+## 9. 变更历史
 
 | 日期 | 变更内容 |
 |-----|---------|
+| 2026-01-31 | 添加"兼容期规则"小节（第 3 节），说明旧编号文件不兼容策略与推荐做法 |
+| 2026-01-31 | 添加 sql_renumbering_map.md 交叉引用 |
 | 2026-01-31 | 添加相关文档交叉引用 |
 | 2026-01-31 | 添加 scm.repos 兼容字段说明 (vcs_type/remote_url) |
 | 2026-01-31 | 初始版本，记录 13 个 SQL 文件 |

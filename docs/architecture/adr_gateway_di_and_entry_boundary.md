@@ -709,12 +709,127 @@ async def memory_store_impl(
 | [Gateway 能力边界](../gateway/07_capability_boundary.md) | correlation_id 契约定义 |
 | [Gateway 设计](../gateway/06_gateway_design.md) | 整体架构 |
 | [ADR: Gateway 审计原子性](./adr_gateway_audit_atomicity.md) | 审计相关决策 |
+| [v1.0 升级指南：移除 Handler DI 兼容层](../gateway/upgrade_v1_0_remove_handler_di_compat.md) | Legacy 参数移除与迁移清单 |
 
 ---
 
-## 11. 变更日志
+## 11. Legacy 参数弃用与版本化移除计划
+
+### 11.1 弃用时间表
+
+| 版本 | 状态 | 变更内容 |
+|------|------|----------|
+| **v0.9（当前）** | 兼容期 | Legacy 参数可用但产生 `DeprecationWarning` |
+| **v1.0** | 移除期 | 移除所有 legacy 参数，`deps` 参数变为必需 |
+
+### 11.2 受影响的 API
+
+#### handlers 层 legacy 参数
+
+| Handler | Legacy 参数 | 状态 | 替代方案 |
+|---------|-------------|------|----------|
+| `memory_store_impl` | `_config`, `_db`, `_openmemory_client` | v0.9 弃用 → v1.0 移除 | 使用 `deps=GatewayDeps.create()` |
+| `memory_query_impl` | `_config`, `_openmemory_client` | v0.9 弃用 → v1.0 移除 | 使用 `deps=GatewayDeps.create()` |
+| `governance_update_impl` | `_config`, `_db` | v0.9 弃用 → v1.0 移除 | 使用 `deps=GatewayDeps.create()` |
+
+#### 模块级全局获取函数（handlers 内禁止使用）
+
+| 函数 | 位置 | 状态 | 替代方案 |
+|------|------|------|----------|
+| `get_config()` | `config.py` | v0.9 不推荐 → v1.0 禁止在 handlers 使用 | `deps.config` |
+| `get_db()` | `logbook_db.py` | v0.9 弃用 → v1.0 移除模块 | `deps.logbook_adapter` |
+| `get_adapter()` | `logbook_adapter.py` | v0.9 不推荐 → v1.0 禁止在 handlers 使用 | `deps.logbook_adapter` |
+| `get_client()` | `openmemory_client.py` | v0.9 不推荐 → v1.0 禁止在 handlers 使用 | `deps.openmemory_client` |
+| `get_container()` | `container.py` | 仅限入口层使用 | handlers 应通过 `deps` 参数获取依赖 |
+
+### 11.3 迁移检查清单
+
+#### v0.9 → v1.0 迁移步骤
+
+- [ ] 将所有 handler 调用从 legacy 参数改为 `deps` 参数
+- [ ] 移除 handlers 中对 `get_config()`、`get_adapter()`、`get_client()` 的直接调用
+- [ ] 更新所有测试使用 `GatewayDeps.for_testing()`
+- [ ] 移除 `logbook_db.py` 模块（完全由 `logbook_adapter.py` 替代）
+- [ ] 将 `deps` 参数从 `Optional` 改为必需
+- [ ] 添加 lint 规则禁止 handlers 导入隐式依赖
+
+#### 测试迁移示例
+
+**Before (v0.9 legacy 方式):**
+
+```python
+# 不推荐
+result = await memory_store_impl(
+    payload_md="test",
+    correlation_id="corr-123",
+    _config=mock_config,
+    _db=mock_db,
+)
+```
+
+**After (v1.0 推荐方式):**
+
+```python
+# 推荐
+deps = GatewayDeps.for_testing(
+    config=mock_config,
+    logbook_adapter=mock_adapter,
+    openmemory_client=mock_client,
+)
+result = await memory_store_impl(
+    payload_md="test",
+    correlation_id="corr-123",
+    deps=deps,
+)
+```
+
+### 11.4 GatewayContainer 业务暴露面收敛计划
+
+#### 当前状态（v0.9）
+
+`GatewayContainer` 的以下属性对外暴露：
+
+| 属性 | 暴露方式 | 状态 |
+|------|----------|------|
+| `config` | 直接属性 | 保留（配置信息只读）|
+| `db` | 延迟初始化属性 | v0.9 弃用 → v1.0 移除 |
+| `logbook_adapter` | 延迟初始化属性 | 保留（通过 `deps` 访问）|
+| `openmemory_client` | 延迟初始化属性 | 保留（通过 `deps` 访问）|
+| `deps` | 属性，返回 `GatewayDepsProtocol` | 推荐访问入口 |
+
+#### v1.0 目标状态
+
+- handlers 禁止直接访问 `GatewayContainer` 实例
+- handlers 仅通过 `deps: GatewayDepsProtocol` 参数获取依赖
+- 入口层（`app.py`、`startup.py`）可使用 `get_container()` 和 `get_gateway_deps()`
+
+### 11.5 测试 Teardown Reset 路径
+
+为确保测试隔离，提供 `reset_all_singletons()` 函数：
+
+```python
+from engram.gateway.container import reset_all_singletons
+
+@pytest.fixture(autouse=True)
+def reset_gateway_state():
+    """确保每个测试从干净状态开始"""
+    yield
+    reset_all_singletons()
+```
+
+`reset_all_singletons()` 同时重置：
+
+1. `GatewayContainer` 全局单例
+2. `GatewayConfig` 全局单例
+3. `LogbookAdapter` 全局单例
+4. `OpenMemoryClient` 全局单例
+
+---
+
+## 12. 变更日志
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
 | 2026-01-31 | v1.0 | 初始版本，推荐方案 A |
 | 2026-01-31 | v1.1 | 新增：分层图、依赖链路、import 清单、P0-P3 迁移阶段、最佳实践 |
+| 2026-01-31 | v1.2 | 新增：Legacy 参数弃用与版本化移除计划（第 11 章）|

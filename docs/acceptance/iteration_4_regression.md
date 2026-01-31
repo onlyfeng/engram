@@ -282,3 +282,66 @@ c600a56 chore(sql): reorganize migration numbering and cleanup
 1. **测试环境配置**: 部分 Gateway 测试需要环境变量配置才能运行，建议添加 pytest fixtures 自动设置测试环境
 2. **main.py 行数**: 当前 383 行，核心处理逻辑已拆分到 handlers/，main.py 保留路由和启动逻辑
 3. **类型检查**: 仍有 263 个类型错误待修复，不影响功能但需后续迭代处理
+
+---
+
+## 文档一致性检查修复记录
+
+### 执行日期
+2026-01-31
+
+### 任务概述
+运行 `make check-logbook-consistency` 与 `make check-env-consistency`，修复文档/命令一致性问题。
+
+### 修复内容
+
+#### 1. 环境变量文档补充
+- **文件**: `docs/reference/environment_variables.md`
+- **修复**: 添加 `ENGRAM_SCM_SYNC_ENABLED` 环境变量文档
+- **原因**: .env.example 中存在但文档未记录
+
+#### 2. 检查脚本现代化
+- **文件**: `scripts/verify_logbook_consistency.py`
+- **修复**: 更新检查逻辑使用现代化命令名称
+  - 检查 B: `acceptance-logbook-only` → `setup-db-logbook-only` + `migrate-ddl` + `verify-permissions`
+  - 检查 C: 验证文档引用的 Makefile 目标存在性
+  - 检查 D: `migrate-logbook-stepwise` → `migrate-ddl`; `verify-permissions-logbook` → `verify-permissions`
+  - 检查 F: 同上，使用现代化命名
+- **原因**: 脚本检查的命令名称与现有 Makefile 不一致
+
+#### 3. README.md 文档索引更新
+- **文件**: `README.md`
+- **修复**: 添加 Iteration 4 回归文档链接
+- **内容**: 
+  ```markdown
+  | [回归 Runbook (Iteration 3)](docs/acceptance/iteration_3_regression.md) | Iteration 3 回归测试命令 |
+  | [回归 Runbook (Iteration 4)](docs/acceptance/iteration_4_regression.md) | Iteration 4 代码质量修复记录 |
+  ```
+
+### 验证结果
+
+```bash
+make check-logbook-consistency
+# [OK] 所有检查通过
+
+make check-env-consistency
+# [OK] 检查通过（仅 WARN，无 ERROR）
+```
+
+### 检查项结果
+
+| 检查项 | 状态 | 说明 |
+|--------|------|------|
+| [A] initdb_default_env | ✅ | compose/logbook.yml 在缺省 .env 下不会致命失败 |
+| [B] acceptance_logbook_compose_dependency | ✅ | Makefile 包含必要的 Logbook-only 验收目标 |
+| [C] docs_makefile_consistency | ✅ | docs 验收命令与 Makefile 一致 |
+| [D] readme_logbook_only_stepwise_commands | ✅ | README.md 数据库初始化命令记录正确 |
+| [F] acceptance_criteria_logbook_only_alignment | ✅ | 04_acceptance_criteria.md 验收命令与 Makefile 对齐 |
+
+### 剩余 WARN（不影响 CI）
+
+环境变量一致性检查报告了 2 个 WARN：
+1. 文档中记录但 .env.example 中未定义的高级配置变量（如熔断器、调度器参数）
+2. 文档中记录但代码中未直接使用的变量（由外部组件读取）
+
+这些 WARN 是预期行为，不需要修复

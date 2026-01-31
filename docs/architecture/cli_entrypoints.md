@@ -12,6 +12,23 @@
 
 ---
 
+## 入口职责划分
+
+| 入口类型 | 位置 | 职责定义 | 状态 |
+|----------|------|----------|------|
+| **Console Scripts** | `pyproject.toml [project.scripts]` | 官方入口，推荐的调用方式 | 当前 |
+| **scripts/** | `scripts/` 目录 | 运维工具、CI 脚本、验证工具 | 长期保留 |
+| **根目录脚本** | 项目根目录 `*.py` | 已弃用的兼容入口（deprecated wrapper） | 待移除 |
+| **logbook_postgres/scripts/** | 遗留目录 | 历史遗留，已无使用价值 | 待移除 |
+
+**职责原则**：
+
+- `console scripts`：用户和 CI 的官方调用入口，通过 `pip install` 后可直接使用
+- `scripts/`：不依赖包安装的独立运维脚本，主要用于 CI 流水线、一致性验证、本地调试
+- 根目录脚本：仅为向后兼容保留，输出 deprecation 警告后转发到官方入口
+
+---
+
 ## 1. 当前入口清单
 
 ### 1.1 Console Scripts（推荐入口）
@@ -29,6 +46,7 @@
 | `engram-scm-worker` | `engram.logbook.cli.scm_sync:worker_main` | Worker 快捷入口 | scm |
 | `engram-scm-reaper` | `engram.logbook.cli.scm_sync:reaper_main` | 清理器快捷入口 | scm |
 | `engram-scm-status` | `engram.logbook.cli.scm_sync:status_main` | 状态查询快捷入口 | scm |
+| `engram-scm-runner` | `engram.logbook.cli.scm_sync:runner_main` | Runner 快捷入口 | scm |
 
 ### 1.2 根目录脚本（兼容入口）
 
@@ -45,7 +63,7 @@
 | `identity_sync.py` | 身份同步工具 | TBD | 待评估 |
 | `kv.py` | KV 存储工具 | TBD | 待评估 |
 | `scm_repo.py` | SCM 仓库工具 | `engram.logbook.scm_repo` | 兼容保留 |
-| `scm_sync_runner.py` | SCM Sync 运行器 | `engram-scm-sync` | 待移除 |
+| `scm_sync_runner.py` | SCM Sync 运行器 | `engram-scm-runner` | 待移除 |
 | `scm_sync_status.py` | SCM Sync 状态 | `engram-scm-status` | 待移除 |
 | `scm_sync_reaper.py` | SCM Sync 清理器 | `engram-scm-reaper` | 待移除 |
 | `scm_sync_worker.py` | SCM Sync Worker | `engram-scm-worker` | 待移除 |
@@ -72,6 +90,7 @@
 | `scripts/scm_sync_gitlab_mrs.py` | GitLab MRs 同步 | `python scripts/scm_sync_gitlab_mrs.py` |
 | `scripts/scm_sync_svn.py` | SVN 同步 | `python scripts/scm_sync_svn.py` |
 | `scripts/verify_logbook_consistency.py` | 一致性校验 | `python scripts/verify_logbook_consistency.py` |
+| `scripts/verify_scm_sync_consistency.py` | SCM Sync 一致性验证 | `python scripts/verify_scm_sync_consistency.py` |
 | `scripts/check_env_var_drift.py` | 环境变量漂移检查 | `python scripts/check_env_var_drift.py` |
 | `scripts/ci/*.py` | CI 相关工具 | CI 流水线调用 |
 | `scripts/docs/*.py` | 文档工具 | 开发时调用 |
@@ -291,6 +310,54 @@ engram-scm get-repo --dsn "..." --repo-type git --repo-url https://gitlab.com/ns
 | 4 | CI 流水线迁移完成 | `.github/workflows/` 使用新命令 |
 | 5 | Makefile 迁移完成 | `Makefile` 使用新命令 |
 | 6 | 至少一个完整版本周期 | 发布包含新 CLI 的版本后 |
+| 7 | CI 门禁检查通过 | `check_no_legacy_imports.py` 脚本验证无新增遗留导入 |
+
+### 4.3 CI 门禁约束
+
+为防止新代码引入对根目录兼容模块的依赖，CI 流水线应包含以下检查：
+
+```yaml
+# .github/workflows/ci.yml
+- name: Check no legacy db/kv imports
+  run: |
+    python scripts/ci/check_no_legacy_imports.py
+```
+
+**门禁规则**：
+
+1. **禁止新增 `from db import` 或 `import db`**
+   - 新代码必须使用 `from engram.logbook.scm_db import ...`
+   - 例外：`tests/logbook/test_scm_sync_integration.py` 作为验收测试保留
+
+2. **禁止新增 `from kv import` 或 `import kv`**
+   - KV 操作应使用 `engram.logbook.scm_db` 中的相关函数
+   - 例外：同上验收测试
+
+3. **允许列表**（不受门禁约束的文件）：
+   - `db.py` - 兼容包装器本身
+   - `kv.py` - 兼容包装器本身
+   - `tests/logbook/test_scm_sync_integration.py` - 验收测试
+
+**检查脚本示例**：
+
+```python
+# scripts/ci/check_no_legacy_imports.py
+LEGACY_PATTERNS = [
+    r'^from db import',
+    r'^import db\s*$',
+    r'^import db as',
+    r'^from kv import',
+    r'^import kv\s*$',
+]
+
+ALLOWED_FILES = [
+    'db.py',
+    'kv.py',
+    'tests/logbook/test_scm_sync_integration.py',
+]
+
+# 扫描所有 .py 文件，排除 allowed_files，检查是否有 legacy patterns
+```
 
 ### 4.3 移除时间表（预估）
 
@@ -345,6 +412,42 @@ CMD ["python", "logbook_cli.py", "serve"]
 # 新
 CMD ["engram-logbook", "serve"]
 ```
+
+---
+
+## 6. Runner CLI/解析器统一
+
+### 6.1 设计原则
+
+Runner 的 CLI 解析器统一在 `engram.logbook.scm_sync_runner` 模块中：
+
+| 函数 | 说明 |
+|------|------|
+| `create_parser()` | 创建配置好的 ArgumentParser 对象 |
+| `parse_args(argv)` | 解析命令行参数，内部调用 `create_parser()` |
+
+### 6.2 入口点复用
+
+所有 runner 相关入口点共享同一解析器定义：
+
+| 入口点 | 调用方式 |
+|--------|----------|
+| `engram-scm-runner` | 调用 `runner_main()` -> 内部使用 `create_parser()` |
+| `engram-scm-sync runner` | 调用 `runner_main()` -> 内部使用 `create_parser()` |
+| `python scm_sync_runner.py` | 调用 `runner_main()` (兼容入口，输出 deprecation 警告) |
+| 直接调用 `parse_args()` | 测试和脚本可直接使用 |
+
+### 6.3 移除条件（scm_sync_runner.py 根目录脚本）
+
+根目录的 `scm_sync_runner.py` 将在满足以下条件后移除：
+
+| # | 条件 | 状态 |
+|---|------|------|
+| 1 | `create_parser()` 和 `parse_args()` 导出稳定 | ✅ 完成 |
+| 2 | `runner_main()` 复用 `create_parser()` | ✅ 完成 |
+| 3 | 测试从 `engram.logbook.scm_sync_runner` 导入 | ✅ 完成 |
+| 4 | 至少一个完整版本周期 | 待满足 |
+| 5 | 所有 CI 流水线迁移到新入口 | 待满足 |
 
 ---
 

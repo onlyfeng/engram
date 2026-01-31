@@ -7,6 +7,100 @@
 
 ---
 
+## 目录导航
+
+- [最小闭环](#最小闭环)
+- [CLI 入口说明](#cli-入口说明)
+- [运行拓扑](#运行拓扑)
+- [Docker Compose 部署](#docker-compose-部署)
+- [参数推荐](#参数推荐)
+- [统一故障处置](#统一故障处置)
+- [常见故障处理](#常见故障处理)
+- [监控告警](#监控告警)
+- [环境变量对齐](#环境变量对齐)
+- [参考配置示例](#参考配置示例)
+
+---
+
+## 最小闭环
+
+本节提供快速验证 SCM Sync 子系统的最小步骤，适用于新部署或问题排查时快速确认系统可用性。
+
+### 验证步骤
+
+1. **检查数据库连接**
+2. **启动 Scheduler 单次调度**
+3. **启动 Worker 处理任务**
+4. **查看状态确认同步完成**
+5. **启动 Reaper 清理过期资源**
+
+### 命令矩阵
+
+以下矩阵列出三种调用方式，按优先级推荐使用：
+
+| 功能 | console_scripts（推荐） | python -m 模块调用 | docker compose |
+|------|------------------------|-------------------|----------------|
+| **Scheduler 单次** | `engram-scm-scheduler --once` | `python -m engram.logbook.cli.scm_sync scheduler --once` | `docker compose run --rm scm_scheduler engram-scm-scheduler --once` |
+| **Scheduler 循环** | `engram-scm-scheduler --loop` | `python -m engram.logbook.cli.scm_sync scheduler --loop` | `docker compose --profile scm_sync up -d scm_scheduler` |
+| **Worker 启动** | `engram-scm-worker --worker-id W1` | `python -m engram.logbook.cli.scm_sync worker --worker-id W1` | `docker compose --profile scm_sync up -d scm_worker` |
+| **Worker 单任务** | `engram-scm-worker --worker-id W1 --once` | `python -m engram.logbook.cli.scm_sync worker --worker-id W1 --once` | `docker compose run --rm scm_worker engram-scm-worker --worker-id W1 --once` |
+| **Reaper 单次** | `engram-scm-reaper --once` | `python -m engram.logbook.cli.scm_sync reaper --once` | `docker compose run --rm scm_reaper engram-scm-reaper --once` |
+| **Reaper 循环** | `engram-scm-reaper --loop` | `python -m engram.logbook.cli.scm_sync reaper --loop` | `docker compose --profile scm_sync up -d scm_reaper` |
+| **状态查看** | `engram-scm-status --json` | `python -m engram.logbook.cli.scm_sync status --json` | `docker compose run --rm scm_scheduler engram-scm-status --json` |
+| **手动同步** | `engram-scm-sync runner incremental --repo gitlab:123` | `python -m engram.logbook.cli.scm_sync runner incremental --repo gitlab:123` | `docker compose run --rm scm_worker engram-scm-sync runner incremental --repo gitlab:123` |
+| **Admin 操作** | `engram-scm-sync admin jobs list --status dead` | `python -m engram.logbook.cli.scm_sync admin jobs list --status dead` | `docker compose run --rm scm_scheduler engram-scm-sync admin jobs list --status dead` |
+
+### 最小闭环示例（本地开发）
+
+```bash
+# 1. 设置环境变量
+export POSTGRES_DSN="postgresql://logbook_svc:password@localhost:5432/engram"
+export GITLAB_URL="https://gitlab.example.com"
+export GITLAB_TOKEN="your_token_here"
+
+# 2. 执行一次调度（干运行查看将入队的任务）
+engram-scm-scheduler --once --dry-run --json
+
+# 3. 实际调度
+engram-scm-scheduler --once
+
+# 4. 查看任务队列状态
+engram-scm-status --json | jq '.jobs_by_status'
+
+# 5. 处理一个任务
+engram-scm-worker --worker-id local-test --once
+
+# 6. 再次查看状态确认任务完成
+engram-scm-status --json
+
+# 7. 执行清理
+engram-scm-reaper --once
+```
+
+### 最小闭环示例（Docker Compose）
+
+```bash
+# 1. 配置 .env 文件
+cat >> .env << 'EOF'
+GITLAB_URL=https://gitlab.example.com
+GITLAB_TOKEN=your_token_here
+EOF
+
+# 2. 启动基础服务（PostgreSQL）
+docker compose up -d postgres
+
+# 3. 执行一次调度
+docker compose run --rm scm_scheduler engram-scm-scheduler --once --dry-run
+
+# 4. 查看状态
+docker compose run --rm scm_scheduler engram-scm-status --json
+
+# 5. 启动完整 SCM Sync 服务
+docker compose --profile scm_sync up -d
+```
+
+---
+
 ## CLI 入口说明
 
 SCM Sync 子系统通过统一的 CLI 入口管理，**推荐使用 `engram-scm-*` 命令**：
@@ -169,33 +263,87 @@ engram-scm-sync reaper --once
 
 ---
 
-## 目录
+## Docker Compose 部署
 
-- [部署拓扑](#部署拓扑)
-  - [单 Worker 部署](#单-worker-部署)
-  - [多 Worker 部署](#多-worker-部署)
-  - [Worker Pool 分组部署](#worker-pool-分组部署)
-- [参数推荐](#参数推荐)
-  - [小型环境](#小型环境10-仓库)
-  - [中型环境](#中型环境10-100-仓库)
-  - [大型环境](#大型环境100-仓库)
-- [运维操作](#运维操作)
-  - [查看系统状态](#查看系统状态)
-  - [重置 Dead 任务](#重置-dead-任务)
-  - [强制释放锁](#强制释放锁)
-  - [暂停与恢复熔断](#暂停与恢复熔断)
-  - [重置游标](#重置游标)
-- [常见故障处理](#常见故障处理)
-  - [任务堆积](#任务堆积)
-  - [Rate Limit 429 频繁](#rate-limit-429-频繁)
-  - [熔断器持续 OPEN](#熔断器持续-open)
-  - [Worker 卡死](#worker-卡死)
-- [监控告警](#监控告警)
-- [参考配置示例](#参考配置示例)
+SCM Sync 服务通过 `scm_sync` profile 提供，包含以下容器：
+
+| 服务 | 命令 | 说明 |
+|------|------|------|
+| `scm_scheduler` | `engram-scm-scheduler --loop` | 调度器（单实例） |
+| `scm_worker` | `engram-scm-worker` | Worker（支持多副本） |
+| `scm_reaper` | `engram-scm-reaper --loop` | 清理器（单实例） |
+
+### 启动服务
+
+```bash
+# 统一栈部署
+docker compose --profile scm_sync up -d
+
+# Logbook-only 部署
+docker compose -f compose/logbook.yml --profile scm_sync up -d
+
+# 扩展 Worker 副本数
+docker compose --profile scm_sync up -d --scale scm_worker=3
+```
+
+### 必需的环境变量
+
+**敏感凭证（不提供默认值，必须通过 `.env` 或环境变量设置）**：
+
+| 变量 | 说明 |
+|------|------|
+| `GITLAB_URL` | GitLab 服务地址 |
+| `GITLAB_TOKEN` | GitLab 访问令牌 |
+| `GITLAB_PRIVATE_TOKEN` | GitLab 私有令牌（别名） |
+| `SVN_USERNAME` | SVN 用户名 |
+| `SVN_PASSWORD` | SVN 密码 |
+
+> **安全提示**: 以上敏感变量**不提供默认值**，必须在 `.env` 文件或环境变量中显式设置。切勿将凭证提交到版本控制。
+
+**功能开关与配置**：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ENGRAM_SCM_SYNC_ENABLED` | `true` | 启用 SCM 同步功能 |
+| `SCM_SCHEDULER_GLOBAL_CONCURRENCY` | `20` | 全局队列深度 |
+| `SCM_SCHEDULER_MAX_RUNNING` | `10` | 最大运行任务数 |
+| `SCM_SCHEDULER_SCAN_INTERVAL_SECONDS` | `60` | 扫描间隔 |
+| `SCM_WORKER_LEASE_SECONDS` | `300` | 任务租约时长 |
+| `SCM_WORKER_POLL_INTERVAL` | `10` | Worker 轮询间隔 |
+| `SCM_WORKER_PARALLELISM` | `2` | Worker 内部并行度 |
+
+详细变量说明请参考 [环境变量参考](../reference/environment_variables.md#scm-同步服务)。
+
+### .env 示例
+
+```bash
+# ===== SCM Sync 凭证（敏感，必填）=====
+GITLAB_URL=https://gitlab.example.com
+GITLAB_TOKEN=your_gitlab_token_here
+# SVN_USERNAME=svn_user
+# SVN_PASSWORD=svn_password
+
+# ===== SCM Sync 配置（可选）=====
+ENGRAM_SCM_SYNC_ENABLED=true
+SCM_SCHEDULER_GLOBAL_CONCURRENCY=20
+SCM_SCHEDULER_MAX_RUNNING=10
+```
 
 ---
 
-## 部署拓扑
+## 运行拓扑
+
+本节描述 SCM Sync 子系统的运行拓扑，包括组件实例数约束和扩展策略。
+
+### 组件实例数约束
+
+| 组件 | 实例数 | 说明 |
+|------|--------|------|
+| **Scheduler** | **必须 1** | 单实例运行，避免重复入队。多实例会导致任务重复 |
+| **Reaper** | **建议 1** | 单实例运行即可满足清理需求。多实例不会造成问题但无必要 |
+| **Worker** | **N（可扩展）** | 支持多实例水平扩展，根据任务负载调整副本数 |
+
+### 部署拓扑
 
 ### 单 Worker 部署
 
@@ -433,6 +581,152 @@ SCM_CB_SMOOTHING_ALPHA=0.3
 
 ## 运维操作
 
+### Admin CLI 命令（推荐）
+
+SCM Sync 子系统提供了统一的 admin CLI 工具，用于运维管理操作。**推荐使用 admin CLI 而非直接执行 SQL**，因为它：
+- 自动处理敏感信息脱敏
+- 提供 JSON/文本两种输出格式
+- 内置参数校验和错误处理
+
+#### admin CLI 概览
+
+```bash
+# 查看帮助
+engram-scm-sync admin --help
+
+# 子命令结构
+engram-scm-sync admin <子命令> <操作> [选项]
+
+# 可用子命令:
+#   jobs        任务管理 (list/reset-dead/mark-dead)
+#   locks       锁管理 (list/force-release/list-expired)
+#   pauses      暂停管理 (set/unset/list)
+#   cursors     游标管理 (list/get/set/delete)
+#   rate-limit  速率限制管理 (buckets list/pause/unpause)
+```
+
+#### jobs - 任务管理
+
+```bash
+# 列出 dead 任务（默认）
+engram-scm-sync admin jobs list --status dead
+
+# 列出指定状态的任务
+engram-scm-sync admin jobs list --status pending --limit 50
+
+# 按仓库和任务类型过滤
+engram-scm-sync admin jobs list --status failed --repo-id 123 --job-type commits
+
+# JSON 输出
+engram-scm-sync admin jobs list --status dead --json
+
+# 重置所有 dead 任务为 pending（模拟运行）
+engram-scm-sync admin jobs reset-dead --dry-run
+
+# 重置所有 dead 任务
+engram-scm-sync admin jobs reset-dead
+
+# 重置指定任务
+engram-scm-sync admin jobs reset-dead --job-ids "job-1,job-2,job-3"
+
+# 重置指定仓库的 dead 任务
+engram-scm-sync admin jobs reset-dead --repo-id 123
+
+# 将任务标记为 dead
+engram-scm-sync admin jobs mark-dead --job-id job-123 --reason "manual_intervention"
+```
+
+#### locks - 锁管理
+
+```bash
+# 列出所有锁
+engram-scm-sync admin locks list
+
+# 按仓库过滤
+engram-scm-sync admin locks list --repo-id 123
+
+# JSON 输出
+engram-scm-sync admin locks list --json
+
+# 列出过期锁
+engram-scm-sync admin locks list-expired
+
+# 列出宽限期内的过期锁
+engram-scm-sync admin locks list-expired --grace-seconds 60
+
+# 强制释放锁
+engram-scm-sync admin locks force-release --lock-id 456
+```
+
+#### pauses - 暂停管理
+
+```bash
+# 列出所有暂停
+engram-scm-sync admin pauses list
+
+# 包含已过期的暂停
+engram-scm-sync admin pauses list --include-expired
+
+# JSON 输出
+engram-scm-sync admin pauses list --json
+
+# 设置暂停（暂停 1 小时）
+engram-scm-sync admin pauses set --repo-id 123 --job-type commits --duration 3600 --reason "maintenance"
+
+# 取消暂停
+engram-scm-sync admin pauses unset --repo-id 123 --job-type commits
+```
+
+#### cursors - 游标管理
+
+```bash
+# 列出所有游标
+engram-scm-sync admin cursors list
+
+# 按 key 前缀过滤
+engram-scm-sync admin cursors list --key-prefix "cursor:123"
+
+# JSON 输出
+engram-scm-sync admin cursors list --json
+
+# 获取游标值
+engram-scm-sync admin cursors get --repo-id 123 --job-type commits
+
+# 设置游标值（JSON 格式）
+engram-scm-sync admin cursors set --repo-id 123 --job-type commits --value '{"watermark": "2025-01-01T00:00:00Z"}'
+
+# 删除游标（触发全量同步）
+engram-scm-sync admin cursors delete --repo-id 123 --job-type commits
+```
+
+#### rate-limit - 速率限制管理
+
+```bash
+# 列出所有速率限制桶
+engram-scm-sync admin rate-limit buckets list
+
+# JSON 输出
+engram-scm-sync admin rate-limit buckets list --json
+
+# 暂停桶（暂停 1 小时）
+engram-scm-sync admin rate-limit buckets pause --instance-key "gitlab.example.com" --duration 3600 --reason "rate_limit_hit"
+
+# 取消暂停桶
+engram-scm-sync admin rate-limit buckets unpause --instance-key "gitlab.example.com"
+```
+
+#### 通用选项
+
+所有 admin 命令支持以下通用选项：
+
+| 选项 | 说明 |
+|------|------|
+| `--dsn` | 数据库连接字符串（默认从 LOGBOOK_DSN 环境变量读取） |
+| `--json` | JSON 格式输出 |
+| `-v, --verbose` | 详细日志输出 |
+
+---
+
 ### 查看系统状态
 
 **CLI 方式**：
@@ -446,6 +740,112 @@ engram-scm-status --prometheus
 
 # 查看任务队列状态
 engram-scm-status --json | jq '.jobs_by_status'
+```
+
+### 健康检查（Health Gate）
+
+健康检查功能用于检测系统不变量违规，适用于监控告警和自动化运维。
+
+**CLI 用法**：
+
+```bash
+# 基本健康检查（文本输出）
+engram-scm-status --health
+
+# JSON 格式输出（便于程序解析）
+engram-scm-status --health --json
+
+# 包含详细违规记录
+engram-scm-status --health --include-details
+
+# 自定义 grace_seconds（running job 过期宽限时间）
+engram-scm-status --health --grace-seconds 120
+```
+
+**退出码**：
+
+| 退出码 | 含义 |
+|--------|------|
+| 0 | 健康（无违规） |
+| 1 | 有 warning 级别违规 |
+| 2 | 有 critical 级别违规 |
+
+**检查项说明**：
+
+| 检查项 ID | 严重程度 | 说明 | 修复建议 |
+|-----------|----------|------|----------|
+| `expired_running_jobs` | CRITICAL | running 状态任务租约已过期 | 运行 `engram-scm-sync reaper --once` |
+| `orphan_locks` | WARNING | sync_locks 存在但无对应 running job | 运行 `engram-scm-sync admin locks force-release --lock-id <id>` |
+| `gitlab_jobs_missing_dimensions` | WARNING | gitlab_* jobs 缺失 gitlab_instance/tenant_id | 检查 scheduler 入队逻辑或 SQL 补填 |
+| `expired_pauses` | INFO | 过期的暂停记录仍存在数据库 | 等待自动清理或手动删除 |
+| `circuit_breaker_inconsistencies` | WARNING | 熔断器状态与 error_budget 不一致 | 运行 `engram-scm-sync admin jobs reset-dead` |
+
+**JSON 输出 Schema**：
+
+```json
+{
+  "healthy": false,
+  "exit_code": 2,
+  "checked_at": 1738300800.0,
+  "total_checks": 5,
+  "passed_checks": 4,
+  "failed_checks": 1,
+  "violations": [
+    {
+      "check_id": "expired_running_jobs",
+      "name": "过期的 Running 任务",
+      "severity": "critical",
+      "count": 3,
+      "description": "有 3 个 running 状态的任务租约已过期",
+      "remediation_hint": "运行 `engram-scm-sync reaper --once` 回收过期任务",
+      "details": [
+        {"job_id": "1", "repo_id": 100, "job_type": "gitlab_commits"}
+      ]
+    }
+  ]
+}
+```
+
+**监控集成示例**：
+
+```bash
+#!/bin/bash
+# health_check.sh - 用于 Prometheus Node Exporter 或 cron 告警
+
+result=$(engram-scm-status --health --json 2>/dev/null)
+exit_code=$?
+
+# 输出指标（供 Prometheus Pushgateway）
+echo "scm_sync_health_status $exit_code"
+echo "scm_sync_health_violations $(echo $result | jq '.violations | length')"
+
+# 退出码作为健康状态
+exit $exit_code
+```
+
+**Prometheus 告警规则**：
+
+```yaml
+groups:
+  - name: scm_sync_health_gate
+    rules:
+      - alert: SCMSyncUnhealthy
+        expr: scm_sync_health_status > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SCM Sync 健康检查失败"
+          description: "健康检查退出码: {{ $value }}，请运行 engram-scm-status --health 查看详情"
+
+      - alert: SCMSyncCriticalViolation
+        expr: scm_sync_health_status == 2
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SCM Sync 存在 Critical 级别违规"
+          description: "需要立即处理，请运行 engram-scm-status --health --include-details 查看详情"
 ```
 
 **SQL 方式**：
@@ -492,38 +892,29 @@ Dead 任务是重试耗尽后标记为不可恢复的任务，需人工介入处
 | 配置错误 | token/权限问题 | 先修复配置再重置 |
 | 仓库不存在 | 已删除 | 删除任务而非重置 |
 
-**操作命令**：
+**推荐方式（Admin CLI）**：
 
 ```bash
 # 查看 dead 任务
-python -c "
-import db as db_api
-with db_api.get_connection() as conn:
-    jobs = db_api.list_sync_jobs(conn, status='dead', limit=100)
-    for j in jobs:
-        print(f\"job_id={j['job_id']}, repo_id={j['repo_id']}, job_type={j['job_type']}, error={j.get('error_summary_json')}\")"
+engram-scm-sync admin jobs list --status dead
 
-# 重置单个 dead 任务
-python -c "
-import db as db_api
-with db_api.get_connection() as conn:
-    result = db_api.reset_dead_jobs(conn, job_ids=[<JOB_ID>])
-    print(f'Reset {result} jobs')
-"
+# 查看 dead 任务（JSON 格式，便于脚本处理）
+engram-scm-sync admin jobs list --status dead --json
 
-# 重置所有 dead 任务（谨慎使用）
-python -c "
-import db as db_api
-with db_api.get_connection() as conn:
-    # 先获取所有 dead job ids
-    jobs = db_api.list_sync_jobs(conn, status='dead', limit=1000)
-    job_ids = [j['job_id'] for j in jobs]
-    if job_ids:
-        result = db_api.reset_dead_jobs(conn, job_ids=job_ids)
-        print(f'Reset {result} jobs')
-    else:
-        print('No dead jobs found')
-"
+# 模拟重置（查看将被重置的任务）
+engram-scm-sync admin jobs reset-dead --dry-run
+
+# 重置所有 dead 任务
+engram-scm-sync admin jobs reset-dead
+
+# 重置指定任务
+engram-scm-sync admin jobs reset-dead --job-ids "job-1,job-2"
+
+# 重置指定仓库的 dead 任务
+engram-scm-sync admin jobs reset-dead --repo-id 123
+
+# 将问题任务标记为 dead（不再重试）
+engram-scm-sync admin jobs mark-dead --job-id job-456 --reason "repo_deleted"
 ```
 
 **SQL 方式**（直接操作，需谨慎）：
@@ -557,38 +948,26 @@ WHERE status = 'dead';
 
 当 Worker 异常退出时，可能遗留未释放的锁，导致任务无法被其他 Worker 获取。
 
-**检查过期锁**：
+**推荐方式（Admin CLI）**：
 
 ```bash
+# 列出所有锁
+engram-scm-sync admin locks list
+
+# 列出指定仓库的锁
+engram-scm-sync admin locks list --repo-id 123
+
 # 列出过期锁
-python -c "
-import db as db_api
-with db_api.get_connection() as conn:
-    locks = db_api.list_expired_locks(conn, limit=100)
-    for lock in locks:
-        print(f\"repo_id={lock['repo_id']}, job_type={lock['job_type']}, locked_by={lock['locked_by']}, locked_at={lock['locked_at']}\")"
-```
+engram-scm-sync admin locks list-expired
 
-**强制释放锁**：
+# 列出宽限期内的过期锁
+engram-scm-sync admin locks list-expired --grace-seconds 60
 
-```bash
-# 释放特定仓库的锁
-python -c "
-import db as db_api
-with db_api.get_connection() as conn:
-    result = db_api.force_release_lock(conn, repo_id=<REPO_ID>, job_type='commits')
-    print(f'Released: {result}')
-"
+# 强制释放锁（通过 lock_id）
+engram-scm-sync admin locks force-release --lock-id 456
 
-# 释放所有过期锁
-python -c "
-import db as db_api
-with db_api.get_connection() as conn:
-    locks = db_api.list_expired_locks(conn, limit=1000)
-    for lock in locks:
-        result = db_api.force_release_lock(conn, repo_id=lock['repo_id'], job_type=lock['job_type'])
-        print(f\"Released lock: repo_id={lock['repo_id']}, job_type={lock['job_type']}, result={result}\")
-"
+# JSON 输出（便于脚本处理）
+engram-scm-sync admin locks list-expired --json
 ```
 
 **SQL 方式**：
@@ -698,7 +1077,26 @@ DELETE FROM logbook.kv
 WHERE namespace = 'scm.sync_health' AND key = 'default:global';
 ```
 
-**暂停特定仓库/任务类型**：
+**暂停特定仓库/任务类型（Admin CLI 推荐）**：
+
+```bash
+# 列出所有暂停
+engram-scm-sync admin pauses list
+
+# 包含已过期的暂停
+engram-scm-sync admin pauses list --include-expired
+
+# 暂停特定 (repo_id, job_type) 组合（暂停 1 小时）
+engram-scm-sync admin pauses set --repo-id 123 --job-type commits --duration 3600 --reason "maintenance"
+
+# 取消暂停
+engram-scm-sync admin pauses unset --repo-id 123 --job-type commits
+
+# JSON 输出
+engram-scm-sync admin pauses list --json
+```
+
+**脚本方式**（仅在需要自定义逻辑时使用）：
 
 ```bash
 # 暂停特定 (repo_id, job_type) 组合
@@ -726,28 +1124,35 @@ with db_api.get_connection() as conn:
 "
 ```
 
-**解除暂停**：
-
-```bash
-# 解除特定暂停
-python -c "
-import db as db_api
-repo_id = <REPO_ID>
-job_type = 'commits'
-
-with db_api.get_connection() as conn:
-    db_api.kv_delete(conn, 'scm.sync_pauses', f'{repo_id}:{job_type}')
-    print(f'Unpaused repo_id={repo_id}, job_type={job_type}')
-"
-```
-
 ### 重置游标
 
 当需要重新同步历史数据时，可以重置游标位置。
 
 **⚠️ 警告**：重置游标会导致重新拉取历史数据，可能产生重复数据（依赖 upsert 幂等性）。
 
-**查看当前游标**：
+**推荐方式（Admin CLI）**：
+
+```bash
+# 列出所有游标
+engram-scm-sync admin cursors list
+
+# 按 key 前缀过滤
+engram-scm-sync admin cursors list --key-prefix "cursor:123"
+
+# 获取特定游标
+engram-scm-sync admin cursors get --repo-id 123 --job-type commits
+
+# 删除游标（触发全量同步）
+engram-scm-sync admin cursors delete --repo-id 123 --job-type commits
+
+# 设置游标到特定时间点
+engram-scm-sync admin cursors set --repo-id 123 --job-type commits --value '{"watermark": "2025-01-01T00:00:00Z", "run_id": "manual_reset"}'
+
+# JSON 输出
+engram-scm-sync admin cursors list --json
+```
+
+**脚本方式**（仅在需要自定义逻辑时使用）：
 
 ```bash
 # 查看所有游标
@@ -758,36 +1163,6 @@ with db_api.get_connection() as conn:
         cur.execute(\"SELECT key, value_json FROM logbook.kv WHERE namespace = 'scm.sync' AND key LIKE '%_cursor:%'\")
         for row in cur.fetchall():
             print(f\"key={row[0]}, value={row[1]}\")"
-```
-
-**重置游标**：
-
-```bash
-# 重置特定仓库的 commits 游标
-python -c "
-import db as db_api
-repo_id = <REPO_ID>
-
-with db_api.get_connection() as conn:
-    db_api.kv_delete(conn, 'scm.sync', f'gitlab_cursor:{repo_id}')
-    print(f'Reset cursor for repo_id={repo_id}')
-"
-
-# 设置游标到特定时间点
-python -c "
-import json
-import db as db_api
-repo_id = <REPO_ID>
-cursor_data = {
-    'watermark': '2024-01-01T00:00:00Z',  # 从此时间点开始重新同步
-    'run_id': 'manual_reset',
-    'updated_at': '2024-01-15T12:00:00Z'
-}
-
-with db_api.get_connection() as conn:
-    db_api.kv_set(conn, 'scm.sync', f'gitlab_cursor:{repo_id}', json.dumps(cursor_data))
-    print(f'Set cursor for repo_id={repo_id} to 2024-01-01')
-"
 ```
 
 **SQL 方式**：
@@ -805,6 +1180,140 @@ WHERE namespace = 'scm.sync' AND key = 'gitlab_cursor:<REPO_ID>';
 UPDATE logbook.kv 
 SET value_json = '{"watermark": "2024-01-01T00:00:00Z", "run_id": "manual_reset"}'::jsonb
 WHERE namespace = 'scm.sync' AND key = 'gitlab_cursor:<REPO_ID>';
+```
+
+---
+
+## 统一故障处置
+
+本节提供常见故障的快速处置命令矩阵，便于运维人员快速定位和处理问题。**所有操作推荐使用 Admin CLI**，支持 `--dry-run` 模拟运行和 `--json` 结构化输出。
+
+### 故障处置快速参考表
+
+| 故障类型 | 诊断命令 | 处置命令 |
+|----------|----------|----------|
+| **Dead 任务堆积** | `engram-scm-sync admin jobs list --status dead` | `engram-scm-sync admin jobs reset-dead` |
+| **锁泄漏/Worker 异常退出** | `engram-scm-sync admin locks list-expired` | `engram-scm-sync admin locks force-release --lock-id <ID>` |
+| **任务暂停/恢复** | `engram-scm-sync admin pauses list` | `engram-scm-sync admin pauses set/unset ...` |
+| **游标重置** | `engram-scm-sync admin cursors get --repo-id <ID>` | `engram-scm-sync admin cursors delete --repo-id <ID>` |
+| **Rate Limit 触发** | `engram-scm-sync admin rate-limit buckets list` | `engram-scm-sync admin rate-limit buckets pause/unpause ...` |
+| **熔断器打开** | `engram-scm-status --json \| jq '.circuit_breakers'` | 修复根因后手动关闭（见下文） |
+
+### Dead 任务重置
+
+Dead 任务是重试次数耗尽后标记为不可恢复的任务。处置前需分析原因：
+
+| 场景 | 原因分析 | 处置建议 |
+|------|----------|----------|
+| 网络恢复 | 临时网络故障已恢复 | 直接重置 |
+| 服务恢复 | GitLab/SVN 维护结束 | 直接重置 |
+| 配置错误 | Token/权限问题 | 先修复配置，再重置 |
+| 仓库不存在 | 仓库已删除 | 删除任务（mark-dead），不重置 |
+
+```bash
+# 1. 查看 dead 任务
+engram-scm-sync admin jobs list --status dead --json
+
+# 2. 模拟重置（不实际执行）
+engram-scm-sync admin jobs reset-dead --dry-run
+
+# 3. 重置所有 dead 任务
+engram-scm-sync admin jobs reset-dead
+
+# 4. 重置指定仓库的 dead 任务
+engram-scm-sync admin jobs reset-dead --repo-id 123
+
+# 5. 将问题任务标记为 dead（不再重试）
+engram-scm-sync admin jobs mark-dead --job-id job-456 --reason "repo_deleted"
+```
+
+### 锁释放
+
+当 Worker 异常退出时，可能遗留未释放的锁，导致任务无法被其他 Worker 获取。
+
+```bash
+# 1. 列出过期锁
+engram-scm-sync admin locks list-expired
+
+# 2. 带宽限期列出
+engram-scm-sync admin locks list-expired --grace-seconds 60
+
+# 3. 强制释放指定锁
+engram-scm-sync admin locks force-release --lock-id 456
+```
+
+### 暂停与恢复
+
+暂停特定仓库或任务类型的同步，用于维护或故障隔离。
+
+```bash
+# 1. 列出当前暂停
+engram-scm-sync admin pauses list
+
+# 2. 暂停指定仓库的 commits 同步（1 小时）
+engram-scm-sync admin pauses set --repo-id 123 --job-type commits --duration 3600 --reason "maintenance"
+
+# 3. 取消暂停
+engram-scm-sync admin pauses unset --repo-id 123 --job-type commits
+```
+
+### 游标重置
+
+重置游标会触发重新拉取历史数据。**警告**：可能产生重复数据（依赖 upsert 幂等性）。
+
+```bash
+# 1. 查看当前游标
+engram-scm-sync admin cursors get --repo-id 123 --job-type commits
+
+# 2. 删除游标（触发全量同步）
+engram-scm-sync admin cursors delete --repo-id 123 --job-type commits
+
+# 3. 设置游标到特定时间点
+engram-scm-sync admin cursors set --repo-id 123 --job-type commits \
+    --value '{"watermark": "2025-01-01T00:00:00Z", "run_id": "manual_reset"}'
+```
+
+### Rate Limit Bucket 处理
+
+当 GitLab API 返回 429 过多时，可暂停特定实例的请求桶。
+
+```bash
+# 1. 列出所有桶状态
+engram-scm-sync admin rate-limit buckets list --json
+
+# 2. 暂停指定实例（等待限流窗口过期）
+engram-scm-sync admin rate-limit buckets pause \
+    --instance-key "gitlab.example.com" \
+    --duration 300 \
+    --reason "rate_limit_429"
+
+# 3. 取消暂停
+engram-scm-sync admin rate-limit buckets unpause --instance-key "gitlab.example.com"
+```
+
+### 熔断器手动控制
+
+熔断器通常自动管理，但紧急情况下可手动控制。
+
+**查看熔断状态**：
+```bash
+engram-scm-status --json | jq '.circuit_breakers'
+```
+
+**强制关闭熔断（恢复同步）**：
+```sql
+-- 方式 1: 更新状态为 closed
+UPDATE logbook.kv 
+SET value_json = jsonb_set(
+    COALESCE(value_json::jsonb, '{}'::jsonb),
+    '{state}',
+    '"closed"'
+)
+WHERE namespace = 'scm.sync_health' AND key = 'default:global';
+
+-- 方式 2: 完全删除状态（重置）
+DELETE FROM logbook.kv 
+WHERE namespace = 'scm.sync_health' AND key = 'default:global';
 ```
 
 ---
@@ -868,8 +1377,17 @@ engram-scm-status --json | jq '.circuit_breakers'
 # 检查 429 统计
 engram-scm-status --json | jq '.error_budget.rate_limit_429'
 
-# 检查 Rate Limit Bucket 状态
-engram-scm-status --json | jq '.rate_limit_buckets'
+# 检查 Rate Limit Bucket 状态（使用 admin CLI）
+engram-scm-sync admin rate-limit buckets list
+
+# JSON 格式
+engram-scm-sync admin rate-limit buckets list --json
+
+# 暂停特定实例的桶（等待限流窗口过期）
+engram-scm-sync admin rate-limit buckets pause --instance-key "gitlab.example.com" --duration 300 --reason "rate_limit_429"
+
+# 取消暂停
+engram-scm-sync admin rate-limit buckets unpause --instance-key "gitlab.example.com"
 ```
 
 **处理步骤**：
@@ -1209,6 +1727,95 @@ url = "https://gitlab.example.com"
 
 ---
 
+## 环境变量对齐
+
+本节汇总 SCM Sync 相关的环境变量，与 [环境变量参考](../reference/environment_variables.md#scm-同步服务) 保持一致。
+
+### 敏感变量声明
+
+> **⚠️ 安全警告**：以下变量包含敏感凭证，**不提供默认值**。必须通过 `.env` 文件或环境变量显式设置。**切勿将凭证提交到版本控制系统**。
+
+| 变量 | 说明 | 敏感 | 必填条件 |
+|------|------|:----:|----------|
+| `GITLAB_URL` | GitLab 服务地址 | | 使用 GitLab 时 |
+| `GITLAB_TOKEN` | GitLab 访问令牌 | ✅ | 使用 GitLab 时 |
+| `GITLAB_PRIVATE_TOKEN` | GitLab 私有令牌（`GITLAB_TOKEN` 别名） | ✅ | |
+| `SVN_USERNAME` | SVN 用户名 | | 使用 SVN 时 |
+| `SVN_PASSWORD` | SVN 密码 | ✅ | 使用 SVN 时 |
+
+### 数据库连接
+
+SCM CLI 工具按以下优先级获取数据库连接：
+
+1. `--dsn` 命令行参数（最高优先级）
+2. `--config` 指定的配置文件中的 `[postgres].dsn`
+3. `POSTGRES_DSN` 环境变量
+4. `ENGRAM_LOGBOOK_CONFIG` 指定的配置文件
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `POSTGRES_DSN` | PostgreSQL 连接字符串 | - |
+| `ENGRAM_LOGBOOK_CONFIG` | 配置文件路径（TOML 格式） | `.agentx/config.toml` |
+
+### Scheduler 变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SCM_SCHEDULER_MAX_RUNNING` | `5` | 全局最大运行任务数 |
+| `SCM_SCHEDULER_GLOBAL_CONCURRENCY` | `10` | 全局最大队列深度 |
+| `SCM_SCHEDULER_PER_INSTANCE_CONCURRENCY` | `3` | 单实例并发数 |
+| `SCM_SCHEDULER_PER_TENANT_CONCURRENCY` | `5` | 单租户并发数 |
+| `SCM_SCHEDULER_SCAN_INTERVAL_SECONDS` | `60` | 扫描间隔（秒） |
+| `SCM_SCHEDULER_MAX_ENQUEUE_PER_SCAN` | `100` | 单次入队最大数 |
+| `SCM_SCHEDULER_ERROR_BUDGET_THRESHOLD` | `0.3` | 错误预算阈值 |
+| `SCM_SCHEDULER_PAUSE_DURATION_SECONDS` | `300` | 暂停持续时间（秒） |
+| `SCM_SCHEDULER_ENABLE_TENANT_FAIRNESS` | `false` | 启用 Tenant 公平调度 |
+| `SCM_SCHEDULER_MVP_MODE_ENABLED` | `false` | 启用 MVP 模式 |
+| `SCM_SCHEDULER_LOG_LEVEL` | `INFO` | 日志级别 |
+
+### Worker 变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SCM_WORKER_LEASE_SECONDS` | `300` | 任务租约时长（秒） |
+| `SCM_WORKER_RENEW_INTERVAL_SECONDS` | `60` | 租约续期间隔（秒） |
+| `SCM_WORKER_MAX_RENEW_FAILURES` | `3` | 最大续期失败次数 |
+| `SCM_WORKER_POLL_INTERVAL` | `10` | 轮询间隔（秒） |
+| `SCM_WORKER_PARALLELISM` | `1` | 内部并行度 |
+| `SCM_WORKER_BATCH_SIZE` | `50` | 批处理大小 |
+| `SCM_WORKER_LOCK_TIMEOUT` | `300` | 分布式锁超时（秒） |
+| `SCM_WORKER_LOG_LEVEL` | `INFO` | 日志级别 |
+
+### Reaper 变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SCM_REAPER_INTERVAL_SECONDS` | `60` | 清理间隔（秒） |
+| `SCM_REAPER_JOB_GRACE_SECONDS` | `60` | 任务宽限期（秒） |
+| `SCM_REAPER_RUN_MAX_SECONDS` | `3600` | 运行最大时长（秒） |
+| `SCM_REAPER_LOCK_GRACE_SECONDS` | `120` | 锁宽限期（秒） |
+| `SCM_REAPER_LOG_LEVEL` | `INFO` | 日志级别 |
+
+### 熔断器变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SCM_CB_FAILURE_RATE_THRESHOLD` | `0.3` | 失败率阈值 |
+| `SCM_CB_RATE_LIMIT_THRESHOLD` | `0.2` | 429 命中率阈值 |
+| `SCM_CB_TIMEOUT_RATE_THRESHOLD` | `0.2` | 超时率阈值 |
+| `SCM_CB_MIN_SAMPLES` | `5` | 最小样本数（小样本保护） |
+| `SCM_CB_ENABLE_SMOOTHING` | `true` | 启用 EMA 平滑 |
+| `SCM_CB_SMOOTHING_ALPHA` | `0.5` | EMA 平滑系数 |
+| `SCM_CB_OPEN_DURATION_SECONDS` | `300` | 熔断持续时间（秒） |
+| `SCM_CB_HALF_OPEN_MAX_REQUESTS` | `3` | 半开状态最大探测数 |
+| `SCM_CB_RECOVERY_SUCCESS_COUNT` | `2` | 恢复所需连续成功数 |
+| `SCM_CB_DEGRADED_BATCH_SIZE` | `10` | 熔断时的 batch_size |
+| `SCM_CB_BACKFILL_ONLY_MODE` | `true` | 熔断时仅执行 backfill |
+
+> **完整变量列表**：参见 [环境变量参考 - SCM 同步服务](../reference/environment_variables.md#scm-同步服务)
+
+---
+
 ## 参考文档
 
 | 文档 | 说明 |
@@ -1216,6 +1823,7 @@ url = "https://gitlab.example.com"
 | [06_scm_sync_subsystem.md](./06_scm_sync_subsystem.md) | 子系统架构详解 |
 | [01_architecture.md](./01_architecture.md) | 整体架构 |
 | [环境变量参考](../reference/environment_variables.md) | 完整变量列表 |
+| [CLI 入口清单](../architecture/cli_entrypoints.md) | CLI 命令对照表 |
 
 ---
 

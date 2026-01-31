@@ -219,7 +219,8 @@ engram/
 | [环境变量参考](docs/reference/environment_variables.md) | 所有环境变量说明 |
 | [架构文档](docs/architecture/) | 架构决策记录（ADR）、命名规范、迭代计划 |
 | [Iteration 2 计划](docs/architecture/iteration_2_plan.md) | 当前迭代：脚本收敛、SQL 整理、CI 硬化、Gateway 模块化 |
-| [回归 Runbook](docs/acceptance/iteration_3_regression.md) | 本地与 CI 对齐的回归测试命令 |
+| [回归 Runbook (Iteration 3)](docs/acceptance/iteration_3_regression.md) | Iteration 3 回归测试命令 |
+| [回归 Runbook (Iteration 4)](docs/acceptance/iteration_4_regression.md) | Iteration 4 代码质量修复记录 |
 | [验收测试矩阵](docs/acceptance/00_acceptance_matrix.md) | 验收测试执行记录与覆盖点 |
 
 ---
@@ -265,24 +266,35 @@ SCM 同步子系统提供以下 CLI 工具：
 
 ```bash
 # 调度器 - 扫描仓库并入队同步任务
-engram-scm-scheduler --once --dry-run
+engram-scm-scheduler --once              # 执行一次调度
+engram-scm-scheduler --once --dry-run    # 干运行（不实际入队）
+engram-scm-scheduler --loop              # 循环模式运行
 
 # Worker - 从队列处理同步任务
-engram-scm-worker --worker-id worker-1
+engram-scm-worker --worker-id worker-1          # 启动 worker
+engram-scm-worker --worker-id worker-1 --once   # 处理单个任务
 
-# Reaper - 回收过期任务
-engram-scm-reaper --grace-seconds 60
+# Reaper - 回收过期任务和锁
+engram-scm-reaper --once                 # 执行一次清理
+engram-scm-reaper --loop                 # 循环模式运行
 
 # 状态查看 - 查看同步健康状态
-engram-scm-status --prometheus
+engram-scm-status --json                 # JSON 格式输出
+engram-scm-status --prometheus           # Prometheus 指标格式
 
-# 运行器 - 手动执行同步
-engram-scm run incremental --repo gitlab:123
+# 运行器 - 手动执行同步（通过 engram-scm-sync）
+engram-scm-sync runner incremental --repo gitlab:123
+engram-scm-sync runner backfill --repo gitlab:123 --last-hours 24
+
+# 管理操作（通过 engram-scm-sync admin）
+engram-scm-sync admin jobs list --status dead    # 查看 dead 任务
+engram-scm-sync admin jobs reset-dead            # 重置 dead 任务
+engram-scm-sync admin locks list-expired         # 查看过期锁
 ```
 
 > **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已弃用，将在 v1.0 移除。请迁移至 `engram-scm-*` 命令。
 
-> 详细配置参见 [SCM Sync 子系统文档](docs/logbook/06_scm_sync_subsystem.md) 和 [环境变量参考](docs/reference/environment_variables.md#scm-同步服务)
+> 详细配置参见 [SCM Sync 运维指南](docs/logbook/07_scm_sync_ops_guide.md) 和 [环境变量参考](docs/reference/environment_variables.md#scm-同步服务)
 
 ---
 

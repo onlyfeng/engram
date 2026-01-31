@@ -255,6 +255,41 @@ Logbook 冒烟测试完成！
 
 > **注意**: 验证脚本位于 `sql/verify/` 子目录，不被 PostgreSQL initdb 自动执行。这确保数据库初始化不会因验证脚本的依赖（如 LOGIN 角色可能尚未创建）而失败。
 
+> **架构决策**: 关于验证门控策略（FAIL-only vs FAIL+WARN）、实现链路、CI/生产的默认选择与例外机制，详见 [ADR: 权限验证门控策略](../architecture/adr_verify_permissions_gate_policy.md)。
+
+#### SSOT + Wrapper 策略
+
+| 文件位置 | 角色 | 说明 |
+|---------|------|------|
+| `sql/verify/99_verify_permissions.sql` | **SSOT**（唯一真实来源） | 所有验证逻辑的权威版本 |
+| `apps/logbook_postgres/sql/99_verify_permissions.sql` | **薄包装器** | 仅通过 `\i` 引用 SSOT |
+
+**核心原则**：
+
+1. **SSOT 永远在** `sql/verify/99_verify_permissions.sql`
+2. **app 目录只允许薄包装器**（使用 `\i` 引用 SSOT）
+3. **禁止复制粘贴形成双源**（任何修改必须在 SSOT 文件中进行）
+
+**为什么包装器需要 psql？**
+
+包装器使用 psql 的 `\i` (include) 元命令引用 SSOT 文件。`\i` 是 psql 特有的命令，无法通过 Python/JDBC/libpq 等数据库驱动执行。因此从 `apps/` 目录执行验证**必须使用 psql 客户端**。
+
+**从 app 目录执行 verify 的正确示例**：
+
+```bash
+# 方式 1: 进入 apps 目录后执行（推荐）
+cd apps/logbook_postgres/sql
+psql -d <your_db> -f 99_verify_permissions.sql
+
+# 方式 2: 从项目根目录执行
+psql -d <your_db> -f apps/logbook_postgres/sql/99_verify_permissions.sql
+
+# 方式 3: 指定 OpenMemory schema
+psql -d <your_db> \
+     -c "SET om.target_schema = 'openmemory'" \
+     -f apps/logbook_postgres/sql/99_verify_permissions.sql
+```
+
 **执行方式**：
 
 ```bash
@@ -304,7 +339,6 @@ psql -d <your_db> \
 | `FAIL` | 严重问题，必须修复 |
 | `WARN` | 潜在问题，可能影响安全 |
 | `SKIP` | 条件不满足，跳过检查 |
-| `COMPAT` | 兼容期警告（使用旧命名，需迁移） |
 
 ### 迁移计划预览（engram-migrate --plan）
 
@@ -324,6 +358,16 @@ engram-migrate --plan --apply-roles --apply-openmemory-grants --verify
 
 # 跳过配置预检（仅查看脚本列表）
 engram-migrate --plan --no-precheck
+```
+
+**Makefile 等价命令**：
+
+```bash
+# 查看默认迁移计划
+make migrate-plan
+
+# 查看完整迁移计划（DDL + 权限 + 验证）
+make migrate-plan-full
 ```
 
 **输出内容**：
@@ -348,17 +392,74 @@ engram-migrate --plan --no-precheck
 
 > **详细文档**：参见 [SQL 文件清单](sql_file_inventory.md#411-迁移计划模式---plan)
 
+### 预检模式（engram-migrate --precheck-only）
+
+使用 `--precheck-only` 参数在**不执行实际迁移**的情况下验证配置和环境，适用于 CI/CD 门禁或部署前检查。
+
+**执行方式**：
+
+```bash
+# 仅执行预检（需要数据库连接）
+engram-migrate --dsn "$POSTGRES_DSN" --precheck-only
+
+# 预检 + 计划查看（组合使用）
+engram-migrate --dsn "$POSTGRES_DSN" --precheck-only --apply-roles
+
+# 预检 + OpenMemory 配置验证
+engram-migrate --dsn "$POSTGRES_DSN" --precheck-only --apply-openmemory-grants
+```
+
+**Makefile 等价命令**：
+
+```bash
+make migrate-precheck
+```
+
+**预检验证项**：
+
+| 检查项 | 说明 | 失败影响 |
+|--------|------|----------|
+| DSN 格式 | 连接字符串格式正确 | 阻断迁移 |
+| 数据库连接 | 能够成功连接数据库 | 阻断迁移 |
+| SQL 文件存在性 | 所有必需的迁移文件存在 | 阻断迁移 |
+| OM_PG_SCHEMA 配置 | OpenMemory schema 名有效（若启用） | 阻断 OM 迁移 |
+
+**输出示例**：
+
+```json
+{
+  "ok": true,
+  "precheck": {
+    "dsn_valid": true,
+    "connection_ok": true,
+    "sql_files_exist": true,
+    "om_schema_valid": true
+  },
+  "message": "预检通过，可执行迁移"
+}
+```
+
+**与 `--plan` 的区别**：
+
+| 参数 | 需要数据库连接 | 验证内容 |
+|------|---------------|----------|
+| `--plan` | 否 | 脚本列表、分类、文件存在性 |
+| `--precheck-only` | 是 | 连接、配置、环境变量、文件存在性 |
+
 ### 验收命令快速参考
 
 | 命令 | 说明 | 适用场景 |
 |------|------|----------|
 | `make acceptance-logbook-only` | **一键完整验收** | CI/CD、发布前验收 |
 | `make up-logbook` | 启动 Logbook 服务 | 首次部署 |
+| `make migrate-plan` | 查看迁移计划（不连接数据库） | CI 预检、部署审查 |
+| `make migrate-plan-full` | 查看完整迁移计划（DDL + 权限 + 验证） | 完整部署审查 |
+| `make migrate-precheck` | 仅执行预检（验证配置和连接） | 部署前检查 |
 | `make migrate-ddl` | DDL 迁移（Schema/表/索引） | 仅 DDL 变更 |
 | `make apply-roles` | 应用 Logbook 角色和权限 | 角色权限变更 |
 | `make apply-openmemory-grants` | 应用 OpenMemory 权限 | OM 权限变更 |
 | `make verify-permissions` | 权限验证 | 权限检查 |
-| `engram-migrate --plan` | 查看迁移计划（不连接数据库） | CI 预检、部署审查 |
+| `make verify-permissions-strict` | 严格模式权限验证（CI 门禁） | CI/CD 门禁 |
 | `make ps-logbook` | 查看服务状态 | 状态检查 |
 | `engram-logbook health` | CLI 健康检查 | 功能验证 |
 | `make logbook-smoke` | 冒烟测试 | 快速验证 |
@@ -700,6 +801,8 @@ make verify-permissions-strict
 
 ## Verify 输出判定标准
 
+> **架构决策**: 本节内容的完整架构决策和实现链路详见 [ADR: 权限验证门控策略](../architecture/adr_verify_permissions_gate_policy.md)。
+
 ### 输出级别定义
 
 `99_verify_permissions.sql` 输出以下级别：
@@ -708,7 +811,6 @@ make verify-permissions-strict
 |------|------|----------|----------|
 | `OK` | 检查通过 | 继续 | 继续 |
 | `SKIP` | 条件不满足，跳过检查 | 继续 | 继续 |
-| `COMPAT` | 使用旧命名（兼容期） | 继续 | 继续 |
 | `WARN` | 潜在问题，可能影响安全 | 继续（仅提示） | **退出码非零** |
 | `FAIL` | 严重问题，必须修复 | 继续（输出警告） | **退出码非零** |
 
@@ -756,6 +858,124 @@ engram-migrate --dsn "$POSTGRES_DSN" --verify --verify-strict
 1. 迁移完成后执行 `--verify --verify-strict`
 2. 任何 `FAIL` 或 `WARN` 导致 CI 失败
 3. 失败时上传 verify 日志供诊断
+
+### CI/运维 Runbook（可复制段落）
+
+以下是标准的迁移和验证流程，可直接复制到 CI/CD 脚本或运维 Runbook 中使用。
+
+#### 完整迁移 + 验证 Runbook
+
+```bash
+#!/bin/bash
+# ============================================================
+# Engram 数据库迁移 + 严格验证 Runbook
+# 适用场景: CI/CD 流水线、生产部署、运维操作
+# ============================================================
+
+set -euo pipefail
+
+# 配置（按需修改）
+POSTGRES_DSN="${POSTGRES_DSN:-postgresql://postgres:postgres@localhost:5432/engram}"
+LOG_DIR="${LOG_DIR:-.artifacts/migrate}"
+
+mkdir -p "$LOG_DIR"
+
+echo "=== Step 1: 迁移计划预览 ==="
+engram-migrate --plan --apply-roles --apply-openmemory-grants --verify \
+    2>&1 | tee "$LOG_DIR/plan.log"
+
+echo ""
+echo "=== Step 2: 执行 DDL 迁移 ==="
+engram-migrate --dsn "$POSTGRES_DSN" \
+    2>&1 | tee "$LOG_DIR/ddl.log"
+exit_code=${PIPESTATUS[0]}
+if [ "$exit_code" -ne 0 ]; then
+    echo "[ERROR] DDL 迁移失败，退出码: $exit_code"
+    exit $exit_code
+fi
+
+echo ""
+echo "=== Step 3: 应用角色权限 ==="
+engram-migrate --dsn "$POSTGRES_DSN" \
+    --apply-roles \
+    --apply-openmemory-grants \
+    2>&1 | tee "$LOG_DIR/roles.log"
+exit_code=${PIPESTATUS[0]}
+if [ "$exit_code" -ne 0 ]; then
+    echo "[ERROR] 角色权限应用失败，退出码: $exit_code"
+    exit $exit_code
+fi
+
+echo ""
+echo "=== Step 4: 严格模式验证 ==="
+engram-migrate --dsn "$POSTGRES_DSN" \
+    --verify \
+    --verify-strict \
+    2>&1 | tee "$LOG_DIR/verify.log"
+exit_code=${PIPESTATUS[0]}
+if [ "$exit_code" -ne 0 ]; then
+    echo "[ERROR] 权限验证失败，退出码: $exit_code"
+    echo "请检查日志: $LOG_DIR/verify.log"
+    exit $exit_code
+fi
+
+echo ""
+echo "=== 迁移完成 ==="
+echo "日志目录: $LOG_DIR"
+```
+
+#### 单步命令（tee + PIPESTATUS 模式）
+
+```bash
+# DDL 迁移（带日志留存）
+engram-migrate --dsn "$POSTGRES_DSN" \
+    2>&1 | tee migration.log
+exit ${PIPESTATUS[0]}
+
+# 应用角色权限（带日志留存）
+engram-migrate --dsn "$POSTGRES_DSN" \
+    --apply-roles \
+    --apply-openmemory-grants \
+    2>&1 | tee roles.log
+exit ${PIPESTATUS[0]}
+
+# 严格验证（带日志留存）
+engram-migrate --dsn "$POSTGRES_DSN" \
+    --verify \
+    --verify-strict \
+    2>&1 | tee verify.log
+exit ${PIPESTATUS[0]}
+```
+
+#### Makefile 等价命令（带日志留存）
+
+```bash
+# 迁移并留存日志
+make migrate-ddl 2>&1 | tee migration.log; exit ${PIPESTATUS[0]}
+
+# 应用角色并留存日志
+make apply-roles 2>&1 | tee roles.log; exit ${PIPESTATUS[0]}
+
+# 严格验证并留存日志
+make verify-permissions-strict 2>&1 | tee verify.log; exit ${PIPESTATUS[0]}
+
+# 一键全流程（DDL + 角色 + 验证）
+make migrate-ddl && make apply-roles && make verify-permissions-strict
+```
+
+#### tee + PIPESTATUS 技术说明
+
+| 技术点 | 说明 | 示例 |
+|--------|------|------|
+| `2>&1` | 合并 stderr 到 stdout | 确保错误信息也写入日志 |
+| `\| tee file.log` | 同时输出到终端和文件 | 实时查看 + 日志留存 |
+| `${PIPESTATUS[0]}` | 获取管道中第一个命令的退出码 | 绕过 tee 始终返回 0 的问题 |
+| `exit ${PIPESTATUS[0]}` | 传递正确的退出码 | CI 门禁依赖退出码判断成功/失败 |
+
+**注意事项**：
+- `${PIPESTATUS[0]}` 是 Bash 特性，在 sh 中不可用
+- 必须在 tee 命令的**同一行或紧接着的下一行**使用 `${PIPESTATUS[0]}`
+- 如果执行其他命令后再访问 `PIPESTATUS`，数组会被覆盖
 
 ### 成功判定总结
 
@@ -1080,10 +1300,13 @@ echo "✓ Logbook 部署成功"
 | [01_architecture.md](01_architecture.md) | 架构设计 |
 | [02_tools_contract.md](02_tools_contract.md) | 工具契约 |
 | [sql_file_inventory.md](sql_file_inventory.md) | SQL 文件清单与执行顺序 |
+| [sql_renumbering_map.md](sql_renumbering_map.md) | SQL 文件重编号映射表（升级参考） |
+| [upgrade_after_sql_renumbering.md](upgrade_after_sql_renumbering.md) | SQL 重编号后升级指南（完整升级流程） |
+| [ADR: 权限验证门控策略](../architecture/adr_verify_permissions_gate_policy.md) | 验证门控策略、实现链路、例外机制 |
 | [环境变量参考](../reference/environment_variables.md) | 完整环境变量列表 |
 | [根 README](../../README.md#logbook-only事实账本) | 快速开始指南 |
 | [项目集成指南](../guides/integrate_existing_project.md) | 在已有项目中集成 Engram |
 
 ---
 
-更新时间：2026-01-31（新增部署入口职责边界、推荐部署流程、Verify 输出判定标准）
+更新时间：2026-01-31（新增 ADR 权限验证门控策略引用、部署入口职责边界、推荐部署流程、Verify 输出判定标准、sql_renumbering_map 链接）

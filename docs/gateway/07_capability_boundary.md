@@ -700,6 +700,8 @@ Gateway 依赖 `engram_logbook` 提供的原语接口：
 
 每个请求都有唯一的 `correlation_id` 用于追踪，必须遵循以下契约。
 
+> **架构设计**：correlation_id 单点生成与依赖注入的详细设计参见 [ADR: Gateway DI 与入口边界统一](../architecture/adr_gateway_di_and_entry_boundary.md)。
+
 ### 契约要求
 
 | 规则 | 说明 |
@@ -1447,3 +1449,4 @@ reason 采用分层命名，区分业务层与协议/依赖层：
 | 治理开关 | [docs/gateway/04_governance_switch.md](./04_governance_switch.md) |
 | 验收测试矩阵 | [docs/acceptance/00_acceptance_matrix.md](../acceptance/00_acceptance_matrix.md) |
 | MCP 集成指南 | [docs/gateway/02_mcp_integration_cursor.md](./02_mcp_integration_cursor.md) |
+| v1.0 升级指南 | [docs/gateway/upgrade_v1_0_remove_handler_di_compat.md](./upgrade_v1_0_remove_handler_di_compat.md) |

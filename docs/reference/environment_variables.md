@@ -225,6 +225,27 @@ MCP 网关组件。模块路径: `src/engram/gateway/`
 | `DEFAULT_TEAM_SPACE` | 默认团队 Space | - | |
 | `PRIVATE_SPACE_PREFIX` | 私有 Space 前缀 | `private:` | |
 
+### 启动与迁移配置
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `AUTO_MIGRATE_ON_STARTUP` | 启动时如检测到 DB 缺失是否自动执行迁移 | `false` | |
+| `LOGBOOK_CHECK_ON_STARTUP` | 启动时是否检查 Logbook DB 结构 | `true` | |
+
+### 治理管理配置
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `GOVERNANCE_ADMIN_KEY` | 治理管理密钥（用于更新 settings） | - | |
+| `UNKNOWN_ACTOR_POLICY` | 未知用户处理策略（`reject`/`degrade`/`auto_create`） | `degrade` | |
+
+### Evidence Refs 校验配置
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `VALIDATE_EVIDENCE_REFS` | 是否校验 evidence refs 结构 | `false` | |
+| `STRICT_MODE_ENFORCE_VALIDATE_REFS` | strict 模式下是否强制启用校验 | `true` | |
+
 ### Worker 配置
 
 Outbox Worker 从 Logbook 消费事件并推送到 OpenMemory。
@@ -240,6 +261,7 @@ Outbox Worker 从 Logbook 消费事件并推送到 OpenMemory。
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `MINIO_AUDIT_WEBHOOK_AUTH_TOKEN` | MinIO Audit Webhook 认证 Token（与 MinIO 侧一致） | - | 启用时必填 |
+| `MINIO_AUDIT_MAX_PAYLOAD_SIZE` | MinIO Audit Webhook 最大 payload 大小（字节） | `1048576` | |
 
 ---
 
@@ -360,6 +382,14 @@ POSTGRES_PASSWORD=postgres
 
 SCM 增量同步服务（可选，启用 scm_sync profile）。
 
+### 启用开关
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `ENGRAM_SCM_SYNC_ENABLED` | 启用 SCM 同步服务（`true`/`false`） | `false` | |
+
+> **注意**: 设置为 `true` 并配合 `--profile scm_sync` 启动时，会启用 Scheduler、Worker、Reaper 等 SCM 同步组件。
+
 ### 数据库连接（SCM CLI）
 
 SCM CLI 工具（`engram-scm`）使用以下优先级获取数据库连接：
@@ -378,13 +408,15 @@ SCM CLI 工具（`engram-scm`）使用以下优先级获取数据库连接：
 
 ### 凭证配置（敏感信息）
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `GITLAB_PRIVATE_TOKEN` | GitLab 访问令牌 | - |
-| `GITLAB_TOKEN` | GitLab 令牌（别名） | - |
-| `GITLAB_URL` | GitLab 服务地址 | - |
-| `SVN_USERNAME` | SVN 用户名 | - |
-| `SVN_PASSWORD` | SVN 密码 | - |
+> **安全警告**: 以下变量包含敏感凭证，**不提供默认值**。必须通过 `.env` 文件或环境变量显式设置。切勿将凭证提交到版本控制系统。
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `GITLAB_URL` | GitLab 服务地址 | - | 使用 GitLab 时必填 |
+| `GITLAB_TOKEN` | GitLab 访问令牌 | - | 使用 GitLab 时必填 |
+| `GITLAB_PRIVATE_TOKEN` | GitLab 私有令牌（别名） | - | |
+| `SVN_USERNAME` | SVN 用户名 | - | 使用 SVN 时必填 |
+| `SVN_PASSWORD` | SVN 密码 | - | 使用 SVN 时必填 |
 
 ### Scheduler 配置
 
@@ -421,6 +453,14 @@ SCM CLI 工具（`engram-scm`）使用以下优先级获取数据库连接：
 | `SCM_WORKER_BATCH_SIZE` | 批处理大小 | `50` |
 | `SCM_WORKER_LOCK_TIMEOUT` | 分布式锁超时（秒） | `300` |
 | `SCM_WORKER_LOG_LEVEL` | 日志级别 | `INFO` |
+
+### Claim 配置（租户公平调度）
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `SCM_CLAIM_ENABLE_TENANT_FAIR_CLAIM` | 启用租户公平调度 | `false` |
+| `SCM_CLAIM_MAX_CONSECUTIVE_SAME_TENANT` | 单租户最大连续 claim 次数 | `3` |
+| `SCM_CLAIM_MAX_TENANTS_PER_ROUND` | 每轮选取的最大租户数 | `5` |
 
 ### Reaper 配置
 

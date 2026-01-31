@@ -76,6 +76,8 @@
 ### 依赖注入迁移路径
 
 > **详细设计**：完整的 DI 架构、分层图和迁移计划参见 [ADR: Gateway DI 与入口边界统一](../architecture/adr_gateway_di_and_entry_boundary.md)。
+>
+> **v1.0 升级指南**：Legacy 参数移除、签名变更和迁移检查清单参见 [v1.0 升级指南：移除 Handler DI 兼容层](./upgrade_v1_0_remove_handler_di_compat.md)。
 
 **推荐方式（生产环境）**：
 
@@ -95,9 +97,16 @@ client = deps.openmemory_client
 # 禁止：直接导入模块级获取函数（handlers 内禁止）
 from engram.gateway.logbook_db import get_db         # 已弃用
 from engram.gateway.config import get_config         # 应通过 deps.config 获取
-from engram.gateway.container import get_container   # 应由入口层调用
+from engram.gateway.container import get_container   # 应由入口层调用，handlers 禁止使用
 from engram.gateway.logbook_adapter import get_adapter  # 应通过 deps.logbook_adapter 获取
+
+# 推荐：通过 get_gateway_deps() 或入口层显式传递 deps 参数
+from engram.gateway.container import get_gateway_deps
+deps = get_gateway_deps()
 ```
+
+> **重要约束**：`handlers/` 模块内禁止直接 import `get_container()`。
+> 容器管理应由入口层（`app.py`、`startup.py`）负责，handlers 通过 `deps` 参数接收依赖。
 
 **测试场景**：
 
