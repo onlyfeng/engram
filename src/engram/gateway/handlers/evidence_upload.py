@@ -76,10 +76,12 @@ async def execute_evidence_upload(
 
     try:
         # 确保有可用的 deps 对象（统一通过 deps.logbook_adapter 获取 adapter）
+        # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
         if deps is None:
             # [LEGACY] 无 deps 的兼容分支：创建默认 deps 容器
             # 此路径仅为向后兼容保留，新代码应显式传入 deps=GatewayDeps.create()
             # TODO: 后续版本将移除此兼容分支，届时 deps 参数将变为必需
+            # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
             deps = GatewayDeps.create()
             logger.debug("evidence_upload: 未提供 deps 参数，使用默认 GatewayDeps（legacy path）")
 

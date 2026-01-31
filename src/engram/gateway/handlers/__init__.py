@@ -10,23 +10,25 @@ Gateway Handlers 模块
 - evidence_upload: evidence_upload 工具实现
 
 依赖注入:
-- handlers 内部通过模块级函数（get_config, get_db 等）获取依赖
-- 支持通过 GatewayContainer 进行显式依赖注入（用于测试）
-- 提供 get_dependencies() 辅助函数获取当前依赖
+- handlers 通过 `deps: GatewayDepsProtocol` 参数接收依赖
+- 生产环境使用 `get_gateway_deps()` 获取绑定到全局容器的 deps
+- 测试环境使用 `GatewayDeps.for_testing(...)` 注入 mock 对象
+
+重要约束:
+- handlers 禁止直接 import `get_container()` — 应由入口层（app.py/startup.py）调用
+- 依赖应通过 `deps: GatewayDepsProtocol` 参数传递，或通过 `get_gateway_deps()` 获取
 
 使用方式:
-    # 方式 1: 直接调用（使用全局依赖）
-    result = await memory_store_impl(payload_md="...", ...)
-
-    # 方式 2: 在 FastAPI 路由中使用（通过 Depends）
-    from engram.gateway.container import get_gateway_container
+    # 推荐方式: 通过 FastAPI Depends 注入 deps
+    from engram.gateway.container import get_gateway_deps
 
     @app.post("/memory/store")
     async def store(
         request: MemoryStoreRequest,
-        container: GatewayContainer = Depends(get_gateway_container)
+        deps: GatewayDepsProtocol = Depends(get_gateway_deps),
     ):
-        # container.config, container.db 等可用于显式传参
+        config = deps.config
+        adapter = deps.logbook_adapter
         ...
 """
 
@@ -44,31 +46,4 @@ __all__ = [
     "governance_update_impl",
     "GovernanceSettingsUpdateResponse",
     "execute_evidence_upload",
-    # 依赖注入辅助
-    "get_dependencies",
 ]
-
-
-def get_dependencies():
-    """
-    获取 handlers 所需的依赖对象
-
-    返回当前全局容器中的依赖对象，供需要显式访问的场景使用。
-
-    Returns:
-        dict: 包含 config, db, logbook_adapter, openmemory_client
-
-    Usage:
-        deps = get_dependencies()
-        config = deps["config"]
-        db = deps["db"]
-    """
-    from ..container import get_container
-
-    container = get_container()
-    return {
-        "config": container.config,
-        "db": container.db,
-        "logbook_adapter": container.logbook_adapter,
-        "openmemory_client": container.openmemory_client,
-    }

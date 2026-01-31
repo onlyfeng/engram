@@ -155,33 +155,29 @@ def assert_jsonrpc_error_response(
 
 
 # 创建 mock 依赖后再导入 app
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def mock_dependencies():
     """
-    Mock 掉 OpenMemory 和 Logbook 依赖
+    为 FastAPI 集成测试设置测试依赖
 
-    使用 tests/gateway/fakes.py 中的 Fake 对象简化配置部分（config, db, adapter），
-    同时保留 MagicMock 用于 openmemory_client（因为一些测试需要动态修改 mock 行为）。
-
-    注意：此 fixture 仅用于 JSON-RPC 协议层测试。
-    对于 handler 单元测试，应优先使用 GatewayDeps.for_testing() 进行依赖注入。
+    使用 GatewayContainer.create_for_testing() + set_container() 设置全局容器，
+    确保 app 通过 container.deps 获取统一的测试依赖。
 
     依赖注入策略（v2 架构）:
     ===========================
     1. 使用 GatewayContainer.create_for_testing() 设置全局容器
-       - handler 通过 deps.logbook_adapter / deps.openmemory_client 获取依赖
-       - 不再需要 patch handler 模块级的 logbook_adapter（已不存在）
-    2. 仅保留必要的模块级 getter patch（用于向后兼容的代码路径）
-       - get_config: HTTP 入口层和某些旧代码路径使用
-       - get_client: 某些旧代码路径使用
-       - get_db: 某些旧代码路径使用
+    2. app.py 中 deps = container.deps，所有 handler 通过 deps 参数获取依赖
+    3. 无需 patch handler 模块级的 get_config/get_client（已统一通过 deps 注入）
+
+    对于 handler 单元测试，应优先使用 GatewayDeps.for_testing() 进行依赖注入。
+
+    Teardown:
+    - 全局容器由 conftest.py 的 auto_reset_gateway_state fixture 自动重置
     """
     from engram.gateway.container import (
         GatewayContainer,
-        reset_container,
         set_container,
     )
-
     from tests.gateway.fakes import (
         FakeGatewayConfig,
         FakeLogbookAdapter,
@@ -201,7 +197,6 @@ def mock_dependencies():
     fake_adapter.configure_dedup_miss()
 
     # 保持使用 MagicMock 用于 client，因为一些测试需要动态修改行为
-    # (如 return_value, side_effect)
     mock_client = MagicMock()
     mock_client.store.return_value = MagicMock(
         success=True,
@@ -214,7 +209,8 @@ def mock_dependencies():
         error=None,
     )
 
-    # 创建并设置全局测试容器（v2 架构：handler 通过 deps 获取依赖）
+    # 创建并设置全局测试容器
+    # v2 架构：handler 通过 container.deps 获取依赖，无需额外 patch
     test_container = GatewayContainer.create_for_testing(
         config=fake_config,
         db=fake_db,
@@ -223,48 +219,34 @@ def mock_dependencies():
     )
     set_container(test_container)
 
-    # Patch 策略说明:
-    # =================
-    # 1. GatewayContainer 已设置为 test_container，但 handler 在调用时会传入 config，
-    #    导致 GatewayDeps.create(config=config) 使用独立模式（不从容器获取依赖）
-    # 2. 独立模式下，GatewayDeps 直接构造 OpenMemoryClient 和 LogbookAdapter
-    # 3. 因此需要 patch 这两个类本身（di.py 内部导入使用）
-    with (
-        # OpenMemoryClient 类（di.py 内部 from .openmemory_client import OpenMemoryClient）
-        patch(f"{CLIENT_MODULE}.OpenMemoryClient", return_value=mock_client),
-        # LogbookAdapter 类（di.py 内部 from .logbook_adapter import LogbookAdapter）
-        patch(f"{ADAPTER_MODULE}.LogbookAdapter", return_value=fake_adapter),
-        # 全局依赖 getter（用于 HTTP 入口层和旧代码路径）
-        patch(f"{CONFIG_MODULE}.get_config", return_value=fake_config),
-        patch(f"{CLIENT_MODULE}.get_client", return_value=mock_client),
-        patch(f"{DB_MODULE}.get_db", return_value=fake_db),
-        # handler 模块的 getter（向后兼容：某些旧代码路径直接调用 get_config/get_client）
-        patch(f"{HANDLER_MODULE_MEMORY_STORE}.get_config", return_value=fake_config),
-        patch(f"{HANDLER_MODULE_MEMORY_STORE}.get_client", return_value=mock_client),
-        patch(f"{HANDLER_MODULE_MEMORY_QUERY}.get_config", return_value=fake_config),
-        patch(f"{HANDLER_MODULE_MEMORY_QUERY}.get_client", return_value=mock_client),
-        patch(f"{HANDLER_MODULE_GOVERNANCE}.get_config", return_value=fake_config),
-        # logbook_adapter 模块级函数（用于未通过 deps 的回退路径）
-        patch(f"{ADAPTER_MODULE}.check_dedup", return_value=None),
-        patch(f"{ADAPTER_MODULE}.query_knowledge_candidates", return_value=[]),
-    ):
-        yield {
-            "config": fake_config,
-            "db": fake_db,
-            "client": mock_client,
-            "adapter": fake_adapter,
-        }
+    yield {
+        "config": fake_config,
+        "db": fake_db,
+        "client": mock_client,
+        "adapter": fake_adapter,
+    }
 
-    # 清理全局容器
-    reset_container()
+    # teardown 由 conftest.py 的 auto_reset_gateway_state 处理
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def client(mock_dependencies):
-    """创建 FastAPI TestClient"""
-    from engram.gateway.main import app
+    """
+    创建 FastAPI TestClient
 
-    return TestClient(app)
+    依赖 mock_dependencies fixture 确保 app 使用正确的测试依赖。
+    scope 改为 function 以确保每个测试都使用干净的依赖状态。
+
+    重要: 使用 create_app() 创建新的 app 实例，而不是复用 main.py 中的模块级 app。
+    这确保 app 中的 deps 绑定到 mock_dependencies 设置的测试容器。
+    """
+    from engram.gateway.app import create_app
+
+    # 创建新的 app 实例，使用 mock_dependencies 设置的全局容器
+    # container 已由 mock_dependencies 通过 set_container() 设置
+    test_app = create_app()
+
+    return TestClient(test_app)
 
 
 class TestJsonRpcInvalidRequest:

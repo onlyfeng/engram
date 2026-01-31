@@ -9,9 +9,13 @@ governance_update handler - governance_update 工具核心实现
 5. 返回更新后的设置
 
 依赖注入支持：
-- 函数签名包含可选的 _config, _db 参数
-- 如果不传入这些参数，使用模块级函数获取（保持向后兼容）
-- 如果传入参数，使用传入的依赖（用于测试或显式注入）
+- 推荐：通过 deps 参数传入 GatewayDeps (推荐)
+- [DEPRECATED v0.9] 函数签名包含可选的 _config, _db 参数（向后兼容）
+- [DEPRECATED v0.9] 如果不传入任何依赖参数，使用模块级函数获取（不推荐）
+
+弃用计划：
+- v0.9（当前）：兼容期，使用 legacy 参数时产生 DeprecationWarning
+- v1.0：移除 _config/_db 参数，deps 参数变为必需
 """
 
 import logging
@@ -63,8 +67,11 @@ async def governance_update_impl(
     actor_user_id: Optional[str] = None,
     # 依赖注入参数（推荐方式）
     deps: Optional[GatewayDepsProtocol] = None,
-    # [DEPRECATED] 以下参数将在后续版本移除，请使用 deps 参数
-    # 迁移计划：这些参数仅为向后兼容保留，新代码应使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...)
+    # [DEPRECATED v0.9 -> 移除于 v1.0] 以下参数已弃用，请使用 deps 参数
+    # 弃用计划：
+    #   - v0.9（当前）：兼容期，使用时产生 DeprecationWarning
+    #   - v1.0：移除这些参数
+    # 迁移指南：docs/architecture/adr_gateway_di_and_entry_boundary.md
     _config: Optional[GatewayConfig] = None,
     _db: Optional["LogbookDatabase"] = None,
 ) -> GovernanceSettingsUpdateResponse:
@@ -91,12 +98,15 @@ async def governance_update_impl(
         _config: 可选的 GatewayConfig 对象，用于向后兼容（推荐使用 deps.config）
         _db: 可选的 LogbookDatabase 对象，用于向后兼容（推荐使用 deps.db）
     """
-    # [DEPRECATED] 弃用警告：_config/_db 参数将在后续版本移除
+    # [DEPRECATED v0.9] 弃用警告：_config/_db 参数将在 v1.0 移除
+    # 弃用计划：
+    #   - v0.9（当前）：兼容期，使用时产生 DeprecationWarning
+    #   - v1.0：移除这些参数，强制使用 deps 参数
     if _config is not None or _db is not None:
         warnings.warn(
-            "governance_update_impl 的 _config/_db 参数已弃用，"
-            "请使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...) 替代。"
-            "这些参数将在后续版本移除。",
+            "[Gateway v0.9 弃用警告] governance_update_impl 的 _config/_db 参数已弃用，"
+            "将在 v1.0 移除。请使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...) 替代。"
+            "迁移指南：docs/architecture/adr_gateway_di_and_entry_boundary.md",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -107,13 +117,16 @@ async def governance_update_impl(
     elif _config is not None:
         config = _config
     else:
+        # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
         config = get_config()
 
     # 确保有可用的 deps 对象（用于后续依赖统一获取）
+    # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
     if deps is None:
+        # DI-BOUNDARY-ALLOW: legacy fallback (v0.9 兼容期，v1.0 移除)
         deps = GatewayDeps.create(config=config)
-        # [LEGACY] 兼容分支：如果有显式传入的 _db，注入到 deps 中
-        # 此路径仅为向后兼容保留，新代码应完全使用 deps 参数
+        # [DEPRECATED v0.9 -> 移除于 v1.0] 兼容分支：如果有显式传入的 _db，注入到 deps 中
+        # 此路径仅为向后兼容保留，将在 v1.0 移除，新代码应完全使用 deps 参数
         if _db is not None:
             deps._db = _db
 

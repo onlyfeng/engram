@@ -3,12 +3,16 @@ Gateway 应用工厂 (Application Factory)
 
 提供 create_app() 函数，负责：
 1. 创建 FastAPI 应用实例
-2. 初始化 GatewayContainer 依赖容器
-3. 注册所有路由和中间件
-4. 返回可运行的 FastAPI app
+2. 组装 GatewayContainer（仅用于依赖组装，不作为业务依赖来源）
+3. 从 container 获取 GatewayDeps，作为统一依赖传递给所有 handler
+4. 注册所有路由和中间件
+5. 返回可运行的 FastAPI app
 
-这是 Gateway 的集中组装入口，将应用创建与启动逻辑分离，
-便于测试和不同部署场景。
+依赖注入设计（ADR：入口层统一 + deps 参数透传）:
+============================================================
+- GatewayContainer: 仅负责组装/持有依赖实例，不直接暴露给业务逻辑
+- GatewayDeps: 通过 container.deps 获取，作为统一依赖接口传递给 handler
+- 所有 handler 调用都显式传入 deps=deps，确保依赖来源单一可控
 
 用法:
     # 直接创建应用
@@ -42,6 +46,7 @@ from .container import (
     get_container,
     set_container,
 )
+from .di import GatewayDepsProtocol
 from .logbook_adapter import get_reliability_report
 
 logger = logging.getLogger("gateway")
@@ -156,10 +161,11 @@ def create_app(
     创建并配置 FastAPI 应用实例
 
     这是 Gateway 的应用工厂函数，负责：
-    1. 初始化或使用传入的 GatewayContainer
-    2. 创建 FastAPI 应用
-    3. 注册所有路由（/mcp, /memory/*, /health, /reliability/report, /governance/*）
-    4. 注册 MinIO Audit Webhook 路由
+    1. 组装 GatewayContainer（仅用于组装依赖，不作为业务依赖来源）
+    2. 从 container 获取 GatewayDeps，作为统一依赖传递给所有 handler
+    3. 创建 FastAPI 应用
+    4. 注册所有路由（/mcp, /memory/*, /health, /reliability/report, /governance/*）
+    5. 注册 MinIO Audit Webhook 路由
 
     Args:
         config: 可选的配置对象。如果不提供，从环境变量加载。
@@ -167,7 +173,7 @@ def create_app(
         container: 可选的 GatewayContainer 实例。如果提供，使用该实例；
                    否则创建新实例。
         lifespan: 可选的 lifespan 上下文管理器。如果提供，用于管理应用生命周期。
-                  lifespan 可用于生产环境的增强初始化（如 DB 检查、日志设置等）。
+                  lifespan 可用于生产环境的增强初始化（如 DB 检查、依赖预热等）。
 
     Returns:
         配置好的 FastAPI 应用实例
@@ -176,12 +182,13 @@ def create_app(
         ConfigError: 配置无效
 
     Note:
-        container 初始化总是在此函数中完成（无论是否提供 lifespan）。
-        lifespan 提供额外的生命周期管理（如 DB 健康检查），但不是必需的。
-        这确保了测试环境和生产环境都能正常工作。
+        - container 仅负责组装依赖，不直接暴露给业务逻辑
+        - deps 通过 container.deps 获取，作为统一依赖接口
+        - 所有 handler 调用都显式传入 deps=deps，确保依赖来源单一可控
+        - lifespan 中会预热 deps.logbook_adapter/deps.openmemory_client
     """
-    # 1. 初始化容器（总是执行，确保测试兼容）
-    # lifespan 提供额外的增强功能，但 container 初始化不依赖它
+    # 1. 组装容器（仅用于依赖组装，不作为业务依赖来源）
+    # lifespan 提供额外的增强功能（预热等），但 container 组装不依赖它
     if container is not None:
         set_container(container)
     elif config is not None:
@@ -192,6 +199,10 @@ def create_app(
 
     # 获取容器引用
     container = get_container()
+
+    # 2. 从 container 获取 GatewayDeps，作为统一依赖传递给所有 handler
+    # 注意：deps 绑定到 container，共享依赖实例
+    deps: GatewayDepsProtocol = container.deps
 
     # 2. 创建 FastAPI 应用
     app = FastAPI(
@@ -229,15 +240,20 @@ def create_app(
         register_tool_executor,
     )
 
-    # 5. 定义工具执行器
+    # 5. 定义工具执行器（闭包捕获 deps，确保统一依赖来源）
+    # NOTE: 使用位置参数 correlation_id 以匹配 ToolExecutor 类型定义
     async def _execute_tool(
-        tool: str, args: Dict[str, Any], *, correlation_id: str
+        tool: str, args: Dict[str, Any], correlation_id: str
     ) -> Dict[str, Any]:
         """
         执行工具调用的内部实现
 
-        此函数实现 ToolExecutor 协议，签名为 (tool_name, tool_args, *, correlation_id)。
-        correlation_id 作为 keyword-only 参数，确保调用时必须显式传递。
+        此函数实现 ToolExecutor 协议，签名为 (tool_name, tool_args, correlation_id)。
+
+        依赖注入：
+        - 通过闭包捕获 create_app() 中创建的 deps 实例
+        - 所有 handler 调用都显式传入 deps=deps，确保依赖来源单一可控
+        - 不再依赖 handler 内部的延迟初始化或全局获取
 
         契约：所有工具的返回结果都必须包含 correlation_id 字段（单一来源原则）。
 
@@ -254,7 +270,7 @@ def create_app(
         result_dict: Dict[str, Any]
 
         if tool == "memory_store":
-            result = await memory_store_impl(
+            store_result = await memory_store_impl(
                 payload_md=args.get("payload_md", ""),
                 target_space=args.get("target_space"),
                 meta_json=args.get("meta_json"),
@@ -265,31 +281,34 @@ def create_app(
                 item_id=args.get("item_id"),
                 actor_user_id=args.get("actor_user_id"),
                 correlation_id=correlation_id,
+                deps=deps,  # 显式传入依赖
             )
-            result_dict = {"ok": result.ok, **result.model_dump()}
+            result_dict = {"ok": store_result.ok, **store_result.model_dump()}
 
         elif tool == "memory_query":
-            result = await memory_query_impl(
+            query_result = await memory_query_impl(
                 query=args.get("query", ""),
                 spaces=args.get("spaces"),
                 filters=args.get("filters"),
                 top_k=args.get("top_k", 10),
                 correlation_id=correlation_id,
+                deps=deps,  # 显式传入依赖
             )
-            result_dict = {"ok": result.ok, **result.model_dump()}
+            result_dict = {"ok": query_result.ok, **query_result.model_dump()}
 
         elif tool == "reliability_report":
             report = get_reliability_report()
             result_dict = {"ok": True, **report}
 
         elif tool == "governance_update":
-            result = await governance_update_impl(
+            gov_result = await governance_update_impl(
                 team_write_enabled=args.get("team_write_enabled"),
                 policy_json=args.get("policy_json"),
                 admin_key=args.get("admin_key"),
                 actor_user_id=args.get("actor_user_id"),
+                deps=deps,  # 显式传入依赖
             )
-            result_dict = {"ok": result.ok, **result.model_dump()}
+            result_dict = {"ok": gov_result.ok, **gov_result.model_dump()}
 
         elif tool == "evidence_upload":
             result_dict = await execute_evidence_upload(
@@ -299,6 +318,7 @@ def create_app(
                 actor_user_id=args.get("actor_user_id"),
                 project_key=args.get("project_key"),
                 item_id=args.get("item_id"),
+                deps=deps,  # 显式传入依赖
             )
 
         else:
@@ -385,6 +405,7 @@ def create_app(
                         reason=ErrorReason.INVALID_REQUEST,
                         retryable=False,
                         correlation_id=correlation_id,
+                        details=None,
                     )
                     parse_error.error.data = error_data.to_dict()
                 return JSONResponse(
@@ -393,6 +414,8 @@ def create_app(
                     headers=response_headers,
                 )
 
+            # rpc_request 已在 parse_error 分支中返回，此处必不为 None
+            assert rpc_request is not None
             response = await mcp_router.dispatch(rpc_request, correlation_id=correlation_id)
 
             if response.error and response.error.data:
@@ -429,7 +452,7 @@ def create_app(
             logger.info(f"旧协议请求: tool={tool}, correlation_id={correlation_id}")
 
             try:
-                result = await _execute_tool(tool, args, correlation_id=correlation_id)
+                result = await _execute_tool(tool, args, correlation_id)
                 result["correlation_id"] = correlation_id
                 return JSONResponse(
                     content=MCPResponse(ok=result.get("ok", True), result=result).model_dump(),
@@ -468,6 +491,7 @@ def create_app(
             item_id=request.item_id,
             actor_user_id=request.actor_user_id,
             correlation_id=correlation_id,
+            deps=deps,  # 显式传入依赖
         )
 
     @app.post("/memory/query", response_model=MemoryQueryResponse)
@@ -481,6 +505,7 @@ def create_app(
             filters=request.filters,
             top_k=request.top_k,
             correlation_id=correlation_id,
+            deps=deps,  # 显式传入依赖
         )
 
     @app.get("/reliability/report", response_model=ReliabilityReportResponse)
@@ -517,6 +542,7 @@ def create_app(
             policy_json=request.policy_json,
             admin_key=request.admin_key,
             actor_user_id=request.actor_user_id,
+            deps=deps,  # 显式传入依赖
         )
 
     return app

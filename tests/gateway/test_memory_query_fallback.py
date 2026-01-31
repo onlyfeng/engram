@@ -9,23 +9,41 @@ memory_query Logbook fallback 测试
 4. Logbook fallback 也失败时返回错误
 5. 降级响应包含 degraded=True 标记
 6. 所有响应包含 correlation_id
+
+================================================================================
+依赖注入说明 (v1.0):
+================================================================================
+
+本测试使用 GatewayDeps.for_testing() 进行依赖注入，替代旧的 patch 方式。
+
+使用方式:
+    deps = GatewayDeps.for_testing(
+        config=fake_config,
+        logbook_adapter=fake_adapter,
+        openmemory_client=fake_client,
+    )
+    result = await memory_query_impl(query=..., correlation_id=..., deps=deps)
+
+注意：
+- deps 是必需的 keyword-only 参数
+- 测试应通过 fake 对象控制依赖行为，而非 patch 模块级函数
 """
 
 import secrets
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
+from engram.gateway.di import GatewayDeps
 from engram.gateway.handlers.memory_query import MemoryQueryResponse, memory_query_impl
+from engram.gateway.openmemory_client import OpenMemoryError
 
 # 导入 Fake 依赖
 from tests.gateway.fakes import (
     FakeGatewayConfig,
+    FakeLogbookAdapter,
     FakeOpenMemoryClient,
 )
-
-# Mock 路径
-HANDLER_MODULE = "engram.gateway.handlers.memory_query"
 
 
 def _test_correlation_id():
@@ -45,31 +63,27 @@ class TestMemoryQuerySuccess:
             {"id": "mem_2", "content": "Result 2", "score": 0.85},
         ]
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_search_success(results=expected_results)
 
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_search_result = MagicMock()
-            mock_search_result.success = True
-            mock_search_result.results = expected_results
-            mock_search_result.error = None
-            mock_client.search.return_value = mock_search_result
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            test_corr_id = _test_correlation_id()
-            result = await memory_query_impl(query=query, correlation_id=test_corr_id)
+        test_corr_id = _test_correlation_id()
+        result = await memory_query_impl(query=query, correlation_id=test_corr_id, deps=deps)
 
-            # 验证结果
-            assert result.ok is True
-            assert result.degraded is False
-            assert result.results == expected_results
-            assert result.total == len(expected_results)
-            assert result.correlation_id == test_corr_id
-            assert result.correlation_id.startswith("corr-")
+        # 验证结果
+        assert result.ok is True
+        assert result.degraded is False
+        assert result.results == expected_results
+        assert result.total == len(expected_results)
+        assert result.correlation_id == test_corr_id
+        assert result.correlation_id.startswith("corr-")
 
     @pytest.mark.asyncio
     async def test_openmemory_success_with_custom_spaces(self):
@@ -77,54 +91,53 @@ class TestMemoryQuerySuccess:
         query = "test query"
         spaces = ["team:project1", "team:project2"]
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_search_success(results=[])
 
-            mock_client = MagicMock()
-            mock_search_result = MagicMock()
-            mock_search_result.success = True
-            mock_search_result.results = []
-            mock_client.search.return_value = mock_search_result
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            result = await memory_query_impl(
-                query=query, spaces=spaces, correlation_id=_test_correlation_id()
-            )
+        result = await memory_query_impl(
+            query=query, spaces=spaces, correlation_id=_test_correlation_id(), deps=deps
+        )
 
-            # 验证 spaces_searched
-            assert result.spaces_searched == spaces
+        # 验证 spaces_searched
+        assert result.spaces_searched == spaces
 
-            # 验证 OpenMemory 调用参数
-            call_args = mock_client.search.call_args
-            assert call_args[1]["filters"]["spaces"] == spaces
+        # 验证 OpenMemory 调用参数
+        assert len(fake_client.search_calls) == 1
+        call_args = fake_client.search_calls[0]
+        assert call_args["filters"]["spaces"] == spaces
 
     @pytest.mark.asyncio
     async def test_openmemory_success_empty_results(self):
         """OpenMemory 成功但结果为空"""
         query = "no match query"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_search_success(results=[])
 
-            mock_client = MagicMock()
-            mock_search_result = MagicMock()
-            mock_search_result.success = True
-            mock_search_result.results = []
-            mock_client.search.return_value = mock_search_result
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            result = await memory_query_impl(query=query, correlation_id=_test_correlation_id())
+        result = await memory_query_impl(
+            query=query, correlation_id=_test_correlation_id(), deps=deps
+        )
 
-            assert result.ok is True
-            assert result.results == []
-            assert result.total == 0
-            assert result.degraded is False
+        assert result.ok is True
+        assert result.results == []
+        assert result.total == 0
+        assert result.degraded is False
 
 
 class TestMemoryQueryFallback:
@@ -154,42 +167,41 @@ class TestMemoryQueryFallback:
             }
         ]
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_knowledge_candidates(fallback_candidates)
 
-            # 模拟 OpenMemory 连接失败
-            from engram.gateway.openmemory_client import OpenMemoryError
+        # 使用 MagicMock 模拟 search 抛出真实的 OpenMemoryError
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(
+            message="连接超时",
+            status_code=None,
+            response=None,
+        )
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(
-                message="连接超时",
-                status_code=None,
-                response=None,
-            )
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            # 模拟 Logbook fallback 查询成功
-            mock_adapter.query_knowledge_candidates.return_value = fallback_candidates
+        result = await memory_query_impl(
+            query=query, correlation_id=_test_correlation_id(), deps=deps
+        )
 
-            result = await memory_query_impl(query=query, correlation_id=_test_correlation_id())
+        # 关键断言：应返回降级结果
+        assert result.ok is True
+        assert result.degraded is True
+        assert "连接超时" in result.message
 
-            # 关键断言：应返回降级结果
-            assert result.ok is True
-            assert result.degraded is True
-            assert "连接超时" in result.message
+        # 验证 fallback 查询被调用
+        assert len(fake_adapter.query_calls) == 1
 
-            # 验证 fallback 查询被调用
-            mock_adapter.query_knowledge_candidates.assert_called_once()
-
-            # 验证结果格式转换正确
-            assert len(result.results) == 1
-            assert result.results[0]["id"] == "kc_1"  # 前缀 kc_
-            assert result.results[0]["content"] == "Fallback content 1"
-            assert result.results[0]["source"] == "logbook_fallback"
+        # 验证结果格式转换正确
+        assert len(result.results) == 1
+        assert result.results[0]["id"] == "kc_1"  # 前缀 kc_
+        assert result.results[0]["content"] == "Fallback content 1"
+        assert result.results[0]["source"] == "logbook_fallback"
 
     @pytest.mark.asyncio
     async def test_api_error_triggers_fallback(self):
@@ -210,32 +222,32 @@ class TestMemoryQueryFallback:
             }
         ]
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_knowledge_candidates(fallback_candidates)
 
-            # 模拟 OpenMemory API 503 错误
-            from engram.gateway.openmemory_client import OpenMemoryError
+        # 使用 MagicMock 模拟 search 抛出 API 错误
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(
+            message="Service Unavailable",
+            status_code=503,
+            response={"error": "Service Unavailable"},
+        )
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(
-                message="Service Unavailable",
-                status_code=503,
-                response={"error": "Service Unavailable"},
-            )
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_adapter.query_knowledge_candidates.return_value = fallback_candidates
+        result = await memory_query_impl(
+            query=query, correlation_id=_test_correlation_id(), deps=deps
+        )
 
-            result = await memory_query_impl(query=query, correlation_id=_test_correlation_id())
-
-            # 验证降级结果
-            assert result.ok is True
-            assert result.degraded is True
-            assert len(result.results) == 1
+        # 验证降级结果
+        assert result.ok is True
+        assert result.degraded is True
+        assert len(result.results) == 1
 
     @pytest.mark.asyncio
     async def test_fallback_passes_correct_parameters(self):
@@ -247,36 +259,36 @@ class TestMemoryQueryFallback:
         spaces = ["team:myproject"]
         filters = {"evidence": "commit:abc"}
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_knowledge_candidates([])
 
-            # 模拟 OpenMemory 失败
-            from engram.gateway.openmemory_client import OpenMemoryError
+        # 使用 MagicMock 模拟 search 抛出错误
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(message="Error")
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(message="Error")
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_adapter.query_knowledge_candidates.return_value = []
+        await memory_query_impl(
+            query=query,
+            top_k=top_k,
+            spaces=spaces,
+            filters=filters,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
 
-            await memory_query_impl(
-                query=query,
-                top_k=top_k,
-                spaces=spaces,
-                filters=filters,
-                correlation_id=_test_correlation_id(),
-            )
-
-            # 验证 fallback 查询参数
-            call_kwargs = mock_adapter.query_knowledge_candidates.call_args[1]
-            assert call_kwargs["keyword"] == query
-            assert call_kwargs["top_k"] == top_k
-            assert call_kwargs["space_filter"] == spaces[0]
-            assert call_kwargs["evidence_filter"] == filters["evidence"]
+        # 验证 fallback 查询参数
+        assert len(fake_adapter.query_calls) == 1
+        call_kwargs = fake_adapter.query_calls[0]
+        assert call_kwargs["keyword"] == query
+        assert call_kwargs["top_k"] == top_k
+        assert call_kwargs["space_filter"] == spaces[0]
+        assert call_kwargs["evidence_filter"] == filters["evidence"]
 
     @pytest.mark.asyncio
     async def test_fallback_also_fails_returns_error(self):
@@ -285,31 +297,32 @@ class TestMemoryQueryFallback:
         """
         query = "double failure"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
 
-            # 模拟 OpenMemory 失败
-            from engram.gateway.openmemory_client import OpenMemoryError
+        # 配置 adapter 抛出异常
+        fake_adapter = MagicMock()
+        fake_adapter.query_knowledge_candidates.side_effect = Exception("DB Error")
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(message="OM Error")
-            mock_get_client.return_value = mock_client
+        # 使用 MagicMock 模拟 search 抛出错误
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(message="OM Error")
 
-            # 模拟 Logbook fallback 也失败
-            mock_adapter.query_knowledge_candidates.side_effect = Exception("DB Error")
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            result = await memory_query_impl(query=query, correlation_id=_test_correlation_id())
+        result = await memory_query_impl(
+            query=query, correlation_id=_test_correlation_id(), deps=deps
+        )
 
-            # 关键断言：应返回错误但标记为 degraded
-            assert result.ok is False
-            assert result.degraded is True
-            assert "OM Error" in result.message
-            assert "DB Error" in result.message
-            assert result.results == []
+        # 关键断言：应返回错误但标记为 degraded
+        assert result.ok is False
+        assert result.degraded is True
+        assert "OM Error" in result.message
+        assert "DB Error" in result.message
+        assert result.results == []
 
     @pytest.mark.asyncio
     async def test_fallback_converts_result_format_correctly(self):
@@ -340,42 +353,43 @@ class TestMemoryQueryFallback:
             },
         ]
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_knowledge_candidates(candidates)
 
-            from engram.gateway.openmemory_client import OpenMemoryError
+        # 使用 MagicMock 模拟 search 抛出错误
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(message="Error")
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(message="Error")
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_adapter.query_knowledge_candidates.return_value = candidates
+        result = await memory_query_impl(
+            query=query, correlation_id=_test_correlation_id(), deps=deps
+        )
 
-            result = await memory_query_impl(query=query, correlation_id=_test_correlation_id())
+        # 验证结果格式
+        assert len(result.results) == 2
 
-            # 验证结果格式
-            assert len(result.results) == 2
+        # 第一个结果（完整字段）
+        r1 = result.results[0]
+        assert r1["id"] == "kc_100"
+        assert r1["content"] == "# Complete Content\n\nWith all fields."
+        assert r1["title"] == "Complete Title"
+        assert r1["kind"] == "PITFALL"
+        assert r1["confidence"] == 0.95
+        assert r1["evidence_refs"] == {"refs": ["commit:xyz"]}
+        assert r1["created_at"] == "2026-01-01T00:00:00Z"
+        assert r1["source"] == "logbook_fallback"
 
-            # 第一个结果（完整字段）
-            r1 = result.results[0]
-            assert r1["id"] == "kc_100"
-            assert r1["content"] == "# Complete Content\n\nWith all fields."
-            assert r1["title"] == "Complete Title"
-            assert r1["kind"] == "PITFALL"
-            assert r1["confidence"] == 0.95
-            assert r1["evidence_refs"] == {"refs": ["commit:xyz"]}
-            assert r1["created_at"] == "2026-01-01T00:00:00Z"
-            assert r1["source"] == "logbook_fallback"
-
-            # 第二个结果（部分字段为 None）
-            r2 = result.results[1]
-            assert r2["id"] == "kc_101"
-            assert r2["title"] is None
-            assert r2["source"] == "logbook_fallback"
+        # 第二个结果（部分字段为 None）
+        r2 = result.results[1]
+        assert r2["id"] == "kc_101"
+        assert r2["title"] is None
+        assert r2["source"] == "logbook_fallback"
 
 
 class TestMemoryQueryCorrelationId:
@@ -388,98 +402,91 @@ class TestMemoryQueryCorrelationId:
     @pytest.mark.asyncio
     async def test_success_response_has_correlation_id(self):
         """成功响应包含 correlation_id"""
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_search_success(results=[])
 
-            mock_client = MagicMock()
-            mock_search_result = MagicMock()
-            mock_search_result.success = True
-            mock_search_result.results = []
-            mock_client.search.return_value = mock_search_result
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            test_corr_id = _test_correlation_id()
-            result = await memory_query_impl(query="test", correlation_id=test_corr_id)
+        test_corr_id = _test_correlation_id()
+        result = await memory_query_impl(query="test", correlation_id=test_corr_id, deps=deps)
 
-            assert result.correlation_id == test_corr_id
-            assert result.correlation_id.startswith("corr-")
-            assert len(result.correlation_id) == 21  # corr- + 16 hex
+        assert result.correlation_id == test_corr_id
+        assert result.correlation_id.startswith("corr-")
+        assert len(result.correlation_id) == 21  # corr- + 16 hex
 
     @pytest.mark.asyncio
     async def test_fallback_response_has_correlation_id(self):
         """降级响应包含 correlation_id"""
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_knowledge_candidates([])
 
-            from engram.gateway.openmemory_client import OpenMemoryError
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(message="Error")
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(message="Error")
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_adapter.query_knowledge_candidates.return_value = []
+        test_corr_id = _test_correlation_id()
+        result = await memory_query_impl(query="test", correlation_id=test_corr_id, deps=deps)
 
-            test_corr_id = _test_correlation_id()
-            result = await memory_query_impl(query="test", correlation_id=test_corr_id)
-
-            assert result.degraded is True
-            assert result.correlation_id == test_corr_id
-            assert result.correlation_id.startswith("corr-")
+        assert result.degraded is True
+        assert result.correlation_id == test_corr_id
+        assert result.correlation_id.startswith("corr-")
 
     @pytest.mark.asyncio
     async def test_error_response_has_correlation_id(self):
         """错误响应包含 correlation_id"""
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
 
-            from engram.gateway.openmemory_client import OpenMemoryError
+        fake_adapter = MagicMock()
+        fake_adapter.query_knowledge_candidates.side_effect = Exception("DB Error")
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(message="Error")
-            mock_get_client.return_value = mock_client
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(message="Error")
 
-            mock_adapter.query_knowledge_candidates.side_effect = Exception("DB Error")
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            test_corr_id = _test_correlation_id()
-            result = await memory_query_impl(query="test", correlation_id=test_corr_id)
+        test_corr_id = _test_correlation_id()
+        result = await memory_query_impl(query="test", correlation_id=test_corr_id, deps=deps)
 
-            assert result.ok is False
-            assert result.correlation_id == test_corr_id
-            assert result.correlation_id.startswith("corr-")
+        assert result.ok is False
+        assert result.correlation_id == test_corr_id
+        assert result.correlation_id.startswith("corr-")
 
     @pytest.mark.asyncio
     async def test_provided_correlation_id_preserved(self):
         """提供的 correlation_id 被保留"""
         provided_id = "corr-1234567890abcdef"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_search_success(results=[])
 
-            mock_client = MagicMock()
-            mock_search_result = MagicMock()
-            mock_search_result.success = True
-            mock_search_result.results = []
-            mock_client.search.return_value = mock_search_result
-            mock_get_client.return_value = mock_client
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            result = await memory_query_impl(query="test", correlation_id=provided_id)
+        result = await memory_query_impl(query="test", correlation_id=provided_id, deps=deps)
 
-            # 关键断言：应保留提供的 correlation_id
-            assert result.correlation_id == provided_id
+        # 关键断言：应保留提供的 correlation_id
+        assert result.correlation_id == provided_id
 
 
 class TestMemoryQueryWithFakeDependencies:
@@ -491,16 +498,22 @@ class TestMemoryQueryWithFakeDependencies:
     async def test_with_fake_client_success(self):
         """使用 FakeOpenMemoryClient 成功场景"""
         fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
 
         fake_client = FakeOpenMemoryClient()
         expected_results = [{"id": "fake_1", "content": "fake content"}]
         fake_client.configure_search_success(results=expected_results)
 
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
         result = await memory_query_impl(
             query="test",
             correlation_id=_test_correlation_id(),
-            _config=fake_config,
-            _openmemory_client=fake_client,
+            deps=deps,
         )
 
         assert result.ok is True
@@ -513,34 +526,29 @@ class TestMemoryQueryWithFakeDependencies:
 
     @pytest.mark.asyncio
     async def test_with_fake_client_connection_error(self):
-        """使用 FakeOpenMemoryClient 连接错误场景"""
+        """使用 MagicMock 模拟连接错误场景"""
         fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_knowledge_candidates([])
 
-        fake_client = FakeOpenMemoryClient()
-        fake_client.configure_search_connection_error("Fake 连接超时")
+        # 使用 MagicMock 模拟真实的 OpenMemoryError
+        fake_client = MagicMock()
+        fake_client.search.side_effect = OpenMemoryError(message="Fake 连接超时")
 
-        # 注意：fake 异常需要转换为真实异常
-        # 这里直接使用 mock 来模拟真实场景
-        from engram.gateway.openmemory_client import OpenMemoryError
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-        ):
-            mock_client = MagicMock()
-            mock_client.search.side_effect = OpenMemoryError(message="Fake 连接超时")
-            mock_get_client.return_value = mock_client
+        result = await memory_query_impl(
+            query="test",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
 
-            mock_adapter.query_knowledge_candidates.return_value = []
-
-            result = await memory_query_impl(
-                query="test",
-                correlation_id=_test_correlation_id(),
-                _config=fake_config,
-            )
-
-            assert result.degraded is True
-            assert "Fake 连接超时" in result.message
+        assert result.degraded is True
+        assert "Fake 连接超时" in result.message
 
 
 class TestMemoryQueryInternalError:
@@ -549,43 +557,49 @@ class TestMemoryQueryInternalError:
     @pytest.mark.asyncio
     async def test_unexpected_exception_handled(self):
         """未预期异常被正确处理"""
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
 
-            # 模拟未预期异常
-            mock_client = MagicMock()
-            mock_client.search.side_effect = RuntimeError("未预期的内部错误")
-            mock_get_client.return_value = mock_client
+        # 模拟未预期异常
+        fake_client = MagicMock()
+        fake_client.search.side_effect = RuntimeError("未预期的内部错误")
 
-            test_corr_id = _test_correlation_id()
-            result = await memory_query_impl(query="test", correlation_id=test_corr_id)
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            # 应返回内部错误
-            assert result.ok is False
-            assert "内部错误" in result.message
-            assert "未预期的内部错误" in result.message
-            assert result.correlation_id == test_corr_id
+        test_corr_id = _test_correlation_id()
+        result = await memory_query_impl(query="test", correlation_id=test_corr_id, deps=deps)
+
+        # 应返回内部错误
+        assert result.ok is False
+        assert "内部错误" in result.message
+        assert "未预期的内部错误" in result.message
+        assert result.correlation_id == test_corr_id
 
     @pytest.mark.asyncio
     async def test_key_error_handled(self):
         """KeyError 被正确处理"""
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-        ):
-            mock_config.return_value.default_team_space = "team:test"
+        fake_config = FakeGatewayConfig()
+        fake_adapter = FakeLogbookAdapter()
 
-            mock_client = MagicMock()
-            mock_client.search.side_effect = KeyError("missing_key")
-            mock_get_client.return_value = mock_client
+        fake_client = MagicMock()
+        fake_client.search.side_effect = KeyError("missing_key")
 
-            result = await memory_query_impl(query="test", correlation_id=_test_correlation_id())
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            assert result.ok is False
-            assert "内部错误" in result.message
+        result = await memory_query_impl(
+            query="test", correlation_id=_test_correlation_id(), deps=deps
+        )
+
+        assert result.ok is False
+        assert "内部错误" in result.message
 
 
 class TestMemoryQueryResponseModel:

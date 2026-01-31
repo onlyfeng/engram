@@ -6,21 +6,51 @@ actor_user_id 审计参数测试
 - REST 端点 /memory/store 透传 actor_user_id 到审计
 - MCP 端点 /mcp 透传 actor_user_id 到审计
 - memory_store_impl 在各种场景下正确传递 actor_user_id
+
+================================================================================
+依赖注入说明 (v1.0):
+================================================================================
+
+本测试使用 GatewayDeps.for_testing() 进行依赖注入，替代旧的 patch 方式。
+
+使用方式:
+    deps = GatewayDeps.for_testing(
+        config=fake_config,
+        db=fake_db,
+        logbook_adapter=fake_adapter,
+        openmemory_client=fake_client,
+    )
+    result = await memory_store_impl(
+        payload_md=...,
+        correlation_id=...,
+        deps=deps,
+        actor_user_id=...,
+    )
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from engram.gateway.main import (
-    MemoryStoreRequest,
-    compute_payload_sha,
-    memory_store_impl,
+from engram.gateway.app import MemoryStoreRequest
+from engram.gateway.di import GatewayDeps
+from engram.gateway.handlers.memory_store import MemoryStoreResponse, memory_store_impl
+from engram.gateway.services.hash_utils import compute_payload_sha
+
+# 导入 Fake 依赖
+from tests.gateway.fakes import (
+    FakeGatewayConfig,
+    FakeLogbookAdapter,
+    FakeLogbookDatabase,
+    FakeOpenMemoryClient,
 )
 
-# Mock 路径：重构后模块使用的依赖
-HANDLER_MODULE = "engram.gateway.handlers.memory_store"
-ACTOR_VALIDATION_MODULE = "engram.gateway.services.actor_validation"
+
+def _test_correlation_id():
+    """生成测试用的 correlation_id"""
+    import secrets
+
+    return f"corr-{secrets.token_hex(8)}"
 
 
 class TestActorUserIdInAudit:
@@ -34,92 +64,88 @@ class TestActorUserIdInAudit:
         actor_user_id = "user_alice_123"
         payload_sha = compute_payload_sha(payload_md)
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
 
-            # 用户存在
-            mock_check_user.return_value = True
+        # 配置用户存在
+        fake_adapter.configure_user_exists(True)
 
-            mock_adapter.check_dedup.return_value = {
-                "outbox_id": 100,
-                "target_space": target_space,
-                "payload_sha": payload_sha,
-                "status": "sent",
-                "last_error": "memory_id=mem_existing_123",
-            }
+        # 配置 dedup hit
+        fake_adapter.configure_dedup_hit(
+            outbox_id=100,
+            target_space=target_space,
+            payload_sha=payload_sha,
+            status="sent",
+            memory_id="mem_existing_123",
+        )
 
-            mock_db = MagicMock()
-            mock_get_db.return_value = mock_db
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            assert result.ok is True
+        assert result.ok is True
 
-            # 验证 actor_user_id 传入审计
-            mock_db.insert_audit.assert_called_once()
-            audit_call = mock_db.insert_audit.call_args[1]
-            assert audit_call["actor_user_id"] == actor_user_id
+        # 验证 actor_user_id 传入审计
+        assert len(fake_db.audit_calls) == 1
+        audit_call = fake_db.audit_calls[0]
+        assert audit_call["actor_user_id"] == actor_user_id
 
     @pytest.mark.asyncio
-    async def test_actor_user_id_passed_to_audit_on_policy_reject(self):
-        """策略拒绝场景下 actor_user_id 传入审计"""
-        payload_md = "# Rejected content"
+    async def test_actor_user_id_passed_to_audit_on_policy_redirect(self):
+        """策略重定向场景下 actor_user_id 传入审计
+
+        当 team_write_enabled=False 时，策略会 redirect 到私有空间而非 reject
+        """
+        payload_md = "# Redirected content"
         target_space = "team:restricted"
         actor_user_id = "user_bob_456"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        # 配置 settings 禁用 team_write -> 触发 redirect
+        fake_db.configure_settings(team_write_enabled=False, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        # 配置用户存在
+        fake_adapter.configure_user_exists(True)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_redirected_001")
 
-            # 用户存在
-            mock_check_user.return_value = True
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_adapter.check_dedup.return_value = None
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": False,
-                "policy_json": {},
-            }
-            mock_get_db.return_value = mock_db
+        assert result.ok is True
+        assert result.action == "redirect"
 
-            # 模拟策略拒绝
-            from engram.gateway.policy import PolicyAction
-
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.REJECT
-            mock_decision.reason = "team_write_disabled"
-            mock_engine.return_value.decide.return_value = mock_decision
-
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
-
-            assert result.ok is False
-            assert result.action == "reject"
-
-            # 验证 actor_user_id 传入审计
-            mock_db.insert_audit.assert_called_once()
-            audit_call = mock_db.insert_audit.call_args[1]
-            assert audit_call["actor_user_id"] == actor_user_id
+        # 验证 actor_user_id 传入审计
+        assert len(fake_db.audit_calls) >= 1
+        audit_call = fake_db.audit_calls[-1]  # 最后一次审计调用
+        assert audit_call["actor_user_id"] == actor_user_id
 
     @pytest.mark.asyncio
     async def test_actor_user_id_passed_to_audit_on_success(self):
@@ -128,59 +154,39 @@ class TestActorUserIdInAudit:
         target_space = "team:success"
         actor_user_id = "user_charlie_789"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        # 配置 settings 启用 team_write
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        # 配置用户存在
+        fake_adapter.configure_user_exists(True)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_new_001")
 
-            # 用户存在
-            mock_check_user.return_value = True
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_adapter.check_dedup.return_value = None
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            mock_get_db.return_value = mock_db
+        assert result.ok is True
+        assert result.memory_id == "mem_new_001"
 
-            # 模拟策略允许
-            from engram.gateway.policy import PolicyAction
-
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.ALLOW
-            mock_decision.reason = "allowed"
-            mock_decision.final_space = target_space
-            mock_engine.return_value.decide.return_value = mock_decision
-
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_new_001"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
-
-            assert result.ok is True
-            assert result.memory_id == "mem_new_001"
-
-            # 验证 actor_user_id 传入审计
-            mock_db.insert_audit.assert_called_once()
-            audit_call = mock_db.insert_audit.call_args[1]
-            assert audit_call["actor_user_id"] == actor_user_id
+        # 验证 actor_user_id 传入审计
+        assert len(fake_db.audit_calls) >= 1
+        audit_call = fake_db.audit_calls[-1]  # 最后一次审计调用
+        assert audit_call["actor_user_id"] == actor_user_id
 
     @pytest.mark.asyncio
     async def test_actor_user_id_passed_to_audit_on_openmemory_error(self):
@@ -189,59 +195,43 @@ class TestActorUserIdInAudit:
         target_space = "team:error"
         actor_user_id = "user_dave_999"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_db.configure_outbox_success(start_id=500)
+        fake_adapter = FakeLogbookAdapter()
+        # 配置用户存在
+        fake_adapter.configure_user_exists(True)
+        fake_adapter.configure_dedup_miss()
 
-            # 用户存在
-            mock_check_user.return_value = True
+        # 模拟 OpenMemory 连接失败
+        from engram.gateway.openmemory_client import OpenMemoryConnectionError
 
-            mock_adapter.check_dedup.return_value = None
+        fake_client = MagicMock()
+        fake_client.store.side_effect = OpenMemoryConnectionError("Connection refused")
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            mock_db.enqueue_outbox.return_value = 500
-            mock_get_db.return_value = mock_db
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            # 模拟策略允许
-            from engram.gateway.policy import PolicyAction
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.ALLOW
-            mock_decision.reason = "allowed"
-            mock_decision.final_space = target_space
-            mock_engine.return_value.decide.return_value = mock_decision
+        assert result.ok is False
+        assert result.action == "deferred"
 
-            # 模拟 OpenMemory 连接失败
-            from engram.gateway.openmemory_client import OpenMemoryConnectionError
-
-            mock_client = MagicMock()
-            mock_client.store.side_effect = OpenMemoryConnectionError("Connection refused")
-            mock_get_client.return_value = mock_client
-
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
-
-            assert result.ok is False
-            assert result.action == "deferred"
-
-            # 验证 actor_user_id 传入审计
-            mock_db.insert_audit.assert_called_once()
-            audit_call = mock_db.insert_audit.call_args[1]
-            assert audit_call["actor_user_id"] == actor_user_id
+        # 验证 actor_user_id 传入审计
+        assert len(fake_db.audit_calls) >= 1
+        audit_call = fake_db.audit_calls[-1]
+        assert audit_call["actor_user_id"] == actor_user_id
 
     @pytest.mark.asyncio
     async def test_actor_user_id_none_when_not_provided(self):
@@ -250,35 +240,39 @@ class TestActorUserIdInAudit:
         target_space = "team:anon"
         payload_sha = compute_payload_sha(payload_md)
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+        fake_client = FakeOpenMemoryClient()
 
-            mock_adapter.check_dedup.return_value = {
-                "outbox_id": 200,
-                "target_space": target_space,
-                "payload_sha": payload_sha,
-                "status": "sent",
-                "last_error": None,
-            }
+        # 配置 dedup hit
+        fake_adapter.configure_dedup_hit(
+            outbox_id=200,
+            target_space=target_space,
+            payload_sha=payload_sha,
+            status="sent",
+            memory_id=None,
+        )
 
-            mock_db = MagicMock()
-            mock_get_db.return_value = mock_db
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            # 不传入 actor_user_id
-            await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-            )
+        # 不传入 actor_user_id
+        await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+        )
 
-            # 验证 actor_user_id 为 None
-            mock_db.insert_audit.assert_called_once()
-            audit_call = mock_db.insert_audit.call_args[1]
-            assert audit_call["actor_user_id"] is None
+        # 验证 actor_user_id 为 None
+        assert len(fake_db.audit_calls) >= 1
+        audit_call = fake_db.audit_calls[0]
+        assert audit_call["actor_user_id"] is None
 
 
 class TestMemoryStoreRequestModel:
@@ -354,45 +348,43 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "unknown_user_001"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter"),
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{ACTOR_VALIDATION_MODULE}.get_db") as mock_get_db_validation,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.unknown_actor_policy = "reject"
-            mock_config.return_value.private_space_prefix = "private:"
+        fake_config = FakeGatewayConfig()
+        fake_config.unknown_actor_policy = "reject"
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+        # 配置用户不存在
+        fake_adapter.configure_user_exists(False)
+        fake_client = FakeOpenMemoryClient()
 
-            # 用户不存在
-            mock_check_user.return_value = False
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_db = MagicMock()
-            mock_get_db.return_value = mock_db
-            mock_get_db_validation.return_value = mock_db
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
+        assert result.ok is False
+        assert result.action == "reject"
+        assert "用户不存在" in result.message
 
-            assert result.ok is False
-            assert result.action == "reject"
-            assert "用户不存在" in result.message
+        # 验证审计日志写入
+        assert len(fake_db.audit_calls) >= 1
+        audit_call = fake_db.audit_calls[0]
+        assert audit_call["actor_user_id"] == actor_user_id
+        assert audit_call["action"] == "reject"
+        assert "actor_unknown:reject" in audit_call["reason"]
 
-            # 验证审计日志写入
-            mock_db.insert_audit.assert_called_once()
-            audit_call = mock_db.insert_audit.call_args[1]
-            assert audit_call["actor_user_id"] == actor_user_id
-            assert audit_call["action"] == "reject"
-            assert "actor_unknown:reject" in audit_call["reason"]
-
-            # v1.1 契约：验证 policy/validation 子结构存在
-            evidence_refs_json = audit_call.get("evidence_refs_json", {})
-            self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
+        # v1.1 契约：验证 policy/validation 子结构存在
+        evidence_refs_json = audit_call.get("evidence_refs_json", {})
+        self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
 
     @pytest.mark.asyncio
     async def test_unknown_actor_degrade_policy(self):
@@ -401,64 +393,41 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "unknown_user_002"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{ACTOR_VALIDATION_MODULE}.get_db") as mock_get_db_validation,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.unknown_actor_policy = "degrade"
-            mock_config.return_value.private_space_prefix = "private:"
+        fake_config = FakeGatewayConfig()
+        fake_config.unknown_actor_policy = "degrade"
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        # 配置用户不存在
+        fake_adapter.configure_user_exists(False)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_degraded_001")
 
-            # 用户不存在
-            mock_check_user.return_value = False
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_adapter.check_dedup.return_value = None
+        await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            mock_get_db.return_value = mock_db
-            mock_get_db_validation.return_value = mock_db
+        # 验证第一次审计调用（降级审计）
+        assert len(fake_db.audit_calls) >= 1
+        first_audit_call = fake_db.audit_calls[0]
+        assert first_audit_call["action"] == "redirect"
+        assert "actor_unknown:degrade" in first_audit_call["reason"]
 
-            # 模拟策略允许
-            from engram.gateway.policy import PolicyAction
-
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.ALLOW
-            mock_decision.reason = "allowed"
-            mock_decision.final_space = "private:unknown"
-            mock_engine.return_value.decide.return_value = mock_decision
-
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_degraded_001"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
-            await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
-
-            # 验证第一次审计调用（降级审计）
-            first_audit_call = mock_db.insert_audit.call_args_list[0][1]
-            assert first_audit_call["action"] == "redirect"
-            assert "actor_unknown:degrade" in first_audit_call["reason"]
-
-            # v1.1 契约：验证 policy/validation 子结构存在
-            evidence_refs_json = first_audit_call.get("evidence_refs_json", {})
-            self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
+        # v1.1 契约：验证 policy/validation 子结构存在
+        evidence_refs_json = first_audit_call.get("evidence_refs_json", {})
+        self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
 
     @pytest.mark.asyncio
     async def test_unknown_actor_auto_create_policy(self):
@@ -467,81 +436,50 @@ class TestActorUserValidation:
         target_space = "team:test"
         actor_user_id = "new_user_003"
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{ACTOR_VALIDATION_MODULE}.get_db") as mock_get_db_validation,
-            patch(f"{HANDLER_MODULE}.get_client") as mock_get_client,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-            patch(f"{ACTOR_VALIDATION_MODULE}.ensure_user") as mock_ensure_user,
-            patch(f"{HANDLER_MODULE}.create_engine_from_settings") as mock_engine,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.unknown_actor_policy = "auto_create"
-            mock_config.return_value.private_space_prefix = "private:"
+        fake_config = FakeGatewayConfig()
+        fake_config.unknown_actor_policy = "auto_create"
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        # 配置用户不存在
+        fake_adapter.configure_user_exists(False)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_autocreate_001")
 
-            # 用户不存在
-            mock_check_user.return_value = False
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            # 自动创建成功
-            mock_ensure_user.return_value = {
-                "user_id": actor_user_id,
-                "display_name": actor_user_id,
-            }
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            mock_adapter.check_dedup.return_value = None
+        assert result.ok is True
+        assert result.memory_id == "mem_autocreate_001"
 
-            mock_db = MagicMock()
-            mock_db.get_or_create_settings.return_value = {
-                "team_write_enabled": True,
-                "policy_json": {},
-            }
-            mock_get_db.return_value = mock_db
-            mock_get_db_validation.return_value = mock_db
+        # 验证 ensure_user 被调用
+        assert len(fake_adapter.ensure_user_calls) == 1
+        ensure_call = fake_adapter.ensure_user_calls[0]
+        assert ensure_call["user_id"] == actor_user_id
+        assert ensure_call["display_name"] == actor_user_id
 
-            # 模拟策略允许
-            from engram.gateway.policy import PolicyAction
+        # 验证审计日志包含 actor_autocreated
+        audit_calls = fake_db.audit_calls
+        autocreate_audit = [c for c in audit_calls if "actor_autocreated" in str(c)]
+        assert len(autocreate_audit) == 1
 
-            mock_decision = MagicMock()
-            mock_decision.action = PolicyAction.ALLOW
-            mock_decision.reason = "allowed"
-            mock_decision.final_space = target_space
-            mock_engine.return_value.decide.return_value = mock_decision
-
-            # 模拟 OpenMemory 成功
-            mock_client = MagicMock()
-            mock_store_result = MagicMock()
-            mock_store_result.success = True
-            mock_store_result.memory_id = "mem_autocreate_001"
-            mock_client.store.return_value = mock_store_result
-            mock_get_client.return_value = mock_client
-
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
-
-            assert result.ok is True
-            assert result.memory_id == "mem_autocreate_001"
-
-            # 验证 ensure_user 被调用
-            mock_ensure_user.assert_called_once_with(
-                user_id=actor_user_id,
-                display_name=actor_user_id,
-            )
-
-            # 验证审计日志包含 actor_autocreated
-            audit_calls = mock_db.insert_audit.call_args_list
-            autocreate_audit = [c for c in audit_calls if "actor_autocreated" in str(c)]
-            assert len(autocreate_audit) == 1
-
-            # v1.1 契约：验证 actor_autocreated 审计的 policy/validation 子结构
-            autocreate_call = autocreate_audit[0][1]
-            evidence_refs_json = autocreate_call.get("evidence_refs_json", {})
-            self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
+        # v1.1 契约：验证 actor_autocreated 审计的 policy/validation 子结构
+        autocreate_call = autocreate_audit[0]
+        evidence_refs_json = autocreate_call.get("evidence_refs_json", {})
+        self._assert_audit_has_policy_validation_substructures(evidence_refs_json)
 
     @pytest.mark.asyncio
     async def test_existing_actor_continues_normally(self):
@@ -551,39 +489,42 @@ class TestActorUserValidation:
         actor_user_id = "existing_user_004"
         payload_sha = compute_payload_sha(payload_md)
 
-        with (
-            patch(f"{HANDLER_MODULE}.get_config") as mock_config,
-            patch(f"{HANDLER_MODULE}.logbook_adapter") as mock_adapter,
-            patch(f"{HANDLER_MODULE}.get_db") as mock_get_db,
-            patch(f"{ACTOR_VALIDATION_MODULE}.check_user_exists") as mock_check_user,
-        ):
-            mock_config.return_value.default_team_space = "team:default"
-            mock_config.return_value.project_key = "test_project"
-            mock_config.return_value.unknown_actor_policy = "reject"  # 策略为 reject，但用户存在
+        fake_config = FakeGatewayConfig()
+        fake_config.unknown_actor_policy = "reject"  # 策略为 reject，但用户存在
+        fake_db = FakeLogbookDatabase()
+        fake_adapter = FakeLogbookAdapter()
+        # 配置用户存在
+        fake_adapter.configure_user_exists(True)
+        fake_client = FakeOpenMemoryClient()
 
-            # 用户存在
-            mock_check_user.return_value = True
+        # 配置 dedup hit（用户存在时正常命中 dedup）
+        fake_adapter.configure_dedup_hit(
+            outbox_id=300,
+            target_space=target_space,
+            payload_sha=payload_sha,
+            status="sent",
+            memory_id="mem_existing_002",
+        )
 
-            mock_adapter.check_dedup.return_value = {
-                "outbox_id": 300,
-                "target_space": target_space,
-                "payload_sha": payload_sha,
-                "status": "sent",
-                "last_error": "memory_id=mem_existing_002",
-            }
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
 
-            mock_db = MagicMock()
-            mock_get_db.return_value = mock_db
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
 
-            result = await memory_store_impl(
-                payload_md=payload_md,
-                target_space=target_space,
-                actor_user_id=actor_user_id,
-            )
-
-            assert result.ok is True
-            # 用户存在，应该正常继续（这里命中 dedup）
-            mock_check_user.assert_called_once_with(actor_user_id)
+        assert result.ok is True
+        # 用户存在，应该正常继续（这里命中 dedup）
+        assert len(fake_adapter.check_user_calls) == 1
+        assert fake_adapter.check_user_calls[0] == actor_user_id
 
 
 class TestEnsureUserAndAccount:

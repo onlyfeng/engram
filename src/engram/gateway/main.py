@@ -13,45 +13,44 @@ Memory Gateway - MCP Server 入口
     python -m engram.gateway.main
 
 模块结构（v2 重构）:
-- app.py: 应用工厂 (create_app)
-- container.py: 依赖容器 (GatewayContainer)
+- app.py: 应用工厂 (create_app)，统一依赖获取与路由注册
+- container.py: 依赖组装容器 (GatewayContainer)，仅负责组装
 - di.py: 依赖注入模块 (RequestContext, GatewayDeps)
 - handlers/: 核心业务逻辑（memory_store, memory_query, governance_update, evidence_upload）
 - services/: 共享纯函数（hash_utils, actor_validation, audit_service）
 - 本文件仅负责调用 create_app() 并暴露 app 与 main()
 
-依赖注入设计（ADR：入口层统一 + 参数透传）:
+依赖注入设计（ADR：入口层统一 + deps 参数透传）:
 ============================================================
 
-1. 依赖集中创建:
-   - GatewayConfig: lifespan 中通过 get_config() 加载，来源于环境变量
-   - OpenMemoryClient: container.openmemory_client 延迟初始化
-     构造参数: base_url=config.openmemory_base_url, api_key=config.openmemory_api_key
-   - LogbookAdapter: container.logbook_adapter 延迟初始化
-     构造参数: dsn=config.postgres_dsn
-   - GatewayContainer: lifespan 中创建，持有以上所有依赖的引用
+1. 依赖组装与获取分离:
+   - GatewayContainer: 仅负责组装依赖实例，不直接暴露给业务逻辑
+   - GatewayDeps: 通过 container.deps 获取，作为统一依赖接口
+   - create_app() 中从 container 获取 deps，显式传入所有 handler
 
-2. 依赖获取路径:
-   - 入口层: get_container() -> GatewayContainer 单例
-   - handlers: 通过 GatewayDeps 获取依赖，或直接从 container 获取
+2. 依赖获取路径（推荐）:
+   - 入口层: create_app() 中 deps = container.deps
+   - handlers: 通过 deps 参数接收依赖（deps=deps）
    - 测试: GatewayDeps.for_testing() / GatewayContainer.create_for_testing()
 
 3. correlation_id 统一规则:
    - 只在入口层生成一次（mcp_endpoint / REST endpoints）
-   - 通过 RequestContext 参数透传到所有 handlers
+   - 通过参数透传到所有 handlers
    - 审计记录、错误响应都使用同一个 correlation_id
 
 4. 线程安全性:
-   - container/config/adapter/client 都是单例，初始化后不变
+   - container/deps/config/adapter/client 都是单例，初始化后不变
    - RequestContext 每次请求创建新实例，无跨请求共享
-   - handlers 接收 ctx 参数，不依赖全局状态
+   - handlers 接收 deps 参数，不依赖全局状态
 
 5. 可测试替换:
-   - config.override_config(mock_config)
-   - openmemory_client.override_client(mock_client)
-   - logbook_adapter.override_adapter(mock_adapter)
+   - GatewayDeps.for_testing(config=mock, logbook_adapter=mock, ...)
    - container.set_container(mock_container)
    - 测试完成后调用对应的 reset_*() 函数清理
+
+6. 预热策略（lifespan）:
+   - lifespan 中预热 deps.logbook_adapter 和 deps.openmemory_client
+   - 确保首次请求时无初始化延迟
 """
 
 import logging
@@ -170,38 +169,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     应用生命周期管理器
 
-    提供可选的增强初始化功能，在应用启动时进行额外检查和资源初始化。
+    提供增强初始化功能，在应用启动时进行配置验证、资源初始化和依赖预热。
 
-    依赖集中创建（ADR：入口层统一 + 参数透传）:
+    依赖组装与预热（ADR：入口层统一 + deps 参数透传）:
     ============================================================
 
     1. GatewayConfig 创建:
        - 来源: get_config() -> load_config() -> 环境变量
        - 必填: PROJECT_KEY, POSTGRES_DSN
        - 可选: OPENMEMORY_BASE_URL, OPENMEMORY_API_KEY, GATEWAY_PORT 等
-       - 线程安全: 是（单例，初始化后不变）
 
-    2. LogbookAdapter 创建:
-       - 来源: GatewayContainer.logbook_adapter (延迟初始化)
-       - 构造参数: dsn=config.postgres_dsn
-       - 线程安全: 是（每次操作获取新连接）
-       - 可测试替换: logbook_adapter.override_adapter(mock)
+    2. GatewayContainer 组装:
+       - 来源: create_app() 中创建，仅负责组装依赖
+       - 不直接暴露给业务逻辑
 
-    3. OpenMemoryClient 创建:
-       - 来源: GatewayContainer.openmemory_client (延迟初始化)
-       - 构造参数: base_url=config.openmemory_base_url, api_key=config.openmemory_api_key
-       - 线程安全: 是（httpx.Client 线程安全）
-       - 可测试替换: openmemory_client.override_client(mock)
-
-    4. GatewayContainer 创建:
-       - 来源: GatewayContainer.create(config)
-       - 持有: config, logbook_adapter, openmemory_client 的引用
-       - 线程安全: 是（单例，依赖也是单例）
-       - 可测试替换: container.set_container(mock)
+    3. GatewayDeps 预热:
+       - 来源: container.deps（绑定到 container 的统一依赖接口）
+       - 预热: 触发 deps.logbook_adapter 和 deps.openmemory_client 的延迟初始化
+       - 目的: 确保首次请求时无初始化延迟
 
     设计原则:
-    - container 基本初始化由 create_app() 完成，lifespan 提供增强功能
-    - lifespan 提供: DB 健康检查、配置验证、日志设置等
+    - container 仅负责组装依赖，create_app() 中获取 deps 传入 handler
+    - lifespan 提供: DB 健康检查、配置验证、依赖预热
     - 如果配置缺失或检查失败，lifespan 会优雅降级（警告但不阻止启动）
     - 这确保了测试环境（可能没有完整配置）也能正常工作
 
@@ -210,7 +199,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             1. 验证配置（如果可用）
             2. 初始化 DB 连接（如果 DSN 可用）
             3. 检查 Logbook DB 结构（非阻塞）
-            4. 更新 GatewayContainer（如果需要）
+            4. 预热 deps.logbook_adapter 和 deps.openmemory_client
         shutdown:
             1. 清理 container 资源（调用 reset_container）
     """
@@ -225,9 +214,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         container_initialized = False
 
     if container_initialized:
-        logger.info("Container 已由 create_app() 初始化，lifespan 跳过基本初始化")
+        logger.info("Container 已由 create_app() 组装，lifespan 进行预热和增强初始化")
 
-    # 尝试进行增强初始化（配置验证、DB 检查等）
+    # 尝试进行增强初始化（配置验证、DB 检查、依赖预热等）
     # 如果失败，仅警告不阻止启动（支持测试环境）
     try:
         # 1. 尝试加载并验证配置
@@ -254,7 +243,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if not container_initialized:
             container = GatewayContainer.create(config)
             set_container(container)
-            logger.info("GatewayContainer 初始化完成")
+            logger.info("GatewayContainer 组装完成")
+
+        # 5. 预热 deps（触发延迟初始化，确保首次请求无延迟）
+        try:
+            container = get_container()
+            deps = container.deps
+            # 预热 logbook_adapter（触发延迟初始化）
+            _ = deps.logbook_adapter
+            logger.info("依赖预热: logbook_adapter 已初始化")
+            # 预热 openmemory_client（触发延迟初始化）
+            _ = deps.openmemory_client
+            logger.info("依赖预热: openmemory_client 已初始化")
+        except Exception as e:
+            logger.warning(f"依赖预热异常: {e}（首次请求时将延迟初始化）")
 
     except ConfigError as e:
         # 配置错误：在测试环境中可以继续，生产环境应该在 main() 预检查时就失败
@@ -298,13 +300,12 @@ def get_app():
 
 # 为 uvicorn 暴露 app 变量
 # 注意：直接使用 uvicorn engram.gateway.main:app 时会触发此处
-# 此时 lifespan 会在 app 启动时执行，完成 container 初始化
+# 此时 lifespan 会在 app 启动时执行，完成依赖预热
 #
 # 依赖注入设计：
-# - lifespan 负责初始化 GatewayContainer
-# - get_container() 获取全局容器实例
-# - get_request_context() 在入口层创建请求上下文
-# - /mcp 和 REST endpoints 都从同一 container 取依赖
+# - create_app() 组装 container，并从 container.deps 获取统一依赖
+# - lifespan 预热 deps.logbook_adapter 和 deps.openmemory_client
+# - 所有 handler 调用都显式传入 deps=deps，确保依赖来源单一可控
 app = create_app(lifespan=lifespan)
 
 
@@ -320,8 +321,10 @@ def main():
     2. 启动前预检查（配置验证、DB 连接测试）
     3. 启动 uvicorn 服务器
 
-    注意：container 的初始化由 lifespan 负责，此处不再创建 container。
-    这确保了 /mcp 和 REST endpoints 都从同一个 lifespan 初始化的 container 取依赖。
+    注意：
+    - container 组装由 create_app() 完成
+    - lifespan 负责预热 deps.logbook_adapter 和 deps.openmemory_client
+    - 所有 handler 调用都显式传入 deps=deps
     """
     import argparse
 

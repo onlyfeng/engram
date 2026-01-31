@@ -10,35 +10,30 @@ memory_store handler - memory_store 工具核心实现
 6. 成功返回 memory_id / 失败写入 outbox
 
 ================================================================================
-                       依赖注入与迁移指引
+                       依赖注入 (v1.0)
 ================================================================================
 
-推荐的依赖获取方式（优先级从高到低）:
+所有依赖通过 deps 参数获取（必需）：
 
-1. 通过 deps 参数传入 GatewayDeps (推荐):
-   ```python
-   from engram.gateway.di import GatewayDeps
+```python
+from engram.gateway.di import GatewayDeps
 
-   deps = GatewayDeps.create()  # 或 GatewayDeps.for_testing(...)
-   result = await memory_store_impl(
-       payload_md="...",
-       correlation_id="...",
-       deps=deps,
-   )
-   ```
+deps = GatewayDeps.create()  # 生产环境
+# 或
+deps = GatewayDeps.for_testing(...)  # 测试环境
 
-2. 通过 _config, _db, _openmemory_client 参数 (向后兼容):
-   ```python
-   result = await memory_store_impl(
-       payload_md="...",
-       correlation_id="...",
-       _config=my_config,
-       _db=my_db,
-   )
-   ```
+result = await memory_store_impl(
+    payload_md="...",
+    correlation_id="...",
+    deps=deps,
+)
+```
 
-3. 使用模块级全局函数 (已弃用):
-   不传入任何依赖参数时，使用 get_config() / get_db() 等全局函数
+deps 提供的依赖：
+- deps.config: GatewayConfig 配置对象
+- deps.db: LogbookDatabase 数据库实例
+- deps.logbook_adapter: LogbookAdapter 适配器
+- deps.openmemory_client: OpenMemoryClient 客户端
 
 ================================================================================
                        correlation_id 单一来源原则
@@ -51,12 +46,10 @@ handler 不再自行生成 correlation_id，确保同一请求使用同一 ID。
 """
 
 import logging
-import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
-# NOTE: logbook_db.get_db 已弃用，新代码应通过 deps.db 或 deps.logbook_adapter 获取数据库操作
 from ..audit_event import (
     AuditWriteError,
     build_evidence_refs_json,
@@ -64,13 +57,12 @@ from ..audit_event import (
     normalize_evidence,
     validate_evidence_for_strict_mode,
 )
-from ..config import GatewayConfig, get_config, resolve_validate_refs
-from ..di import GatewayDeps, GatewayDepsProtocol
+from ..config import resolve_validate_refs
+from ..di import GatewayDepsProtocol
 from ..openmemory_client import (
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
-    get_client,
 )
 from ..policy import PolicyAction, create_engine_from_settings
 from ..services.actor_validation import validate_actor_user
@@ -78,7 +70,6 @@ from ..services.audit_service import write_audit_or_raise
 from ..services.hash_utils import compute_payload_sha
 
 if TYPE_CHECKING:
-    # LogbookDatabase 类型仅用于向后兼容，新代码应使用 LogbookAdapter
     from ..logbook_db import LogbookDatabase
     from ..openmemory_client import OpenMemoryClient
 
@@ -134,6 +125,8 @@ class MemoryStoreResponse(BaseModel):
 
 async def memory_store_impl(
     payload_md: str,
+    correlation_id: str,
+    deps: GatewayDepsProtocol,
     target_space: Optional[str] = None,
     meta_json: Optional[Dict[str, Any]] = None,
     kind: Optional[str] = None,
@@ -142,14 +135,6 @@ async def memory_store_impl(
     is_bulk: bool = False,
     item_id: Optional[int] = None,
     actor_user_id: Optional[str] = None,
-    correlation_id: Optional[str] = None,
-    # 依赖注入参数（推荐方式）
-    deps: Optional[GatewayDepsProtocol] = None,
-    # [DEPRECATED] 以下参数将在后续版本移除，请使用 deps 参数
-    # 迁移计划：这些参数仅为向后兼容保留，新代码应使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...)
-    _config: Optional[GatewayConfig] = None,
-    _db: Optional["LogbookDatabase"] = None,
-    _openmemory_client: Optional["OpenMemoryClient"] = None,
 ) -> MemoryStoreResponse:
     """
     memory_store 核心实现
@@ -168,51 +153,21 @@ async def memory_store_impl(
     - 在 strict 模式下，missing sha256 会触发 evidence_validation 校验
 
     Args:
+        payload_md: 要存储的内容
         correlation_id: 追踪 ID（必需）。必须由 HTTP 入口层生成后传入，
-                        确保同一请求使用同一 ID。handler 不再自行生成。
-        deps: 可选的 GatewayDeps 依赖容器，优先使用其中的依赖
-        _config: 可选的 GatewayConfig 对象，不传则使用 get_config()
-        _db: 可选的 LogbookDatabase 对象，用于向后兼容（推荐使用 deps.db）
-        _openmemory_client: 可选的 OpenMemoryClient 对象，用于向后兼容（推荐使用 deps.openmemory_client）
-
-    Raises:
-        ValueError: 如果 correlation_id 未提供
+                        确保同一请求使用同一 ID。
+        deps: GatewayDeps 依赖容器（必需），提供 config/db/logbook_adapter/openmemory_client
+        target_space: 目标空间，默认使用 config.default_team_space
+        meta_json: 附加元数据
+        kind: 内容类型
+        evidence_refs: v1 格式的 evidence 引用列表
+        evidence: v2 格式的 evidence 列表
+        is_bulk: 是否为批量操作
+        item_id: 关联的 item ID
+        actor_user_id: 操作者用户 ID
     """
-    # correlation_id 必须由调用方提供（单一来源原则）
-    if correlation_id is None:
-        raise ValueError(
-            "correlation_id 是必需参数：必须由 HTTP 入口层生成后传入，"
-            "handler 不再自行生成 correlation_id"
-        )
-
-    # [DEPRECATED] 弃用警告：_config/_db/_openmemory_client 参数将在后续版本移除
-    if _config is not None or _db is not None or _openmemory_client is not None:
-        warnings.warn(
-            "memory_store_impl 的 _config/_db/_openmemory_client 参数已弃用，"
-            "请使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...) 替代。"
-            "这些参数将在后续版本移除。",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    # 获取配置（支持依赖注入）：deps 优先 > _config 参数 > 全局 getter
-    if deps is not None:
-        config = deps.config
-    elif _config is not None:
-        config = _config
-    else:
-        config = get_config()
-
-    # 确保有可用的 deps 对象（用于后续依赖统一获取）
-    # 如果调用方未提供 deps，创建一个延迟初始化的 deps 容器
-    if deps is None:
-        deps = GatewayDeps.create(config=config)
-        # [LEGACY] 兼容分支：如果有显式传入的 _db 或 _openmemory_client，注入到 deps 中
-        # 此路径仅为向后兼容保留，新代码应完全使用 deps 参数
-        if _db is not None:
-            deps._db = _db
-        if _openmemory_client is not None:
-            deps._openmemory_client = _openmemory_client
+    # 从 deps 获取配置
+    config = deps.config
 
     # 默认目标空间
     if not target_space:
@@ -365,15 +320,9 @@ async def memory_store_impl(
         action = decision.action.value
 
         # 4. 调用 OpenMemory
-        # 获取 OpenMemory client（支持依赖注入）：deps 优先 > _openmemory_client 参数 > 全局 getter
-        # 注意：不使用不带 config 的 get_client()，确保 base_url/api_key 来自 config
+        # 获取 OpenMemory client（统一从 deps 获取）
         try:
-            if deps is not None:
-                client = deps.openmemory_client
-            elif _openmemory_client is not None:
-                client = _openmemory_client
-            else:
-                client = get_client(config)
+            client = deps.openmemory_client
             result = client.store(
                 content=payload_md,
                 space=final_space,

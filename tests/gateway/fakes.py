@@ -5,21 +5,51 @@ Gateway 测试用 Fake 依赖
 提供可注入的 Fake 对象，用于替代外部依赖（OpenMemory、Logbook DB）。
 支持配置不同的响应行为和失败模式。
 
+================================================================================
+依赖注入使用方式 (v1.0):
+================================================================================
+
+所有测试应通过 GatewayDeps.for_testing() 注入依赖，而非使用旧的 _openmemory_client 参数。
+
 使用示例:
-    from tests.gateway.fakes import FakeOpenMemoryClient, FakeLogbookDatabase
+    from engram.gateway.di import GatewayDeps
+    from tests.gateway.fakes import (
+        FakeGatewayConfig,
+        FakeLogbookAdapter,
+        FakeLogbookDatabase,
+        FakeOpenMemoryClient,
+    )
 
-    # 创建 fake client
+    # 创建 fake 依赖
+    fake_config = FakeGatewayConfig()
+    fake_db = FakeLogbookDatabase()
+    fake_adapter = FakeLogbookAdapter()
     fake_client = FakeOpenMemoryClient()
-    fake_client.configure_store_success(memory_id="mem_123")
 
+    # 配置 fake 行为
+    fake_client.configure_store_success(memory_id="mem_123")
     # 或配置为失败模式
     fake_client.configure_store_connection_error("连接超时")
 
-    # 注入到被测函数
+    # 通过 GatewayDeps.for_testing() 注入依赖
+    deps = GatewayDeps.for_testing(
+        config=fake_config,
+        db=fake_db,
+        logbook_adapter=fake_adapter,
+        openmemory_client=fake_client,
+    )
+
+    # 调用被测函数
     result = await memory_store_impl(
         payload_md="test",
-        _openmemory_client=fake_client,
+        correlation_id="corr-test1234567890",
+        deps=deps,
     )
+
+注意:
+- deps 参数是必需的 keyword-only 参数
+- correlation_id 也是必需参数，必须由调用方提供
+- 不再支持旧的 _config/_openmemory_client 参数
 """
 
 from dataclasses import dataclass, field
@@ -511,16 +541,20 @@ class FakeLogbookDatabase:
 
 class FakeLogbookAdapter:
     """
-    Fake logbook_adapter 模块，模拟 check_dedup 和 query_knowledge_candidates
+    Fake logbook_adapter 模块，模拟 check_dedup、query_knowledge_candidates、
+    check_user_exists 和 ensure_user 等方法
     """
 
     def __init__(self):
         self._dedup_result: Optional[Dict[str, Any]] = None
         self._knowledge_candidates: List[Dict[str, Any]] = []
+        self._user_exists: bool = True  # 默认用户存在
 
         # 调用记录
         self.dedup_calls: List[Dict[str, Any]] = []
         self.query_calls: List[Dict[str, Any]] = []
+        self.check_user_calls: List[str] = []
+        self.ensure_user_calls: List[Dict[str, Any]] = []
 
     def configure_dedup_hit(
         self,
@@ -546,6 +580,32 @@ class FakeLogbookAdapter:
     def configure_knowledge_candidates(self, candidates: List[Dict[str, Any]]):
         """配置 knowledge_candidates 查询结果"""
         self._knowledge_candidates = candidates
+
+    def configure_user_exists(self, exists: bool = True):
+        """配置 check_user_exists 返回值"""
+        self._user_exists = exists
+
+    def check_user_exists(self, user_id: str) -> bool:
+        """检查用户是否存在"""
+        self.check_user_calls.append(user_id)
+        return self._user_exists
+
+    def ensure_user(
+        self,
+        user_id: str,
+        display_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """确保用户存在（自动创建）"""
+        self.ensure_user_calls.append(
+            {
+                "user_id": user_id,
+                "display_name": display_name,
+            }
+        )
+        return {
+            "user_id": user_id,
+            "display_name": display_name or user_id,
+        }
 
     def check_dedup(
         self,
@@ -583,6 +643,8 @@ class FakeLogbookAdapter:
         """重置调用记录"""
         self.dedup_calls.clear()
         self.query_calls.clear()
+        self.check_user_calls.clear()
+        self.ensure_user_calls.clear()
 
 
 # ============== Fake GatewayConfig ==============

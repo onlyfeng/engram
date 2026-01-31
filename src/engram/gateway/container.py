@@ -238,8 +238,20 @@ def get_container() -> GatewayContainer:
 
     首次调用时创建实例，后续调用返回缓存的实例。
 
+    **使用场景**:
+    - 入口层（app.py, startup.py）：用于初始化和预热依赖
+    - FastAPI 依赖注入函数（本模块内）：如 get_gateway_deps() 等
+
+    **禁止场景**:
+    - handlers/ 模块内禁止直接调用此函数
+    - handlers 应通过 `deps: GatewayDepsProtocol` 参数获取依赖
+
     Returns:
         GatewayContainer 实例
+
+    See Also:
+        - get_gateway_deps(): handlers 推荐使用的依赖获取方式
+        - GatewayDeps.for_testing(): 测试时的依赖注入方式
     """
     global _container
     if _container is None:
@@ -271,6 +283,51 @@ def reset_container() -> None:
         _container.reset()
     _container = None
     reset_config()
+
+
+def reset_all_singletons() -> None:
+    """
+    重置所有 Gateway 模块的全局单例
+
+    用于测试 teardown，确保所有单例被正确清理，避免测试间状态污染。
+    此函数同时重置：
+    - GatewayContainer 全局容器
+    - GatewayConfig 全局配置
+    - LogbookAdapter 全局适配器
+    - OpenMemoryClient 全局客户端
+
+    使用场景：
+    - pytest fixture 的 teardown
+    - 集成测试的 setup/teardown
+    - 需要完全隔离的测试场景
+
+    Usage:
+        @pytest.fixture(autouse=True)
+        def reset_singletons():
+            yield
+            reset_all_singletons()
+
+    线程安全: 否（建议在单线程环境下调用，如测试 teardown）
+    """
+    global _container
+
+    # 1. 重置全局容器（内部会调用 reset_config）
+    if _container is not None:
+        _container.reset()
+    _container = None
+
+    # 2. 重置 config 单例
+    reset_config()
+
+    # 3. 重置 logbook_adapter 单例
+    from .logbook_adapter import reset_adapter
+
+    reset_adapter()
+
+    # 4. 重置 openmemory_client 单例
+    from .openmemory_client import reset_client
+
+    reset_client()
 
 
 # ======================== FastAPI 依赖注入函数 ========================

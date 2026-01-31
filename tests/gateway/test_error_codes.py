@@ -21,6 +21,46 @@ from engram.logbook.errors import ErrorCode
 # Mock 路径：handlers 模块使用的依赖
 HANDLER_MODULE = "engram.gateway.handlers.memory_store"
 
+
+# ======================== 测试配置辅助函数 ========================
+#
+# 注意: 推荐使用 conftest.py 中的 gateway_deps fixture 进行依赖注入。
+# 如果需要自定义配置，可以使用此辅助函数或 tests/gateway/fakes.py 中的 FakeGatewayConfig。
+
+
+def make_test_config(
+    governance_admin_key: Optional[str] = "test_admin_key",
+    unknown_actor_policy: str = "degrade",
+    **overrides,
+):
+    """
+    创建测试用配置
+
+    此辅助函数减少重复的 TestConfig dataclass 定义。
+
+    Args:
+        governance_admin_key: 治理管理员密钥（默认 "test_admin_key"）
+        unknown_actor_policy: 未知 actor 策略（默认 "degrade"）
+        **overrides: 其他配置覆盖
+
+    Returns:
+        配置 dataclass 实例
+    """
+    # 使用 tests/gateway/fakes.py 中的 FakeGatewayConfig
+    from tests.gateway.fakes import FakeGatewayConfig
+
+    config = FakeGatewayConfig(
+        governance_admin_key=governance_admin_key,
+        unknown_actor_policy=unknown_actor_policy,
+    )
+
+    # 应用覆盖
+    for key, value in overrides.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
+    return config
+
+
 # ======================== ErrorCode 常量验证测试 ========================
 
 
@@ -105,27 +145,8 @@ class TestGatewayErrorCodes:
 
     @pytest.fixture
     def test_config(self):
-        """测试用配置"""
-
-        @dataclass
-        class TestConfig:
-            project_key: str = "test_project"
-            postgres_dsn: str = "postgresql://fake:fake@localhost/fakedb"
-            default_team_space: str = "team:test"
-            private_space_prefix: str = "private:"
-            openmemory_base_url: str = "http://fake-openmemory:8080"
-            openmemory_api_key: Optional[str] = "fake_api_key"
-            governance_admin_key: Optional[str] = "test_admin_key"
-            unknown_actor_policy: str = "degrade"
-            gateway_port: int = 8787
-            auto_migrate_on_startup: bool = False
-            logbook_check_on_startup: bool = False
-            minio_audit_webhook_auth_token: Optional[str] = None
-            minio_audit_max_payload_size: int = 1024 * 1024
-            validate_evidence_refs: bool = False
-            strict_mode_enforce_validate_refs: bool = True
-
-        return TestConfig()
+        """测试用配置（使用 make_test_config 辅助函数）"""
+        return make_test_config()
 
     @pytest.mark.asyncio
     async def test_openmemory_connection_error_reason(self, test_config):
@@ -530,27 +551,8 @@ class TestOpenMemoryAPIErrorWithStatus:
 
     @pytest.fixture
     def test_config(self):
-        """测试用配置"""
-
-        @dataclass
-        class TestConfig:
-            project_key: str = "test_project"
-            postgres_dsn: str = "postgresql://fake:fake@localhost/fakedb"
-            default_team_space: str = "team:test"
-            private_space_prefix: str = "private:"
-            openmemory_base_url: str = "http://fake-openmemory:8080"
-            openmemory_api_key: Optional[str] = "fake_api_key"
-            governance_admin_key: Optional[str] = "test_admin_key"
-            unknown_actor_policy: str = "degrade"
-            gateway_port: int = 8787
-            auto_migrate_on_startup: bool = False
-            logbook_check_on_startup: bool = False
-            minio_audit_webhook_auth_token: Optional[str] = None
-            minio_audit_max_payload_size: int = 1024 * 1024
-            validate_evidence_refs: bool = False
-            strict_mode_enforce_validate_refs: bool = True
-
-        return TestConfig()
+        """测试用配置（使用 make_test_config 辅助函数）"""
+        return make_test_config()
 
     @pytest.mark.asyncio
     async def test_openmemory_api_error_with_status_404(self, test_config):
@@ -681,27 +683,8 @@ class TestUnknownExceptionErrorCodes:
 
     @pytest.fixture
     def test_config(self):
-        """测试用配置"""
-
-        @dataclass
-        class TestConfig:
-            project_key: str = "test_project"
-            postgres_dsn: str = "postgresql://fake:fake@localhost/fakedb"
-            default_team_space: str = "team:test"
-            private_space_prefix: str = "private:"
-            openmemory_base_url: str = "http://fake-openmemory:8080"
-            openmemory_api_key: Optional[str] = "fake_api_key"
-            governance_admin_key: Optional[str] = None
-            unknown_actor_policy: str = "degrade"
-            gateway_port: int = 8787
-            auto_migrate_on_startup: bool = False
-            logbook_check_on_startup: bool = False
-            minio_audit_webhook_auth_token: Optional[str] = None
-            minio_audit_max_payload_size: int = 1024 * 1024
-            validate_evidence_refs: bool = False
-            strict_mode_enforce_validate_refs: bool = True
-
-        return TestConfig()
+        """测试用配置（使用 make_test_config 辅助函数）"""
+        return make_test_config(governance_admin_key=None)
 
     @pytest.mark.asyncio
     async def test_openmemory_generic_error_reason(self, test_config):
@@ -932,27 +915,8 @@ class TestGovernanceUpdateErrorCodes:
 
     @pytest.fixture
     def test_config(self):
-        """测试用配置"""
-
-        @dataclass
-        class TestConfig:
-            project_key: str = "test_project"
-            postgres_dsn: str = "postgresql://fake:fake@localhost/fakedb"
-            default_team_space: str = "team:test"
-            private_space_prefix: str = "private:"
-            openmemory_base_url: str = "http://fake-openmemory:8080"
-            openmemory_api_key: Optional[str] = "fake_api_key"
-            governance_admin_key: Optional[str] = "real_admin_key"
-            unknown_actor_policy: str = "degrade"
-            gateway_port: int = 8787
-            auto_migrate_on_startup: bool = False
-            logbook_check_on_startup: bool = False
-            minio_audit_webhook_auth_token: Optional[str] = None
-            minio_audit_max_payload_size: int = 1024 * 1024
-            validate_evidence_refs: bool = False
-            strict_mode_enforce_validate_refs: bool = True
-
-        return TestConfig()
+        """测试用配置（使用 make_test_config 辅助函数）"""
+        return make_test_config(governance_admin_key="real_admin_key")
 
     @pytest.mark.asyncio
     async def test_governance_missing_credentials_reason(self, test_config):
@@ -1150,27 +1114,8 @@ class TestUnifiedResponseContract:
 
     @pytest.fixture
     def test_config(self):
-        """测试用配置"""
-
-        @dataclass
-        class TestConfig:
-            project_key: str = "test_project"
-            postgres_dsn: str = "postgresql://fake:fake@localhost/fakedb"
-            default_team_space: str = "team:test"
-            private_space_prefix: str = "private:"
-            openmemory_base_url: str = "http://fake-openmemory:8080"
-            openmemory_api_key: Optional[str] = "fake_api_key"
-            governance_admin_key: Optional[str] = "test_admin_key"
-            unknown_actor_policy: str = "degrade"
-            gateway_port: int = 8787
-            auto_migrate_on_startup: bool = False
-            logbook_check_on_startup: bool = False
-            minio_audit_webhook_auth_token: Optional[str] = None
-            minio_audit_max_payload_size: int = 1024 * 1024
-            validate_evidence_refs: bool = False
-            strict_mode_enforce_validate_refs: bool = True
-
-        return TestConfig()
+        """测试用配置（使用 make_test_config 辅助函数）"""
+        return make_test_config()
 
     @pytest.mark.asyncio
     async def test_deferred_response_contract(self, test_config):
@@ -1400,27 +1345,8 @@ class TestCorrelationIdInErrorResponses:
 
     @pytest.fixture
     def test_config(self):
-        """测试用配置"""
-
-        @dataclass
-        class TestConfig:
-            project_key: str = "test_project"
-            postgres_dsn: str = "postgresql://fake:fake@localhost/fakedb"
-            default_team_space: str = "team:test"
-            private_space_prefix: str = "private:"
-            openmemory_base_url: str = "http://fake-openmemory:8080"
-            openmemory_api_key: Optional[str] = "fake_api_key"
-            governance_admin_key: Optional[str] = "test_admin_key"
-            unknown_actor_policy: str = "degrade"
-            gateway_port: int = 8787
-            auto_migrate_on_startup: bool = False
-            logbook_check_on_startup: bool = False
-            minio_audit_webhook_auth_token: Optional[str] = None
-            minio_audit_max_payload_size: int = 1024 * 1024
-            validate_evidence_refs: bool = False
-            strict_mode_enforce_validate_refs: bool = True
-
-        return TestConfig()
+        """测试用配置（使用 make_test_config 辅助函数）"""
+        return make_test_config()
 
     @pytest.mark.asyncio
     async def test_memory_store_response_has_correlation_id(self, test_config):
@@ -1645,7 +1571,12 @@ class TestErrorDataCorrelationIdContract:
 
 @dataclass
 class MockConfig:
-    """测试用 Mock 配置（用于 Deferred/Outbox 完整场景测试）"""
+    """
+    测试用 Mock 配置（用于 Deferred/Outbox 完整场景测试）
+
+    注意: 对于新测试，推荐使用 make_test_config() 辅助函数，
+    或 tests/gateway/fakes.py 中的 FakeGatewayConfig。
+    """
 
     project_key: str = "test_project"
     postgres_dsn: str = "postgresql://fake:fake@localhost/fakedb"

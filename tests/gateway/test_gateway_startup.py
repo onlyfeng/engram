@@ -932,18 +932,14 @@ class TestOpenMemoryClientConfigPropagation:
     1. 显式传入 config 时，使用 config.openmemory_base_url 和 config.openmemory_api_key
     2. 不传入 config 时，从环境变量获取（OPENMEMORY_BASE_URL, OPENMEMORY_API_KEY/OM_API_KEY）
     3. Container 构造的 client 必须使用 config 的配置
+
+    注意:
+    - 全局状态重置由 conftest.py 的 auto_reset_gateway_state fixture 自动处理
+    - 此处仅保留环境变量管理逻辑
     """
 
     def setup_method(self):
-        """每个测试前重置配置和客户端"""
-        from engram.gateway.config import reset_config
-        from engram.gateway.container import reset_container
-        from engram.gateway.openmemory_client import reset_client
-
-        reset_config()
-        reset_client()
-        reset_container()
-
+        """每个测试前保存并清理环境变量"""
         # 保存并清理环境变量
         self._saved_env = {}
         for key in [
@@ -959,19 +955,13 @@ class TestOpenMemoryClientConfigPropagation:
 
     def teardown_method(self):
         """每个测试后恢复环境变量"""
-        from engram.gateway.config import reset_config
-        from engram.gateway.container import reset_container
-        from engram.gateway.openmemory_client import reset_client
-
-        reset_config()
-        reset_client()
-        reset_container()
-
+        # 恢复环境变量
         for key, value in self._saved_env.items():
             if value is None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        # 全局状态重置由 auto_reset_gateway_state 处理
 
     def test_get_client_with_config_uses_config_values(self):
         """

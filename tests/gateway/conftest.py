@@ -322,8 +322,93 @@ def logbook_adapter_config(migrated_db: dict):
     logbook_adapter.reset_adapter()
 
 
+# ---------- Gateway 状态重置辅助函数 ----------
+
+
+def reset_all_gateway_state():
+    """
+    集中重置所有 Gateway 相关的全局状态
+
+    包括:
+    - config: 配置单例
+    - logbook_adapter: 适配器单例
+    - openmemory_client: 客户端单例
+    - container: 全局依赖容器
+
+    用于测试间隔离，确保每个测试从干净状态开始。
+    """
+    # 重置 config
+    try:
+        from engram.gateway.config import reset_config
+
+        reset_config()
+    except ImportError:
+        pass
+
+    # 重置 logbook_adapter
+    try:
+        from engram.gateway.logbook_adapter import reset_adapter
+
+        reset_adapter()
+    except (ImportError, AttributeError):
+        pass
+
+    # 重置 openmemory_client
+    try:
+        from engram.gateway.openmemory_client import reset_client
+
+        reset_client()
+    except (ImportError, AttributeError):
+        pass
+
+    # 重置 container
+    try:
+        from engram.gateway.container import reset_container
+
+        reset_container()
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def auto_reset_gateway_state():
+    """
+    自动重置 Gateway 状态的 fixture（autouse=True）
+
+    在每个测试函数前后自动重置全局状态，确保测试隔离。
+    """
+    # setup: 测试前重置
+    reset_all_gateway_state()
+
+    yield
+
+    # teardown: 测试后重置
+    reset_all_gateway_state()
+
+
 # ---------- GatewayDeps Fixture ----------
 # 提供可注入的依赖容器，让测试通过依赖注入替代 patch
+#
+# 使用指南:
+# =========
+# 1. 对于 handler 单元测试，优先使用 gateway_deps fixture：
+#
+#    @pytest.mark.asyncio
+#    async def test_handler(gateway_deps, test_correlation_id):
+#        result = await memory_store_impl(
+#            payload_md="test",
+#            correlation_id=test_correlation_id,
+#            deps=gateway_deps,
+#        )
+#
+# 2. 需要自定义依赖时，使用 GatewayDeps.for_testing()：
+#
+#    deps = GatewayDeps.for_testing(
+#        config=custom_config,
+#        db=custom_db,
+#    )
+#
+# 3. 对于 FastAPI 集成测试，使用 gateway_test_container fixture。
 
 
 @pytest.fixture(scope="function")
@@ -444,19 +529,90 @@ def test_correlation_id():
 @pytest.fixture(scope="function")
 def mock_logbook_adapter_module(fake_logbook_adapter):
     """
-    Mock logbook_adapter 模块
+    [已弃用] Mock logbook_adapter 模块
 
-    在测试期间将 logbook_adapter 模块的函数替换为 fake 实现。
-    适用于需要 mock 模块级函数（如 check_dedup）的场景。
+    此 fixture 已弃用，新测试应使用以下方式进行依赖注入:
 
-    使用示例:
-        @pytest.mark.asyncio
-        async def test_dedup(gateway_deps, mock_logbook_adapter_module):
+    - handler 单元测试: 使用 GatewayDeps.for_testing(logbook_adapter=fake_adapter)
+    - FastAPI 集成测试: 使用 gateway_test_container fixture
+
+    仅保留此 fixture 用于以下场景:
+    1. outbox_worker 测试（outbox_worker 使用模块级 logbook_adapter，不通过 DI）
+    2. legacy 代码路径测试（正在迁移中的旧代码）
+
+    迁移指南:
+        # 旧方式（不推荐）
+        async def test_old(mock_logbook_adapter_module):
             mock_logbook_adapter_module.configure_dedup_hit(memory_id="mem_123")
-            result = await memory_store_impl(...)
+
+        # 新方式（推荐）
+        async def test_new(fake_logbook_adapter, test_correlation_id):
+            fake_logbook_adapter.configure_dedup_hit(memory_id="mem_123")
+            deps = GatewayDeps.for_testing(logbook_adapter=fake_logbook_adapter)
+            result = await memory_store_impl(deps=deps, correlation_id=test_correlation_id)
     """
+    import warnings
+
+    warnings.warn(
+        "mock_logbook_adapter_module fixture 已弃用，请使用 GatewayDeps.for_testing() 进行依赖注入",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     with (
         patch("engram.gateway.handlers.memory_store.logbook_adapter", fake_logbook_adapter),
         patch("engram.gateway.handlers.memory_query.logbook_adapter", fake_logbook_adapter),
     ):
         yield fake_logbook_adapter
+
+
+# ---------- FastAPI 集成测试 Fixture ----------
+
+
+@pytest.fixture(scope="function")
+def gateway_test_container(
+    fake_gateway_config, fake_logbook_db, fake_openmemory_client, fake_logbook_adapter
+):
+    """
+    为 FastAPI 集成测试创建测试容器
+
+    此 fixture 会设置全局容器，使得 FastAPI app 通过 get_gateway_deps()
+    获取同一组测试依赖。
+
+    使用示例:
+        def test_mcp_endpoint(gateway_test_container):
+            from engram.gateway.main import app
+            from fastapi.testclient import TestClient
+
+            # app 将使用 gateway_test_container 中的 fake 依赖
+            with TestClient(app) as client:
+                response = client.post("/mcp", json={...})
+
+    注意:
+        - 测试结束后会自动重置全局容器（通过 auto_reset_gateway_state）
+        - 如需自定义依赖，直接使用此 fixture 返回的组件字典
+    """
+    from engram.gateway.container import (
+        GatewayContainer,
+        set_container,
+    )
+
+    # 创建测试容器
+    test_container = GatewayContainer.create_for_testing(
+        config=fake_gateway_config,
+        db=fake_logbook_db,
+        logbook_adapter=fake_logbook_adapter,
+        openmemory_client=fake_openmemory_client,
+    )
+
+    # 设置全局容器
+    set_container(test_container)
+
+    yield {
+        "container": test_container,
+        "config": fake_gateway_config,
+        "db": fake_logbook_db,
+        "adapter": fake_logbook_adapter,
+        "client": fake_openmemory_client,
+    }
+
+    # teardown 由 auto_reset_gateway_state 处理

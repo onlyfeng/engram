@@ -6,12 +6,12 @@ memory_query handler - memory_query 工具核心实现
 2. OpenMemory 失败时降级到 Logbook 回退查询
 
 ================================================================================
-                       依赖注入与迁移指引
+                       依赖注入 (v1.0)
 ================================================================================
 
-推荐的依赖获取方式（优先级从高到低）:
+依赖获取方式:
 
-1. 通过 deps 参数传入 GatewayDeps (推荐):
+通过 deps 参数传入 GatewayDeps (必需):
    ```python
    from engram.gateway.di import GatewayDeps
 
@@ -23,18 +23,10 @@ memory_query handler - memory_query 工具核心实现
    )
    ```
 
-2. 通过 _config, _openmemory_client 参数 (向后兼容):
-   ```python
-   result = await memory_query_impl(
-       query="...",
-       correlation_id="...",
-       _config=my_config,
-       _openmemory_client=my_client,
-   )
-   ```
-
-3. 使用模块级全局函数 (已弃用):
-   不传入任何依赖参数时，使用 get_config() / get_client() 等全局函数
+v1.0 变更：
+   - deps 参数为必需参数
+   - 已移除 _config/_openmemory_client 参数
+   - 已移除 get_config()/get_client() 全局 fallback
 
 ================================================================================
                        correlation_id 单一来源原则
@@ -47,20 +39,12 @@ handler 不再自行生成 correlation_id，确保同一请求使用同一 ID。
 """
 
 import logging
-import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
-from ..config import GatewayConfig, get_config
-from ..di import GatewayDeps, GatewayDepsProtocol
-from ..openmemory_client import (
-    OpenMemoryError,
-    get_client,
-)
-
-if TYPE_CHECKING:
-    from ..openmemory_client import OpenMemoryClient
+from ..di import GatewayDepsProtocol
+from ..openmemory_client import OpenMemoryError
 
 logger = logging.getLogger("gateway.handlers.memory_query")
 
@@ -83,12 +67,8 @@ async def memory_query_impl(
     filters: Optional[Dict[str, Any]] = None,
     top_k: int = 10,
     correlation_id: Optional[str] = None,
-    # 依赖注入参数（推荐方式）
-    deps: Optional[GatewayDepsProtocol] = None,
-    # [DEPRECATED] 以下参数将在后续版本移除，请使用 deps 参数
-    # 迁移计划：这些参数仅为向后兼容保留，新代码应使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...)
-    _config: Optional[GatewayConfig] = None,
-    _openmemory_client: Optional["OpenMemoryClient"] = None,
+    *,
+    deps: GatewayDepsProtocol,
 ) -> MemoryQueryResponse:
     """
     memory_query 核心实现
@@ -96,11 +76,13 @@ async def memory_query_impl(
     当 OpenMemory 查询失败时，会降级到 Logbook 的 knowledge_candidates 表进行回退查询。
 
     Args:
+        query: 查询字符串
+        spaces: 搜索空间列表，不传则使用默认空间
+        filters: 过滤条件
+        top_k: 返回结果数量限制
         correlation_id: 追踪 ID（必需）。必须由 HTTP 入口层生成后传入，
                         确保同一请求使用同一 ID。handler 不再自行生成。
-        deps: 可选的 GatewayDeps 依赖容器，优先使用其中的依赖
-        _config: 可选的 GatewayConfig 对象，不传则使用 get_config()
-        _openmemory_client: 可选的 OpenMemoryClient 对象，不传则使用 get_client()
+        deps: GatewayDeps 依赖容器（必需），通过此对象获取所有依赖
 
     Raises:
         ValueError: 如果 correlation_id 未提供
@@ -112,44 +94,17 @@ async def memory_query_impl(
             "handler 不再自行生成 correlation_id"
         )
 
-    # [DEPRECATED] 弃用警告：_config/_openmemory_client 参数将在后续版本移除
-    if _config is not None or _openmemory_client is not None:
-        warnings.warn(
-            "memory_query_impl 的 _config/_openmemory_client 参数已弃用，"
-            "请使用 deps=GatewayDeps.create() 或 deps=GatewayDeps.for_testing(...) 替代。"
-            "这些参数将在后续版本移除。",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    # 获取配置（支持依赖注入）：deps 优先 > _config 参数 > 全局 getter
-    if deps is not None:
-        config = deps.config
-    elif _config is not None:
-        config = _config
-    else:
-        config = get_config()
-
-    # 确保有可用的 deps 对象（用于 fallback 查询时获取 logbook_adapter）
-    if deps is None:
-        deps = GatewayDeps.create(config=config)
-        # [LEGACY] 兼容分支：如果有显式传入的 _openmemory_client，注入到 deps 中
-        if _openmemory_client is not None:
-            deps._openmemory_client = _openmemory_client
+    # 通过 deps 获取配置
+    config = deps.config
 
     # 默认搜索空间
     if not spaces:
         spaces = [config.default_team_space]
 
     try:
-        # 获取 OpenMemory client（支持依赖注入）：deps 优先 > _openmemory_client 参数 > 全局 getter
-        # 注意：不使用不带 config 的 get_client()，确保 base_url/api_key 来自 config
-        if deps is not None:
-            client = deps.openmemory_client
-        elif _openmemory_client is not None:
-            client = _openmemory_client
-        else:
-            client = get_client(config)
+        # 通过 deps 获取 OpenMemory client
+        client = deps.openmemory_client
+
         # 使用 openmemory_client 的 search 方法
         combined_filters = filters.copy() if filters else {}
         combined_filters["spaces"] = spaces
