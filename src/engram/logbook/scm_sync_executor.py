@@ -202,11 +202,11 @@ def _gitlab_commits_handler(
     """
     GitLab commits 同步处理器
 
-    调用 scm_sync_gitlab_commits 模块进行同步。
+    使用包内 engram.logbook.scm_sync_tasks.gitlab_commits 模块进行同步。
     """
     try:
-        # 延迟导入避免循环依赖
-        import scm_sync_gitlab_commits as gitlab_commits
+        # 使用包内模块（不依赖根目录脚本）
+        from engram.logbook.scm_sync_tasks import gitlab_commits
 
         # 从 payload 获取配置
         gitlab_url = payload.get("gitlab_url")
@@ -261,12 +261,11 @@ def _gitlab_commits_handler(
                 "message": "probe sync executed with limited budget",
             }
         else:
-            # incremental 模式 - 暂时返回成功（需要完善）
-            result = {
-                "success": True,
-                "synced_count": 0,
-                "message": "incremental sync not fully implemented",
-            }
+            # incremental 模式
+            result = gitlab_commits.sync_gitlab_commits_incremental(
+                sync_config,
+                project_key=project_key,
+            )
 
         return result
 
@@ -285,10 +284,23 @@ def _gitlab_mrs_handler(
     """
     GitLab MRs 同步处理器
 
-    调用 scm_sync_gitlab_mrs 模块进行同步。
+    使用包内 engram.logbook.scm_sync_tasks.gitlab_mrs 模块进行同步。
     """
     try:
-        # 延迟导入避免循环依赖
+        # 使用包内模块（不依赖根目录脚本）
+        from engram.logbook.scm_sync_tasks import gitlab_mrs
+
+        # 从 payload 获取配置
+        gitlab_url = payload.get("gitlab_url")
+        project_id = payload.get("project_id")
+        project_key = payload.get("project_key", "")
+        token = payload.get("token") or ""
+
+        if not gitlab_url or not project_id:
+            return _make_error_result(
+                "missing gitlab_url or project_id in payload",
+                ErrorCategory.UNKNOWN.value,
+            )
 
         if mode == "probe":
             # probe 模式 - 熔断器 half_open 状态的受限同步
@@ -303,14 +315,28 @@ def _gitlab_mrs_handler(
                 "message": "gitlab_mrs probe sync executed with limited budget",
             }
 
-        # MRs 同步目前返回 stub 结果
-        return {
-            "success": True,
-            "synced_count": 0,
-            "scanned_count": 0,
-            "inserted_count": 0,
-            "message": "gitlab_mrs sync handler stub",
-        }
+        if mode == "backfill":
+            result = gitlab_mrs.backfill_gitlab_mrs(
+                gitlab_url=gitlab_url,
+                project_id=str(project_id),
+                token=token,
+                project_key=project_key,
+                since=payload.get("since"),
+                until=payload.get("until"),
+                update_watermark=payload.get("update_watermark", False),
+                dry_run=payload.get("dry_run", False),
+                batch_size=payload.get("batch_size", 100),
+            )
+        else:
+            # incremental 模式
+            result = gitlab_mrs.sync_gitlab_mrs_incremental(
+                gitlab_url=gitlab_url,
+                project_id=str(project_id),
+                token=token,
+                project_key=project_key,
+            )
+
+        return result
 
     except Exception as exc:
         from engram.logbook.scm_sync_errors import classify_exception
@@ -365,11 +391,11 @@ def _svn_handler(
     """
     SVN 同步处理器
 
-    调用 scm_sync_svn 模块进行同步。
+    使用包内 engram.logbook.scm_sync_tasks.svn 模块进行同步。
     """
     try:
-        # 延迟导入避免循环依赖
-        import scm_sync_svn as svn
+        # 使用包内模块（不依赖根目录脚本）
+        from engram.logbook.scm_sync_tasks import svn
 
         svn_url = payload.get("svn_url")
         project_key = payload.get("project_key", "")

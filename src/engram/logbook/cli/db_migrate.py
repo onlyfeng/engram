@@ -157,6 +157,14 @@ def main():
         help="跳过配置预检（仅在 --plan 模式下有效）",
     )
 
+    # 添加 --sql-dir 参数（特殊打包/兼容场景使用）
+    parser.add_argument(
+        "--sql-dir",
+        type=str,
+        default=None,
+        help="指定 SQL 文件目录路径。默认使用项目根目录 sql/。仅在特殊打包或兼容场景下使用此参数。",
+    )
+
     # 迁移后回填参数
     parser.add_argument(
         "--post-backfill",
@@ -187,9 +195,15 @@ def main():
 
     opts = get_output_options(args)
 
+    # 处理 sql_dir 参数
+    from pathlib import Path
+
+    sql_dir = Path(args.sql_dir) if args.sql_dir else None
+
     # --plan 模式：仅查看迁移计划，不连接数据库
     if args.plan:
         result = generate_migration_plan(
+            sql_dir=sql_dir,
             apply_roles=args.apply_roles or False,
             apply_openmemory_grants=args.apply_openmemory_grants or False,
             verify=args.verify,
@@ -213,6 +227,7 @@ def main():
         backfill_chunking_version=args.backfill_chunking_version,
         backfill_batch_size=args.backfill_batch_size,
         backfill_dry_run=args.backfill_dry_run,
+        sql_dir=sql_dir,
     )
     output_json(result, pretty=opts["pretty"])
 

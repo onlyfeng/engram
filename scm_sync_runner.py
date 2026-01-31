@@ -64,6 +64,7 @@ from engram.logbook.scm_sync_runner import (
     get_connection,
     refresh_vfacts,
     get_exit_code,
+    create_parser,
     parse_args,
     # 类
     SyncRunner,
@@ -115,6 +116,7 @@ __all__ = [
     "SyncRunner",
     # CLI
     "main",
+    "create_parser",
     "parse_args",
 ]
 

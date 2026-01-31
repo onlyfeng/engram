@@ -1,70 +1,58 @@
 #!/usr/bin/env python3
 """
-scm_sync_gitlab_mrs - GitLab MR 解析与客户端兼容层
+scm_sync_gitlab_mrs - GitLab MRs 同步脚本薄包装器
+
+[DEPRECATED] 此脚本已废弃，核心逻辑已迁移至包内模块。
+
+新代码应使用:
+    from engram.logbook.scm_sync_tasks import gitlab_mrs
+
+或通过 CLI:
+    python -m engram.logbook.cli.scm_sync ...
+
+此脚本保留用于向后兼容。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, Optional
+import warnings
 
-from engram.logbook.gitlab_client import GitLabClient as _GitLabClient
+# 发出废弃警告
+warnings.warn(
+    "scripts/scm_sync_gitlab_mrs.py 已废弃。"
+    "请使用 'from engram.logbook.scm_sync_tasks import gitlab_mrs' 代替。"
+    "此脚本将在未来版本中移除。",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-
-GitLabClient = _GitLabClient
-
-
-@dataclass
-class GitLabMergeRequest:
-    iid: int
-    project_id: int
-    title: str
-    description: str
-    state: str
-    author_id: Optional[int] = None
-    author_username: str = ""
-    source_branch: str = ""
-    target_branch: str = ""
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    merged_at: Optional[datetime] = None
-    merge_commit_sha: Optional[str] = None
-    web_url: str = ""
-
-
-def _parse_dt(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
-        return None
+# 从包内模块重新导出所有 API
+from engram.logbook.scm_sync_tasks.gitlab_mrs import (
+    # 数据类
+    GitLabMergeRequest,
+    # 解析函数
+    parse_merge_request,
+    # 辅助函数
+    map_gitlab_state_to_status,
+    build_mr_id,
+    ensure_repo,
+    # 数据库操作
+    insert_merge_requests,
+    # 同步主函数
+    backfill_gitlab_mrs,
+    sync_gitlab_mrs_incremental,
+)
+from engram.logbook.gitlab_client import GitLabClient
 
 
-def parse_merge_request(data: Dict[str, Any]) -> GitLabMergeRequest:
-    author = data.get("author") or {}
-    return GitLabMergeRequest(
-        iid=int(data.get("iid") or 0),
-        project_id=int(data.get("project_id") or 0),
-        title=data.get("title", "") or "",
-        description=data.get("description", "") or "",
-        state=data.get("state", "") or "",
-        author_id=author.get("id"),
-        author_username=author.get("username", "") or "",
-        source_branch=data.get("source_branch", "") or "",
-        target_branch=data.get("target_branch", "") or "",
-        created_at=_parse_dt(data.get("created_at")),
-        updated_at=_parse_dt(data.get("updated_at")),
-        merged_at=_parse_dt(data.get("merged_at")),
-        merge_commit_sha=data.get("merge_commit_sha"),
-        web_url=data.get("web_url", "") or "",
-    )
-
-
-def map_gitlab_state_to_status(state: str) -> str:
-    if state == "opened":
-        return "open"
-    return state
+__all__ = [
+    "GitLabClient",
+    "GitLabMergeRequest",
+    "parse_merge_request",
+    "map_gitlab_state_to_status",
+    "build_mr_id",
+    "ensure_repo",
+    "insert_merge_requests",
+    "backfill_gitlab_mrs",
+    "sync_gitlab_mrs_incremental",
+]

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from engram.logbook.errors import (
     EngramConfigError,
@@ -346,9 +346,13 @@ def main() -> int:
     _add_dsn_config_args(get_parser)
     add_output_arguments(get_parser)
 
-    # sync 子命令（占位）
-    sync_parser = subparsers.add_parser("sync", help="同步仓库数据")
-    sync_parser.add_argument("--repo-id", required=True, help="仓库 ID")
+    # sync 子命令（重定向到 engram-scm-sync）
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="同步仓库数据 (请使用 engram-scm-sync 命令)",
+        description="此子命令已迁移。请使用 engram-scm-sync 命令进行同步操作。",
+    )
+    sync_parser.add_argument("--repo-id", help="仓库 ID")
     _add_dsn_config_args(sync_parser)
     add_output_arguments(sync_parser)
 
@@ -362,12 +366,24 @@ def main() -> int:
     elif args.command == "get-repo":
         return _handle_get_repo(args, opts)
     elif args.command == "sync":
+        # sync 功能已迁移到 engram-scm-sync 命令
         output_json(
-            make_error_result(code="NOT_IMPLEMENTED", message="sync 命令尚未实现"),
+            make_success_result(
+                message="sync 功能已迁移，请使用 engram-scm-sync 命令",
+                data={
+                    "hint": "使用 engram-scm-sync runner incremental --repo <repo_spec> 进行增量同步",
+                    "examples": [
+                        "engram-scm-sync runner incremental --repo gitlab:123",
+                        "engram-scm-sync runner backfill --repo svn:456 --last-days 7",
+                        "engram-scm-sync status --health",
+                    ],
+                    "help": "engram-scm-sync --help",
+                },
+            ),
             pretty=opts["pretty"],
             quiet=opts["quiet"],
         )
-        return EXIT_ERROR
+        return EXIT_SUCCESS
     elif args.command is None:
         parser.print_help()
         return EXIT_SUCCESS

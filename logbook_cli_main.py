@@ -41,8 +41,11 @@ def _load_module():
     global _module_cache
     if _module_cache is None:
         import importlib.util
-        spec = importlib.util.spec_from_file_location("_logbook_cli_main_impl", _SCRIPT_PATH)
+        module_name = "_logbook_cli_main_impl"
+        spec = importlib.util.spec_from_file_location(module_name, _SCRIPT_PATH)
         _module_cache = importlib.util.module_from_spec(spec)
+        # 需要在 exec_module 前将模块添加到 sys.modules，否则 dataclass 装饰器会失败
+        sys.modules[module_name] = _module_cache
         spec.loader.exec_module(_module_cache)
     return _module_cache
 

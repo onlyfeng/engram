@@ -22,6 +22,7 @@ engram_logbook.migrate - 数据库迁移模块
 import os
 import re
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
 from psycopg import sql
@@ -197,7 +198,7 @@ def is_testing_mode() -> bool:
 # ============================================================================
 
 
-def get_repair_commands_hint(error_code: str = None, target_db: str = None) -> dict:
+def get_repair_commands_hint(error_code: Optional[str] = None, target_db: Optional[str] = None) -> dict:
     """
     根据错误代码生成修复命令提示。
 
@@ -522,7 +523,7 @@ def check_has_superuser_privilege(conn) -> bool:
 
 
 def generate_migration_plan(
-    sql_dir: Path = None,
+    sql_dir: Optional[Path] = None,
     apply_roles: bool = False,
     apply_openmemory_grants: bool = False,
     verify: bool = False,
@@ -920,7 +921,7 @@ def should_auto_apply_openmemory() -> bool:
 # ============================================================================
 
 
-def check_openmemory_schema_exists(conn, schema_name: str = None) -> tuple[bool, str]:
+def check_openmemory_schema_exists(conn, schema_name: Optional[str] = None) -> tuple[bool, str]:
     """检查 openmemory schema 是否存在。"""
     if schema_name is None:
         schema_name = get_openmemory_schema()
@@ -943,10 +944,10 @@ def check_openmemory_schema_exists(conn, schema_name: str = None) -> tuple[bool,
 
 def check_tables_exist(
     conn,
-    tables: list[tuple[str, str]] = None,
+    tables: Optional[list[tuple[str, str]]] = None,
     *,
-    schema_map: dict[str, str] = None,
-    schema_prefix: str = None,
+    schema_map: Optional[dict[str, str]] = None,
+    schema_prefix: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """检查指定的表是否存在。"""
     if tables is None:
@@ -982,10 +983,10 @@ def check_tables_exist(
 
 def check_schemas_exist(
     conn,
-    schemas: list[str] = None,
+    schemas: Optional[list[str]] = None,
     *,
-    schema_map: dict[str, str] = None,
-    schema_prefix: str = None,
+    schema_map: Optional[dict[str, str]] = None,
+    schema_prefix: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """检查指定的 schema 是否存在。"""
     if schemas is None:
@@ -1013,10 +1014,10 @@ def check_schemas_exist(
 
 def check_columns_exist(
     conn,
-    columns: list[tuple[str, str, str]] = None,
+    columns: Optional[list[tuple[str, str, str]]] = None,
     *,
-    schema_map: dict[str, str] = None,
-    schema_prefix: str = None,
+    schema_map: Optional[dict[str, str]] = None,
+    schema_prefix: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """检查指定的列是否存在。"""
     if columns is None:
@@ -1053,10 +1054,10 @@ def check_columns_exist(
 
 def check_indexes_exist(
     conn,
-    indexes: list[tuple[str, str]] = None,
+    indexes: Optional[list[tuple[str, str]]] = None,
     *,
-    schema_map: dict[str, str] = None,
-    schema_prefix: str = None,
+    schema_map: Optional[dict[str, str]] = None,
+    schema_prefix: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """检查指定的索引是否存在。"""
     if indexes is None:
@@ -1092,10 +1093,10 @@ def check_indexes_exist(
 
 def check_triggers_exist(
     conn,
-    triggers: list[tuple[str, str, str]] = None,
+    triggers: Optional[list[tuple[str, str, str]]] = None,
     *,
-    schema_map: dict[str, str] = None,
-    schema_prefix: str = None,
+    schema_map: Optional[dict[str, str]] = None,
+    schema_prefix: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """检查指定的触发器是否存在。"""
     if triggers is None:
@@ -1134,10 +1135,10 @@ def check_triggers_exist(
 
 def check_matviews_exist(
     conn,
-    matviews: list[tuple[str, str]] = None,
+    matviews: Optional[list[tuple[str, str]]] = None,
     *,
-    schema_map: dict[str, str] = None,
-    schema_prefix: str = None,
+    schema_map: Optional[dict[str, str]] = None,
+    schema_prefix: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
     """检查指定的物化视图是否存在。"""
     if matviews is None:
@@ -1216,13 +1217,13 @@ def check_search_path(
 
 def run_all_checks(
     conn,
-    schema_context: SchemaContext = None,
+    schema_context: Optional[SchemaContext] = None,
     *,
-    schema_map: dict[str, str] = None,
-    schema_prefix: str = None,
-    check_search_path_schemas: list[str] = None,
+    schema_map: Optional[dict[str, str]] = None,
+    schema_prefix: Optional[str] = None,
+    check_search_path_schemas: Optional[list[str]] = None,
     check_openmemory_schema: bool = False,
-    openmemory_schema_name: str = None,
+    openmemory_schema_name: Optional[str] = None,
 ) -> dict:
     """
     运行所有自检项，返回统一结果。
@@ -1308,7 +1309,7 @@ def run_all_checks(
 # ============================================================================
 
 
-def _build_lock_key(schema_prefix: str = None) -> str:
+def _build_lock_key(schema_prefix: Optional[str] = None) -> str:
     """构建迁移锁的唯一标识符。"""
     namespace = "engram_migrate"
     if schema_prefix:
@@ -1336,19 +1337,20 @@ def _release_advisory_lock(conn, lock_key: str, quiet: bool = False) -> None:
 
 
 def run_migrate(
-    config_path: str = None,
+    config_path: Optional[str] = None,
     quiet: bool = False,
-    dsn: str = None,
-    schema_prefix: str = None,
-    apply_roles: bool = None,
-    apply_openmemory_grants: bool = None,
+    dsn: Optional[str] = None,
+    schema_prefix: Optional[str] = None,
+    apply_roles: Optional[bool] = None,
+    apply_openmemory_grants: Optional[bool] = None,
     precheck_only: bool = False,
     verify: bool = False,
     verify_strict: bool = False,
     post_backfill: bool = False,
-    backfill_chunking_version: str = None,
+    backfill_chunking_version: Optional[str] = None,
     backfill_batch_size: int = 1000,
     backfill_dry_run: bool = False,
+    sql_dir: Optional[Path] = None,
 ) -> dict:
     """
     执行数据库迁移。
@@ -1369,6 +1371,8 @@ def run_migrate(
         backfill_chunking_version: 若指定，同时执行 chunking_version 回填
         backfill_batch_size: backfill 每批处理记录数（默认 1000）
         backfill_dry_run: backfill 是否为 dry-run 模式
+        sql_dir: SQL 文件目录路径（可选，默认使用项目根目录 sql/）。
+            仅在特殊打包或兼容场景下使用此参数。
 
     Returns:
         {ok: True, ...} 或 {ok: False, code, message, detail}
@@ -1458,7 +1462,9 @@ def run_migrate(
         # SQL 文件路径 - 使用相对于此模块的路径
         # migrate.py 在 src/engram/logbook/ 目录下，sql 在项目根目录 sql/
         # 路径: src/engram/logbook/migrate.py -> sql/
-        sql_dir = Path(__file__).parent.parent.parent.parent / "sql"
+        # 若传入 sql_dir 参数则使用该值，否则使用默认路径
+        if sql_dir is None:
+            sql_dir = Path(__file__).parent.parent.parent.parent / "sql"
 
         # 确定是否执行角色权限脚本
         should_apply_roles = apply_roles

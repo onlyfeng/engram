@@ -27,15 +27,108 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 from psycopg.rows import dict_row
 
+
+class InvariantSeverity(str, Enum):
+    """不变量违规严重程度"""
+
+    CRITICAL = "critical"  # 需要立即处理
+    WARNING = "warning"  # 需要关注
+    INFO = "info"  # 信息性提示
+
+
+@dataclass
+class InvariantViolation:
+    """
+    不变量违规记录
+
+    表示检测到的一个健康检查违规项。
+    """
+
+    check_id: str  # 检查项 ID
+    name: str  # 检查项名称
+    severity: InvariantSeverity  # 严重程度
+    count: int  # 违规数量
+    description: str  # 描述
+    remediation_hint: str  # 修复建议
+    details: List[Dict[str, Any]] = field(default_factory=list)  # 详细记录
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "check_id": self.check_id,
+            "name": self.name,
+            "severity": self.severity.value,
+            "count": self.count,
+            "description": self.description,
+            "remediation_hint": self.remediation_hint,
+            "details": self.details,
+        }
+
+
+@dataclass
+class HealthCheckResult:
+    """
+    健康检查结果
+
+    包含所有检查项的结果和整体健康状态。
+    """
+
+    healthy: bool  # 是否健康（无 critical 违规）
+    violations: List[InvariantViolation] = field(default_factory=list)
+    checked_at: float = field(default_factory=time.time)
+    total_checks: int = 0
+    passed_checks: int = 0
+    failed_checks: int = 0
+
+    @property
+    def exit_code(self) -> int:
+        """
+        返回 CLI 退出码
+
+        - 0: 健康（无违规）
+        - 1: 有 warning 级别违规
+        - 2: 有 critical 级别违规
+        """
+        if not self.violations:
+            return 0
+
+        has_critical = any(v.severity == InvariantSeverity.CRITICAL for v in self.violations)
+        if has_critical:
+            return 2
+
+        has_warning = any(v.severity == InvariantSeverity.WARNING for v in self.violations)
+        if has_warning:
+            return 1
+
+        return 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "healthy": self.healthy,
+            "exit_code": self.exit_code,
+            "checked_at": self.checked_at,
+            "total_checks": self.total_checks,
+            "passed_checks": self.passed_checks,
+            "failed_checks": self.failed_checks,
+            "violations": [v.to_dict() for v in self.violations],
+        }
+
+
 __all__ = [
     "get_sync_summary",
     "format_prometheus_metrics",
+    "check_invariants",
+    "format_health_check_output",
+    "HealthCheckResult",
+    "InvariantViolation",
+    "InvariantSeverity",
     # 内部函数（供测试使用）
     "_load_error_budget",
     "_load_circuit_breakers",
@@ -561,3 +654,225 @@ def format_prometheus_metrics(summary: Dict[str, Any]) -> str:
         )
 
     return "\n".join(lines) + "\n"
+
+
+# ============ 健康检查不变量 ============
+
+
+def check_invariants(
+    conn,
+    *,
+    db_api=None,
+    include_details: bool = False,
+    grace_seconds: int = 60,
+) -> HealthCheckResult:
+    """
+    执行系统健康不变量检查
+
+    检查项：
+    1. expired_running_jobs: running jobs 中 locked_at+lease 已过期数量
+    2. orphan_locks: sync_locks 过期/孤立（锁存在但无对应 running job）数量
+    3. gitlab_jobs_missing_dimensions: active gitlab_* jobs 缺失 gitlab_instance/tenant_id
+    4. expired_pauses: paused_records 过期但仍存在于数据库
+    5. circuit_breaker_inconsistencies: circuit_breaker state 与 error_budget 的矛盾状态
+
+    Args:
+        conn: 数据库连接
+        db_api: 数据库 API 模块（用于测试注入）
+        include_details: 是否包含详细记录（默认 False 以减少输出）
+        grace_seconds: running job 过期宽限时间（秒）
+
+    Returns:
+        HealthCheckResult: 健康检查结果
+    """
+    if db_api is None:
+        from engram.logbook import scm_db as db_api
+
+    violations: List[InvariantViolation] = []
+    total_checks = 5
+    passed_checks = 0
+
+    # 检查 1: expired_running_jobs
+    expired_running_count = db_api.count_expired_running_jobs(conn, grace_seconds=grace_seconds)
+    if expired_running_count > 0:
+        details = []
+        if include_details:
+            expired_jobs = db_api.list_expired_running_jobs(
+                conn, grace_seconds=grace_seconds, limit=10
+            )
+            details = [
+                {"job_id": str(j["job_id"]), "repo_id": j["repo_id"], "job_type": j["job_type"]}
+                for j in expired_jobs
+            ]
+        violations.append(
+            InvariantViolation(
+                check_id="expired_running_jobs",
+                name="过期的 Running 任务",
+                severity=InvariantSeverity.CRITICAL,
+                count=expired_running_count,
+                description=f"有 {expired_running_count} 个 running 状态的任务租约已过期",
+                remediation_hint="运行 `engram-scm-sync reaper --once` 回收过期任务",
+                details=details,
+            )
+        )
+    else:
+        passed_checks += 1
+
+    # 检查 2: orphan_locks
+    orphan_lock_count = db_api.count_orphan_locks(conn)
+    if orphan_lock_count > 0:
+        details = []
+        if include_details:
+            orphan_locks = db_api.list_orphan_locks(conn, limit=10)
+            details = [
+                {
+                    "lock_id": lock["lock_id"],
+                    "repo_id": lock["repo_id"],
+                    "job_type": lock["job_type"],
+                }
+                for lock in orphan_locks
+            ]
+        violations.append(
+            InvariantViolation(
+                check_id="orphan_locks",
+                name="孤立锁",
+                severity=InvariantSeverity.WARNING,
+                count=orphan_lock_count,
+                description=f"有 {orphan_lock_count} 个锁没有对应的 running job",
+                remediation_hint="运行 `engram-scm-sync admin locks force-release --lock-id <id>` 释放孤立锁",
+                details=details,
+            )
+        )
+    else:
+        passed_checks += 1
+
+    # 检查 3: gitlab_jobs_missing_dimensions
+    missing_dims_count = db_api.count_gitlab_jobs_missing_dimensions(conn)
+    if missing_dims_count > 0:
+        details = []
+        if include_details:
+            missing_jobs = db_api.list_gitlab_jobs_missing_dimensions(conn, limit=10)
+            details = [
+                {
+                    "job_id": str(j["job_id"]),
+                    "repo_id": j["repo_id"],
+                    "job_type": j["job_type"],
+                    "gitlab_instance": j.get("gitlab_instance"),
+                    "tenant_id": j.get("tenant_id"),
+                }
+                for j in missing_jobs
+            ]
+        violations.append(
+            InvariantViolation(
+                check_id="gitlab_jobs_missing_dimensions",
+                name="GitLab 任务缺失维度",
+                severity=InvariantSeverity.WARNING,
+                count=missing_dims_count,
+                description=f"有 {missing_dims_count} 个 gitlab_* 任务缺失 gitlab_instance 或 tenant_id 列",
+                remediation_hint="检查 scheduler 入队逻辑，确保 payload 中包含维度信息；可使用 SQL 补填维度列",
+                details=details,
+            )
+        )
+    else:
+        passed_checks += 1
+
+    # 检查 4: expired_pauses
+    expired_pause_count = db_api.count_expired_pauses_affecting_scheduling(conn)
+    if expired_pause_count > 0:
+        details = []
+        if include_details:
+            expired_pauses = db_api.list_expired_pauses(conn, limit=10)
+            details = expired_pauses
+        violations.append(
+            InvariantViolation(
+                check_id="expired_pauses",
+                name="过期的暂停记录",
+                severity=InvariantSeverity.INFO,
+                count=expired_pause_count,
+                description=f"有 {expired_pause_count} 个已过期的暂停记录仍在数据库中",
+                remediation_hint="运行清理脚本删除过期的 scm.sync_pauses 记录，或等待自动清理",
+                details=details,
+            )
+        )
+    else:
+        passed_checks += 1
+
+    # 检查 5: circuit_breaker_inconsistencies
+    cb_inconsistencies = db_api.get_circuit_breaker_inconsistencies(conn)
+    if cb_inconsistencies:
+        violations.append(
+            InvariantViolation(
+                check_id="circuit_breaker_inconsistencies",
+                name="熔断器状态不一致",
+                severity=InvariantSeverity.WARNING,
+                count=len(cb_inconsistencies),
+                description=f"有 {len(cb_inconsistencies)} 个熔断器状态与 error_budget 不一致",
+                remediation_hint="运行 `engram-scm-sync admin jobs reset-dead` 重置死任务，或手动检查熔断器状态",
+                details=cb_inconsistencies if include_details else [],
+            )
+        )
+    else:
+        passed_checks += 1
+
+    # 确定整体健康状态
+    has_critical = any(v.severity == InvariantSeverity.CRITICAL for v in violations)
+    healthy = not has_critical
+
+    return HealthCheckResult(
+        healthy=healthy,
+        violations=violations,
+        checked_at=time.time(),
+        total_checks=total_checks,
+        passed_checks=passed_checks,
+        failed_checks=total_checks - passed_checks,
+    )
+
+
+def format_health_check_output(result: HealthCheckResult, *, verbose: bool = False) -> str:
+    """
+    格式化健康检查结果为人类可读文本
+
+    Args:
+        result: 健康检查结果
+        verbose: 是否显示详细信息
+
+    Returns:
+        str: 格式化的文本输出
+    """
+    lines: List[str] = []
+
+    # 标题和状态
+    status_icon = "✓" if result.healthy else "✗"
+    status_text = "健康" if result.healthy else "不健康"
+    lines.append(f"健康检查结果: {status_icon} {status_text}")
+    lines.append(
+        f"检查时间: {datetime.fromtimestamp(result.checked_at, tz=timezone.utc).isoformat()}"
+    )
+    lines.append(f"检查项: {result.passed_checks}/{result.total_checks} 通过")
+    lines.append("")
+
+    if not result.violations:
+        lines.append("所有检查项均通过。")
+    else:
+        lines.append("违规项:")
+        for v in result.violations:
+            severity_icon = {
+                InvariantSeverity.CRITICAL: "🔴",
+                InvariantSeverity.WARNING: "🟡",
+                InvariantSeverity.INFO: "🔵",
+            }.get(v.severity, "⚪")
+
+            lines.append(f"  {severity_icon} [{v.severity.value.upper()}] {v.name}")
+            lines.append(f"     数量: {v.count}")
+            lines.append(f"     描述: {v.description}")
+            lines.append(f"     建议: {v.remediation_hint}")
+
+            if verbose and v.details:
+                lines.append("     详情:")
+                for i, d in enumerate(v.details[:5]):
+                    lines.append(f"       {i + 1}. {d}")
+                if len(v.details) > 5:
+                    lines.append(f"       ... 还有 {len(v.details) - 5} 条")
+            lines.append("")
+
+    return "\n".join(lines)

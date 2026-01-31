@@ -1424,3 +1424,706 @@ def get_sync_runs_health_stats(
             "total_requests": total_requests,
             "total_timeout_count": row["total_timeout_count"] or 0,
         }
+
+
+# ============ Admin CLI 辅助函数 ============
+
+
+def unset_repo_job_pause(
+    conn,
+    *,
+    repo_id: int,
+    job_type: str,
+) -> bool:
+    """
+    删除仓库任务的暂停记录
+
+    Args:
+        conn: 数据库连接
+        repo_id: 仓库 ID
+        job_type: 任务类型
+
+    Returns:
+        bool: 是否成功删除（True 表示删除了记录，False 表示记录不存在）
+    """
+    key = _build_pause_key(repo_id, job_type)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM logbook.kv
+            WHERE namespace = 'scm.sync_pauses' AND key = %s
+            RETURNING key
+            """,
+            (key,),
+        )
+        return cur.fetchone() is not None
+
+
+def set_cursor_value(
+    conn,
+    repo_id: int,
+    job_type: str,
+    value: Dict[str, Any],
+    *,
+    namespace: str = "scm.sync",
+) -> bool:
+    """
+    设置仓库同步游标
+
+    Args:
+        conn: 数据库连接
+        repo_id: 仓库 ID
+        job_type: 任务类型
+        value: 游标值（字典）
+        namespace: 命名空间
+
+    Returns:
+        bool: 是否成功设置
+    """
+    key = f"cursor:{repo_id}:{job_type}"
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO logbook.kv (namespace, key, value_json)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (namespace, key) DO UPDATE
+            SET value_json = EXCLUDED.value_json,
+                updated_at = now()
+            RETURNING key
+            """,
+            (namespace, key, json.dumps(value)),
+        )
+        return cur.fetchone() is not None
+
+
+def delete_cursor_value(
+    conn,
+    repo_id: int,
+    job_type: str,
+    *,
+    namespace: str = "scm.sync",
+) -> bool:
+    """
+    删除仓库同步游标
+
+    Args:
+        conn: 数据库连接
+        repo_id: 仓库 ID
+        job_type: 任务类型
+        namespace: 命名空间
+
+    Returns:
+        bool: 是否成功删除
+    """
+    key = f"cursor:{repo_id}:{job_type}"
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM logbook.kv
+            WHERE namespace = %s AND key = %s
+            RETURNING key
+            """,
+            (namespace, key),
+        )
+        return cur.fetchone() is not None
+
+
+def list_rate_limit_buckets(
+    conn,
+    *,
+    namespace: str = "scm.rate_limit",
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    列出所有速率限制桶状态
+
+    Args:
+        conn: 数据库连接
+        namespace: 命名空间
+        limit: 返回数量限制
+
+    Returns:
+        List[Dict]: 桶状态列表
+    """
+    with _dict_cursor(conn) as cur:
+        cur.execute(
+            """
+            SELECT key, value_json, updated_at
+            FROM logbook.kv
+            WHERE namespace = %s AND key LIKE 'bucket:%%'
+            ORDER BY updated_at DESC
+            LIMIT %s
+            """,
+            (namespace, limit),
+        )
+        rows = cur.fetchall()
+
+    results = []
+    now_ts = time.time()
+    for row in rows:
+        bucket_key = (
+            row["key"].replace("bucket:", "", 1) if row["key"].startswith("bucket:") else row["key"]
+        )
+        value = row["value_json"] or {}
+        if isinstance(value, str):
+            value = json.loads(value)
+
+        # 计算桶状态
+        paused_until = value.get("paused_until", 0)
+        is_paused = paused_until > now_ts
+
+        results.append(
+            {
+                "instance_key": bucket_key,
+                "tokens": value.get("tokens", 0),
+                "last_refill": value.get("last_refill"),
+                "paused_until": paused_until if paused_until > 0 else None,
+                "is_paused": is_paused,
+                "remaining_pause_seconds": max(0, paused_until - now_ts) if is_paused else 0,
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                "raw_value": value,
+            }
+        )
+
+    return results
+
+
+def pause_rate_limit_bucket(
+    conn,
+    instance_key: str,
+    pause_duration_seconds: float,
+    *,
+    reason: str = "manual_pause",
+    namespace: str = "scm.rate_limit",
+) -> Dict[str, Any]:
+    """
+    暂停速率限制桶
+
+    Args:
+        conn: 数据库连接
+        instance_key: 实例 key
+        pause_duration_seconds: 暂停时长（秒）
+        reason: 暂停原因
+        namespace: 命名空间
+
+    Returns:
+        Dict: 更新后的桶状态
+    """
+    key = f"bucket:{instance_key}"
+    now_ts = time.time()
+    paused_until = now_ts + pause_duration_seconds
+
+    with _dict_cursor(conn) as cur:
+        # 先获取现有值
+        cur.execute(
+            """
+            SELECT value_json FROM logbook.kv
+            WHERE namespace = %s AND key = %s
+            """,
+            (namespace, key),
+        )
+        row = cur.fetchone()
+
+        if row:
+            value = row["value_json"] or {}
+            if isinstance(value, str):
+                value = json.loads(value)
+        else:
+            value = {}
+
+        # 更新暂停状态
+        value["paused_until"] = paused_until
+        value["pause_reason"] = reason
+        value["paused_at"] = now_ts
+
+        # upsert
+        cur.execute(
+            """
+            INSERT INTO logbook.kv (namespace, key, value_json)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (namespace, key) DO UPDATE
+            SET value_json = EXCLUDED.value_json,
+                updated_at = now()
+            RETURNING value_json, updated_at
+            """,
+            (namespace, key, json.dumps(value)),
+        )
+        result_row = cur.fetchone()
+
+    return {
+        "instance_key": instance_key,
+        "paused_until": paused_until,
+        "pause_reason": reason,
+        "updated_at": result_row["updated_at"].isoformat()
+        if result_row and result_row["updated_at"]
+        else None,
+    }
+
+
+def unpause_rate_limit_bucket(
+    conn,
+    instance_key: str,
+    *,
+    namespace: str = "scm.rate_limit",
+) -> Dict[str, Any]:
+    """
+    取消暂停速率限制桶
+
+    Args:
+        conn: 数据库连接
+        instance_key: 实例 key
+        namespace: 命名空间
+
+    Returns:
+        Dict: 更新后的桶状态
+    """
+    key = f"bucket:{instance_key}"
+
+    with _dict_cursor(conn) as cur:
+        # 获取现有值
+        cur.execute(
+            """
+            SELECT value_json FROM logbook.kv
+            WHERE namespace = %s AND key = %s
+            """,
+            (namespace, key),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            return {"instance_key": instance_key, "status": "not_found"}
+
+        value = row["value_json"] or {}
+        if isinstance(value, str):
+            value = json.loads(value)
+
+        # 清除暂停状态
+        value["paused_until"] = 0
+        value.pop("pause_reason", None)
+        value.pop("paused_at", None)
+
+        cur.execute(
+            """
+            UPDATE logbook.kv
+            SET value_json = %s, updated_at = now()
+            WHERE namespace = %s AND key = %s
+            RETURNING updated_at
+            """,
+            (json.dumps(value), namespace, key),
+        )
+        result_row = cur.fetchone()
+
+    return {
+        "instance_key": instance_key,
+        "status": "unpaused",
+        "updated_at": result_row["updated_at"].isoformat()
+        if result_row and result_row["updated_at"]
+        else None,
+    }
+
+
+def reset_dead_jobs(
+    conn,
+    *,
+    job_ids: Optional[List[str]] = None,
+    repo_id: Optional[int] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    重置 dead 任务为 pending 状态
+
+    Args:
+        conn: 数据库连接
+        job_ids: 指定的任务 ID 列表（可选）
+        repo_id: 按仓库 ID 过滤（可选）
+        limit: 重置数量限制
+
+    Returns:
+        List[Dict]: 重置的任务列表
+    """
+    with _dict_cursor(conn) as cur:
+        if job_ids:
+            # 按 job_ids 重置
+            cur.execute(
+                """
+                UPDATE scm.sync_jobs
+                SET status = 'pending',
+                    attempts = 0,
+                    not_before = now(),
+                    locked_by = NULL,
+                    locked_at = NULL,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE job_id = ANY(%s) AND status = 'dead'
+                RETURNING job_id, repo_id, job_type
+                """,
+                (job_ids,),
+            )
+        elif repo_id is not None:
+            # 按 repo_id 重置
+            cur.execute(
+                """
+                UPDATE scm.sync_jobs
+                SET status = 'pending',
+                    attempts = 0,
+                    not_before = now(),
+                    locked_by = NULL,
+                    locked_at = NULL,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE repo_id = %s AND status = 'dead'
+                RETURNING job_id, repo_id, job_type
+                """,
+                (repo_id,),
+            )
+        else:
+            # 重置所有 dead 任务
+            cur.execute(
+                """
+                UPDATE scm.sync_jobs
+                SET status = 'pending',
+                    attempts = 0,
+                    not_before = now(),
+                    locked_by = NULL,
+                    locked_at = NULL,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE status = 'dead'
+                RETURNING job_id, repo_id, job_type
+                LIMIT %s
+                """,
+                (limit,),
+            )
+
+        return cur.fetchall()
+
+
+def mark_job_dead(
+    conn,
+    job_id: str,
+    *,
+    reason: str = "manual_mark_dead",
+) -> bool:
+    """
+    将任务标记为 dead 状态
+
+    Args:
+        conn: 数据库连接
+        job_id: 任务 ID
+        reason: 标记原因
+
+    Returns:
+        bool: 是否成功标记
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE scm.sync_jobs
+            SET status = 'dead',
+                last_error = %s,
+                locked_by = NULL,
+                locked_at = NULL,
+                updated_at = now()
+            WHERE job_id = %s AND status IN ('pending', 'running', 'failed')
+            RETURNING job_id
+            """,
+            (reason, job_id),
+        )
+        return cur.fetchone() is not None
+
+
+def list_jobs_by_status(
+    conn,
+    status: str,
+    *,
+    repo_id: Optional[int] = None,
+    job_type: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    按状态列出任务
+
+    Args:
+        conn: 数据库连接
+        status: 任务状态 (pending/running/failed/dead/completed)
+        repo_id: 按仓库 ID 过滤（可选）
+        job_type: 按任务类型过滤（可选）
+        limit: 返回数量限制
+
+    Returns:
+        List[Dict]: 任务列表
+    """
+    query = """
+        SELECT job_id, repo_id, job_type, mode, status,
+               priority, attempts, max_attempts,
+               not_before, locked_by, locked_at, lease_seconds,
+               last_error, last_run_id,
+               payload_json, created_at, updated_at
+        FROM scm.sync_jobs
+        WHERE status = %s
+    """
+    params: List[Any] = [status]
+
+    if repo_id is not None:
+        query += " AND repo_id = %s"
+        params.append(repo_id)
+
+    if job_type is not None:
+        query += " AND job_type = %s"
+        params.append(job_type)
+
+    query += " ORDER BY created_at DESC LIMIT %s"
+    params.append(limit)
+
+    with _dict_cursor(conn) as cur:
+        cur.execute(query, params)
+        return cur.fetchall()
+
+
+# ============ 健康检查辅助函数 ============
+
+
+def count_expired_running_jobs(conn, *, grace_seconds: int = 0) -> int:
+    """
+    统计 running 状态但租约已过期的任务数量
+
+    检查 running jobs 中 locked_at + lease_seconds 已过期的数量。
+    这类任务表示 worker 可能已经崩溃或网络断开。
+
+    Args:
+        conn: 数据库连接
+        grace_seconds: 宽限时间（秒）
+
+    Returns:
+        int: 过期的 running 任务数量
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM scm.sync_jobs
+            WHERE status = 'running'
+              AND locked_at IS NOT NULL
+              AND locked_at + (lease_seconds + %s) * interval '1 second' < now()
+            """,
+            (grace_seconds,),
+        )
+        return cur.fetchone()[0]
+
+
+def count_orphan_locks(conn) -> int:
+    """
+    统计孤立锁数量
+
+    孤立锁定义：sync_locks 中 locked_by 不为空，但没有对应的 running job。
+    这类锁可能由于 worker 异常退出或 job 状态不同步导致。
+
+    Args:
+        conn: 数据库连接
+
+    Returns:
+        int: 孤立锁数量
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM scm.sync_locks l
+            WHERE l.locked_by IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM scm.sync_jobs j
+                  WHERE j.repo_id = l.repo_id
+                    AND j.job_type = l.job_type
+                    AND j.status = 'running'
+              )
+            """
+        )
+        return cur.fetchone()[0]
+
+
+def list_orphan_locks(conn, *, limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    列出孤立锁详情
+
+    Args:
+        conn: 数据库连接
+        limit: 返回数量限制
+
+    Returns:
+        List[Dict]: 孤立锁列表
+    """
+    with _dict_cursor(conn) as cur:
+        cur.execute(
+            """
+            SELECT l.lock_id, l.repo_id, l.job_type, l.locked_by, l.locked_at, l.lease_seconds
+            FROM scm.sync_locks l
+            WHERE l.locked_by IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM scm.sync_jobs j
+                  WHERE j.repo_id = l.repo_id
+                    AND j.job_type = l.job_type
+                    AND j.status = 'running'
+              )
+            ORDER BY l.locked_at ASC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def count_gitlab_jobs_missing_dimensions(conn) -> int:
+    """
+    统计 active gitlab_* jobs 缺失维度列的数量
+
+    检查 gitlab_commits/gitlab_mrs 类型的 active jobs 中
+    gitlab_instance 或 tenant_id 列为空的数量。
+    这会影响基于实例/租户的熔断和速率限制。
+
+    Args:
+        conn: 数据库连接
+
+    Returns:
+        int: 缺失维度列的任务数量
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM scm.sync_jobs
+            WHERE status IN ('pending', 'running')
+              AND job_type LIKE 'gitlab_%'
+              AND (
+                  gitlab_instance IS NULL OR gitlab_instance = ''
+                  OR tenant_id IS NULL OR tenant_id = ''
+              )
+            """
+        )
+        return cur.fetchone()[0]
+
+
+def list_gitlab_jobs_missing_dimensions(conn, *, limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    列出缺失维度列的 gitlab jobs 详情
+
+    Args:
+        conn: 数据库连接
+        limit: 返回数量限制
+
+    Returns:
+        List[Dict]: 缺失维度的任务列表
+    """
+    with _dict_cursor(conn) as cur:
+        cur.execute(
+            """
+            SELECT job_id, repo_id, job_type, gitlab_instance, tenant_id, status, created_at
+            FROM scm.sync_jobs
+            WHERE status IN ('pending', 'running')
+              AND job_type LIKE 'gitlab_%'
+              AND (
+                  gitlab_instance IS NULL OR gitlab_instance = ''
+                  OR tenant_id IS NULL OR tenant_id = ''
+              )
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def count_expired_pauses_affecting_scheduling(conn) -> int:
+    """
+    统计已过期但仍存在于数据库中的暂停记录数量
+
+    虽然 scheduler 会检查 paused_until 是否过期，但过期的记录
+    仍然会被加载到内存中，占用资源。建议定期清理。
+
+    Args:
+        conn: 数据库连接
+
+    Returns:
+        int: 过期的暂停记录数量
+    """
+    now_ts = time.time()
+    pauses = list_all_pauses(conn, include_expired=True)
+    expired_count = 0
+    for p in pauses:
+        if p.is_expired(now=now_ts):
+            expired_count += 1
+    return expired_count
+
+
+def list_expired_pauses(conn, *, limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    列出过期的暂停记录详情
+
+    Args:
+        conn: 数据库连接
+        limit: 返回数量限制
+
+    Returns:
+        List[Dict]: 过期的暂停记录列表
+    """
+    now_ts = time.time()
+    pauses = list_all_pauses(conn, include_expired=True)
+    expired = []
+    for p in pauses:
+        if p.is_expired(now=now_ts):
+            d = p.to_dict()
+            d["expired_seconds_ago"] = now_ts - p.paused_until
+            expired.append(d)
+    return expired[:limit]
+
+
+def get_circuit_breaker_inconsistencies(conn) -> List[Dict[str, Any]]:
+    """
+    检查熔断器状态与 error_budget 的不一致
+
+    检测以下矛盾状态：
+    1. circuit_breaker state=open 但 error_budget samples=0（无数据支撑熔断）
+    2. circuit_breaker failure_count > 0 但 state=closed 且无 success_count
+
+    Args:
+        conn: 数据库连接
+
+    Returns:
+        List[Dict]: 不一致状态列表
+    """
+    inconsistencies = []
+
+    # 加载所有熔断器状态
+    with _dict_cursor(conn) as cur:
+        cur.execute(
+            "SELECT key, value_json FROM logbook.kv WHERE namespace = %s",
+            ("scm.sync_health",),
+        )
+        rows = cur.fetchall()
+
+    for row in rows:
+        key = row["key"]
+        state = row["value_json"] or {}
+        if isinstance(state, str):
+            state = json.loads(state)
+
+        cb_state = state.get("state", "closed")
+        failure_count = int(state.get("failure_count", 0) or 0)
+        success_count = int(state.get("success_count", 0) or 0)
+        total_samples = failure_count + success_count
+
+        # 检查 1: open 状态但没有样本数据
+        if cb_state == "open" and total_samples == 0:
+            inconsistencies.append(
+                {
+                    "key": key,
+                    "issue": "circuit_open_no_samples",
+                    "description": "熔断器处于 open 状态但没有样本数据",
+                    "state": cb_state,
+                    "failure_count": failure_count,
+                    "success_count": success_count,
+                }
+            )
+
+        # 检查 2: half_open 状态超过合理时间（可选，留作扩展）
+
+    return inconsistencies

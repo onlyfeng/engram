@@ -82,6 +82,7 @@ __all__ = [
     "get_connection",
     "refresh_vfacts",
     "get_exit_code",
+    "create_parser",
     "parse_args",
     # 类
     "SyncRunner",
@@ -464,12 +465,31 @@ def validate_watermark_constraint(
         )
 
 
-# ============ 脚本路径与命令构建 ============
+# ============ 脚本路径与命令构建（已弃用） ============
+#
+# 注意：以下函数已弃用（deprecated），保留仅为向后兼容。
+# 新代码应使用 SyncRunner + SyncExecutor 直接执行同步，无需构建命令行。
+#
+# 弃用原因：
+# 1. SyncRunner 已通过 SyncExecutor 在进程内直接执行同步
+# 2. 避免对根目录脚本（如 scm_sync_gitlab_commits.py）的依赖
+# 3. 新入口统一使用 `python -m engram.logbook.cli.scm_sync` 形式
+#
+# 迁移指南：
+# - 旧方式: subprocess.run(build_sync_command(ctx, phase, ...))
+# - 新方式: SyncRunner(ctx).run_incremental() 或 .run_backfill(...)
+
+
+import warnings
 
 
 def get_script_path(repo_type: str, job_type: str) -> str:
     """
     获取同步脚本路径
+
+    .. deprecated::
+        此函数已弃用，将在未来版本移除。
+        新代码应使用 SyncRunner + SyncExecutor 直接执行同步。
 
     Args:
         repo_type: 仓库类型
@@ -481,6 +501,12 @@ def get_script_path(repo_type: str, job_type: str) -> str:
     Raises:
         ValueError: 不支持的仓库/任务组合
     """
+    warnings.warn(
+        "get_script_path() 已弃用，新代码应使用 SyncRunner + SyncExecutor 直接执行同步。"
+        "此函数依赖的根目录脚本将被移除。",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     repo_type = repo_type.lower()
     job_type = job_type.lower()
     # 计算项目根目录
@@ -509,6 +535,10 @@ def build_sync_command(
     """
     构建同步命令行
 
+    .. deprecated::
+        此函数已弃用，将在未来版本移除。
+        新代码应使用 SyncRunner + SyncExecutor 直接执行同步，而非构建命令行。
+
     Args:
         ctx: 运行器上下文
         phase: 运行阶段
@@ -520,9 +550,19 @@ def build_sync_command(
     Returns:
         命令行参数列表
     """
+    warnings.warn(
+        "build_sync_command() 已弃用，新代码应使用 SyncRunner.run_incremental() 或 "
+        "SyncRunner.run_backfill() 直接执行同步。此函数依赖的根目录脚本将被移除。",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     import sys
 
-    script_path = get_script_path(ctx.repo.repo_type, ctx.job.job_type)
+    # 注意：此处仍调用 get_script_path()，但会触发其自身的弃用警告
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        script_path = get_script_path(ctx.repo.repo_type, ctx.job.job_type)
+
     cmd = [sys.executable, script_path]
     if ctx.config_path:
         cmd += ["--config", ctx.config_path]
@@ -574,7 +614,9 @@ def refresh_vfacts(*, dry_run: bool = False, concurrently: bool = False) -> dict
     Returns:
         刷新结果字典
     """
-    result = {
+    from typing import Any
+
+    result: dict[str, Any] = {
         "dry_run": dry_run,
         "refreshed": False,
         "concurrently": concurrently,
@@ -790,8 +832,9 @@ class SyncRunner:
         executor = self._get_executor()
         job = self._build_job_dict(mode=mode, payload=payload)
 
-        result = executor.execute(job)
-        return result.to_dict()
+        exec_result = executor.execute(job)
+        result_dict: dict = exec_result.to_dict()
+        return result_dict
 
     def run_incremental(self) -> SyncResult:
         """执行增量同步
@@ -867,6 +910,10 @@ class SyncRunner:
         )
 
         # 确定 chunk 类型
+        # 使用 Sequence 而不是 List，因为 Sequence 是协变的
+        from typing import Sequence, Union
+
+        chunks: Sequence[Union[TimeWindowChunk, RevisionWindowChunk]]
         if start_rev is not None or end_rev is not None:
             # SVN revision 窗口
             chunks = self._generate_revision_chunks(start_rev, end_rev)
@@ -1000,19 +1047,47 @@ class SyncRunner:
 # ============ CLI 参数解析 ============
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def create_parser() -> argparse.ArgumentParser:
     """
-    解析命令行参数
-
-    Args:
-        argv: 命令行参数列表（默认使用 sys.argv[1:]）
+    创建 SCM sync runner 命令行解析器
 
     Returns:
-        argparse.Namespace 对象
+        配置好的 ArgumentParser 对象
+
+    Note:
+        此函数被 parse_args() 和 engram.logbook.cli.scm_sync.runner_main() 复用，
+        确保所有入口点使用一致的参数定义。
     """
     parser = argparse.ArgumentParser(
         description="SCM sync runner - 增量同步与回填工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+    # 增量同步
+    engram-scm-sync runner incremental --repo gitlab:123
+
+    # 回填最近 24 小时
+    engram-scm-sync runner backfill --repo gitlab:123 --last-hours 24
+
+    # 回填指定时间范围
+    engram-scm-sync runner backfill --repo gitlab:123 \\
+        --since 2025-01-01T00:00:00Z --until 2025-01-31T23:59:59Z
+
+    # SVN 回填指定版本范围
+    engram-scm-sync runner backfill --repo svn:https://svn.example.com/repo \\
+        --start-rev 100 --end-rev 500
+
+    # 回填并更新游标
+    engram-scm-sync runner backfill --repo gitlab:123 --last-hours 24 --update-watermark
+
+    # 查看回填配置
+    engram-scm-sync runner config --show-backfill
+
+返回码:
+    0  成功 (全部 chunk 成功)
+    1  部分成功 (部分 chunk 失败)
+    2  失败 (全部 chunk 失败或严重错误)
+        """,
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="详细日志输出")
     parser.add_argument("--dry-run", action="store_true", help="模拟运行，不执行实际操作")
@@ -1061,4 +1136,21 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     cfg = subparsers.add_parser("config", help="显示配置")
     cfg.add_argument("--show-backfill", action="store_true", help="显示回填配置")
 
+    return parser
+
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    """
+    解析命令行参数
+
+    Args:
+        argv: 命令行参数列表（默认使用 sys.argv[1:]）
+
+    Returns:
+        argparse.Namespace 对象
+
+    Note:
+        使用 create_parser() 创建解析器，确保与其他入口点参数定义一致。
+    """
+    parser = create_parser()
     return parser.parse_args(argv)

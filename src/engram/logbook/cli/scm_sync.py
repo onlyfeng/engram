@@ -269,7 +269,11 @@ def scheduler_main(argv: Optional[List[str]] = None) -> int:
             except Exception as e:
                 logger.error(f"调度执行错误: {e}", exc_info=True)
                 if args.json_output:
-                    error_data = {"error": str(e), "iteration": iteration} if loop_mode else {"error": str(e)}
+                    error_data = (
+                        {"error": str(e), "iteration": iteration}
+                        if loop_mode
+                        else {"error": str(e)}
+                    )
                     print(json.dumps(error_data, ensure_ascii=False))
                 last_exit_code = 1
 
@@ -595,7 +599,9 @@ def reaper_main(argv: Optional[List[str]] = None) -> int:
             )
 
             total_processed = (
-                result["jobs"]["processed"] + result["runs"]["processed"] + result["locks"]["processed"]
+                result["jobs"]["processed"]
+                + result["runs"]["processed"]
+                + result["locks"]["processed"]
             )
             total_errors = (
                 result["jobs"]["errors"] + result["runs"]["errors"] + result["locks"]["errors"]
@@ -647,7 +653,9 @@ def reaper_main(argv: Optional[List[str]] = None) -> int:
         except Exception as e:
             logger.exception(f"Reaper 执行失败: {e}")
             if args.json_output:
-                error_data = {"error": str(e), "iteration": iteration} if loop_mode else {"error": str(e)}
+                error_data = (
+                    {"error": str(e), "iteration": iteration} if loop_mode else {"error": str(e)}
+                )
                 print(json.dumps(error_data, ensure_ascii=False))
             last_exit_code = 2
 
@@ -673,6 +681,8 @@ def reaper_main(argv: Optional[List[str]] = None) -> int:
 def status_main(argv: Optional[List[str]] = None) -> int:
     """Status CLI 入口函数"""
     from engram.logbook.scm_sync_status import (
+        check_invariants,
+        format_health_check_output,
         format_prometheus_metrics,
         get_sync_summary,
     )
@@ -691,9 +701,21 @@ def status_main(argv: Optional[List[str]] = None) -> int:
     # Prometheus 指标格式
     python -m engram.logbook.cli.scm_sync status --prometheus
 
+    # 健康检查（用于监控告警）
+    python -m engram.logbook.cli.scm_sync status --health
+    python -m engram.logbook.cli.scm_sync status --health --json
+
+    # 快捷命令
+    engram-scm-status --health
+
 环境变量:
     LOGBOOK_DSN     数据库连接字符串（优先）
     POSTGRES_DSN    数据库连接字符串（备用）
+
+退出码（--health 模式）:
+    0  健康（无违规）
+    1  有 warning 级别违规
+    2  有 critical 级别违规
         """,
     )
 
@@ -720,6 +742,24 @@ def status_main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="紧凑 JSON 输出（默认）",
     )
+    output_group.add_argument(
+        "--health",
+        action="store_true",
+        help="执行健康不变量检查（非零退出码表示不健康）",
+    )
+
+    parser.add_argument(
+        "--include-details",
+        action="store_true",
+        help="在健康检查中包含详细记录（与 --health 配合使用）",
+    )
+
+    parser.add_argument(
+        "--grace-seconds",
+        type=int,
+        default=60,
+        help="Running job 过期宽限时间（秒，默认 60，与 --health 配合使用）",
+    )
 
     parser.add_argument(
         "-v",
@@ -744,12 +784,34 @@ def status_main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     try:
-        summary = get_sync_summary(conn)
 
         def json_serializer(obj):
             if hasattr(obj, "isoformat"):
                 return obj.isoformat()
             raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+        # 健康检查模式
+        if args.health:
+            result = check_invariants(
+                conn,
+                include_details=args.include_details,
+                grace_seconds=args.grace_seconds,
+            )
+
+            if args.json_pretty:
+                print(
+                    json.dumps(
+                        result.to_dict(), indent=2, ensure_ascii=False, default=json_serializer
+                    )
+                )
+            else:
+                # 默认文本输出
+                print(format_health_check_output(result, verbose=args.verbose))
+
+            return result.exit_code
+
+        # 常规状态摘要模式
+        summary = get_sync_summary(conn)
 
         if args.prometheus:
             print(format_prometheus_metrics(summary))
@@ -784,107 +846,32 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
     - 0 (EXIT_SUCCESS): 全部成功
     - 1 (EXIT_PARTIAL): 部分成功（有失败但非全部失败）
     - 2 (EXIT_FAILED): 全部失败或严重错误
+
+    Note:
+        使用 engram.logbook.scm_sync_runner.create_parser() 创建解析器，
+        确保所有入口点（engram-scm-sync runner、engram-scm-runner、
+        python scm_sync_runner.py）使用一致的参数定义。
     """
     from datetime import datetime as dt
 
     from engram.logbook.scm_sync_runner import (
-        DEFAULT_LOOP_INTERVAL_SECONDS,
         EXIT_FAILED,
         EXIT_PARTIAL,
         EXIT_SUCCESS,
-        JOB_TYPE_COMMITS,
-        VALID_JOB_TYPES,
-        AggregatedResult,
         BackfillConfig,
         JobSpec,
         RepoSpec,
         RunnerContext,
-        RunnerStatus,
         SyncRunner,
         calculate_backfill_window,
+        create_parser,
         get_exit_code,
     )
 
     logger = logging.getLogger("engram.scm_sync.runner")
 
-    parser = argparse.ArgumentParser(
-        description="SCM sync runner - 增量同步与回填工具",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-    # 增量同步
-    python -m engram.logbook.cli.scm_sync runner incremental --repo gitlab:123
-
-    # 回填最近 24 小时
-    python -m engram.logbook.cli.scm_sync runner backfill --repo gitlab:123 --last-hours 24
-
-    # 回填指定时间范围
-    python -m engram.logbook.cli.scm_sync runner backfill --repo gitlab:123 \\
-        --since 2025-01-01T00:00:00Z --until 2025-01-31T23:59:59Z
-
-    # SVN 回填指定版本范围
-    python -m engram.logbook.cli.scm_sync runner backfill --repo svn:https://svn.example.com/repo \\
-        --start-rev 100 --end-rev 500
-
-    # 回填并更新游标
-    python -m engram.logbook.cli.scm_sync runner backfill --repo gitlab:123 --last-hours 24 --update-watermark
-
-    # 查看回填配置
-    python -m engram.logbook.cli.scm_sync runner config --show-backfill
-
-返回码:
-    0  成功 (全部 chunk 成功)
-    1  部分成功 (部分 chunk 失败)
-    2  失败 (全部 chunk 失败或严重错误)
-        """,
-    )
-    parser.add_argument("-v", "--verbose", action="store_true", help="详细日志输出")
-    parser.add_argument("--dry-run", action="store_true", help="模拟运行，不执行实际操作")
-    parser.add_argument("--config", metavar="PATH", help="配置文件路径")
-    parser.add_argument("--json", dest="json_output", action="store_true", help="JSON 格式输出")
-
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # incremental 子命令
-    inc = subparsers.add_parser("incremental", help="增量同步")
-    inc.add_argument("--repo", required=True, help="仓库规格 (格式: <type>:<id>，如 gitlab:123)")
-    inc.add_argument(
-        "--job",
-        default=JOB_TYPE_COMMITS,
-        choices=sorted(VALID_JOB_TYPES),
-        help=f"任务类型 (默认: {JOB_TYPE_COMMITS})",
-    )
-    inc.add_argument("--loop", action="store_true", help="循环模式")
-    inc.add_argument(
-        "--loop-interval",
-        type=int,
-        default=DEFAULT_LOOP_INTERVAL_SECONDS,
-        help=f"循环间隔秒数 (默认: {DEFAULT_LOOP_INTERVAL_SECONDS})",
-    )
-    inc.add_argument("--max-iterations", type=int, default=0, help="最大迭代次数 (0=无限)")
-
-    # backfill 子命令
-    bf = subparsers.add_parser("backfill", help="回填同步")
-    bf.add_argument("--repo", required=True, help="仓库规格 (格式: <type>:<id>)")
-    bf.add_argument(
-        "--job",
-        default=JOB_TYPE_COMMITS,
-        choices=sorted(VALID_JOB_TYPES),
-        help=f"任务类型 (默认: {JOB_TYPE_COMMITS})",
-    )
-    time_group = bf.add_mutually_exclusive_group()
-    time_group.add_argument("--last-hours", type=int, help="回填最近 N 小时")
-    time_group.add_argument("--last-days", type=int, help="回填最近 N 天")
-    bf.add_argument("--update-watermark", action="store_true", help="更新游标位置")
-    bf.add_argument("--start-rev", type=int, help="起始版本号 (SVN)")
-    bf.add_argument("--end-rev", type=int, help="结束版本号 (SVN)")
-    bf.add_argument("--since", help="开始时间 (ISO8601)")
-    bf.add_argument("--until", help="结束时间 (ISO8601)")
-
-    # config 子命令
-    cfg = subparsers.add_parser("config", help="显示配置")
-    cfg.add_argument("--show-backfill", action="store_true", help="显示回填配置")
-
+    # 复用 scm_sync_runner 的解析器，确保参数定义一致
+    parser = create_parser()
     args = parser.parse_args(argv)
 
     # 配置日志
@@ -906,17 +893,17 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
     if args.command == "config":
         if args.show_backfill:
             bf_config = BackfillConfig.from_config(config)
-            result = {
+            config_dict = {
                 "repair_window_hours": bf_config.repair_window_hours,
                 "cron_hint": bf_config.cron_hint,
                 "max_concurrent_jobs": bf_config.max_concurrent_jobs,
                 "default_update_watermark": bf_config.default_update_watermark,
             }
             if args.json_output:
-                print(json.dumps(result, indent=2))
+                print(json.dumps(config_dict, indent=2))
             else:
                 print("回填配置:")
-                for k, v in result.items():
+                for k, v in config_dict.items():
                     print(f"  {k}: {v}")
         return EXIT_SUCCESS
 
@@ -965,11 +952,11 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
             iteration += 1
 
             try:
-                result = runner.run_incremental()
+                sync_result = runner.run_incremental()
 
                 # 构建输出数据
-                output_data = result.to_dict()
-                output_data["exit_code"] = get_exit_code(result.status)
+                output_data = sync_result.to_dict()
+                output_data["exit_code"] = get_exit_code(sync_result.status)
                 if loop_mode:
                     output_data["iteration"] = iteration
 
@@ -977,18 +964,18 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
                     print(json.dumps(output_data, ensure_ascii=False))
                 else:
                     if loop_mode:
-                        logger.info(f"[第 {iteration} 轮] 同步完成: {result.status}")
+                        logger.info(f"[第 {iteration} 轮] 同步完成: {sync_result.status}")
                     else:
-                        print(f"同步完成: {result.status}")
-                    print(f"  仓库: {result.repo}")
-                    print(f"  任务: {result.job}")
-                    print(f"  同步数: {result.items_synced}")
-                    if result.error:
-                        print(f"  错误: {result.error}")
-                    if result.vfacts_refreshed:
+                        print(f"同步完成: {sync_result.status}")
+                    print(f"  仓库: {sync_result.repo}")
+                    print(f"  任务: {sync_result.job}")
+                    print(f"  同步数: {sync_result.items_synced}")
+                    if sync_result.error:
+                        print(f"  错误: {sync_result.error}")
+                    if sync_result.vfacts_refreshed:
                         print("  vfacts 已刷新")
 
-                last_exit_code = get_exit_code(result.status)
+                last_exit_code = get_exit_code(sync_result.status)
 
             except KeyboardInterrupt:
                 logger.info("收到中断信号，退出")
@@ -1039,7 +1026,11 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
                 since = dt.fromisoformat(args.since.replace("Z", "+00:00"))
             except ValueError as e:
                 if args.json_output:
-                    print(json.dumps({"error": f"--since 时间格式错误: {e}", "exit_code": EXIT_FAILED}))
+                    print(
+                        json.dumps(
+                            {"error": f"--since 时间格式错误: {e}", "exit_code": EXIT_FAILED}
+                        )
+                    )
                 else:
                     print(f"错误: --since 时间格式错误: {e}", file=sys.stderr)
                 return EXIT_FAILED
@@ -1049,7 +1040,11 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
                 until = dt.fromisoformat(args.until.replace("Z", "+00:00"))
             except ValueError as e:
                 if args.json_output:
-                    print(json.dumps({"error": f"--until 时间格式错误: {e}", "exit_code": EXIT_FAILED}))
+                    print(
+                        json.dumps(
+                            {"error": f"--until 时间格式错误: {e}", "exit_code": EXIT_FAILED}
+                        )
+                    )
                 else:
                     print(f"错误: --until 时间格式错误: {e}", file=sys.stderr)
                 return EXIT_FAILED
@@ -1063,7 +1058,7 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
 
         try:
             # 执行回填
-            result = runner.run_backfill(
+            backfill_result = runner.run_backfill(
                 since=since,
                 until=until,
                 start_rev=start_rev,
@@ -1071,38 +1066,38 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
             )
 
             # 构建输出数据
-            output_data = result.to_dict()
-            output_data["exit_code"] = get_exit_code(result.status)
+            output_data = backfill_result.to_dict()
+            output_data["exit_code"] = get_exit_code(backfill_result.status)
 
             if args.json_output:
                 print(json.dumps(output_data, ensure_ascii=False, indent=2))
             else:
-                print(f"回填完成: {result.status}")
-                print(f"  仓库: {result.repo}")
-                print(f"  任务: {result.job}")
-                print(f"  总 chunks: {result.total_chunks}")
-                print(f"  成功 chunks: {result.success_chunks}")
-                if result.partial_chunks > 0:
-                    print(f"  部分成功 chunks: {result.partial_chunks}")
-                if result.failed_chunks > 0:
-                    print(f"  失败 chunks: {result.failed_chunks}")
-                print(f"  总同步数: {result.total_items_synced}")
-                if result.total_items_skipped > 0:
-                    print(f"  总跳过数: {result.total_items_skipped}")
-                if result.total_items_failed > 0:
-                    print(f"  总失败数: {result.total_items_failed}")
-                if result.watermark_updated:
+                print(f"回填完成: {backfill_result.status}")
+                print(f"  仓库: {backfill_result.repo}")
+                print(f"  任务: {backfill_result.job}")
+                print(f"  总 chunks: {backfill_result.total_chunks}")
+                print(f"  成功 chunks: {backfill_result.success_chunks}")
+                if backfill_result.partial_chunks > 0:
+                    print(f"  部分成功 chunks: {backfill_result.partial_chunks}")
+                if backfill_result.failed_chunks > 0:
+                    print(f"  失败 chunks: {backfill_result.failed_chunks}")
+                print(f"  总同步数: {backfill_result.total_items_synced}")
+                if backfill_result.total_items_skipped > 0:
+                    print(f"  总跳过数: {backfill_result.total_items_skipped}")
+                if backfill_result.total_items_failed > 0:
+                    print(f"  总失败数: {backfill_result.total_items_failed}")
+                if backfill_result.watermark_updated:
                     print("  游标已更新")
-                if result.vfacts_refreshed:
+                if backfill_result.vfacts_refreshed:
                     print("  vfacts 已刷新")
-                if result.errors:
-                    print(f"  错误数: {len(result.errors)}")
-                    for err in result.errors[:5]:
+                if backfill_result.errors:
+                    print(f"  错误数: {len(backfill_result.errors)}")
+                    for err in backfill_result.errors[:5]:
                         print(f"    - {err}")
-                    if len(result.errors) > 5:
-                        print(f"    ... 还有 {len(result.errors) - 5} 个错误")
+                    if len(backfill_result.errors) > 5:
+                        print(f"    ... 还有 {len(backfill_result.errors) - 5} 个错误")
 
-            return get_exit_code(result.status)
+            return get_exit_code(backfill_result.status)
 
         except KeyboardInterrupt:
             logger.info("收到中断信号，退出")
@@ -1118,6 +1113,753 @@ def runner_main(argv: Optional[List[str]] = None) -> int:
             return EXIT_FAILED
 
     return EXIT_SUCCESS
+
+
+# ============ Admin CLI ============
+
+
+def _serialize_datetime(obj):
+    """序列化 datetime 对象为 ISO 格式字符串"""
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+
+def _redact_job_info(job: dict) -> dict:
+    """对任务信息进行脱敏"""
+    from engram.logbook.scm_auth import redact, redact_dict
+
+    result = dict(job)
+    # 脱敏 payload_json
+    if result.get("payload_json"):
+        payload = result["payload_json"]
+        if isinstance(payload, str):
+            import json as json_mod
+
+            try:
+                payload = json_mod.loads(payload)
+            except Exception:
+                payload = {}
+        result["payload_json"] = redact_dict(payload) if payload else {}
+    # 脱敏 last_error
+    if result.get("last_error"):
+        result["last_error"] = redact(result["last_error"])
+    return result
+
+
+def _redact_lock_info(lock: dict) -> dict:
+    """对锁信息进行脱敏"""
+    from engram.logbook.scm_auth import redact
+
+    result = dict(lock)
+    if result.get("locked_by"):
+        result["locked_by"] = redact(result["locked_by"])
+    return result
+
+
+def _redact_pause_info(pause) -> dict:
+    """对暂停信息进行脱敏"""
+    from typing import Any
+
+    from engram.logbook.scm_auth import redact
+
+    result: dict[str, Any]
+    if hasattr(pause, "to_dict"):
+        result = pause.to_dict()
+    else:
+        result = dict(pause)
+    if result.get("reason"):
+        result["reason"] = redact(result["reason"])
+    return result
+
+
+def _redact_cursor_info(cursor: dict) -> dict:
+    """对游标信息进行脱敏"""
+    from engram.logbook.scm_auth import redact_dict
+
+    result = dict(cursor)
+    if result.get("value_json"):
+        value = result["value_json"]
+        if isinstance(value, str):
+            import json as json_mod
+
+            try:
+                value = json_mod.loads(value)
+            except Exception:
+                value = {}
+        result["value_json"] = redact_dict(value) if value else {}
+    if result.get("value"):
+        value = result["value"]
+        if isinstance(value, dict):
+            result["value"] = redact_dict(value)
+    return result
+
+
+def admin_main(argv: Optional[List[str]] = None) -> int:
+    """Admin CLI 入口函数
+
+    提供 SCM Sync 子系统的管理命令，包括：
+    - jobs: 任务管理 (list/reset-dead/mark-dead)
+    - locks: 锁管理 (list/force-release/list-expired)
+    - pauses: 暂停管理 (set/unset/list)
+    - cursors: 游标管理 (list/get/set/delete)
+    - rate-limit: 速率限制管理 (buckets list/pause/unpause)
+    """
+    parser = argparse.ArgumentParser(
+        prog="engram-scm-sync admin",
+        description="SCM Sync 管理命令 - 运维管理工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+子命令:
+    jobs        任务管理 (list/reset-dead/mark-dead)
+    locks       锁管理 (list/force-release/list-expired)
+    pauses      暂停管理 (set/unset/list)
+    cursors     游标管理 (list/get/set/delete)
+    rate-limit  速率限制管理 (buckets list/pause/unpause)
+
+示例:
+    # 列出 dead 任务
+    engram-scm-sync admin jobs list --status dead
+
+    # 重置所有 dead 任务
+    engram-scm-sync admin jobs reset-dead
+
+    # 列出所有锁
+    engram-scm-sync admin locks list
+
+    # 列出所有暂停
+    engram-scm-sync admin pauses list
+
+    # 列出所有游标
+    engram-scm-sync admin cursors list
+
+    # 列出速率限制桶
+    engram-scm-sync admin rate-limit buckets list
+
+详细帮助:
+    engram-scm-sync admin <子命令> --help
+        """,
+    )
+
+    parser.add_argument(
+        "--dsn",
+        default=_get_dsn_from_env(),
+        help="数据库连接字符串（默认从环境变量读取）",
+    )
+    parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="JSON 格式输出",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="详细日志输出",
+    )
+
+    subparsers = parser.add_subparsers(dest="admin_command", help="管理子命令")
+
+    # ===== jobs 子命令 =====
+    jobs_parser = subparsers.add_parser("jobs", help="任务管理")
+    jobs_sub = jobs_parser.add_subparsers(dest="jobs_action", help="任务操作")
+
+    # jobs list
+    jobs_list = jobs_sub.add_parser("list", help="列出任务")
+    jobs_list.add_argument("--status", default="dead", help="任务状态 (默认: dead)")
+    jobs_list.add_argument("--repo-id", type=int, help="按仓库 ID 过滤")
+    jobs_list.add_argument("--job-type", help="按任务类型过滤")
+    jobs_list.add_argument("--limit", type=int, default=100, help="返回数量限制")
+
+    # jobs reset-dead
+    jobs_reset = jobs_sub.add_parser("reset-dead", help="重置 dead 任务为 pending")
+    jobs_reset.add_argument("--job-ids", help="任务 ID 列表（逗号分隔）")
+    jobs_reset.add_argument("--repo-id", type=int, help="按仓库 ID 过滤")
+    jobs_reset.add_argument("--limit", type=int, default=100, help="重置数量限制")
+    jobs_reset.add_argument("--dry-run", action="store_true", help="模拟运行")
+
+    # jobs mark-dead
+    jobs_mark = jobs_sub.add_parser("mark-dead", help="将任务标记为 dead")
+    jobs_mark.add_argument("--job-id", required=True, help="任务 ID")
+    jobs_mark.add_argument("--reason", default="manual_mark_dead", help="标记原因")
+
+    # ===== locks 子命令 =====
+    locks_parser = subparsers.add_parser("locks", help="锁管理")
+    locks_sub = locks_parser.add_subparsers(dest="locks_action", help="锁操作")
+
+    # locks list
+    locks_list = locks_sub.add_parser("list", help="列出所有锁")
+    locks_list.add_argument("--repo-id", type=int, help="按仓库 ID 过滤")
+    locks_list.add_argument("--limit", type=int, default=100, help="返回数量限制")
+
+    # locks force-release
+    locks_release = locks_sub.add_parser("force-release", help="强制释放锁")
+    locks_release.add_argument("--lock-id", type=int, required=True, help="锁 ID")
+
+    # locks list-expired
+    locks_expired = locks_sub.add_parser("list-expired", help="列出过期锁")
+    locks_expired.add_argument("--grace-seconds", type=int, default=0, help="宽限时间（秒）")
+    locks_expired.add_argument("--limit", type=int, default=100, help="返回数量限制")
+
+    # ===== pauses 子命令 =====
+    pauses_parser = subparsers.add_parser("pauses", help="暂停管理")
+    pauses_sub = pauses_parser.add_subparsers(dest="pauses_action", help="暂停操作")
+
+    # pauses list
+    pauses_list = pauses_sub.add_parser("list", help="列出所有暂停")
+    pauses_list.add_argument("--include-expired", action="store_true", help="包含已过期的暂停")
+
+    # pauses set
+    pauses_set = pauses_sub.add_parser("set", help="设置暂停")
+    pauses_set.add_argument("--repo-id", type=int, required=True, help="仓库 ID")
+    pauses_set.add_argument("--job-type", required=True, help="任务类型")
+    pauses_set.add_argument("--duration", type=int, required=True, help="暂停时长（秒）")
+    pauses_set.add_argument("--reason", default="manual_pause", help="暂停原因")
+
+    # pauses unset
+    pauses_unset = pauses_sub.add_parser("unset", help="取消暂停")
+    pauses_unset.add_argument("--repo-id", type=int, required=True, help="仓库 ID")
+    pauses_unset.add_argument("--job-type", required=True, help="任务类型")
+
+    # ===== cursors 子命令 =====
+    cursors_parser = subparsers.add_parser("cursors", help="游标管理")
+    cursors_sub = cursors_parser.add_subparsers(dest="cursors_action", help="游标操作")
+
+    # cursors list
+    cursors_list = cursors_sub.add_parser("list", help="列出所有游标")
+    cursors_list.add_argument("--key-prefix", help="按 key 前缀过滤")
+    cursors_list.add_argument("--limit", type=int, default=200, help="返回数量限制")
+
+    # cursors get
+    cursors_get = cursors_sub.add_parser("get", help="获取游标值")
+    cursors_get.add_argument("--repo-id", type=int, required=True, help="仓库 ID")
+    cursors_get.add_argument("--job-type", required=True, help="任务类型")
+
+    # cursors set
+    cursors_set = cursors_sub.add_parser("set", help="设置游标值")
+    cursors_set.add_argument("--repo-id", type=int, required=True, help="仓库 ID")
+    cursors_set.add_argument("--job-type", required=True, help="任务类型")
+    cursors_set.add_argument("--value", required=True, help="游标值（JSON 格式）")
+
+    # cursors delete
+    cursors_delete = cursors_sub.add_parser("delete", help="删除游标")
+    cursors_delete.add_argument("--repo-id", type=int, required=True, help="仓库 ID")
+    cursors_delete.add_argument("--job-type", required=True, help="任务类型")
+
+    # ===== rate-limit 子命令 =====
+    ratelimit_parser = subparsers.add_parser("rate-limit", help="速率限制管理")
+    ratelimit_sub = ratelimit_parser.add_subparsers(dest="ratelimit_action", help="速率限制操作")
+
+    # rate-limit buckets
+    buckets_parser = ratelimit_sub.add_parser("buckets", help="桶管理")
+    buckets_sub = buckets_parser.add_subparsers(dest="buckets_action", help="桶操作")
+
+    # buckets list
+    buckets_list = buckets_sub.add_parser("list", help="列出所有桶")
+    buckets_list.add_argument("--limit", type=int, default=100, help="返回数量限制")
+
+    # buckets pause
+    buckets_pause = buckets_sub.add_parser("pause", help="暂停桶")
+    buckets_pause.add_argument("--instance-key", required=True, help="实例 key")
+    buckets_pause.add_argument("--duration", type=int, required=True, help="暂停时长（秒）")
+    buckets_pause.add_argument("--reason", default="manual_pause", help="暂停原因")
+
+    # buckets unpause
+    buckets_unpause = buckets_sub.add_parser("unpause", help="取消暂停桶")
+    buckets_unpause.add_argument("--instance-key", required=True, help="实例 key")
+
+    # 解析参数
+    if argv is None:
+        argv = sys.argv[1:]
+
+    args = parser.parse_args(argv)
+    _setup_logging(args.verbose)
+
+    if not args.dsn:
+        if args.json_output:
+            print(json.dumps({"error": "未提供数据库连接字符串"}))
+        else:
+            print(
+                "错误: 未提供数据库连接字符串。请设置 LOGBOOK_DSN 环境变量或使用 --dsn 参数",
+                file=sys.stderr,
+            )
+        return 1
+
+    if not args.admin_command:
+        parser.print_help()
+        return 0
+
+    try:
+        conn = _get_connection(args.dsn)
+    except Exception as e:
+        if args.json_output:
+            print(json.dumps({"error": f"数据库连接失败: {e}"}))
+        else:
+            print(f"错误: 数据库连接失败: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        return _dispatch_admin_command(args, conn)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _dispatch_admin_command(args: argparse.Namespace, conn) -> int:
+    """分发 admin 子命令"""
+    from engram.logbook import scm_db
+
+    if args.admin_command == "jobs":
+        return _handle_jobs_command(args, conn, scm_db)
+    elif args.admin_command == "locks":
+        return _handle_locks_command(args, conn, scm_db)
+    elif args.admin_command == "pauses":
+        return _handle_pauses_command(args, conn, scm_db)
+    elif args.admin_command == "cursors":
+        return _handle_cursors_command(args, conn, scm_db)
+    elif args.admin_command == "rate-limit":
+        return _handle_ratelimit_command(args, conn, scm_db)
+    else:
+        if args.json_output:
+            print(json.dumps({"error": f"未知命令: {args.admin_command}"}))
+        else:
+            print(f"错误: 未知命令: {args.admin_command}", file=sys.stderr)
+        return 1
+
+
+def _handle_jobs_command(args: argparse.Namespace, conn, scm_db) -> int:
+    """处理 jobs 子命令"""
+    if args.jobs_action == "list":
+        jobs = scm_db.list_jobs_by_status(
+            conn,
+            status=args.status,
+            repo_id=args.repo_id,
+            job_type=args.job_type,
+            limit=args.limit,
+        )
+        # 脱敏处理
+        jobs = [_redact_job_info(j) for j in jobs]
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"jobs": jobs, "count": len(jobs)},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"任务列表 (status={args.status}, count={len(jobs)}):")
+            for j in jobs:
+                print(
+                    f"  job_id={j['job_id']}, repo_id={j['repo_id']}, job_type={j['job_type']}, "
+                    f"attempts={j['attempts']}, error={j.get('last_error', '-')[:50] if j.get('last_error') else '-'}"
+                )
+        return 0
+
+    elif args.jobs_action == "reset-dead":
+        job_ids = None
+        if args.job_ids:
+            job_ids = [jid.strip() for jid in args.job_ids.split(",") if jid.strip()]
+
+        if args.dry_run:
+            # 只列出将被重置的任务
+            jobs = scm_db.list_jobs_by_status(
+                conn,
+                status="dead",
+                repo_id=args.repo_id,
+                limit=args.limit,
+            )
+            if job_ids:
+                jobs = [j for j in jobs if str(j["job_id"]) in job_ids]
+
+            jobs = [_redact_job_info(j) for j in jobs]
+
+            if args.json_output:
+                print(
+                    json.dumps(
+                        {"dry_run": True, "would_reset": jobs, "count": len(jobs)},
+                        default=_serialize_datetime,
+                        ensure_ascii=False,
+                    )
+                )
+            else:
+                print(f"[DRY-RUN] 将重置 {len(jobs)} 个 dead 任务:")
+                for j in jobs:
+                    print(
+                        f"  job_id={j['job_id']}, repo_id={j['repo_id']}, job_type={j['job_type']}"
+                    )
+            return 0
+
+        # 执行重置
+        reset_jobs = scm_db.reset_dead_jobs(
+            conn,
+            job_ids=job_ids,
+            repo_id=args.repo_id,
+            limit=args.limit,
+        )
+        conn.commit()
+
+        reset_jobs = [_redact_job_info(j) for j in reset_jobs]
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"reset_count": len(reset_jobs), "reset_jobs": reset_jobs},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"已重置 {len(reset_jobs)} 个 dead 任务为 pending:")
+            for j in reset_jobs:
+                print(f"  job_id={j['job_id']}, repo_id={j['repo_id']}, job_type={j['job_type']}")
+        return 0
+
+    elif args.jobs_action == "mark-dead":
+        success = scm_db.mark_job_dead(conn, args.job_id, reason=args.reason)
+        conn.commit()
+
+        if args.json_output:
+            print(json.dumps({"success": success, "job_id": args.job_id, "reason": args.reason}))
+        else:
+            if success:
+                print(f"已将任务 {args.job_id} 标记为 dead (reason={args.reason})")
+            else:
+                print(f"标记失败: 任务 {args.job_id} 不存在或状态不允许标记")
+        return 0 if success else 1
+
+    else:
+        if args.json_output:
+            print(json.dumps({"error": "请指定 jobs 子命令: list/reset-dead/mark-dead"}))
+        else:
+            print("错误: 请指定 jobs 子命令: list/reset-dead/mark-dead", file=sys.stderr)
+        return 1
+
+
+def _handle_locks_command(args: argparse.Namespace, conn, scm_db) -> int:
+    """处理 locks 子命令"""
+    if args.locks_action == "list":
+        locks = scm_db.list_sync_locks(conn, repo_id=args.repo_id, limit=args.limit)
+        locks = [_redact_lock_info(lock) for lock in locks]
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"locks": locks, "count": len(locks)},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"锁列表 (count={len(locks)}):")
+            for lock in locks:
+                status = (
+                    "EXPIRED"
+                    if lock.get("is_expired")
+                    else ("LOCKED" if lock.get("is_locked") else "FREE")
+                )
+                print(
+                    f"  lock_id={lock['lock_id']}, repo_id={lock['repo_id']}, job_type={lock['job_type']}, "
+                    f"status={status}, locked_by={lock.get('locked_by', '-')}"
+                )
+        return 0
+
+    elif args.locks_action == "force-release":
+        success = scm_db.force_release_lock(conn, args.lock_id)
+        conn.commit()
+
+        if args.json_output:
+            print(json.dumps({"success": success, "lock_id": args.lock_id}))
+        else:
+            if success:
+                print(f"已强制释放锁 lock_id={args.lock_id}")
+            else:
+                print(f"释放失败: 锁 lock_id={args.lock_id} 不存在")
+        return 0 if success else 1
+
+    elif args.locks_action == "list-expired":
+        locks = scm_db.list_expired_locks(conn, grace_seconds=args.grace_seconds, limit=args.limit)
+        locks = [_redact_lock_info(lock) for lock in locks]
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"expired_locks": locks, "count": len(locks)},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"过期锁列表 (grace_seconds={args.grace_seconds}, count={len(locks)}):")
+            for lock in locks:
+                print(
+                    f"  lock_id={lock['lock_id']}, repo_id={lock['repo_id']}, job_type={lock['job_type']}, "
+                    f"locked_by={lock.get('locked_by', '-')}, locked_at={lock.get('locked_at', '-')}"
+                )
+        return 0
+
+    else:
+        if args.json_output:
+            print(json.dumps({"error": "请指定 locks 子命令: list/force-release/list-expired"}))
+        else:
+            print("错误: 请指定 locks 子命令: list/force-release/list-expired", file=sys.stderr)
+        return 1
+
+
+def _handle_pauses_command(args: argparse.Namespace, conn, scm_db) -> int:
+    """处理 pauses 子命令"""
+    if args.pauses_action == "list":
+        pauses = scm_db.list_all_pauses(conn, include_expired=args.include_expired)
+        pauses = [_redact_pause_info(p) for p in pauses]
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"pauses": pauses, "count": len(pauses)},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"暂停列表 (include_expired={args.include_expired}, count={len(pauses)}):")
+            for p in pauses:
+                print(
+                    f"  repo_id={p['repo_id']}, job_type={p['job_type']}, "
+                    f"reason_code={p.get('reason_code', '-')}, reason={p.get('reason', '-')[:30]}"
+                )
+        return 0
+
+    elif args.pauses_action == "set":
+        pause = scm_db.set_repo_job_pause(
+            conn,
+            repo_id=args.repo_id,
+            job_type=args.job_type,
+            pause_duration_seconds=args.duration,
+            reason=args.reason,
+        )
+        conn.commit()
+
+        pause_dict = _redact_pause_info(pause)
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"success": True, "pause": pause_dict},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(
+                f"已设置暂停: repo_id={args.repo_id}, job_type={args.job_type}, duration={args.duration}s"
+            )
+        return 0
+
+    elif args.pauses_action == "unset":
+        success = scm_db.unset_repo_job_pause(conn, repo_id=args.repo_id, job_type=args.job_type)
+        conn.commit()
+
+        if args.json_output:
+            print(
+                json.dumps({"success": success, "repo_id": args.repo_id, "job_type": args.job_type})
+            )
+        else:
+            if success:
+                print(f"已取消暂停: repo_id={args.repo_id}, job_type={args.job_type}")
+            else:
+                print(
+                    f"取消失败: 暂停记录不存在 (repo_id={args.repo_id}, job_type={args.job_type})"
+                )
+        return 0 if success else 1
+
+    else:
+        if args.json_output:
+            print(json.dumps({"error": "请指定 pauses 子命令: list/set/unset"}))
+        else:
+            print("错误: 请指定 pauses 子命令: list/set/unset", file=sys.stderr)
+        return 1
+
+
+def _handle_cursors_command(args: argparse.Namespace, conn, scm_db) -> int:
+    """处理 cursors 子命令"""
+    if args.cursors_action == "list":
+        cursors = scm_db.list_kv_cursors(conn, key_prefix=args.key_prefix, limit=args.limit)
+        cursors = [_redact_cursor_info(c) for c in cursors]
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"cursors": cursors, "count": len(cursors)},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"游标列表 (count={len(cursors)}):")
+            for c in cursors:
+                print(f"  key={c['key']}, updated_at={c.get('updated_at', '-')}")
+        return 0
+
+    elif args.cursors_action == "get":
+        cursor = scm_db.get_cursor_value(conn, args.repo_id, args.job_type)
+        if cursor:
+            cursor = _redact_cursor_info(cursor)
+
+        if args.json_output:
+            if cursor:
+                print(
+                    json.dumps(
+                        {"found": True, "cursor": cursor},
+                        default=_serialize_datetime,
+                        ensure_ascii=False,
+                    )
+                )
+            else:
+                print(
+                    json.dumps({"found": False, "repo_id": args.repo_id, "job_type": args.job_type})
+                )
+        else:
+            if cursor:
+                print(f"游标 (repo_id={args.repo_id}, job_type={args.job_type}):")
+                print(f"  value: {cursor.get('value', '-')}")
+                print(f"  updated_at: {cursor.get('updated_at', '-')}")
+            else:
+                print(f"游标不存在: repo_id={args.repo_id}, job_type={args.job_type}")
+        return 0 if cursor else 1
+
+    elif args.cursors_action == "set":
+        try:
+            value = json.loads(args.value)
+        except json.JSONDecodeError as e:
+            if args.json_output:
+                print(json.dumps({"error": f"无效的 JSON 值: {e}"}))
+            else:
+                print(f"错误: 无效的 JSON 值: {e}", file=sys.stderr)
+            return 1
+
+        success = scm_db.set_cursor_value(conn, args.repo_id, args.job_type, value)
+        conn.commit()
+
+        if args.json_output:
+            print(
+                json.dumps({"success": success, "repo_id": args.repo_id, "job_type": args.job_type})
+            )
+        else:
+            if success:
+                print(f"已设置游标: repo_id={args.repo_id}, job_type={args.job_type}")
+            else:
+                print(f"设置失败: repo_id={args.repo_id}, job_type={args.job_type}")
+        return 0 if success else 1
+
+    elif args.cursors_action == "delete":
+        success = scm_db.delete_cursor_value(conn, args.repo_id, args.job_type)
+        conn.commit()
+
+        if args.json_output:
+            print(
+                json.dumps({"success": success, "repo_id": args.repo_id, "job_type": args.job_type})
+            )
+        else:
+            if success:
+                print(f"已删除游标: repo_id={args.repo_id}, job_type={args.job_type}")
+            else:
+                print(f"删除失败: 游标不存在 (repo_id={args.repo_id}, job_type={args.job_type})")
+        return 0 if success else 1
+
+    else:
+        if args.json_output:
+            print(json.dumps({"error": "请指定 cursors 子命令: list/get/set/delete"}))
+        else:
+            print("错误: 请指定 cursors 子命令: list/get/set/delete", file=sys.stderr)
+        return 1
+
+
+def _handle_ratelimit_command(args: argparse.Namespace, conn, scm_db) -> int:
+    """处理 rate-limit 子命令"""
+    if args.ratelimit_action == "buckets":
+        return _handle_buckets_command(args, conn, scm_db)
+    else:
+        if args.json_output:
+            print(json.dumps({"error": "请指定 rate-limit 子命令: buckets"}))
+        else:
+            print("错误: 请指定 rate-limit 子命令: buckets", file=sys.stderr)
+        return 1
+
+
+def _handle_buckets_command(args: argparse.Namespace, conn, scm_db) -> int:
+    """处理 rate-limit buckets 子命令"""
+    if args.buckets_action == "list":
+        buckets = scm_db.list_rate_limit_buckets(conn, limit=args.limit)
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"buckets": buckets, "count": len(buckets)},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"速率限制桶列表 (count={len(buckets)}):")
+            for b in buckets:
+                status = "PAUSED" if b.get("is_paused") else "ACTIVE"
+                remaining = b.get("remaining_pause_seconds", 0)
+                print(
+                    f"  instance_key={b['instance_key']}, status={status}, "
+                    f"tokens={b.get('tokens', '-')}, remaining_pause={remaining:.0f}s"
+                )
+        return 0
+
+    elif args.buckets_action == "pause":
+        result = scm_db.pause_rate_limit_bucket(
+            conn,
+            args.instance_key,
+            args.duration,
+            reason=args.reason,
+        )
+        conn.commit()
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"success": True, "result": result},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"已暂停桶: instance_key={args.instance_key}, duration={args.duration}s")
+        return 0
+
+    elif args.buckets_action == "unpause":
+        result = scm_db.unpause_rate_limit_bucket(conn, args.instance_key)
+        conn.commit()
+
+        if args.json_output:
+            print(
+                json.dumps(
+                    {"success": True, "result": result},
+                    default=_serialize_datetime,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            if result.get("status") == "not_found":
+                print(f"取消暂停失败: 桶不存在 (instance_key={args.instance_key})")
+            else:
+                print(f"已取消暂停: instance_key={args.instance_key}")
+        return 0 if result.get("status") != "not_found" else 1
+
+    else:
+        if args.json_output:
+            print(json.dumps({"error": "请指定 buckets 子命令: list/pause/unpause"}))
+        else:
+            print("错误: 请指定 buckets 子命令: list/pause/unpause", file=sys.stderr)
+        return 1
 
 
 # ============ 统一入口 ============
@@ -1136,6 +1878,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     reaper      清理器 - 回收过期任务、runs 和锁
     status      状态查询 - 查看同步健康状态与指标
     runner      运行器 - 增量同步与回填工具
+    admin       管理命令 - 运维管理工具 (jobs/locks/pauses/cursors/rate-limit)
 
 示例:
     python -m engram.logbook.cli.scm_sync scheduler --once
@@ -1143,6 +1886,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     python -m engram.logbook.cli.scm_sync reaper --dry-run
     python -m engram.logbook.cli.scm_sync status --json
     python -m engram.logbook.cli.scm_sync runner incremental --repo gitlab:123
+    python -m engram.logbook.cli.scm_sync admin jobs list --status dead
+    python -m engram.logbook.cli.scm_sync admin locks list-expired
+    python -m engram.logbook.cli.scm_sync admin pauses list
+    python -m engram.logbook.cli.scm_sync admin cursors list
+    python -m engram.logbook.cli.scm_sync admin rate-limit buckets list
 
 详细帮助:
     python -m engram.logbook.cli.scm_sync <子命令> --help
@@ -1167,6 +1915,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # runner 子命令
     subparsers.add_parser("runner", help="运行器 - 增量同步与回填工具", add_help=False)
 
+    # admin 子命令
+    subparsers.add_parser(
+        "admin",
+        help="管理命令 - 运维管理工具 (jobs/locks/pauses/cursors/rate-limit)",
+        add_help=False,
+    )
+
     # 解析子命令
     if argv is None:
         argv = sys.argv[1:]
@@ -1174,7 +1929,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 找到子命令位置
     command_idx = -1
     for i, arg in enumerate(argv):
-        if arg in ("scheduler", "worker", "reaper", "status", "runner"):
+        if arg in ("scheduler", "worker", "reaper", "status", "runner", "admin"):
             command_idx = i
             break
 
@@ -1195,6 +1950,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return status_main(remaining_args)
     elif command == "runner":
         return runner_main(remaining_args)
+    elif command == "admin":
+        return admin_main(remaining_args)
     else:
         parser.print_help()
         return 0
