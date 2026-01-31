@@ -1,15 +1,52 @@
 """
 logbook_db - Logbook 数据库操作模块 (已弃用)
 
-=== 模块状态与未来规划 ===
+================================================================================
+                              ⚠️  已弃用  ⚠️
+================================================================================
 
-当前状态: 已弃用 (Deprecated)
-未来状态: 作为 engram_logbook 的适配层 (Adapter)
+状态: 已弃用 (Deprecated) - 仅用于向后兼容
+替代方案: 使用 container.py 或 di.py 中的依赖注入机制
 
-此模块的演进路径:
+================================================================================
+                            迁移指引 (Migration Guide)
+================================================================================
+
+新代码请使用 GatewayDeps 或 GatewayContainer 获取依赖:
+
+    # 方式 1: 通过 GatewayDeps (推荐，纯 Python)
+    from engram.gateway.di import GatewayDeps
+
+    async def my_handler(..., deps: GatewayDeps = None):
+        if deps is None:
+            deps = GatewayDeps.create()
+        db = deps.db                    # LogbookDatabase (薄代理层)
+        adapter = deps.logbook_adapter  # LogbookAdapter (推荐)
+        config = deps.config            # GatewayConfig
+
+    # 方式 2: 通过 GatewayContainer (FastAPI 集成)
+    from engram.gateway.container import get_container
+
+    container = get_container()
+    db = container.db
+    adapter = container.logbook_adapter
+
+旧代码迁移步骤:
+    # Before (已弃用)
+    from engram.gateway.logbook_db import get_db
+    db = get_db()
+
+    # After (推荐)
+    from engram.gateway.di import GatewayDeps
+    deps = GatewayDeps.create()
+    db = deps.db  # 或 deps.logbook_adapter
+
+================================================================================
+
+模块演进路径:
 1. [已完成] 作为独立的 Logbook 数据库操作实现
-2. [当前] 作为向后兼容的代理层，转发调用到 logbook_adapter
-3. [未来] 完全移除，由 logbook_adapter 直接复用 engram_logbook 包
+2. [当前] 作为向后兼容的薄代理层，转发调用到 logbook_adapter
+3. [未来] 完全移除，由 container/di 模块直接管理 logbook_adapter
 
 依赖关系:
 - 本模块 → logbook_adapter → engram_logbook (PyPI 包)
@@ -19,9 +56,15 @@ logbook_db - Logbook 数据库操作模块 (已弃用)
   * outbox_enqueue, outbox_claim_lease, outbox_ack_sent
   * outbox_fail_retry, outbox_mark_dead
 
-警告: 此模块已弃用，请使用 logbook_adapter 模块代替。
-新代码请直接使用:
-    from engram.gateway.logbook_adapter import LogbookAdapter, get_adapter
+当前保留原因:
+- 启动时数据库初始化 (main.py: set_default_dsn, get_db)
+- 向后兼容现有测试代码
+- 作为 LogbookAdapter 的类型适配层
+
+注意事项:
+- 本模块中的函数只做薄代理，不引入新的业务逻辑
+- correlation_id 必须由调用方传入，本模块不自行生成（单一来源原则）
+- 所有数据库操作最终委托给 LogbookAdapter 实现
 """
 
 from datetime import datetime, timezone
@@ -30,30 +73,32 @@ from typing import Any, Dict, List, Optional
 #
 
 # 尝试导入新适配器，如果失败则回退到旧实现
+# 使用 type: ignore 是因为这是"可选依赖"模式
 try:
     from .logbook_adapter import LogbookAdapter as _LogbookAdapter
     from .logbook_adapter import get_adapter as _get_adapter
     from .logbook_adapter import reset_adapter as _reset_adapter
+
     _USE_ADAPTER = True
 except ImportError:
     # 如果 engram_logbook 包未安装，回退到旧实现
     _USE_ADAPTER = False
-    _LogbookAdapter = None
-    _get_adapter = None
-    _reset_adapter = None
+    _LogbookAdapter = None  # type: ignore[misc, assignment]
+    _get_adapter = None  # type: ignore[assignment]
+    _reset_adapter = None  # type: ignore[assignment]
 
 
 class LogbookDatabase:
     """
     Logbook 数据库连接管理器 (已弃用)
-    
+
     警告: 此类已弃用，请使用 logbook_adapter.LogbookAdapter 代替。
     """
 
     def __init__(self, dsn: Optional[str] = None):
         """
         初始化数据库连接
-        
+
         Args:
             dsn: PostgreSQL 连接字符串，为 None 时从环境变量读取
         """
@@ -72,7 +117,7 @@ class LogbookDatabase:
             self._dsn = dsn or os.environ.get("POSTGRES_DSN") or os.environ.get("TEST_PG_DSN", "")
             if not self._dsn:
                 raise ValueError("需要设置 POSTGRES_DSN 或 TEST_PG_DSN 环境变量或传入 dsn 参数")
-            self._adapter = None
+            self._adapter = None  # type: ignore[assignment]
             self._hashlib = hashlib
             self._json = json
             self._timedelta = timedelta
@@ -89,17 +134,17 @@ class LogbookDatabase:
     def get_settings(self, project_key: str) -> Optional[Dict[str, Any]]:
         """
         读取治理设置
-        
+
         Args:
             project_key: 项目标识
-            
+
         Returns:
             设置字典 {team_write_enabled, policy_json, updated_by, updated_at}
             如果不存在返回 None
         """
         if self._adapter:
             return self._adapter.get_settings(project_key)
-        
+
         # 回退实现
         conn = self._get_connection()
         try:
@@ -128,16 +173,16 @@ class LogbookDatabase:
     def get_or_create_settings(self, project_key: str) -> Dict[str, Any]:
         """
         获取或创建治理设置（默认 team_write_enabled=false）
-        
+
         Args:
             project_key: 项目标识
-            
+
         Returns:
             设置字典
         """
         if self._adapter:
             return self._adapter.get_or_create_settings(project_key)
-        
+
         # 回退实现
         settings = self.get_settings(project_key)
         if settings:
@@ -190,7 +235,7 @@ class LogbookDatabase:
     ) -> int:
         """
         写入审计日志
-        
+
         Args:
             actor_user_id: 操作者用户 ID
             target_space: 目标空间 (team:<project> / private:<user> / org:shared)
@@ -199,7 +244,7 @@ class LogbookDatabase:
             payload_sha: 记忆内容的 SHA256 哈希
             evidence_refs_json: 证据链引用
             validate_refs: 是否校验 evidence_refs 结构（默认 False，向后兼容）
-            
+
         Returns:
             创建的 audit_id
         """
@@ -213,7 +258,7 @@ class LogbookDatabase:
                 evidence_refs_json=evidence_refs_json,
                 validate_refs=validate_refs,
             )
-        
+
         # 回退实现（不支持 validate_refs，仅用于向后兼容）
         evidence_refs = evidence_refs_json or {}
 
@@ -257,14 +302,14 @@ class LogbookDatabase:
     ) -> int:
         """
         将记忆入队到 outbox_memory 表（失败补偿队列）
-        
+
         Args:
             payload_md: Markdown 格式的记忆内容
             target_space: 目标空间
             item_id: 关联的 logbook.items.item_id（可选）
             last_error: 错误信息
             next_attempt_at: 下次重试时间（适配器模式下忽略此参数）
-            
+
         Returns:
             创建的 outbox_id
         """
@@ -275,7 +320,7 @@ class LogbookDatabase:
                 item_id=item_id,
                 last_error=last_error,
             )
-        
+
         # 回退实现
         payload_sha = self._hashlib.sha256(payload_md.encode("utf-8")).hexdigest()
 
@@ -288,7 +333,7 @@ class LogbookDatabase:
                 cur.execute(
                     """
                     INSERT INTO logbook.outbox_memory
-                        (item_id, target_space, payload_md, payload_sha, status, 
+                        (item_id, target_space, payload_md, payload_sha, status,
                          retry_count, last_error, next_attempt_at)
                     VALUES (%s, %s, %s, %s, 'pending', 0, %s, %s)
                     RETURNING outbox_id
@@ -311,17 +356,17 @@ class LogbookDatabase:
     ) -> List[Dict[str, Any]]:
         """
         获取待处理的 outbox 记录
-        
+
         Args:
             limit: 返回记录数量上限
             before_time: 只返回 next_attempt_at <= before_time 的记录（适配器模式下忽略）
-            
+
         Returns:
             pending 状态的 outbox 记录列表
         """
         if self._adapter:
             return self._adapter.get_pending_outbox(limit=limit)
-        
+
         # 回退实现
         if before_time is None:
             before_time = datetime.now(timezone.utc)
@@ -363,16 +408,16 @@ class LogbookDatabase:
     def mark_outbox_sent(self, outbox_id: int) -> bool:
         """
         标记 outbox 记录为已发送 (pending -> sent)
-        
+
         Args:
             outbox_id: Outbox 记录 ID
-            
+
         Returns:
             True 表示成功更新
         """
         if self._adapter:
             return self._adapter.mark_outbox_sent(outbox_id)
-        
+
         # 回退实现
         conn = self._get_connection()
         try:
@@ -403,18 +448,18 @@ class LogbookDatabase:
     ) -> int:
         """
         增加 outbox 重试计数并更新错误信息
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             error: 本次错误信息
             next_attempt_at: 下次重试时间（适配器模式下忽略，使用指数退避）
-            
+
         Returns:
             更新后的 retry_count
         """
         if self._adapter:
             return self._adapter.increment_outbox_retry(outbox_id=outbox_id, error=error)
-        
+
         # 回退实现
         conn = self._get_connection()
         try:
@@ -429,7 +474,9 @@ class LogbookDatabase:
 
                 new_retry_count = row[0] + 1
                 if next_attempt_at is None:
-                    next_attempt_at = datetime.now(timezone.utc) + self._timedelta(minutes=5 * (2 ** row[0]))
+                    next_attempt_at = datetime.now(timezone.utc) + self._timedelta(
+                        minutes=5 * (2 ** row[0])
+                    )
 
                 cur.execute(
                     """
@@ -452,17 +499,17 @@ class LogbookDatabase:
     def mark_outbox_dead(self, outbox_id: int, error: str) -> bool:
         """
         标记 outbox 记录为死信 (pending -> dead)
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             error: 错误信息
-            
+
         Returns:
             True 表示成功更新
         """
         if self._adapter:
             return self._adapter.mark_outbox_dead(outbox_id=outbox_id, error=error)
-        
+
         # 回退实现
         conn = self._get_connection()
         try:
@@ -496,39 +543,54 @@ _default_dsn: Optional[str] = None
 def get_db(dsn: Optional[str] = None) -> LogbookDatabase:
     """
     获取全局数据库实例 (已弃用)
-    
-    警告: 此函数已弃用，请使用 logbook_adapter.get_adapter() 代替。
-    
+
+    ⚠️ 警告: 此函数已弃用，请通过以下方式获取数据库操作:
+
+    1. 在 handlers/services 中，使用 deps.db 或 deps.logbook_adapter:
+       ```python
+       async def my_handler(..., deps: GatewayDeps = None):
+           db = deps.db  # 或 adapter = deps.logbook_adapter
+       ```
+
+    2. 直接使用 logbook_adapter:
+       ```python
+       from engram.gateway.logbook_adapter import get_adapter
+       adapter = get_adapter()
+       ```
+
     Args:
         dsn: PostgreSQL 连接字符串。不同 DSN 会创建不同实例。
              如果为 None，使用默认 DSN（从环境变量 POSTGRES_DSN 读取）。
-    
+
     Returns:
-        LogbookDatabase 实例
-    
+        LogbookDatabase 实例（内部封装 LogbookAdapter）
+
     Note:
+        此函数目前仅用于:
+        - 启动时数据库初始化 (main.py)
+        - 向后兼容现有测试代码
         不同 DSN 不会复用同一实例，以支持测试场景中切换数据库。
     """
     global _db_instances, _default_dsn
     import os
-    
+
     # 确定实际使用的 DSN
     effective_dsn = dsn or _default_dsn or os.environ.get("POSTGRES_DSN", "")
-    
+
     # 使用 DSN 作为 key 缓存实例
     if effective_dsn not in _db_instances:
         _db_instances[effective_dsn] = LogbookDatabase(dsn=dsn)
         # 如果是首次调用且没有指定默认 DSN，设置为默认
         if _default_dsn is None and dsn:
             _default_dsn = dsn
-    
+
     return _db_instances[effective_dsn]
 
 
 def set_default_dsn(dsn: str) -> None:
     """
     设置默认 DSN
-    
+
     Args:
         dsn: PostgreSQL 连接字符串
     """
@@ -539,14 +601,14 @@ def set_default_dsn(dsn: str) -> None:
 def reset_db(dsn: Optional[str] = None) -> None:
     """
     重置全局数据库实例 (已弃用)
-    
+
     警告: 此函数已弃用，请使用 logbook_adapter.reset_adapter() 代替。
-    
+
     Args:
         dsn: 要重置的特定 DSN。如果为 None，重置所有实例。
     """
     global _db_instances, _default_dsn
-    
+
     if dsn is None:
         # 重置所有实例
         _db_instances.clear()
@@ -556,6 +618,6 @@ def reset_db(dsn: Optional[str] = None) -> None:
         _db_instances.pop(dsn, None)
         if _default_dsn == dsn:
             _default_dsn = None
-    
+
     if _USE_ADAPTER and _reset_adapter:
         _reset_adapter()

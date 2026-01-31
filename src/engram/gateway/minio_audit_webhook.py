@@ -24,10 +24,9 @@ MinIO Audit Webhook 处理模块
 
 import json
 import logging
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from .config import get_config
@@ -40,6 +39,7 @@ router = APIRouter(prefix="/minio", tags=["minio"])
 
 class MinioAuditError(Exception):
     """MinIO Audit 处理错误"""
+
     def __init__(self, message: str, status_code: int = 500):
         self.message = message
         self.status_code = status_code
@@ -49,30 +49,29 @@ class MinioAuditError(Exception):
 def _verify_auth_token(request: Request) -> bool:
     """
     验证请求的认证 token
-    
+
     支持两种方式:
     1. Authorization: Bearer <token>
     2. X-Minio-Auth-Token: <token>
-    
+
     Returns:
         True 如果 token 验证通过
-        
+
     Raises:
-        MinioAuditError: 
+        MinioAuditError:
             - 503: webhook 未配置 (MINIO_AUDIT_WEBHOOK_AUTH_TOKEN 为空)
             - 401: token 缺失
             - 403: token 无效
     """
     config = get_config()
     expected_token = config.minio_audit_webhook_auth_token
-    
+
     # 如果未配置 token，拒绝服务（需要管理员配置）
     if not expected_token:
         raise MinioAuditError(
-            "MinIO audit webhook 未配置，请设置 MINIO_AUDIT_WEBHOOK_AUTH_TOKEN",
-            status_code=503
+            "MinIO audit webhook 未配置，请设置 MINIO_AUDIT_WEBHOOK_AUTH_TOKEN", status_code=503
         )
-    
+
     # 尝试从 Authorization header 获取 token
     auth_header = request.headers.get("Authorization")
     if auth_header:
@@ -80,33 +79,33 @@ def _verify_auth_token(request: Request) -> bool:
             token = auth_header[7:]
             if token == expected_token:
                 return True
-    
+
     # 尝试从 X-Minio-Auth-Token header 获取 token
     minio_token = request.headers.get("X-Minio-Auth-Token")
     if minio_token:
         if minio_token == expected_token:
             return True
-    
+
     # token 缺失或无效
     if not auth_header and not minio_token:
         raise MinioAuditError("缺少认证 token", status_code=401)
-    
+
     raise MinioAuditError("认证 token 无效", status_code=403)
 
 
 async def _read_body_with_limit(request: Request) -> bytes:
     """
     读取请求体并检查大小限制
-    
+
     Returns:
         请求体字节数据
-        
+
     Raises:
         MinioAuditError: 请求体过大
     """
     config = get_config()
     max_size = config.minio_audit_max_payload_size
-    
+
     # 检查 Content-Length header
     content_length = request.headers.get("Content-Length")
     if content_length:
@@ -114,44 +113,40 @@ async def _read_body_with_limit(request: Request) -> bytes:
             length = int(content_length)
             if length > max_size:
                 raise MinioAuditError(
-                    f"请求体过大: {length} 字节 (最大 {max_size})",
-                    status_code=413
+                    f"请求体过大: {length} 字节 (最大 {max_size})", status_code=413
                 )
         except ValueError:
             pass  # 忽略无效的 Content-Length
-    
+
     # 读取请求体（带大小限制）
     body = b""
     async for chunk in request.stream():
         body += chunk
         if len(body) > max_size:
-            raise MinioAuditError(
-                f"请求体过大: 超过 {max_size} 字节限制",
-                status_code=413
-            )
-    
+            raise MinioAuditError(f"请求体过大: 超过 {max_size} 字节限制", status_code=413)
+
     return body
 
 
 def _parse_minio_audit_event(body: bytes) -> Dict[str, Any]:
     """
     解析 MinIO 审计事件 JSON
-    
+
     MinIO 审计日志格式参考:
     https://min.io/docs/minio/linux/operations/monitoring/audit-logging.html
-    
+
     Args:
         body: 请求体字节数据
-        
+
     Returns:
         解析后的审计事件字典
-        
+
     Raises:
         MinioAuditError: JSON 解析失败
     """
     if not body:
         raise MinioAuditError("请求体为空", status_code=400)
-    
+
     try:
         # 尝试解析 JSON
         data = json.loads(body.decode("utf-8"))
@@ -165,13 +160,13 @@ def _parse_minio_audit_event(body: bytes) -> Dict[str, Any]:
 def normalize_to_schema(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     将 MinIO 审计事件归一化为 object_store_audit_event_v1 schema 格式
-    
+
     归一化结构包含:
     - schema_version: 固定为 "1.0"
     - provider: 固定为 "minio"
     - raw: 完整保留原始事件
     - 以及其他标准化字段
-    
+
     MinIO 审计事件结构:
     {
         "version": "1",
@@ -197,42 +192,42 @@ def normalize_to_schema(event: Dict[str, Any]) -> Dict[str, Any]:
         },
         ...
     }
-    
+
     Args:
         event: MinIO 原始审计事件
-        
+
     Returns:
         归一化后的事件字典，符合 object_store_audit_event_v1 schema
     """
     api_info = event.get("api", {})
     request_claims = event.get("requestClaims", {})
-    
+
     # 提取操作者标识（优先使用 accessKey，其次是 claims 中的其他标识）
     principal = request_claims.get("accessKey") or request_claims.get("sub") or None
-    
+
     # 解析 remote_host（可能包含端口）
     remote_host = event.get("remotehost", "")
     if remote_host and ":" in remote_host:
         # 移除端口号，只保留 IP
         remote_host = remote_host.rsplit(":", 1)[0]
-    
+
     # 构建操作类型（使用 s3: 前缀以符合 S3 API 命名约定）
     api_name = api_info.get("name")
     if api_name:
         operation = f"s3:{api_name}"
     else:
         operation = "unknown"
-    
+
     # 判断操作是否成功（2xx 状态码为成功）
     status_code = api_info.get("statusCode")
     success = status_code is not None and 200 <= status_code < 300
-    
+
     # 提取 bucket（默认 "unknown" 以满足 schema required 约束）
     bucket = api_info.get("bucket") or "unknown"
-    
+
     # 提取 user_agent
     user_agent = event.get("userAgent")
-    
+
     # 提取响应时间（如果有）
     duration_ms = None
     time_to_response = api_info.get("timeToResponse", "")
@@ -243,7 +238,7 @@ def normalize_to_schema(event: Dict[str, Any]) -> Dict[str, Any]:
                 duration_ms = int(time_to_response[:-2])
             except ValueError:
                 pass
-    
+
     return {
         # Schema 核心字段
         "schema_version": "1.0",
@@ -269,9 +264,9 @@ def normalize_to_schema(event: Dict[str, Any]) -> Dict[str, Any]:
 def _extract_audit_fields(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     从 MinIO 审计事件中提取关键字段（使用归一化函数）
-    
+
     此函数是 normalize_to_schema 的包装，用于向后兼容。
-    
+
     Returns:
         提取后的字段字典，适配 governance.object_store_audit_events 表结构
     """
@@ -281,27 +276,27 @@ def _extract_audit_fields(event: Dict[str, Any]) -> Dict[str, Any]:
 def _insert_audit_to_db(audit_data: Dict[str, Any]) -> int:
     """
     将审计数据写入 governance.object_store_audit_events 表
-    
+
     归一化后的 audit_data 包含:
     - schema_version: "1.0"
     - provider: "minio"
     - raw: 完整原始事件
     - 以及其他标准化字段
-    
+
     Args:
         audit_data: 归一化后的审计数据字典（符合 object_store_audit_event_v1 schema）
-        
+
     Returns:
         创建的 event_id
     """
     import psycopg
-    
+
     config = get_config()
-    
+
     # 记录 schema_version 用于日志追踪
     schema_version = audit_data.get("schema_version", "1.0")
     logger.debug(f"插入审计数据，schema_version={schema_version}")
-    
+
     try:
         conn = psycopg.connect(config.postgres_dsn, autocommit=True)
         try:
@@ -309,7 +304,7 @@ def _insert_audit_to_db(audit_data: Dict[str, Any]) -> int:
                 cur.execute(
                     """
                     INSERT INTO governance.object_store_audit_events
-                        (provider, event_ts, bucket, object_key, operation, 
+                        (provider, event_ts, bucket, object_key, operation,
                          status_code, request_id, principal, remote_ip, raw)
                     VALUES (
                         %s,
@@ -344,16 +339,16 @@ def _insert_audit_to_db(audit_data: Dict[str, Any]) -> int:
 async def minio_audit_webhook(request: Request):
     """
     MinIO Audit Webhook 端点
-    
+
     接收 MinIO 审计日志并落库到 governance.artifact_ops_audit 表。
-    
+
     认证方式:
     - Authorization: Bearer <token>
     - X-Minio-Auth-Token: <token>
-    
+
     请求体:
     - JSON 格式的 MinIO 审计事件
-    
+
     响应:
     - 200: 成功落库
     - 400: 请求体解析失败
@@ -366,26 +361,26 @@ async def minio_audit_webhook(request: Request):
     try:
         # 1. 验证 token
         _verify_auth_token(request)
-        
+
         # 2. 读取请求体（带大小限制）
         body = await _read_body_with_limit(request)
-        
+
         # 3. 解析 JSON
         event = _parse_minio_audit_event(body)
-        
+
         # 4. 提取关键字段
         audit_data = _extract_audit_fields(event)
-        
+
         # 5. 写入数据库
         event_id = _insert_audit_to_db(audit_data)
-        
+
         logger.info(
             f"MinIO audit 落库成功: event_id={event_id}, "
             f"operation={audit_data.get('operation')}, "
             f"bucket={audit_data.get('bucket')}, "
             f"object_key={audit_data.get('object_key')}"
         )
-        
+
         return JSONResponse(
             content={
                 "ok": True,
@@ -394,7 +389,7 @@ async def minio_audit_webhook(request: Request):
             },
             status_code=200,
         )
-        
+
     except MinioAuditError as e:
         # 根据错误类型选择合适的日志级别：
         # - 503 未配置：info（配置问题，不应产生告警噪声）

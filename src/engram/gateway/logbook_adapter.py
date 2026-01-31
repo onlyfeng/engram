@@ -5,6 +5,28 @@ logbook_adapter - Logbook engram_logbook 包适配器模块
 engram_logbook.governance 与 engram_logbook.outbox 模块。
 
 此模块是 Gateway 与 Logbook 包之间的桥梁，统一接口调用方式。
+
+线程安全与可测试性说明 (ADR: Gateway DI 与入口边界统一):
+============================================================
+
+1. 线程安全性 (Thread Safety):
+   - LogbookAdapter 实例: 线程安全（内部使用 psycopg2 连接，每次操作获取新连接）
+   - _adapter_instance 全局单例: 使用模块级变量，依赖 Python GIL 基本安全
+   - 高并发场景下首次初始化可能出现竞态，但结果一致（幂等）
+
+2. 可重入性 (Reentrancy):
+   - get_adapter(): 幂等操作，多次调用返回同一实例
+   - reset_adapter(): 非幂等，会清除全局单例
+   - 建议在应用启动时预热，避免运行时竞态
+
+3. 可测试替换 (Test Override):
+   - 方式一: 使用 override_adapter(mock_adapter) 临时替换全局单例
+   - 方式二: 测试完成后调用 reset_adapter() 恢复默认行为
+   - 方式三: 直接构造 LogbookAdapter 实例传入 GatewayDeps.for_testing()
+
+构造参数来源说明:
+   - dsn: POSTGRES_DSN 环境变量（或显式传入）
+   - config: engram_logbook.config.Config 实例（可选）
 """
 
 import json
@@ -13,12 +35,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-
 # ======================== 数据结构 ========================
+
 
 @dataclass
 class OutboxItem:
     """Outbox 记录数据结构"""
+
     outbox_id: int
     item_id: Optional[int]
     target_space: str
@@ -52,36 +75,47 @@ class OutboxItem:
             updated_at=data.get("updated_at"),
         )
 
+
 # 从 engram_logbook 导入核心模块
 _LOGBOOK_PKG_NAME = "engram_logbook"
 try:
     from engram.logbook import governance, outbox
-    from engram.logbook.config import Config, get_config
-    from engram.logbook.db import get_connection, query_knowledge_candidates as _query_knowledge_candidates, create_item as _create_item
+    from engram.logbook.config import Config
+    from engram.logbook.db import (
+        create_item as _create_item,
+    )
+    from engram.logbook.db import (
+        get_connection,
+    )
+    from engram.logbook.db import (
+        query_knowledge_candidates as _query_knowledge_candidates,
+    )
     from engram.logbook.errors import DatabaseError
 except ImportError as e:
     raise ImportError(
-        f"logbook_adapter 需要 engram_logbook 模块: {e}\n"
-        "请先安装:\n"
-        "  pip install -e \".[full]\""
+        f'logbook_adapter 需要 engram_logbook 模块: {e}\n请先安装:\n  pip install -e ".[full]"'
     )
 
 # ======================== 用户校验策略枚举 ========================
 
+
 class UnknownActorPolicy:
     """
     未知 actor_user_id 处理策略
-    
+
     用于配置当 actor_user_id 提供但用户不存在时的行为。
     """
-    REJECT = "reject"           # 拒绝请求
-    DEGRADE = "degrade"         # 降级到 private:unknown 空间
-    AUTO_CREATE = "auto_create" # 自动创建用户
+
+    REJECT = "reject"  # 拒绝请求
+    DEGRADE = "degrade"  # 降级到 private:unknown 空间
+    AUTO_CREATE = "auto_create"  # 自动创建用户
+
 
 # 从 engram_logbook.migrate 导入数据库检查和迁移函数
 _DB_MIGRATE_AVAILABLE = False
 try:
     from engram.logbook.migrate import run_all_checks, run_migrate
+
     _DB_MIGRATE_AVAILABLE = True
 except ImportError:
     run_all_checks = None
@@ -90,18 +124,19 @@ except ImportError:
 
 class LogbookDBErrorCode:
     """Logbook DB 相关错误码常量"""
+
     # DB 检查相关
     SCHEMA_MISSING = "LOGBOOK_DB_SCHEMA_MISSING"
     TABLE_MISSING = "LOGBOOK_DB_TABLE_MISSING"
     INDEX_MISSING = "LOGBOOK_DB_INDEX_MISSING"
     MATVIEW_MISSING = "LOGBOOK_DB_MATVIEW_MISSING"
     STRUCTURE_INCOMPLETE = "LOGBOOK_DB_STRUCTURE_INCOMPLETE"
-    
+
     # 迁移相关
     MIGRATE_NOT_AVAILABLE = "LOGBOOK_DB_MIGRATE_NOT_AVAILABLE"
     MIGRATE_FAILED = "LOGBOOK_DB_MIGRATE_FAILED"
     MIGRATE_PARTIAL = "LOGBOOK_DB_MIGRATE_PARTIAL"
-    
+
     # 连接相关
     CONNECTION_FAILED = "LOGBOOK_DB_CONNECTION_FAILED"
     CHECK_FAILED = "LOGBOOK_DB_CHECK_FAILED"
@@ -110,18 +145,18 @@ class LogbookDBErrorCode:
 class LogbookDBCheckError(Exception):
     """
     Logbook DB 检查失败异常
-    
+
     Attributes:
         message: 错误消息
         code: 错误码（LogbookDBErrorCode 常量）
         missing_items: 缺失项详情字典
     """
-    
+
     def __init__(
         self,
         message: str,
-        code: str = None,
-        missing_items: Dict[str, Any] = None,
+        code: Optional[str] = None,
+        missing_items: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(message)
         self.message = message
@@ -131,17 +166,17 @@ class LogbookDBCheckError(Exception):
 
 class LogbookDBCheckResult:
     """Logbook DB 检查结果"""
-    
+
     def __init__(
         self,
         ok: bool,
-        checks: Dict[str, Any] = None,
-        message: str = None,
+        checks: Optional[Dict[str, Any]] = None,
+        message: Optional[str] = None,
     ):
         self.ok = ok
         self.checks = checks or {}
         self.message = message
-    
+
     def get_missing_summary(self) -> str:
         """获取缺失项的摘要信息"""
         missing = []
@@ -151,7 +186,7 @@ class LogbookDBCheckResult:
                 if missing_items:
                     missing.append(f"{check_name}: {missing_items}")
         return "; ".join(missing) if missing else "无"
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -165,27 +200,38 @@ class LogbookDBCheckResult:
 class LogbookAdapter:
     """
     Logbook 数据库适配器
-    
+
     封装 engram_logbook 包的功能，提供统一的接口给 Gateway 的 main 和 worker 使用。
+
+    线程安全: 是（每次数据库操作获取新连接，操作完成后关闭）
+    可重入: 是（无共享可变状态）
+
+    构造参数来源:
+        - dsn: POSTGRES_DSN 环境变量（或显式传入）
+              格式: postgresql://user:password@host:port/database
+        - config: engram_logbook.config.Config 实例（可选，用于传递给内部模块）
     """
 
     def __init__(self, dsn: Optional[str] = None, config: Optional[Config] = None):
         """
         初始化适配器
-        
+
         DSN 优先级: 显式参数 > POSTGRES_DSN > TEST_PG_DSN
-        
+
         当显式传入 dsn 参数时，使用强覆盖策略：
         - 直接设置 os.environ['POSTGRES_DSN'] = dsn
         - 确保 engram_logbook 的所有子模块都使用该 DSN
-        
+
+        线程安全: 初始化过程非线程安全（设置环境变量）
+                 建议在单线程启动阶段调用
+
         Args:
             dsn: PostgreSQL 连接字符串，为 None 时从 POSTGRES_DSN 或 TEST_PG_DSN 环境变量读取
             config: engram_logbook Config 实例
         """
         self._config = config
         self._dsn = dsn
-        
+
         # 如果显式提供了 dsn，使用强覆盖策略设置到环境变量
         # 确保 engram_logbook 的 get_connection 等函数使用该 DSN
         if dsn:
@@ -196,10 +242,10 @@ class LogbookAdapter:
     def check_user_exists(self, user_id: str) -> bool:
         """
         检查用户是否存在
-        
+
         Args:
             user_id: 用户标识
-            
+
         Returns:
             True 如果用户存在
         """
@@ -217,10 +263,10 @@ class LogbookAdapter:
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
         获取用户信息
-        
+
         Args:
             user_id: 用户标识
-            
+
         Returns:
             用户信息字典，不存在返回 None
         """
@@ -258,16 +304,16 @@ class LogbookAdapter:
     ) -> Dict[str, Any]:
         """
         确保用户存在（幂等 upsert）
-        
+
         如果用户已存在，返回现有用户信息；
         如果用户不存在，创建新用户并返回。
-        
+
         Args:
             user_id: 用户标识（主键）
             display_name: 显示名称（不提供时使用 user_id）
             is_active: 是否激活（默认 True）
             roles_json: 角色信息（默认 {}）
-            
+
         Returns:
             用户信息字典
         """
@@ -275,7 +321,7 @@ class LogbookAdapter:
             display_name = user_id
         if roles_json is None:
             roles_json = {}
-        
+
         conn = get_connection(config=self._config)
         try:
             with conn.cursor() as cur:
@@ -292,7 +338,7 @@ class LogbookAdapter:
                 )
                 row = cur.fetchone()
                 conn.commit()
-                
+
                 return {
                     "user_id": row[0],
                     "display_name": row[1],
@@ -318,12 +364,12 @@ class LogbookAdapter:
     ) -> Dict[str, Any]:
         """
         确保账户存在（幂等 upsert）
-        
+
         如果账户已存在，返回现有账户信息；
         如果账户不存在，创建新账户并返回。
-        
+
         注意：调用前需确保 user_id 对应的用户已存在（可先调用 ensure_user）。
-        
+
         Args:
             user_id: 关联的用户标识
             account_type: 账户类型（svn/gitlab/git/email）
@@ -331,13 +377,13 @@ class LogbookAdapter:
             email: 邮箱地址（可选）
             aliases_json: 别名列表（默认 []）
             verified: 是否已验证（默认 False）
-            
+
         Returns:
             账户信息字典
         """
         if aliases_json is None:
             aliases_json = []
-        
+
         conn = get_connection(config=self._config)
         try:
             with conn.cursor() as cur:
@@ -350,11 +396,18 @@ class LogbookAdapter:
                         updated_at = now()
                     RETURNING account_id, user_id, account_type, account_name, email, aliases_json, verified, updated_at
                     """,
-                    (user_id, account_type, account_name, email, json.dumps(aliases_json), verified),
+                    (
+                        user_id,
+                        account_type,
+                        account_name,
+                        email,
+                        json.dumps(aliases_json),
+                        verified,
+                    ),
                 )
                 row = cur.fetchone()
                 conn.commit()
-                
+
                 return {
                     "account_id": row[0],
                     "user_id": row[1],
@@ -376,10 +429,10 @@ class LogbookAdapter:
     def get_settings(self, project_key: str) -> Optional[Dict[str, Any]]:
         """
         读取治理设置
-        
+
         Args:
             project_key: 项目标识
-            
+
         Returns:
             设置字典 {project_key, team_write_enabled, policy_json, updated_by, updated_at}
             如果不存在返回 None
@@ -389,13 +442,13 @@ class LogbookAdapter:
     def get_or_create_settings(self, project_key: str) -> Dict[str, Any]:
         """
         获取或创建治理设置（默认 team_write_enabled=false, policy_json={}）
-        
+
         使用 engram_logbook.governance.get_or_create_settings 实现，
         依赖 ON CONFLICT 保证并发安全。
-        
+
         Args:
             project_key: 项目标识
-            
+
         Returns:
             设置字典
         """
@@ -413,13 +466,13 @@ class LogbookAdapter:
     ) -> bool:
         """
         更新治理设置
-        
+
         Args:
             project_key: 项目标识
             team_write_enabled: 是否启用团队写入
             policy_json: 策略 JSON
             updated_by: 更新者用户 ID
-            
+
         Returns:
             True 表示成功
         """
@@ -445,7 +498,7 @@ class LogbookAdapter:
     ) -> int:
         """
         写入审计日志
-        
+
         Args:
             actor_user_id: 操作者用户 ID
             target_space: 目标空间 (team:<project> / private:<user> / org:shared)
@@ -454,7 +507,7 @@ class LogbookAdapter:
             payload_sha: 记忆内容的 SHA256 哈希
             evidence_refs_json: 证据链引用
             validate_refs: 是否校验 evidence_refs 结构（默认 False，向后兼容）
-            
+
         Returns:
             创建的 audit_id
         """
@@ -480,7 +533,7 @@ class LogbookAdapter:
     ) -> List[Dict[str, Any]]:
         """
         查询审计记录
-        
+
         Args:
             since: 起始时间（ISO 8601 格式）
             limit: 返回记录数量上限
@@ -488,7 +541,7 @@ class LogbookAdapter:
             action: 按 action 筛选
             target_space: 按 target_space 筛选
             reason_prefix: 按 reason 前缀筛选（例如 "policy:" 或 "outbox_flush_"）
-            
+
         Returns:
             审计记录列表
         """
@@ -514,14 +567,14 @@ class LogbookAdapter:
     ) -> int:
         """
         在 logbook.items 中创建新条目
-        
+
         Args:
             item_type: 条目类型（如 'evidence', 'note', 'task' 等）
             title: 标题
             scope_json: 范围元数据（默认 {}）
             status: 状态（默认 'open'）
             owner_user_id: 所有者用户 ID（可选）
-            
+
         Returns:
             创建的 item_id
         """
@@ -543,11 +596,11 @@ class LogbookAdapter:
     ) -> Optional[Dict[str, Any]]:
         """
         检查是否存在已成功写入的重复记录（幂等去重）
-        
+
         Args:
             target_space: 目标空间 (team:<project> / private:<user> / org:shared)
             payload_sha: payload 的 SHA256 哈希
-            
+
         Returns:
             如果存在已成功写入的记录，返回该记录的字典，否则返回 None
         """
@@ -566,13 +619,13 @@ class LogbookAdapter:
     ) -> int:
         """
         将记忆入队到 outbox_memory 表（失败补偿队列）
-        
+
         Args:
             payload_md: Markdown 格式的记忆内容
             target_space: 目标空间
             item_id: 关联的 logbook.items.item_id（可选）
             last_error: 错误信息
-            
+
         Returns:
             创建的 outbox_id
         """
@@ -587,10 +640,10 @@ class LogbookAdapter:
     def get_pending_outbox(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
         获取待处理的 outbox 记录
-        
+
         Args:
             limit: 返回记录数量上限
-            
+
         Returns:
             pending 状态的 outbox 记录列表
         """
@@ -599,10 +652,10 @@ class LogbookAdapter:
     def get_outbox_by_id(self, outbox_id: int) -> Optional[Dict[str, Any]]:
         """
         根据 outbox_id 获取单条记录
-        
+
         Args:
             outbox_id: Outbox 记录 ID
-            
+
         Returns:
             outbox 记录字典，不存在返回 None
         """
@@ -611,10 +664,10 @@ class LogbookAdapter:
     def mark_outbox_sent(self, outbox_id: int) -> bool:
         """
         标记 outbox 记录为已发送 (pending -> sent)
-        
+
         Args:
             outbox_id: Outbox 记录 ID
-            
+
         Returns:
             True 表示成功更新
         """
@@ -628,12 +681,12 @@ class LogbookAdapter:
     ) -> int:
         """
         增加 outbox 重试计数并更新错误信息
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             error: 本次错误信息
             backoff_seconds: 基础退避秒数
-            
+
         Returns:
             更新后的 retry_count
         """
@@ -647,11 +700,11 @@ class LogbookAdapter:
     def mark_outbox_dead(self, outbox_id: int, error: str) -> bool:
         """
         标记 outbox 记录为死信 (pending -> dead)
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             error: 错误信息
-            
+
         Returns:
             True 表示成功更新
         """
@@ -667,12 +720,12 @@ class LogbookAdapter:
     ) -> List[Dict[str, Any]]:
         """
         并发安全地获取并锁定待处理的 outbox 记录（Lease 协议）
-        
+
         Args:
             worker_id: Worker 标识符（用于锁定归属验证）
             limit: 返回记录数量上限
             lease_seconds: 租约有效期（秒）
-            
+
         Returns:
             已锁定的 outbox 记录列表（字典格式）
         """
@@ -691,12 +744,12 @@ class LogbookAdapter:
     ) -> bool:
         """
         确认 outbox 记录已成功发送 (pending -> sent)
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             worker_id: Worker 标识符（必须与 claim 时的一致）
             memory_id: 写入 OpenMemory 后返回的 memory_id
-            
+
         Returns:
             True 表示成功更新
         """
@@ -716,13 +769,13 @@ class LogbookAdapter:
     ) -> bool:
         """
         标记 outbox 记录处理失败，安排重试
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             worker_id: Worker 标识符（必须与 claim 时的一致）
             error: 本次失败的错误信息
             next_attempt_at: 下次重试时间（datetime 或 ISO 字符串，由调用方计算）
-            
+
         Returns:
             True 表示成功更新
         """
@@ -742,12 +795,12 @@ class LogbookAdapter:
     ) -> bool:
         """
         标记 outbox 记录为死信（带 worker_id 验证）
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             worker_id: Worker 标识符（必须与 claim 时的一致）
             error: 错误信息
-            
+
         Returns:
             True 表示成功更新
         """
@@ -765,14 +818,14 @@ class LogbookAdapter:
     ) -> bool:
         """
         续期 Lease 租约
-        
+
         仅当 status='pending' 且 locked_by 匹配 worker_id 时才执行更新。
         更新 locked_at 和 updated_at 为当前时间，延长租约有效期。
-        
+
         Args:
             outbox_id: Outbox 记录 ID
             worker_id: Worker 标识符（必须与 claim 时的一致）
-            
+
         Returns:
             True 表示成功续期，False 表示未更新
         """
@@ -789,11 +842,11 @@ class LogbookAdapter:
     ) -> int:
         """
         批量续期 Lease 租约
-        
+
         Args:
             outbox_ids: Outbox 记录 ID 列表
             worker_id: Worker 标识符（必须与 claim 时的一致）
-            
+
         Returns:
             成功续期的记录数
         """
@@ -814,16 +867,16 @@ class LogbookAdapter:
     ) -> List[Dict[str, Any]]:
         """
         从 analysis.knowledge_candidates 表按关键词查询知识候选项
-        
+
         使用 ILIKE 对 title 和 content_md 进行模糊匹配。
         用于 OpenMemory 查询失败时的降级回退。
-        
+
         Args:
             keyword: 搜索关键词
             top_k: 返回结果数量上限（默认 10）
             evidence_filter: 可选，按 evidence_refs_json 过滤
             space_filter: 可选，按 space 过滤
-            
+
         Returns:
             知识候选项列表
         """
@@ -840,10 +893,10 @@ class LogbookAdapter:
     def get_reliability_report(self) -> Dict[str, Any]:
         """
         获取可靠性统计报告
-        
+
         聚合 logbook.outbox_memory 和 governance.write_audit 表的统计数据。
         报告结构符合 schemas/reliability_report_v1.schema.json。
-        
+
         Returns:
             可靠性报告字典，包含：
             - outbox_stats: outbox_memory 表统计
@@ -853,14 +906,14 @@ class LogbookAdapter:
             - generated_at: 报告生成时间 (ISO 8601)
         """
         from datetime import datetime, timezone
-        
+
         conn = get_connection(config=self._config)
         try:
             outbox_stats = self._get_outbox_stats(conn)
             audit_stats = self._get_audit_stats(conn)
             v2_evidence_stats = self._get_v2_evidence_stats(conn)
             content_intercept_stats = self._get_content_intercept_stats(conn)
-            
+
             return {
                 "outbox_stats": outbox_stats,
                 "audit_stats": audit_stats,
@@ -876,7 +929,7 @@ class LogbookAdapter:
         with conn.cursor() as cur:
             # 总数和按状态分组
             cur.execute("""
-                SELECT 
+                SELECT
                     COUNT(*) as total,
                     COUNT(*) FILTER (WHERE status = 'pending') as pending,
                     COUNT(*) FILTER (WHERE status = 'sent') as sent,
@@ -889,7 +942,7 @@ class LogbookAdapter:
                 FROM logbook.outbox_memory
             """)
             row = cur.fetchone()
-            
+
             return {
                 "total": row[0],
                 "by_status": {
@@ -906,7 +959,7 @@ class LogbookAdapter:
         with conn.cursor() as cur:
             # 总数和按 action 分组
             cur.execute("""
-                SELECT 
+                SELECT
                     COUNT(*) as total,
                     COUNT(*) FILTER (WHERE action = 'allow') as allow_count,
                     COUNT(*) FILTER (WHERE action = 'redirect') as redirect_count,
@@ -915,7 +968,7 @@ class LogbookAdapter:
                 FROM governance.write_audit
             """)
             row = cur.fetchone()
-            
+
             total = row[0]
             by_action = {
                 "allow": row[1],
@@ -923,10 +976,10 @@ class LogbookAdapter:
                 "reject": row[3],
             }
             recent_24h = row[4]
-            
+
             # 按 reason 前缀分组统计
             cur.execute("""
-                SELECT 
+                SELECT
                     CASE
                         WHEN reason LIKE 'policy:%%' THEN 'policy'
                         WHEN reason LIKE 'openmemory_write_failed:%%' THEN 'openmemory_write_failed'
@@ -941,12 +994,18 @@ class LogbookAdapter:
             by_reason = {}
             for reason_row in cur.fetchall():
                 by_reason[reason_row[0]] = reason_row[1]
-            
+
             # 确保所有必需的 by_reason 键都存在
-            for key in ["policy", "openmemory_write_failed", "outbox_flush_success", "dedup_hit", "other"]:
+            for key in [
+                "policy",
+                "openmemory_write_failed",
+                "outbox_flush_success",
+                "dedup_hit",
+                "other",
+            ]:
                 if key not in by_reason:
                     by_reason[key] = 0
-            
+
             return {
                 "total": total,
                 "by_action": by_action,
@@ -957,7 +1016,7 @@ class LogbookAdapter:
     def _get_v2_evidence_stats(self, conn) -> Dict[str, Any]:
         """
         获取 v2 evidence 覆盖率统计
-        
+
         统计 scm.patch_blobs 和 logbook.attachments 表的 evidence_uri 覆盖率。
         """
         with conn.cursor() as cur:
@@ -965,7 +1024,7 @@ class LogbookAdapter:
             patch_blobs_stats = {"total": 0, "with_evidence_uri": 0, "coverage_pct": 0.0}
             try:
                 cur.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total,
                         COUNT(*) FILTER (WHERE evidence_uri IS NOT NULL AND evidence_uri != '') as with_evidence
                     FROM scm.patch_blobs
@@ -977,17 +1036,19 @@ class LogbookAdapter:
                     patch_blobs_stats = {
                         "total": total,
                         "with_evidence_uri": with_evidence,
-                        "coverage_pct": round((with_evidence / total * 100) if total > 0 else 0.0, 2),
+                        "coverage_pct": round(
+                            (with_evidence / total * 100) if total > 0 else 0.0, 2
+                        ),
                     }
             except Exception:
                 # 表不存在或查询失败，使用默认值
                 pass
-            
+
             # attachments 覆盖率（检查表是否存在）
             attachments_stats = {"total": 0, "with_evidence_uri": 0, "coverage_pct": 0.0}
             try:
                 cur.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total,
                         COUNT(*) FILTER (WHERE evidence_uri IS NOT NULL AND evidence_uri != '') as with_evidence
                     FROM logbook.attachments
@@ -999,23 +1060,29 @@ class LogbookAdapter:
                     attachments_stats = {
                         "total": total,
                         "with_evidence_uri": with_evidence,
-                        "coverage_pct": round((with_evidence / total * 100) if total > 0 else 0.0, 2),
+                        "coverage_pct": round(
+                            (with_evidence / total * 100) if total > 0 else 0.0, 2
+                        ),
                     }
             except Exception:
                 # 表不存在或查询失败，使用默认值
                 pass
-            
+
             # 总覆盖率计算
             total_artifacts = patch_blobs_stats["total"] + attachments_stats["total"]
-            total_with_evidence = patch_blobs_stats["with_evidence_uri"] + attachments_stats["with_evidence_uri"]
-            v2_coverage_pct = round((total_with_evidence / total_artifacts * 100) if total_artifacts > 0 else 0.0, 2)
-            
+            total_with_evidence = (
+                patch_blobs_stats["with_evidence_uri"] + attachments_stats["with_evidence_uri"]
+            )
+            v2_coverage_pct = round(
+                (total_with_evidence / total_artifacts * 100) if total_artifacts > 0 else 0.0, 2
+            )
+
             # 无效 evidence_uri 统计（URI 格式错误的数量）
             invalid_evidence_count = 0
             try:
                 cur.execute("""
                     SELECT COUNT(*) FROM (
-                        SELECT evidence_uri FROM scm.patch_blobs 
+                        SELECT evidence_uri FROM scm.patch_blobs
                         WHERE evidence_uri IS NOT NULL AND evidence_uri != ''
                         AND evidence_uri NOT LIKE 's3://%%'
                         AND evidence_uri NOT LIKE 'file://%%'
@@ -1035,7 +1102,7 @@ class LogbookAdapter:
                     invalid_evidence_count = row[0]
             except Exception:
                 pass
-            
+
             # 审计模式统计（最近 7 天）
             # 字段优先级：
             #   - mode: evidence_refs_json->'gateway_event'->'policy'->>'mode' > evidence_refs_json->>'mode'
@@ -1048,15 +1115,15 @@ class LogbookAdapter:
             }
             try:
                 cur.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*) as total,
-                        COUNT(*) FILTER (WHERE 
+                        COUNT(*) FILTER (WHERE
                             COALESCE(
                                 evidence_refs_json->'gateway_event'->'policy'->>'mode',
                                 evidence_refs_json->>'mode'
                             ) = 'strict'
                         ) as strict_count,
-                        COUNT(*) FILTER (WHERE 
+                        COUNT(*) FILTER (WHERE
                             COALESCE(
                                 evidence_refs_json->'gateway_event'->'policy'->>'mode',
                                 evidence_refs_json->>'mode'
@@ -1066,7 +1133,7 @@ class LogbookAdapter:
                                 AND evidence_refs_json->>'mode' IS NULL
                             )
                         ) as compat_count,
-                        COUNT(*) FILTER (WHERE 
+                        COUNT(*) FILTER (WHERE
                             (evidence_refs_json ? 'patches' AND jsonb_array_length(COALESCE(evidence_refs_json->'patches', '[]'::jsonb)) > 0)
                             OR (evidence_refs_json ? 'attachments' AND jsonb_array_length(COALESCE(evidence_refs_json->'attachments', '[]'::jsonb)) > 0)
                             OR evidence_refs_json->>'v2_evidence' IS NOT NULL
@@ -1084,7 +1151,7 @@ class LogbookAdapter:
                     }
             except Exception:
                 pass
-            
+
             return {
                 "patch_blobs": patch_blobs_stats,
                 "attachments": attachments_stats,
@@ -1097,14 +1164,14 @@ class LogbookAdapter:
     def _get_content_intercept_stats(self, conn) -> Dict[str, Any]:
         """
         获取内容拦截统计（diff/log 拦截次数）
-        
+
         从 governance.write_audit 表中统计因内容策略被拦截的记录。
         """
         with conn.cursor() as cur:
             # 统计拦截次数
             try:
                 cur.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*) FILTER (WHERE reason LIKE '%%diff%%' AND reason NOT LIKE '%%log%%') as diff_reject,
                         COUNT(*) FILTER (WHERE reason LIKE '%%log%%' AND reason NOT LIKE '%%diff%%') as log_reject,
                         COUNT(*) FILTER (WHERE reason LIKE '%%diff%%' AND reason LIKE '%%log%%') as diff_log_reject,
@@ -1117,7 +1184,7 @@ class LogbookAdapter:
                     WHERE action = 'reject'
                 """)
                 row = cur.fetchone()
-                
+
                 if row:
                     return {
                         "diff_reject_count": row[0] or 0,
@@ -1128,7 +1195,7 @@ class LogbookAdapter:
                     }
             except Exception:
                 pass
-            
+
             # 查询失败时返回默认值
             return {
                 "diff_reject_count": 0,
@@ -1143,9 +1210,9 @@ class LogbookAdapter:
     def check_db_schema(self) -> LogbookDBCheckResult:
         """
         检查 Logbook 数据库的 schema/表/索引/物化视图是否存在
-        
+
         使用 db_migrate.run_all_checks 进行检查。
-        
+
         Returns:
             LogbookDBCheckResult 检查结果
         """
@@ -1154,7 +1221,7 @@ class LogbookAdapter:
                 ok=False,
                 message="db_migrate 模块不可用，无法执行 DB 检查",
             )
-        
+
         try:
             conn = get_connection(config=self._config)
             try:
@@ -1175,12 +1242,12 @@ class LogbookAdapter:
     def run_migration(self, quiet: bool = True) -> Dict[str, Any]:
         """
         执行 Logbook 数据库迁移
-        
+
         使用 db_migrate.run_migrate 执行迁移。
-        
+
         Args:
             quiet: 是否静默模式（减少输出）
-            
+
         Returns:
             迁移结果字典 {ok: bool, code: str, ...}
         """
@@ -1190,7 +1257,7 @@ class LogbookAdapter:
                 "code": LogbookDBErrorCode.MIGRATE_NOT_AVAILABLE,
                 "message": "db_migrate 模块不可用，无法执行迁移",
             }
-        
+
         try:
             result = run_migrate(
                 dsn=self._dsn,
@@ -1210,33 +1277,33 @@ class LogbookAdapter:
     ) -> LogbookDBCheckResult:
         """
         确保 Logbook DB 已就绪（schema/表/索引/物化视图存在）
-        
+
         1. 检查 DB 结构是否完整
         2. 如果缺失且 auto_migrate=True，自动执行迁移
         3. 如果缺失且 auto_migrate=False，返回错误信息和修复指令
-        
+
         Args:
             auto_migrate: 如果 DB 结构缺失，是否自动执行迁移
-            
+
         Returns:
             LogbookDBCheckResult 检查结果
-            
+
         Raises:
             LogbookDBCheckError: 如果 DB 结构缺失且无法自动修复
         """
         # 1. 执行检查
         check_result = self.check_db_schema()
-        
+
         if check_result.ok:
             return check_result
-        
+
         # 2. DB 结构缺失，确定错误码
         error_code = self._determine_error_code(check_result.checks)
-        
+
         if auto_migrate:
             # 尝试自动迁移
             migrate_result = self.run_migration(quiet=True)
-            
+
             if migrate_result.get("ok"):
                 # 迁移成功，重新检查
                 check_result = self.check_db_schema()
@@ -1270,16 +1337,16 @@ class LogbookAdapter:
                 code=error_code,
                 missing_items=check_result.checks,
             )
-    
+
     def _determine_error_code(self, checks: Dict[str, Any]) -> str:
         """
         根据检查结果确定错误码
-        
+
         优先级: schema > tables > indexes > matviews > 其他
         """
         if not checks:
             return LogbookDBErrorCode.STRUCTURE_INCOMPLETE
-        
+
         # 按优先级检查
         priority_map = [
             ("schemas", LogbookDBErrorCode.SCHEMA_MISSING),
@@ -1287,14 +1354,14 @@ class LogbookAdapter:
             ("indexes", LogbookDBErrorCode.INDEX_MISSING),
             ("matviews", LogbookDBErrorCode.MATVIEW_MISSING),
         ]
-        
+
         for check_name, error_code in priority_map:
             if check_name in checks:
                 check_result = checks[check_name]
                 if isinstance(check_result, dict) and not check_result.get("ok", True):
                     if check_result.get("missing"):
                         return error_code
-        
+
         return LogbookDBErrorCode.STRUCTURE_INCOMPLETE
 
 
@@ -1303,7 +1370,19 @@ _adapter_instance: Optional[LogbookAdapter] = None
 
 
 def get_adapter(dsn: Optional[str] = None) -> LogbookAdapter:
-    """获取全局适配器实例"""
+    """
+    获取全局适配器实例（单例模式）
+
+    线程安全: 基本安全（依赖 Python GIL，高并发下可能多次初始化但结果一致）
+    可重入: 是（幂等操作）
+
+    Args:
+        dsn: PostgreSQL 连接字符串。仅在首次调用时生效。
+             如果全局实例已存在，此参数被忽略。
+
+    Returns:
+        LogbookAdapter 全局单例实例
+    """
     global _adapter_instance
     if _adapter_instance is None:
         _adapter_instance = LogbookAdapter(dsn)
@@ -1311,12 +1390,59 @@ def get_adapter(dsn: Optional[str] = None) -> LogbookAdapter:
 
 
 def reset_adapter() -> None:
-    """重置全局适配器实例"""
+    """
+    重置全局适配器实例
+
+    线程安全: 否（建议在单线程环境下调用，如测试 setup/teardown）
+
+    调用后下次 get_adapter() 将重新从环境变量初始化。
+    """
     global _adapter_instance
     _adapter_instance = None
 
 
+def override_adapter(adapter: LogbookAdapter) -> None:
+    """
+    覆盖全局适配器实例（测试专用）
+
+    线程安全: 否（建议在单线程环境下调用，如测试 setup）
+
+    允许测试代码注入 mock 适配器，替换全局单例。
+    测试完成后应调用 reset_adapter() 恢复默认行为。
+
+    Args:
+        adapter: 要设置的 LogbookAdapter 实例（可以是 mock）
+
+    Usage:
+        # 在测试 setup 中
+        mock_adapter = Mock(spec=LogbookAdapter)
+        override_adapter(mock_adapter)
+
+        # 测试代码...
+
+        # 在测试 teardown 中
+        reset_adapter()
+    """
+    global _adapter_instance
+    _adapter_instance = adapter
+
+
+def get_adapter_or_none() -> Optional[LogbookAdapter]:
+    """
+    获取全局适配器实例（如果已初始化）
+
+    线程安全: 是（只读操作）
+
+    用于检查全局单例状态，不触发延迟初始化。
+
+    Returns:
+        已初始化的 LogbookAdapter 实例，或 None
+    """
+    return _adapter_instance
+
+
 # ======================== Logbook Items 便捷函数 ========================
+
 
 def create_item(
     item_type: str,
@@ -1327,14 +1453,14 @@ def create_item(
 ) -> int:
     """
     在 logbook.items 中创建新条目
-    
+
     Args:
         item_type: 条目类型（如 'evidence', 'note', 'task' 等）
         title: 标题
         scope_json: 范围元数据（默认 {}）
         status: 状态（默认 'open'）
         owner_user_id: 所有者用户 ID（可选）
-        
+
     Returns:
         创建的 item_id
     """
@@ -1348,6 +1474,7 @@ def create_item(
 
 
 # ======================== Outbox 便捷函数 ========================
+
 
 def check_dedup(
     target_space: str,
@@ -1420,7 +1547,7 @@ def renew_lease(
 ) -> bool:
     """
     续期 Lease 租约
-    
+
     仅当 status='pending' 且 locked_by 匹配 worker_id 时才执行更新。
     """
     return get_adapter().renew_lease(
@@ -1464,10 +1591,10 @@ def insert_write_audit(
 def get_outbox_by_id(outbox_id: int) -> Optional[Dict[str, Any]]:
     """
     根据 outbox_id 获取单条记录
-    
+
     Args:
         outbox_id: Outbox 记录 ID
-        
+
     Returns:
         outbox 记录字典，不存在返回 None
     """
@@ -1476,13 +1603,14 @@ def get_outbox_by_id(outbox_id: int) -> Optional[Dict[str, Any]]:
 
 # ======================== DB 检查便捷函数 ========================
 
+
 def check_db_schema(dsn: Optional[str] = None) -> LogbookDBCheckResult:
     """
     检查 Logbook 数据库的 schema/表/索引/物化视图是否存在
-    
+
     Args:
         dsn: PostgreSQL 连接字符串（可选）
-        
+
     Returns:
         LogbookDBCheckResult 检查结果
     """
@@ -1495,14 +1623,14 @@ def ensure_db_ready(
 ) -> LogbookDBCheckResult:
     """
     确保 Logbook DB 已就绪
-    
+
     Args:
         dsn: PostgreSQL 连接字符串（可选）
         auto_migrate: 如果 DB 结构缺失，是否自动执行迁移
-        
+
     Returns:
         LogbookDBCheckResult 检查结果
-        
+
     Raises:
         LogbookDBCheckError: 如果 DB 结构缺失且无法自动修复
     """
@@ -1516,6 +1644,7 @@ def is_db_migrate_available() -> bool:
 
 # ======================== Analysis 查询便捷函数 ========================
 
+
 def query_knowledge_candidates(
     keyword: str,
     top_k: int = 10,
@@ -1524,15 +1653,15 @@ def query_knowledge_candidates(
 ) -> List[Dict[str, Any]]:
     """
     从 analysis.knowledge_candidates 表按关键词查询知识候选项
-    
+
     用于 OpenMemory 查询失败时的降级回退。
-    
+
     Args:
         keyword: 搜索关键词
         top_k: 返回结果数量上限（默认 10）
         evidence_filter: 可选，按 evidence_refs_json 过滤
         space_filter: 可选，按 space 过滤
-        
+
     Returns:
         知识候选项列表
     """
@@ -1546,12 +1675,13 @@ def query_knowledge_candidates(
 
 # ======================== 可靠性报告函数 ========================
 
+
 def get_reliability_report() -> Dict[str, Any]:
     """
     获取可靠性统计报告
-    
+
     聚合 logbook.outbox_memory 和 governance.write_audit 表的统计数据。
-    
+
     Returns:
         可靠性报告字典，包含：
         - outbox_stats: outbox_memory 表统计
@@ -1563,13 +1693,14 @@ def get_reliability_report() -> Dict[str, Any]:
 
 # ======================== 用户管理便捷函数 ========================
 
+
 def check_user_exists(user_id: str) -> bool:
     """
     检查用户是否存在
-    
+
     Args:
         user_id: 用户标识
-        
+
     Returns:
         True 如果用户存在
     """
@@ -1579,10 +1710,10 @@ def check_user_exists(user_id: str) -> bool:
 def get_user(user_id: str) -> Optional[Dict[str, Any]]:
     """
     获取用户信息
-    
+
     Args:
         user_id: 用户标识
-        
+
     Returns:
         用户信息字典，不存在返回 None
     """
@@ -1597,13 +1728,13 @@ def ensure_user(
 ) -> Dict[str, Any]:
     """
     确保用户存在（幂等 upsert）
-    
+
     Args:
         user_id: 用户标识
         display_name: 显示名称（可选）
         is_active: 是否激活（默认 True）
         roles_json: 角色信息（默认 {}）
-        
+
     Returns:
         用户信息字典
     """
@@ -1625,7 +1756,7 @@ def ensure_account(
 ) -> Dict[str, Any]:
     """
     确保账户存在（幂等 upsert）
-    
+
     Args:
         user_id: 关联的用户标识
         account_type: 账户类型（svn/gitlab/git/email）
@@ -1633,7 +1764,7 @@ def ensure_account(
         email: 邮箱地址（可选）
         aliases_json: 别名列表（默认 []）
         verified: 是否已验证（默认 False）
-        
+
     Returns:
         账户信息字典
     """

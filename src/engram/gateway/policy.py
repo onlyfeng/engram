@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 class PolicyAction(Enum):
     """策略决策结果"""
+
     ALLOW = "allow"
     REDIRECT = "redirect"
     REJECT = "reject"
@@ -26,6 +27,7 @@ class PolicyAction(Enum):
 @dataclass
 class PolicyDecision:
     """策略决策结果"""
+
     action: PolicyAction
     reason: str
     original_space: str
@@ -54,7 +56,7 @@ class PolicyEngine:
         "bulk_mode": "very_short",  # 对 is_bulk 提交的处理
         "bulk_max_chars": 200,  # bulk_mode=very_short 时的字符限制
     }
-    
+
     # evidence_mode 允许值
     VALID_EVIDENCE_MODES = ("compat", "strict")
 
@@ -75,23 +77,23 @@ class PolicyEngine:
         self.team_write_enabled = team_write_enabled
         self.policy = {**self.DEFAULT_POLICY, **(policy_json or {})}
         self.project_key = project_key
-        
+
         # 验证 evidence_mode 值
         evidence_mode = self.policy.get("evidence_mode", "compat")
         if evidence_mode not in self.VALID_EVIDENCE_MODES:
             # 无效值降级为 compat
             self.policy["evidence_mode"] = "compat"
-    
+
     @property
     def evidence_mode(self) -> str:
         """获取 evidence 验证模式"""
         return self.policy.get("evidence_mode", "compat")
-    
+
     @property
     def require_evidence(self) -> bool:
         """获取是否要求证据链"""
         return self.policy.get("require_evidence", True)
-    
+
     @property
     def bulk_max_chars(self) -> int:
         """获取 bulk 模式字符限制"""
@@ -106,6 +108,7 @@ class PolicyEngine:
         evidence_refs: Optional[List[str]] = None,
         is_bulk: bool = False,
         meta_json: Optional[Dict[str, Any]] = None,
+        evidence_present: Optional[bool] = None,
     ) -> PolicyDecision:
         """
         执行策略决策
@@ -115,9 +118,13 @@ class PolicyEngine:
             actor_user_id: 操作者用户 ID
             payload_md: 记忆内容（Markdown）
             kind: 知识类型 (FACT/PROCEDURE/PITFALL/DECISION/REVIEW_GUIDE)
-            evidence_refs: 证据链引用列表
+            evidence_refs: 证据链引用列表（v1 legacy 格式）
             is_bulk: 是否为批量提交
             meta_json: 其他元数据
+            evidence_present: 规范化后的 evidence 是否存在（v2 格式支持）
+                - None: 使用 evidence_refs 判断（向后兼容）
+                - True: 有规范化 evidence（即使 evidence_refs 为空）
+                - False: 无规范化 evidence
 
         Returns:
             PolicyDecision 决策结果
@@ -144,6 +151,7 @@ class PolicyEngine:
                 kind=kind,
                 evidence_refs=evidence_refs,
                 is_bulk=is_bulk,
+                evidence_present=evidence_present,
             )
 
         # 未知空间类型，拒绝
@@ -163,6 +171,7 @@ class PolicyEngine:
         kind: Optional[str],
         evidence_refs: Optional[List[str]],
         is_bulk: bool,
+        evidence_present: Optional[bool] = None,
     ) -> PolicyDecision:
         """检查团队空间写入策略"""
 
@@ -196,14 +205,26 @@ class PolicyEngine:
             )
 
         # 4. 检查证据链
+        # 判断逻辑：
+        # - 若 evidence_present 明确传入，优先使用（支持 v2 evidence 格式）
+        # - 否则回退到检查 evidence_refs（v1 legacy 兼容）
         require_evidence: bool = self.policy.get("require_evidence", True)
-        if require_evidence and (not evidence_refs or len(evidence_refs) == 0):
-            return PolicyDecision(
-                action=PolicyAction.REDIRECT,
-                reason="missing_evidence",
-                original_space=target_space,
-                final_space=private_space,
-            )
+        if require_evidence:
+            has_evidence = False
+            if evidence_present is not None:
+                # v2 模式：使用规范化后的 evidence 存在性
+                has_evidence = evidence_present
+            else:
+                # v1 兼容模式：检查 evidence_refs
+                has_evidence = bool(evidence_refs and len(evidence_refs) > 0)
+
+            if not has_evidence:
+                return PolicyDecision(
+                    action=PolicyAction.REDIRECT,
+                    reason="missing_evidence",
+                    original_space=target_space,
+                    final_space=private_space,
+                )
 
         # 5. 检查字符数限制
         max_chars: int = self.policy.get("max_chars", 1200)
@@ -270,6 +291,7 @@ def decide_write(
     *,
     policy_engine: Optional[PolicyEngine] = None,
     settings: Optional[Dict[str, Any]] = None,
+    evidence_present: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     写入策略决策便捷函数
@@ -282,9 +304,13 @@ def decide_write(
         kind: 知识类型 (FACT/PROCEDURE/PITFALL/DECISION/REVIEW_GUIDE)
         is_bulk: 是否为批量提交
         payload_md: 记忆内容（Markdown）
-        evidence_refs: 证据链引用列表
+        evidence_refs: 证据链引用列表（v1 legacy 格式）
         policy_engine: 可选，已创建的策略引擎实例
         settings: 可选，governance.settings 配置（用于创建引擎）
+        evidence_present: 规范化后的 evidence 是否存在（v2 格式支持）
+            - None: 使用 evidence_refs 判断（向后兼容）
+            - True: 有规范化 evidence（即使 evidence_refs 为空）
+            - False: 无规范化 evidence
 
     Returns:
         {
@@ -313,6 +339,7 @@ def decide_write(
         kind=kind,
         evidence_refs=evidence_refs,
         is_bulk=is_bulk,
+        evidence_present=evidence_present,
     )
 
     # 返回简化格式

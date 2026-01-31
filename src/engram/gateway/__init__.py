@@ -17,9 +17,9 @@ engram.gateway - MCP Gateway 模块
 
 __version__ = "0.1.0"
 
-from . import logbook_adapter
-from . import openmemory_client
-from . import outbox_worker
+from . import logbook_adapter as logbook_adapter
+from . import openmemory_client as openmemory_client
+from . import outbox_worker as outbox_worker
 
 # 保留 logbook_db 向后兼容导入（会触发弃用警告）
 # 新代码请使用 logbook_adapter 模块

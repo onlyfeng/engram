@@ -11,6 +11,43 @@ reconcile_outbox - Outbox 与 Audit 数据一致性对账模块
 用法：
     python -m gateway.reconcile_outbox --once    # 执行一轮对账
     python -m gateway.reconcile_outbox --report  # 仅报告不修复
+
+SQL 契约声明
+============
+
+本模块对 governance.write_audit.evidence_refs_json 的 SQL 查询依赖以下契约：
+
+1. 顶层必需字段（用于 SQL 查询）
+   --------------------------------
+   - outbox_id   : int    — 查询: (evidence_refs_json->>'outbox_id')::int
+   - source      : str    — 查询: evidence_refs_json->>'source'
+   - correlation_id : str — 查询: evidence_refs_json->>'correlation_id'
+   - payload_sha : str    — 查询: evidence_refs_json->>'payload_sha'
+   - memory_id   : str    — 查询: evidence_refs_json->>'memory_id' (可选)
+   - retry_count : int    — 查询: evidence_refs_json->>'retry_count' (可选)
+   - intended_action : str — 查询: evidence_refs_json->>'intended_action' (redirect 场景)
+
+2. reason/action 组合映射
+   --------------------------------
+   | outbox 状态      | 审计 reason                | 审计 action |
+   |------------------|---------------------------|-------------|
+   | sent             | outbox_flush_success      | allow       |
+   | sent (dedup)     | outbox_flush_dedup_hit    | allow       |
+   | dead             | outbox_flush_dead         | reject      |
+   | pending (stale)  | outbox_stale              | redirect    |
+
+3. 关键 SQL 查询模式
+   --------------------------------
+   查询审计记录：
+       SELECT * FROM governance.write_audit
+       WHERE reason LIKE 'outbox_flush_success%'
+         AND (evidence_refs_json->>'outbox_id')::int = %s
+
+契约测试引用
+------------
+- tests/gateway/test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract
+- tests/gateway/test_reconcile_outbox.py::TestAuditOutboxInvariants
+- docs/gateway/07_capability_boundary.md#evidence-refs_json-可查询性
 """
 
 from __future__ import annotations
@@ -18,21 +55,21 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import psycopg
 
 from . import logbook_adapter
-from .audit_event import build_reconcile_audit_event, build_evidence_refs_json
+from .audit_event import build_evidence_refs_json, build_reconcile_audit_event
 
 # 导入统一错误码
 try:
     from engram.logbook.errors import ErrorCode
 except ImportError:
     import sys
+
     print(
         "\n"
         "=" * 60 + "\n"
@@ -40,7 +77,7 @@ except ImportError:
         "=" * 60 + "\n"
         "\n"
         "请先安装:\n"
-        "  pip install -e \".[full]\"\n"
+        '  pip install -e ".[full]"\n'
         "\n"
         "=" * 60 + "\n"
     )
@@ -51,9 +88,11 @@ logger = logging.getLogger(__name__)
 
 # ---------- 配置 ----------
 
+
 @dataclass
 class ReconcileConfig:
     """对账配置"""
+
     # 时间窗口：扫描最近 N 小时内更新的记录
     scan_window_hours: int = 24
     # 批量处理大小
@@ -71,26 +110,27 @@ class ReconcileConfig:
 @dataclass
 class ReconcileResult:
     """对账结果"""
+
     # 扫描统计
     total_scanned: int = 0
     sent_count: int = 0
     dead_count: int = 0
     stale_count: int = 0
-    
+
     # 缺失审计统计
     sent_missing_audit: int = 0
     dead_missing_audit: int = 0
     stale_missing_audit: int = 0
-    
+
     # 修复统计
     sent_audit_fixed: int = 0
     dead_audit_fixed: int = 0
     stale_audit_fixed: int = 0
     stale_rescheduled: int = 0
-    
+
     # 详细记录
     details: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     def summary(self) -> str:
         """生成摘要报告"""
         lines = [
@@ -105,6 +145,7 @@ class ReconcileResult:
 
 # ---------- 数据库查询函数 ----------
 
+
 def get_outbox_by_time_window(
     conn: psycopg.Connection,
     window_hours: int,
@@ -113,13 +154,13 @@ def get_outbox_by_time_window(
 ) -> List[Dict[str, Any]]:
     """
     按时间窗口获取 outbox_memory 记录
-    
+
     Args:
         conn: 数据库连接
         window_hours: 时间窗口（小时）
         status_filter: 可选状态筛选 (sent/dead/pending)
         limit: 返回记录数量上限
-        
+
     Returns:
         outbox 记录列表
     """
@@ -127,14 +168,14 @@ def get_outbox_by_time_window(
         # 构建查询条件
         conditions = ["updated_at >= now() - make_interval(hours := %s)"]
         params: List[Any] = [window_hours]
-        
+
         if status_filter:
             conditions.append("status = %s")
             params.append(status_filter)
-        
+
         where_clause = " AND ".join(conditions)
         params.append(limit)
-        
+
         cur.execute(
             f"""
             SELECT outbox_id, item_id, target_space, payload_md, payload_sha,
@@ -147,25 +188,27 @@ def get_outbox_by_time_window(
             """,
             params,
         )
-        
+
         rows = cur.fetchall()
         results = []
         for row in rows:
-            results.append({
-                "outbox_id": row[0],
-                "item_id": row[1],
-                "target_space": row[2],
-                "payload_md": row[3],
-                "payload_sha": row[4],
-                "status": row[5],
-                "retry_count": row[6],
-                "next_attempt_at": row[7],
-                "locked_at": row[8],
-                "locked_by": row[9],
-                "last_error": row[10],
-                "created_at": row[11],
-                "updated_at": row[12],
-            })
+            results.append(
+                {
+                    "outbox_id": row[0],
+                    "item_id": row[1],
+                    "target_space": row[2],
+                    "payload_md": row[3],
+                    "payload_sha": row[4],
+                    "status": row[5],
+                    "retry_count": row[6],
+                    "next_attempt_at": row[7],
+                    "locked_at": row[8],
+                    "locked_by": row[9],
+                    "last_error": row[10],
+                    "created_at": row[11],
+                    "updated_at": row[12],
+                }
+            )
         return results
 
 
@@ -176,12 +219,12 @@ def get_audit_by_outbox_id(
 ) -> List[Dict[str, Any]]:
     """
     查询指定 outbox_id 对应的审计记录
-    
+
     Args:
         conn: 数据库连接
         outbox_id: Outbox 记录 ID
         reason_prefix: reason 前缀（如 outbox_flush_success, outbox_flush_dead）
-        
+
     Returns:
         匹配的审计记录列表
     """
@@ -198,7 +241,7 @@ def get_audit_by_outbox_id(
             """,
             (f"{reason_prefix}%", outbox_id),
         )
-        
+
         rows = cur.fetchall()
         return [
             {
@@ -222,12 +265,12 @@ def check_audit_exists(
 ) -> bool:
     """
     检查指定 outbox_id 是否存在对应的审计记录
-    
+
     Args:
         conn: 数据库连接
         outbox_id: Outbox 记录 ID
         reason_prefix: reason 前缀
-        
+
     Returns:
         True 如果存在审计记录
     """
@@ -242,14 +285,14 @@ def update_outbox_next_attempt(
 ) -> bool:
     """
     更新 outbox 记录的 next_attempt_at（重新调度）
-    
+
     同时清除 locked_at 和 locked_by 以释放锁
-    
+
     Args:
         conn: 数据库连接
         outbox_id: Outbox 记录 ID
         next_attempt_at: 下次尝试时间
-        
+
     Returns:
         True 如果更新成功
     """
@@ -273,6 +316,7 @@ def update_outbox_next_attempt(
 
 # ---------- 补写审计函数 ----------
 
+
 def write_reconcile_audit(
     outbox: Dict[str, Any],
     reason: str,
@@ -281,10 +325,10 @@ def write_reconcile_audit(
 ) -> int:
     """
     写入对账补救的审计记录
-    
+
     使用 build_reconcile_audit_event() 构建统一的审计事件结构，
     使用 build_evidence_refs_json() 生成 Logbook 兼容的 evidence_refs_json。
-    
+
     Args:
         outbox: Outbox 记录字典
         reason: 审计原因，必须使用 ErrorCode 枚举值:
@@ -293,7 +337,7 @@ def write_reconcile_audit(
                 - ErrorCode.OUTBOX_STALE
         action: 审计动作（allow/reject/redirect）
         extra_evidence: 额外的证据信息
-        
+
     Returns:
         创建的 audit_id
     """
@@ -302,32 +346,32 @@ def write_reconcile_audit(
     target_space = outbox["target_space"]
     if target_space.startswith("private:"):
         user_id = target_space[8:]
-    
+
     # 从 last_error 中提取 memory_id（如果有）
     memory_id = None
     last_error = outbox.get("last_error")
     if last_error and last_error.startswith("memory_id="):
         memory_id = last_error.split("=", 1)[1]
-    
+
     # 构建 extra 信息（包含 original_locked_at/locked_by/reconcile_time 等）
     reconcile_time = datetime.now(timezone.utc).isoformat()
     extra: Dict[str, Any] = {
         "reconcile_time": reconcile_time,
     }
-    
+
     if outbox.get("locked_by"):
         extra["original_locked_by"] = outbox["locked_by"]
-    
+
     if outbox.get("locked_at"):
         extra["original_locked_at"] = (
             outbox["locked_at"].isoformat()
             if isinstance(outbox["locked_at"], datetime)
             else str(outbox["locked_at"])
         )
-    
+
     if extra_evidence:
         extra.update(extra_evidence)
-    
+
     # 使用 build_reconcile_audit_event 构建统一审计事件
     gateway_event = build_reconcile_audit_event(
         operation="outbox_reconcile",
@@ -343,18 +387,20 @@ def write_reconcile_audit(
         original_locked_at=(
             outbox["locked_at"].isoformat()
             if isinstance(outbox.get("locked_at"), datetime)
-            else str(outbox.get("locked_at")) if outbox.get("locked_at") else None
+            else str(outbox.get("locked_at"))
+            if outbox.get("locked_at")
+            else None
         ),
         extra=extra,
     )
-    
+
     # 使用 build_evidence_refs_json 生成 Logbook 兼容的结构
     # reconcile 场景通常没有 evidence 列表，传入 None
     evidence_refs_json = build_evidence_refs_json(
         evidence=None,
         gateway_event=gateway_event,
     )
-    
+
     return logbook_adapter.insert_write_audit(
         actor_user_id=user_id,
         target_space=target_space,
@@ -367,6 +413,7 @@ def write_reconcile_audit(
 
 # ---------- 核心对账逻辑 ----------
 
+
 def reconcile_sent_records(
     conn: psycopg.Connection,
     config: ReconcileConfig,
@@ -374,7 +421,7 @@ def reconcile_sent_records(
 ) -> None:
     """
     对账 status=sent 的记录
-    
+
     检查是否缺少 outbox_flush_success 审计，如缺失则补写
     """
     records = get_outbox_by_time_window(
@@ -383,26 +430,28 @@ def reconcile_sent_records(
         status_filter="sent",
         limit=config.batch_size,
     )
-    
+
     result.sent_count = len(records)
-    
+
     for record in records:
         outbox_id = record["outbox_id"]
-        
+
         # 检查是否存在 outbox_flush_success 或 outbox_flush_dedup_hit 审计
         # 使用 ErrorCode 枚举确保与补写 reason 一致
         has_success = check_audit_exists(conn, outbox_id, ErrorCode.OUTBOX_FLUSH_SUCCESS)
         has_dedup = check_audit_exists(conn, outbox_id, ErrorCode.OUTBOX_FLUSH_DEDUP_HIT)
-        
+
         if not has_success and not has_dedup:
             result.sent_missing_audit += 1
-            result.details.append({
-                "outbox_id": outbox_id,
-                "status": "sent",
-                "issue": "missing_audit",
-                "expected_reason": "outbox_flush_success",
-            })
-            
+            result.details.append(
+                {
+                    "outbox_id": outbox_id,
+                    "status": "sent",
+                    "issue": "missing_audit",
+                    "expected_reason": "outbox_flush_success",
+                }
+            )
+
             if config.auto_fix:
                 try:
                     audit_id = write_reconcile_audit(
@@ -414,9 +463,13 @@ def reconcile_sent_records(
                     result.sent_audit_fixed += 1
                     result.details[-1]["fixed"] = True
                     result.details[-1]["audit_id"] = audit_id
-                    logger.info(f"[reconcile] 补写 sent 审计: outbox_id={outbox_id}, audit_id={audit_id}")
+                    logger.info(
+                        f"[reconcile] 补写 sent 审计: outbox_id={outbox_id}, audit_id={audit_id}"
+                    )
                 except Exception as e:
-                    logger.error(f"[reconcile] 补写 sent 审计失败: outbox_id={outbox_id}, error={e}")
+                    logger.error(
+                        f"[reconcile] 补写 sent 审计失败: outbox_id={outbox_id}, error={e}"
+                    )
                     result.details[-1]["fix_error"] = str(e)
 
 
@@ -427,7 +480,7 @@ def reconcile_dead_records(
 ) -> None:
     """
     对账 status=dead 的记录
-    
+
     检查是否缺少 outbox_flush_dead 审计，如缺失则补写
     """
     records = get_outbox_by_time_window(
@@ -436,25 +489,27 @@ def reconcile_dead_records(
         status_filter="dead",
         limit=config.batch_size,
     )
-    
+
     result.dead_count = len(records)
-    
+
     for record in records:
         outbox_id = record["outbox_id"]
-        
+
         # 检查是否存在 outbox_flush_dead 审计
         # 使用 ErrorCode 枚举确保与补写 reason 一致
         has_dead_audit = check_audit_exists(conn, outbox_id, ErrorCode.OUTBOX_FLUSH_DEAD)
-        
+
         if not has_dead_audit:
             result.dead_missing_audit += 1
-            result.details.append({
-                "outbox_id": outbox_id,
-                "status": "dead",
-                "issue": "missing_audit",
-                "expected_reason": "outbox_flush_dead",
-            })
-            
+            result.details.append(
+                {
+                    "outbox_id": outbox_id,
+                    "status": "dead",
+                    "issue": "missing_audit",
+                    "expected_reason": "outbox_flush_dead",
+                }
+            )
+
             if config.auto_fix:
                 try:
                     audit_id = write_reconcile_audit(
@@ -469,9 +524,13 @@ def reconcile_dead_records(
                     result.dead_audit_fixed += 1
                     result.details[-1]["fixed"] = True
                     result.details[-1]["audit_id"] = audit_id
-                    logger.info(f"[reconcile] 补写 dead 审计: outbox_id={outbox_id}, audit_id={audit_id}")
+                    logger.info(
+                        f"[reconcile] 补写 dead 审计: outbox_id={outbox_id}, audit_id={audit_id}"
+                    )
                 except Exception as e:
-                    logger.error(f"[reconcile] 补写 dead 审计失败: outbox_id={outbox_id}, error={e}")
+                    logger.error(
+                        f"[reconcile] 补写 dead 审计失败: outbox_id={outbox_id}, error={e}"
+                    )
                     result.details[-1]["fix_error"] = str(e)
 
 
@@ -482,7 +541,7 @@ def reconcile_stale_records(
 ) -> None:
     """
     对账 status=pending 且 locked 已过期的记录（stale）
-    
+
     写入 outbox_stale 审计，可选重新调度
     """
     records = get_outbox_by_time_window(
@@ -491,10 +550,10 @@ def reconcile_stale_records(
         status_filter="pending",
         limit=config.batch_size,
     )
-    
+
     now = datetime.now(timezone.utc)
     stale_threshold = timedelta(seconds=config.stale_threshold_seconds)
-    
+
     stale_records = []
     for record in records:
         locked_at = record.get("locked_at")
@@ -502,29 +561,31 @@ def reconcile_stale_records(
             # 确保 locked_at 是 timezone-aware
             if locked_at.tzinfo is None:
                 locked_at = locked_at.replace(tzinfo=timezone.utc)
-            
+
             if now - locked_at > stale_threshold:
                 stale_records.append(record)
-    
+
     result.stale_count = len(stale_records)
-    
+
     for record in stale_records:
         outbox_id = record["outbox_id"]
-        
+
         # 检查是否存在 outbox_stale 审计（最近24小时内）
         # 使用 ErrorCode 枚举确保与补写 reason 一致
         has_stale_audit = check_audit_exists(conn, outbox_id, ErrorCode.OUTBOX_STALE)
-        
+
         if not has_stale_audit:
             result.stale_missing_audit += 1
-            result.details.append({
-                "outbox_id": outbox_id,
-                "status": "pending",
-                "issue": "stale_lock",
-                "locked_by": record.get("locked_by"),
-                "locked_at": str(record.get("locked_at")),
-            })
-            
+            result.details.append(
+                {
+                    "outbox_id": outbox_id,
+                    "status": "pending",
+                    "issue": "stale_lock",
+                    "locked_by": record.get("locked_by"),
+                    "locked_at": str(record.get("locked_at")),
+                }
+            )
+
             if config.auto_fix:
                 try:
                     # 写入 stale 审计
@@ -540,8 +601,10 @@ def reconcile_stale_records(
                     result.stale_audit_fixed += 1
                     result.details[-1]["fixed"] = True
                     result.details[-1]["audit_id"] = audit_id
-                    logger.info(f"[reconcile] 补写 stale 审计: outbox_id={outbox_id}, audit_id={audit_id}")
-                    
+                    logger.info(
+                        f"[reconcile] 补写 stale 审计: outbox_id={outbox_id}, audit_id={audit_id}"
+                    )
+
                     # 可选重新调度
                     if config.reschedule_stale:
                         next_attempt = now + timedelta(seconds=config.reschedule_delay_seconds)
@@ -549,134 +612,110 @@ def reconcile_stale_records(
                             result.stale_rescheduled += 1
                             result.details[-1]["rescheduled"] = True
                             result.details[-1]["next_attempt_at"] = next_attempt.isoformat()
-                            logger.info(f"[reconcile] 重新调度 stale 记录: outbox_id={outbox_id}, next_attempt={next_attempt.isoformat()}")
+                            logger.info(
+                                f"[reconcile] 重新调度 stale 记录: outbox_id={outbox_id}, next_attempt={next_attempt.isoformat()}"
+                            )
                         else:
-                            logger.warning(f"[reconcile] 重新调度失败（状态可能已变更）: outbox_id={outbox_id}")
-                    
+                            logger.warning(
+                                f"[reconcile] 重新调度失败（状态可能已变更）: outbox_id={outbox_id}"
+                            )
+
                 except Exception as e:
-                    logger.error(f"[reconcile] 处理 stale 记录失败: outbox_id={outbox_id}, error={e}")
+                    logger.error(
+                        f"[reconcile] 处理 stale 记录失败: outbox_id={outbox_id}, error={e}"
+                    )
                     result.details[-1]["fix_error"] = str(e)
 
 
 def run_reconcile(config: ReconcileConfig) -> ReconcileResult:
     """
     执行完整的对账流程
-    
+
     Args:
         config: 对账配置
-        
+
     Returns:
         ReconcileResult 对账结果
     """
     result = ReconcileResult()
-    
+
     # 获取数据库连接
     from engram.logbook.db import get_connection
+
     conn = get_connection()
-    
+
     try:
         # 设置 search_path
         with conn.cursor() as cur:
             cur.execute("SET search_path TO logbook, governance, public")
-        
+
         # 执行各项对账
         logger.info(f"[reconcile] 开始对账，时间窗口: {config.scan_window_hours} 小时")
-        
+
         reconcile_sent_records(conn, config, result)
         reconcile_dead_records(conn, config, result)
         reconcile_stale_records(conn, config, result)
-        
+
         # 提交事务
         conn.commit()
-        
+
         result.total_scanned = result.sent_count + result.dead_count + result.stale_count
         logger.info(f"[reconcile] 对账完成: {result.summary()}")
-        
+
     except Exception as e:
         conn.rollback()
         logger.error(f"[reconcile] 对账失败: {e}")
         raise
     finally:
         conn.close()
-    
+
     return result
 
 
 # ---------- 命令行入口 ----------
+
 
 def main():
     """命令行入口"""
     parser = argparse.ArgumentParser(
         description="Outbox 对账工具：检测并修复 outbox_memory 与 write_audit 的数据不一致"
     )
-    
+
     mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument("--once", action="store_true", help="执行一轮对账")
     mode_group.add_argument(
-        "--once",
-        action="store_true",
-        help="执行一轮对账"
+        "--report", action="store_true", help="仅报告不修复（等同于 --once --no-auto-fix）"
     )
-    mode_group.add_argument(
-        "--report",
-        action="store_true",
-        help="仅报告不修复（等同于 --once --no-auto-fix）"
-    )
-    
+
     parser.add_argument(
-        "--scan-window",
-        type=int,
-        default=24,
-        help="扫描时间窗口（小时，默认: 24）"
+        "--scan-window", type=int, default=24, help="扫描时间窗口（小时，默认: 24）"
     )
+    parser.add_argument("--batch-size", type=int, default=100, help="批量处理大小（默认: 100）")
     parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=100,
-        help="批量处理大小（默认: 100）"
+        "--stale-threshold", type=int, default=600, help="Stale 阈值（秒，默认: 600 即 10 分钟）"
     )
+    parser.add_argument("--no-auto-fix", action="store_true", help="不自动修复，仅检测")
+    parser.add_argument("--no-reschedule", action="store_true", help="不重新调度 stale 记录")
     parser.add_argument(
-        "--stale-threshold",
-        type=int,
-        default=600,
-        help="Stale 阈值（秒，默认: 600 即 10 分钟）"
+        "--reschedule-delay", type=int, default=0, help="重新调度延迟（秒，默认: 0 立即重试）"
     )
-    parser.add_argument(
-        "--no-auto-fix",
-        action="store_true",
-        help="不自动修复，仅检测"
-    )
-    parser.add_argument(
-        "--no-reschedule",
-        action="store_true",
-        help="不重新调度 stale 记录"
-    )
-    parser.add_argument(
-        "--reschedule-delay",
-        type=int,
-        default=0,
-        help="重新调度延迟（秒，默认: 0 立即重试）"
-    )
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="详细日志输出"
-    )
-    
+    parser.add_argument("--verbose", "-v", action="store_true", help="详细日志输出")
+
     args = parser.parse_args()
-    
+
     # 配置日志
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    
+
     # 构建配置
     auto_fix = not args.no_auto_fix
     if args.report:
         auto_fix = False
-    
+
     config = ReconcileConfig(
         scan_window_hours=args.scan_window,
         batch_size=args.batch_size,
@@ -685,20 +724,22 @@ def main():
         reschedule_stale=not args.no_reschedule,
         reschedule_delay_seconds=args.reschedule_delay,
     )
-    
+
     # 执行对账
     try:
         result = run_reconcile(config)
         print(result.summary())
-        
+
         # 返回码：如果有未修复的缺失审计则返回 1
-        total_missing = result.sent_missing_audit + result.dead_missing_audit + result.stale_missing_audit
+        total_missing = (
+            result.sent_missing_audit + result.dead_missing_audit + result.stale_missing_audit
+        )
         total_fixed = result.sent_audit_fixed + result.dead_audit_fixed + result.stale_audit_fixed
         if total_missing > total_fixed:
             sys.exit(1)
         else:
             sys.exit(0)
-            
+
     except Exception as e:
         logger.exception(f"对账执行失败: {e}")
         sys.exit(2)
