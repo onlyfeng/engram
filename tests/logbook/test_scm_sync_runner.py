@@ -13,16 +13,14 @@ test_scm_sync_runner.py - SCM 同步运行器单元测试
 
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# 确保 scripts 目录在路径中
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from scm_sync_runner import (
+# 直接从核心模块导入，确保测试的稳定性
+# 不再依赖根目录的 scm_sync_runner.py 兼容层
+from engram.logbook.scm_sync_runner import (
     DEFAULT_LOOP_INTERVAL_SECONDS,
     DEFAULT_REPAIR_WINDOW_HOURS,
     DEFAULT_WINDOW_CHUNK_HOURS,
@@ -36,32 +34,31 @@ from scm_sync_runner import (
     # 常量
     REPO_TYPE_GITLAB,
     REPO_TYPE_SVN,
-    # 数据类
     AggregatedResult,
-    # 配置类
     BackfillConfig,
     IncrementalConfig,
     JobSpec,
+    # 数据类
     RepoSpec,
     RevisionWindowChunk,
     RunnerContext,
-    # 枚举
     RunnerPhase,
+    # 枚举
     RunnerStatus,
     SyncResult,
+    # 类
     SyncRunner,
-    # 窗口切分相关
     TimeWindowChunk,
     # 异常
     WatermarkConstraintError,
     build_sync_command,
-    # 辅助函数
     calculate_backfill_window,
+    # 解析器
     get_exit_code,
     get_script_path,
-    # 解析器
     parse_args,
     split_revision_window,
+    # 辅助函数
     split_time_window,
     validate_watermark_constraint,
 )
@@ -403,40 +400,86 @@ class TestSyncResult:
 
 
 class TestGetScriptPath:
-    """脚本路径获取测试"""
+    """脚本路径获取测试
+
+    注意：get_script_path() 已标记为 deprecated，这些测试验证其向后兼容性。
+    """
 
     def test_gitlab_commits(self):
         """测试 GitLab commits 脚本路径"""
-        path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_COMMITS)
-        assert "scm_sync_gitlab_commits.py" in path
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_COMMITS)
+            assert "scm_sync_gitlab_commits.py" in path
+            # 验证产生了 DeprecationWarning
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "已弃用" in str(w[0].message)
 
     def test_gitlab_mrs(self):
         """测试 GitLab MRs 脚本路径"""
-        path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_MRS)
-        assert "scm_sync_gitlab_mrs.py" in path
+        import warnings
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_MRS)
+            assert "scm_sync_gitlab_mrs.py" in path
 
     def test_gitlab_reviews(self):
         """测试 GitLab Reviews 脚本路径"""
-        path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_REVIEWS)
-        assert "scm_sync_gitlab_reviews.py" in path
+        import warnings
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_REVIEWS)
+            assert "scm_sync_gitlab_reviews.py" in path
 
     def test_svn_commits(self):
         """测试 SVN commits 脚本路径"""
-        path = get_script_path(REPO_TYPE_SVN, JOB_TYPE_COMMITS)
-        assert "scm_sync_svn.py" in path
+        import warnings
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            path = get_script_path(REPO_TYPE_SVN, JOB_TYPE_COMMITS)
+            assert "scm_sync_svn.py" in path
 
     def test_invalid_combination(self):
         """测试无效组合"""
-        with pytest.raises(ValueError) as exc_info:
-            get_script_path(REPO_TYPE_SVN, JOB_TYPE_MRS)
-        assert "不支持的仓库/任务组合" in str(exc_info.value)
+        import warnings
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError) as exc_info:
+                get_script_path(REPO_TYPE_SVN, JOB_TYPE_MRS)
+            assert "不支持的仓库/任务组合" in str(exc_info.value)
+
+    def test_deprecation_warning_message(self):
+        """测试 deprecation 警告消息内容"""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_COMMITS)
+
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            warning_msg = str(w[0].message)
+            assert "SyncRunner" in warning_msg or "SyncExecutor" in warning_msg
+            assert "根目录脚本" in warning_msg or "将被移除" in warning_msg
 
 
 class TestBuildSyncCommand:
-    """构建同步命令测试"""
+    """构建同步命令测试
+
+    注意：build_sync_command() 已标记为 deprecated，这些测试验证其向后兼容性。
+    """
 
     def test_basic_command(self):
         """测试基本命令构建"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("gitlab:123")
         job = JobSpec.parse("commits")
@@ -447,12 +490,19 @@ class TestBuildSyncCommand:
             job=job,
         )
 
-        cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
-        assert "python" in cmd[0] or "python3" in cmd[0]
-        assert any("scm_sync_gitlab_commits.py" in c for c in cmd)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+            assert "python" in cmd[0] or "python3" in cmd[0]
+            assert any("scm_sync_gitlab_commits.py" in c for c in cmd)
+            # 验证产生了 DeprecationWarning
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
 
     def test_command_with_config_path(self):
         """测试带配置路径的命令"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("gitlab:123")
 
@@ -462,12 +512,16 @@ class TestBuildSyncCommand:
             config_path="/path/to/config.toml",
         )
 
-        cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
-        assert "--config" in cmd
-        assert "/path/to/config.toml" in cmd
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+            assert "--config" in cmd
+            assert "/path/to/config.toml" in cmd
 
     def test_command_with_verbose(self):
         """测试带 verbose 的命令"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("gitlab:123")
 
@@ -477,11 +531,15 @@ class TestBuildSyncCommand:
             verbose=True,
         )
 
-        cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
-        assert "--verbose" in cmd
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+            assert "--verbose" in cmd
 
     def test_command_with_dry_run(self):
         """测试带 dry-run 的命令"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("gitlab:123")
 
@@ -491,11 +549,15 @@ class TestBuildSyncCommand:
             dry_run=True,
         )
 
-        cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
-        assert "--dry-run" in cmd
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+            assert "--dry-run" in cmd
 
     def test_backfill_command_with_time_range(self):
         """测试回填命令带时间范围"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("gitlab:123")
 
@@ -508,19 +570,23 @@ class TestBuildSyncCommand:
         since = datetime(2025, 1, 26, 0, 0, 0, tzinfo=timezone.utc)
         until = datetime(2025, 1, 27, 0, 0, 0, tzinfo=timezone.utc)
 
-        cmd = build_sync_command(
-            ctx,
-            RunnerPhase.BACKFILL,
-            since_time=since,
-            until_time=until,
-        )
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(
+                ctx,
+                RunnerPhase.BACKFILL,
+                since_time=since,
+                until_time=until,
+            )
 
-        assert "--since" in cmd
-        assert "--until" in cmd
-        assert "--no-update-cursor" in cmd
+            assert "--since" in cmd
+            assert "--until" in cmd
+            assert "--no-update-cursor" in cmd
 
     def test_backfill_command_with_update_watermark(self):
         """测试回填命令更新 watermark"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("gitlab:123")
 
@@ -533,15 +599,39 @@ class TestBuildSyncCommand:
         since = datetime(2025, 1, 26, 0, 0, 0, tzinfo=timezone.utc)
         until = datetime(2025, 1, 27, 0, 0, 0, tzinfo=timezone.utc)
 
-        cmd = build_sync_command(
-            ctx,
-            RunnerPhase.BACKFILL,
-            since_time=since,
-            until_time=until,
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(
+                ctx,
+                RunnerPhase.BACKFILL,
+                since_time=since,
+                until_time=until,
+            )
+
+            # 更新 watermark 时不应包含 --no-update-cursor
+            assert "--no-update-cursor" not in cmd
+
+    def test_deprecation_warning_message(self):
+        """测试 deprecation 警告消息内容"""
+        import warnings
+
+        mock_config = MagicMock()
+        repo = RepoSpec.parse("gitlab:123")
+
+        ctx = RunnerContext(
+            config=mock_config,
+            repo=repo,
         )
 
-        # 更新 watermark 时不应包含 --no-update-cursor
-        assert "--no-update-cursor" not in cmd
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            warning_msg = str(w[0].message)
+            assert "SyncRunner" in warning_msg
+            assert "run_incremental" in warning_msg or "run_backfill" in warning_msg
 
 
 class TestRunnerStatus:
@@ -752,10 +842,15 @@ class TestBackfillWatermarkBehavior:
 
 
 class TestBuildSyncCommandWithRevision:
-    """构建同步命令测试（包含 SVN revision 参数）"""
+    """构建同步命令测试（包含 SVN revision 参数）
+
+    注意：build_sync_command() 已标记为 deprecated，这些测试验证其向后兼容性。
+    """
 
     def test_svn_backfill_with_revisions(self):
         """测试 SVN 回填命令包含 revision 参数"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("svn:https://svn.example.com/repo")
 
@@ -765,23 +860,27 @@ class TestBuildSyncCommandWithRevision:
             update_watermark=False,
         )
 
-        cmd = build_sync_command(
-            ctx,
-            RunnerPhase.BACKFILL,
-            start_rev=100,
-            end_rev=200,
-        )
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(
+                ctx,
+                RunnerPhase.BACKFILL,
+                start_rev=100,
+                end_rev=200,
+            )
 
-        assert "--backfill" in cmd
-        assert "--start-rev" in cmd
-        assert "100" in cmd
-        assert "--end-rev" in cmd
-        assert "200" in cmd
-        # 不更新 watermark 时不应包含 --update-watermark
-        assert "--update-watermark" not in cmd
+            assert "--backfill" in cmd
+            assert "--start-rev" in cmd
+            assert "100" in cmd
+            assert "--end-rev" in cmd
+            assert "200" in cmd
+            # 不更新 watermark 时不应包含 --update-watermark
+            assert "--update-watermark" not in cmd
 
     def test_svn_backfill_with_update_watermark(self):
         """测试 SVN 回填命令更新 watermark"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("svn:https://svn.example.com/repo")
 
@@ -791,18 +890,22 @@ class TestBuildSyncCommandWithRevision:
             update_watermark=True,
         )
 
-        cmd = build_sync_command(
-            ctx,
-            RunnerPhase.BACKFILL,
-            start_rev=100,
-            end_rev=200,
-        )
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(
+                ctx,
+                RunnerPhase.BACKFILL,
+                start_rev=100,
+                end_rev=200,
+            )
 
-        assert "--backfill" in cmd
-        assert "--update-watermark" in cmd
+            assert "--backfill" in cmd
+            assert "--update-watermark" in cmd
 
     def test_gitlab_backfill_with_until(self):
         """测试 GitLab 回填命令包含 until 参数"""
+        import warnings
+
         mock_config = MagicMock()
         repo = RepoSpec.parse("gitlab:123")
 
@@ -815,16 +918,116 @@ class TestBuildSyncCommandWithRevision:
         since = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         until = datetime(2025, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 
-        cmd = build_sync_command(
-            ctx,
-            RunnerPhase.BACKFILL,
-            since_time=since,
-            until_time=until,
-        )
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cmd = build_sync_command(
+                ctx,
+                RunnerPhase.BACKFILL,
+                since_time=since,
+                until_time=until,
+            )
 
-        assert "--since" in cmd
-        assert "--until" in cmd
-        assert "--no-update-cursor" in cmd
+            assert "--since" in cmd
+            assert "--until" in cmd
+            assert "--no-update-cursor" in cmd
+
+
+class TestDeprecatedFunctions:
+    """弃用函数测试
+
+    验证 get_script_path() 和 build_sync_command() 的 deprecation 行为。
+    这些函数已弃用，新代码应使用 SyncRunner + SyncExecutor。
+    """
+
+    def test_get_script_path_emits_deprecation_warning(self):
+        """验证 get_script_path 发出 DeprecationWarning"""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_COMMITS)
+
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "get_script_path" in str(w[0].message)
+
+    def test_build_sync_command_emits_deprecation_warning(self):
+        """验证 build_sync_command 发出 DeprecationWarning"""
+        import warnings
+
+        mock_config = MagicMock()
+        repo = RepoSpec.parse("gitlab:123")
+        ctx = RunnerContext(config=mock_config, repo=repo)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "build_sync_command" in str(w[0].message)
+
+    def test_build_sync_command_does_not_double_warn(self):
+        """验证 build_sync_command 内部调用 get_script_path 时不重复警告"""
+        import warnings
+
+        mock_config = MagicMock()
+        repo = RepoSpec.parse("gitlab:123")
+        ctx = RunnerContext(config=mock_config, repo=repo)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+
+            # 只应有 1 个警告（来自 build_sync_command），
+            # get_script_path 的警告被内部抑制
+            assert len(w) == 1
+            assert "build_sync_command" in str(w[0].message)
+
+    def test_deprecated_functions_still_work(self):
+        """验证弃用函数仍然正常工作（向后兼容）"""
+        import warnings
+
+        mock_config = MagicMock()
+        repo = RepoSpec.parse("gitlab:123")
+        job = JobSpec.parse("commits")
+        ctx = RunnerContext(config=mock_config, repo=repo, job=job)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+
+            # get_script_path 仍返回正确路径
+            path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_COMMITS)
+            assert "scm_sync_gitlab_commits.py" in path
+
+            # build_sync_command 仍生成正确命令
+            cmd = build_sync_command(ctx, RunnerPhase.INCREMENTAL)
+            assert len(cmd) > 0
+            assert "--repo" in cmd
+
+    def test_sync_runner_does_not_use_deprecated_functions(self):
+        """验证 SyncRunner 核心执行路径不使用弃用函数"""
+        import warnings
+
+        mock_config = MagicMock()
+        repo = RepoSpec.parse("gitlab:123")
+        ctx = RunnerContext(config=mock_config, repo=repo, dry_run=True)
+
+        runner = SyncRunner(ctx)
+
+        # 运行时不应产生 DeprecationWarning
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = runner.run_incremental()
+
+            # 过滤出 DeprecationWarning
+            deprecation_warnings = [
+                warning for warning in w if issubclass(warning.category, DeprecationWarning)
+            ]
+            # SyncRunner 核心路径不应使用弃用函数
+            for warning in deprecation_warnings:
+                assert "get_script_path" not in str(warning.message)
+                assert "build_sync_command" not in str(warning.message)
 
 
 class TestHttpConfigDSNFallback:

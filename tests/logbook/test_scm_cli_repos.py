@@ -16,7 +16,6 @@ import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
-import psycopg
 import pytest
 
 from engram.logbook.cli.scm import (
@@ -246,7 +245,7 @@ class TestListReposCommand:
 
         opts = {"pretty": False, "quiet": True, "json_out": None}
 
-        with patch("engram.logbook.cli.scm.output_json") as mock_output:
+        with patch("engram.logbook.cli.scm.output_json"):
             result = _handle_list_repos(args, opts)
 
         assert result == EXIT_NO_DSN
@@ -368,7 +367,7 @@ class TestGetRepoCommand:
 
         opts = {"pretty": False, "quiet": True, "json_out": None}
 
-        with patch("engram.logbook.cli.scm.output_json") as mock_output:
+        with patch("engram.logbook.cli.scm.output_json"):
             result = _handle_get_repo(args, opts)
 
         assert result == EXIT_NO_DSN

@@ -13,16 +13,10 @@ test_sync_runs_counts_persistence.py - sync_runs.counts 持久化测试
 - 使用 validate_counts_schema 进行契约校验
 """
 
-import sys
 import uuid
-from pathlib import Path
 
-# 确保可以导入 db 模块和 engram_logbook 包
-scripts_dir = Path(__file__).parent.parent
-if str(scripts_dir) not in sys.path:
-    sys.path.insert(0, str(scripts_dir))
-
-from db import (
+# 使用包内模块，不再依赖根目录脚本
+from engram.logbook.scm_db import (
     get_sync_run,
     insert_sync_run_finish,
     insert_sync_run_start,

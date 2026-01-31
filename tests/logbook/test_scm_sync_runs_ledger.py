@@ -12,16 +12,10 @@ test_scm_sync_runs_ledger.py - scm.sync_runs 表的单元测试
 依赖: conftest.py 中的 db_conn fixture
 """
 
-import sys
 import uuid
-from pathlib import Path
 
-# 确保可以导入 db 模块
-scripts_dir = Path(__file__).parent.parent
-if str(scripts_dir) not in sys.path:
-    sys.path.insert(0, str(scripts_dir))
-
-from db import (
+# 使用包内模块，不再依赖根目录脚本
+from engram.logbook.scm_db import (
     get_latest_sync_run,
     get_sync_run,
     insert_sync_run_finish,

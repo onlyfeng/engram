@@ -15,7 +15,7 @@ test_scm_sync_status.py - SCM 同步状态查询功能测试
 import json
 import uuid
 
-from db import (
+from engram.logbook.scm_db import (
     build_circuit_breaker_key,
     enqueue_sync_job,
     get_sync_status_summary,
@@ -29,7 +29,24 @@ from db import (
     save_circuit_breaker_state,
     upsert_repo,
 )
-from kv import kv_set_json
+
+
+def kv_set_json(conn, namespace: str, key: str, value) -> None:
+    """内联 KV 写入工具，避免依赖废弃的 kv.py"""
+    import json
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO logbook.kv (namespace, key, value_json)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (namespace, key) DO UPDATE
+            SET value_json = EXCLUDED.value_json,
+                updated_at = now()
+            """,
+            (namespace, key, json.dumps(value)),
+        )
+
 
 # ============ 基础结构测试 ============
 
@@ -1038,7 +1055,7 @@ class TestPrometheusOutputFormat:
 
     def test_prometheus_pauses_by_reason_metrics(self, db_conn):
         """验证 Prometheus 输出包含 pauses_by_reason 指标（新/旧格式）"""
-        from db import PauseReasonCode, set_repo_job_pause
+        from engram.logbook.scm_db import PauseReasonCode, set_repo_job_pause
 
         repo_id = upsert_repo(
             db_conn,
@@ -1209,7 +1226,7 @@ class TestFixedSchemaSummary:
 
     def test_pauses_by_reason_schema(self, db_conn):
         """验证 pauses_by_reason 固定 schema"""
-        from db import PauseReasonCode, set_repo_job_pause
+        from engram.logbook.scm_db import PauseReasonCode, set_repo_job_pause
 
         repo_id = upsert_repo(
             db_conn,
@@ -1250,7 +1267,7 @@ class TestPausedReposAggregation:
 
     def test_paused_by_reason_in_summary(self, db_conn):
         """验证 summary 输出包含按 reason_code 聚合的暂停统计"""
-        from db import PauseReasonCode, set_repo_job_pause
+        from engram.logbook.scm_db import PauseReasonCode, set_repo_job_pause
 
         # 创建测试仓库
         repo_id1 = upsert_repo(
@@ -1339,7 +1356,7 @@ class TestPausedReposAggregation:
 
     def test_prometheus_paused_metrics(self, db_conn):
         """验证 Prometheus 输出包含暂停统计指标"""
-        from db import PauseReasonCode, set_repo_job_pause
+        from engram.logbook.scm_db import PauseReasonCode, set_repo_job_pause
 
         repo_id = upsert_repo(
             db_conn,
@@ -1377,7 +1394,7 @@ class TestNoSensitiveInfoLeakage:
 
     def test_paused_details_no_url(self, db_conn):
         """验证 paused_details 不包含 URL"""
-        from db import PauseReasonCode, set_repo_job_pause
+        from engram.logbook.scm_db import PauseReasonCode, set_repo_job_pause
 
         sensitive_url = "https://secret-gitlab.internal.corp/sensitive/repo.git"
         repo_id = upsert_repo(
@@ -1428,7 +1445,7 @@ class TestNoSensitiveInfoLeakage:
 
     def test_top_lag_repos_url_redacted(self, db_conn):
         """验证 top_lag_repos 中的 URL 被 redact 脱敏"""
-        from db import insert_sync_run_finish, insert_sync_run_start
+        from engram.logbook.scm_db import insert_sync_run_finish, insert_sync_run_start
 
         # 创建包含敏感信息的 URL
         sensitive_url = "https://user:glpat-secret123456789@gitlab.private.corp/api/v4"
@@ -1531,7 +1548,7 @@ class TestNoSensitiveInfoLeakage:
 
     def test_paused_by_reason_no_sensitive_info(self, db_conn):
         """验证 paused_by_reason 聚合只包含 reason_code 和计数"""
-        from db import PauseReasonCode, set_repo_job_pause
+        from engram.logbook.scm_db import PauseReasonCode, set_repo_job_pause
 
         repo_id = upsert_repo(
             db_conn,
@@ -1576,7 +1593,7 @@ class TestNoSensitiveInfoLeakage:
 
     def test_prometheus_output_no_sensitive_info(self, db_conn):
         """验证 Prometheus 输出不泄漏敏感信息"""
-        from db import PauseReasonCode, set_repo_job_pause
+        from engram.logbook.scm_db import PauseReasonCode, set_repo_job_pause
 
         sensitive_url = "https://enterprise.gitlab.corp/internal/secret-api.git"
         sensitive_project = "internal/secret-api"

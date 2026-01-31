@@ -31,18 +31,14 @@ pytest tests/test_gitlab_client_integration.py -v
 """
 
 import concurrent.futures
-import os
-import sys
 import time
 from unittest.mock import Mock, patch
 
 import pytest
 import requests
 
-# 添加 scripts 目录到 path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import db as scm_db
+# 使用包内模块，不再依赖根目录脚本
+from engram.logbook import scm_db
 from engram.logbook.gitlab_client import (
     GitLabClient,
     HttpConfig,

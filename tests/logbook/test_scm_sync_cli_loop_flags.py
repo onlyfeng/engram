@@ -69,14 +69,18 @@ class TestSchedulerMainLoopFlags:
     def test_interval_seconds_default_value(self):
         """--interval-seconds 默认值应为 DEFAULT_SCHEDULER_INTERVAL_SECONDS"""
         parser = argparse.ArgumentParser()
-        parser.add_argument("--interval-seconds", type=int, default=DEFAULT_SCHEDULER_INTERVAL_SECONDS)
+        parser.add_argument(
+            "--interval-seconds", type=int, default=DEFAULT_SCHEDULER_INTERVAL_SECONDS
+        )
         args = parser.parse_args([])
         assert args.interval_seconds == DEFAULT_SCHEDULER_INTERVAL_SECONDS
 
     def test_interval_seconds_custom_value(self):
         """--interval-seconds 可指定自定义值"""
         parser = argparse.ArgumentParser()
-        parser.add_argument("--interval-seconds", type=int, default=DEFAULT_SCHEDULER_INTERVAL_SECONDS)
+        parser.add_argument(
+            "--interval-seconds", type=int, default=DEFAULT_SCHEDULER_INTERVAL_SECONDS
+        )
         args = parser.parse_args(["--interval-seconds", "30"])
         assert args.interval_seconds == 30
 
@@ -199,7 +203,9 @@ class TestReaperMainLoopFlags:
         """--once 和 --loop 互斥时 JSON 输出"""
         with patch("engram.logbook.cli.scm_sync._setup_logging"):
             with patch("builtins.print") as mock_print:
-                exit_code = reaper_main(["--once", "--loop", "--json", "--dsn", "postgresql://test"])
+                exit_code = reaper_main(
+                    ["--once", "--loop", "--json", "--dsn", "postgresql://test"]
+                )
         assert exit_code == 1
         call_args = mock_print.call_args[0][0]
         error_data = json.loads(call_args)

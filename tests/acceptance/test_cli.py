@@ -442,7 +442,16 @@ class TestSCMSyncCLILoopFlags:
     def test_scm_sync_reaper_once_and_loop_mutually_exclusive(self):
         """reaper --once --loop 应报错"""
         result = subprocess.run(
-            [sys.executable, "-m", "engram.logbook.cli.scm_sync", "reaper", "--once", "--loop", "--dsn", "postgresql://test"],
+            [
+                sys.executable,
+                "-m",
+                "engram.logbook.cli.scm_sync",
+                "reaper",
+                "--once",
+                "--loop",
+                "--dsn",
+                "postgresql://test",
+            ],
             capture_output=True,
             text=True,
             timeout=30,

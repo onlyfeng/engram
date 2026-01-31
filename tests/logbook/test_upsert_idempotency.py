@@ -13,19 +13,15 @@ test_upsert_idempotency.py - 测试 DB upsert 幂等性
 - 使用临时 schema（通过 conftest.py 的 migrated_db fixture）
 """
 
-import os
-
 # 导入被测模块（需要 PYTHONPATH 包含 scripts 目录）
-import sys
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 import psycopg
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from db import (
+# 使用包内模块，不再依赖根目录脚本
+from engram.logbook.scm_db import (
     get_repo_by_url,
     upsert_git_commit,
     upsert_mr,
@@ -505,7 +501,7 @@ class TestMrIdConsistencyAcrossScripts:
 
     def test_review_event_uses_consistent_mr_id(self, db_conn: psycopg.Connection):
         """验证 review_event 插入时使用与 MR 相同的 mr_id"""
-        from db import insert_review_event
+        from engram.logbook.scm_db import insert_review_event
 
         url = f"https://test.example.com/review-mr-consistency-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
