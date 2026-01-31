@@ -1,9 +1,36 @@
--- 兼容入口：99_verify_permissions.sql（占位包装）
+-- ============================================================
+-- 薄包装器：99_verify_permissions.sql
+-- ============================================================
+--
+-- SSOT + Wrapper 策略：
+--   SSOT（Single Source of Truth）永远在 sql/verify/99_verify_permissions.sql
+--   本文件仅为薄包装器（thin wrapper），通过 \i 命令引用 SSOT
+--   禁止复制粘贴形成双源！任何修改必须在 SSOT 文件中进行
+--
+-- 为什么需要 psql？
+--   本包装器使用 psql 的 \i (include) 元命令引用 SSOT 文件
+--   \i 是 psql 特有的命令，无法通过 Python/JDBC 等驱动执行
+--   因此从 apps/ 目录执行验证必须使用 psql 客户端
+--
+-- 从 apps/logbook_postgres/sql/ 目录执行验证的正确方式：
+--
+--   # 方式 1: 进入 apps 目录后执行（推荐）
+--   cd apps/logbook_postgres/sql
+--   psql -d <your_db> -f 99_verify_permissions.sql
+--
+--   # 方式 2: 从项目根目录执行
+--   psql -d <your_db> -f apps/logbook_postgres/sql/99_verify_permissions.sql
+--
+--   # 方式 3: 指定 OpenMemory schema
+--   psql -d <your_db> \
+--        -c "SET om.target_schema = 'openmemory'" \
+--        -f apps/logbook_postgres/sql/99_verify_permissions.sql
 --
 -- 输出级别: OK FAIL WARN SKIP
 --
 -- core roles: engram_admin, engram_migrator, engram_app_readwrite, engram_app_readonly,
 --             openmemory_migrator, openmemory_app
 --
+-- ============================================================
 
 \i ../../../sql/verify/99_verify_permissions.sql

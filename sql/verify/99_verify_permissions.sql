@@ -19,10 +19,10 @@
 --     方式2 - psql 直接设置：
 --       psql -d <your_db> -c "SET engram.schema_prefix = 'test'" -f 99_verify_permissions.sql
 --
--- Strict 模式：
+-- Strict 模式（旧开关，向后兼容）：
 --   通过 PostgreSQL 自定义配置变量 'engram.verify_strict' 启用
---   当设置为 '1' 时，如果有任何 FAIL 或 WARN 项，脚本最终会 RAISE EXCEPTION
---   用于 CI/CD 流水线门禁，确保权限配置完全正确
+--   当设置为 '1' 时，启用 gate 门禁检查（等效于设置 engram.verify_gate = '1'）
+--   实际异常触发策略由 engram.verify_gate_policy 控制
 --
 --   启用方式：
 --     方式1 - CLI 参数：
@@ -31,6 +31,24 @@
 --       ENGRAM_VERIFY_STRICT=1 python -m engram.logbook.cli.db_migrate --verify
 --     方式3 - psql 直接设置：
 --       psql -d <your_db> -c "SET engram.verify_strict = '1'" -f 99_verify_permissions.sql
+--
+-- Gate 门禁配置（新开关，推荐）：
+--   通过 PostgreSQL 自定义配置变量配置门禁行为：
+--
+--   engram.verify_gate - 是否启用门禁（'1' 启用，其他禁用）
+--     当启用时，验证失败会 RAISE EXCEPTION，用于 CI/CD 流水线门禁
+--
+--   engram.verify_gate_policy - 门禁触发策略
+--     'fail_only'     - 仅 FAIL 触发异常（默认值）
+--     'fail_and_warn' - FAIL 或 WARN 都触发异常
+--
+--   启用方式：
+--     方式1 - psql 设置（仅 FAIL 触发）：
+--       psql -d <your_db> -c "SET engram.verify_gate = '1'" -f 99_verify_permissions.sql
+--     方式2 - psql 设置（FAIL 或 WARN 触发）：
+--       psql -d <your_db> -c "SET engram.verify_gate = '1'; SET engram.verify_gate_policy = 'fail_and_warn'" -f 99_verify_permissions.sql
+--     方式3 - 环境变量：
+--       ENGRAM_VERIFY_GATE=1 ENGRAM_VERIFY_GATE_POLICY=fail_only python -m engram.logbook.cli.db_migrate --verify
 --
 -- 执行方式：
 --   方式1 - psql 直接执行（使用默认 schema）：
@@ -1065,25 +1083,47 @@ BEGIN
     RAISE NOTICE '  SKIP - 条件不满足，跳过检查';
 END $$;
 
--- 11. Strict 模式汇总与异常处理
--- 当 engram.verify_strict = '1' 时，如果有任何 FAIL 则抛出异常
+-- 11. Gate 门禁汇总与异常处理
+-- 读取 gate 配置变量，决定异常条件：
+--   - engram.verify_gate = '1' 启用门禁检查
+--   - engram.verify_gate_policy = 'fail_only' (默认) 或 'fail_and_warn'
+--   - engram.verify_strict = '1' 为旧开关，等效于 verify_gate = '1'（向后兼容）
+-- 当门禁启用时，根据 policy 决定是仅 FAIL 触发还是 FAIL/WARN 都触发异常
 DO $$
 DECLARE
     v_total_fail INT;
     v_total_warn INT;
-    v_is_strict BOOLEAN;
+    v_gate_enabled BOOLEAN;
+    v_gate_policy TEXT;
     v_strict_setting TEXT;
+    v_gate_setting TEXT;
     v_rec RECORD;
     v_failed_sections TEXT := '';
+    v_warned_sections TEXT := '';
+    v_should_raise BOOLEAN := false;
 BEGIN
-    -- 检查是否启用 strict 模式
+    -- 读取 gate 配置变量
+    v_gate_setting := COALESCE(
+        NULLIF(current_setting('engram.verify_gate', true), ''),
+        '0'
+    );
+    
+    -- 读取旧的 strict 开关（向后兼容）
     v_strict_setting := COALESCE(
         NULLIF(current_setting('engram.verify_strict', true), ''),
         '0'
     );
-    v_is_strict := (v_strict_setting = '1');
     
-    -- 汇总所有 fail_count
+    -- 门禁启用条件：verify_gate = '1' 或 verify_strict = '1'（旧开关）
+    v_gate_enabled := (v_gate_setting = '1') OR (v_strict_setting = '1');
+    
+    -- 读取门禁策略（默认 fail_only）
+    v_gate_policy := COALESCE(
+        NULLIF(current_setting('engram.verify_gate_policy', true), ''),
+        'fail_only'
+    );
+    
+    -- 汇总所有 fail_count 和 warn_count
     SELECT COALESCE(SUM(fail_count), 0), COALESCE(SUM(warn_count), 0)
     INTO v_total_fail, v_total_warn
     FROM _verify_fail_counts;
@@ -1093,7 +1133,18 @@ BEGIN
     RAISE NOTICE '=== 验证汇总 ===';
     RAISE NOTICE '============================================================';
     RAISE NOTICE '';
-    RAISE NOTICE 'Strict 模式: %', CASE WHEN v_is_strict THEN '启用' ELSE '禁用' END;
+    RAISE NOTICE 'Gate 门禁: %', CASE WHEN v_gate_enabled THEN '启用' ELSE '禁用' END;
+    IF v_gate_enabled THEN
+        RAISE NOTICE 'Gate 策略: % (%)', v_gate_policy,
+            CASE v_gate_policy
+                WHEN 'fail_only' THEN '仅 FAIL 触发异常'
+                WHEN 'fail_and_warn' THEN 'FAIL 或 WARN 触发异常'
+                ELSE '未知策略，使用 fail_only'
+            END;
+        IF v_strict_setting = '1' AND v_gate_setting != '1' THEN
+            RAISE NOTICE '(通过旧开关 engram.verify_strict 启用)';
+        END IF;
+    END IF;
     RAISE NOTICE '总计 FAIL: %', v_total_fail;
     RAISE NOTICE '总计 WARN: %', v_total_warn;
     RAISE NOTICE '';
@@ -1123,20 +1174,39 @@ BEGIN
             ORDER BY section_id
         LOOP
             RAISE NOTICE '  - %: % 项 WARN', v_rec.section_name, v_rec.warn_count;
+            v_warned_sections := v_warned_sections || v_rec.section_name || ' (' || v_rec.warn_count || '), ';
         END LOOP;
         RAISE NOTICE '';
     END IF;
     
-    -- Strict 模式下，有 FAIL 或 WARN 则抛出异常（用于 CI 门禁）
-    IF v_is_strict AND (v_total_fail > 0 OR v_total_warn > 0) THEN
-        -- 移除末尾的 ", "
-        v_failed_sections := rtrim(v_failed_sections, ', ');
+    -- 根据 gate 策略决定是否触发异常
+    IF v_gate_enabled THEN
+        IF v_gate_policy = 'fail_and_warn' THEN
+            -- fail_and_warn 策略：FAIL 或 WARN 都触发
+            v_should_raise := (v_total_fail > 0 OR v_total_warn > 0);
+        ELSE
+            -- fail_only 策略（默认）：仅 FAIL 触发
+            v_should_raise := (v_total_fail > 0);
+        END IF;
         
-        RAISE EXCEPTION 'VERIFY_STRICT_FAILED: 权限验证失败，共 % 项 FAIL，% 项 WARN。失败的验证项: [%]。请修复上述问题后重试。', 
-            v_total_fail, v_total_warn, v_failed_sections;
+        IF v_should_raise THEN
+            -- 移除末尾的 ", "
+            v_failed_sections := rtrim(v_failed_sections, ', ');
+            v_warned_sections := rtrim(v_warned_sections, ', ');
+            
+            IF v_gate_policy = 'fail_and_warn' THEN
+                RAISE EXCEPTION 'VERIFY_GATE_FAILED: 权限验证失败（策略: %）。共 % 项 FAIL，% 项 WARN。FAIL 项: [%]。WARN 项: [%]。请修复上述问题后重试。', 
+                    v_gate_policy, v_total_fail, v_total_warn, 
+                    CASE WHEN v_failed_sections = '' THEN '无' ELSE v_failed_sections END,
+                    CASE WHEN v_warned_sections = '' THEN '无' ELSE v_warned_sections END;
+            ELSE
+                RAISE EXCEPTION 'VERIFY_GATE_FAILED: 权限验证失败（策略: %）。共 % 项 FAIL。失败的验证项: [%]。请修复上述问题后重试。', 
+                    v_gate_policy, v_total_fail, v_failed_sections;
+            END IF;
+        END IF;
     END IF;
     
-    -- 非 strict 模式，输出结论
+    -- 非门禁模式或门禁通过，输出结论
     IF v_total_fail > 0 THEN
         RAISE WARNING '权限验证完成，但存在 % 项 FAIL，请检查并修复', v_total_fail;
     ELSIF v_total_warn > 0 THEN

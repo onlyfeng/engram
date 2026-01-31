@@ -700,6 +700,52 @@ class TestMigrationNumberingRules:
                 "08（sync_jobs 表）应在 11（维度列）之前"
             )
 
+    def test_scm_sync_execution_order_constraints(self):
+        """验证 SCM Sync 相关文件的执行顺序约束"""
+        from engram.logbook.migrate import DDL_SCRIPT_PREFIXES
+
+        # 将前缀转为整数排序
+        sorted_prefixes = sorted(int(p) for p in DDL_SCRIPT_PREFIXES)
+
+        # SCM Sync 依赖关系：
+        # 06 (sync_runs) -> 07 (sync_locks) -> 08 (sync_jobs) -> 11 (dimension columns)
+        scm_sync_order = [6, 7, 8, 11]
+
+        # 检查所有 SCM sync 相关前缀都在 DDL 前缀中
+        for prefix in scm_sync_order:
+            assert prefix in sorted_prefixes, (
+                f"SCM Sync 前缀 {prefix:02d} 应在 DDL_SCRIPT_PREFIXES 中"
+            )
+
+        # 验证执行顺序约束
+        for i in range(len(scm_sync_order) - 1):
+            current = scm_sync_order[i]
+            next_prefix = scm_sync_order[i + 1]
+            if current in sorted_prefixes and next_prefix in sorted_prefixes:
+                current_idx = sorted_prefixes.index(current)
+                next_idx = sorted_prefixes.index(next_prefix)
+                assert current_idx < next_idx, (
+                    f"SCM Sync 执行顺序约束失败：{current:02d} 应在 {next_prefix:02d} 之前执行"
+                )
+
+        # 额外验证：06 必须在 07, 08, 11 之前（sync_runs 是基础表）
+        if 6 in sorted_prefixes:
+            idx_06 = sorted_prefixes.index(6)
+            for dep_prefix in [7, 8, 11]:
+                if dep_prefix in sorted_prefixes:
+                    idx_dep = sorted_prefixes.index(dep_prefix)
+                    assert idx_06 < idx_dep, (
+                        f"06_scm_sync_runs.sql 必须在 {dep_prefix:02d} 之前执行"
+                    )
+
+        # 额外验证：08 必须在 11 之前（sync_jobs 表定义必须先于维度列添加）
+        if 8 in sorted_prefixes and 11 in sorted_prefixes:
+            idx_08 = sorted_prefixes.index(8)
+            idx_11 = sorted_prefixes.index(11)
+            assert idx_08 < idx_11, (
+                "08_scm_sync_jobs.sql（表定义）必须在 11_sync_jobs_dimension_columns.sql（维度列）之前执行"
+            )
+
     def test_migration_sequence_is_documented(self):
         """验证迁移序列中的废弃说明"""
         from engram.logbook.migrate import DDL_SCRIPT_PREFIXES
@@ -766,10 +812,30 @@ class TestSqlFileNamingConventions:
 
         # 关键前缀（不应缺失）
         # 注意: 99 前缀验证脚本位于 sql/verify/ 子目录，不在主目录检查范围
-        critical_prefixes = {1, 2, 3, 4, 5, 6, 7, 8}
+        critical_prefixes = {1, 2, 3, 4, 5, 6, 7, 8, 11}
 
         missing = critical_prefixes - prefixes
         assert not missing, f"以下关键前缀缺失：{sorted(missing)}"
+
+    def test_scm_sync_files_exist(self):
+        """验证 SCM Sync 相关的迁移文件存在"""
+        # SCM Sync 功能依赖这些文件
+        scm_sync_files = [
+            "06_scm_sync_runs.sql",
+            "07_scm_sync_locks.sql",
+            "08_scm_sync_jobs.sql",
+            "11_sync_jobs_dimension_columns.sql",
+        ]
+
+        missing = []
+        for filename in scm_sync_files:
+            if not (SQL_DIR / filename).exists():
+                missing.append(filename)
+
+        assert not missing, (
+            f"SCM Sync 相关迁移文件缺失：{missing}\n"
+            f"SCM Sync 功能依赖这些文件，请确保它们存在于 sql/ 目录"
+        )
 
     def test_verify_script_has_99_prefix(self):
         """验证验证脚本使用 99 前缀（位于 sql/verify/ 子目录）"""
@@ -950,6 +1016,394 @@ class TestPrefixClassificationGate:
 
 
 # ---------- 测试：文档一致性门禁 ----------
+
+
+# ---------- 测试：同前缀多文件分类（05 前缀特殊逻辑） ----------
+
+
+class TestSamePrefixMultipleFilesClassification:
+    """
+    测试同前缀多文件的分类逻辑
+
+    场景：前缀 05 同时存在多个文件时的分类处理
+    - 05_scm_sync_runs.sql（不含 openmemory）-> 应作为 DDL 默认执行
+    - 05_openmemory_roles_and_grants.sql（含 openmemory）-> 应作为 Permission，需开关启用
+
+    验证 classify_sql_files 的分类逻辑与执行列表符合预期。
+    """
+
+    def test_prefix_05_multiple_files_classification(self):
+        """
+        验证前缀 05 同时存在 DDL 类型和 OpenMemory 权限类型文件时的分类行为
+
+        预期：
+        - 05_scm_sync_runs.sql（非 openmemory）归类为 DDL，默认执行
+        - 05_openmemory_roles_and_grants.sql 归类为 Permission，需 apply_openmemory_grants=True 才执行
+        """
+        import tempfile
+
+        from engram.logbook.migrate import classify_sql_files, scan_sql_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # 创建模拟 SQL 文件：同一前缀 05 的两种类型
+            (tmp_path / "01_logbook_schema.sql").write_text("-- DDL schema", encoding="utf-8")
+            (tmp_path / "05_scm_sync_runs.sql").write_text(
+                "-- SCM sync runs DDL migration", encoding="utf-8"
+            )
+            (tmp_path / "05_openmemory_roles_and_grants.sql").write_text(
+                "-- OpenMemory permission script", encoding="utf-8"
+            )
+
+            # 扫描文件
+            scan_result = scan_sql_files(tmp_path, include_verify_subdir=True)
+            files = scan_result["files"]
+            duplicates = scan_result["duplicates"]
+
+            # 验证扫描结果
+            assert len(files) == 3, f"应扫描到 3 个文件，实际: {len(files)}"
+
+            # 验证 05 前缀被标记为重复
+            assert "05" in duplicates, "05 前缀应被检测为重复"
+            assert len(duplicates["05"]) == 2, f"05 前缀应有 2 个文件: {duplicates['05']}"
+
+            # 分类测试 1: 不启用任何权限开关
+            classified_default = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=False,
+                verify=False,
+            )
+
+            # 验证 DDL 分类
+            ddl_names = [f.name for f in classified_default["ddl"]]
+            assert "01_logbook_schema.sql" in ddl_names
+            assert "05_scm_sync_runs.sql" in ddl_names, (
+                "05_scm_sync_runs.sql 应被归类为 DDL（非 openmemory 的 05 文件）"
+            )
+            assert "05_openmemory_roles_and_grants.sql" not in ddl_names, (
+                "05_openmemory_roles_and_grants.sql 不应被归类为 DDL"
+            )
+
+            # 验证 Permission 分类
+            permission_names = [f.name for f in classified_default["permissions"]]
+            assert "05_openmemory_roles_and_grants.sql" in permission_names, (
+                "05_openmemory_roles_and_grants.sql 应被归类为 Permission"
+            )
+
+            # 验证 execute 列表（不启用 openmemory 开关）
+            execute_names = [f.name for f in classified_default["execute"]]
+            assert "01_logbook_schema.sql" in execute_names
+            assert "05_scm_sync_runs.sql" in execute_names, (
+                "05_scm_sync_runs.sql 应在默认执行列表中"
+            )
+            assert "05_openmemory_roles_and_grants.sql" not in execute_names, (
+                "05_openmemory_roles_and_grants.sql 不应在默认执行列表中（需开关启用）"
+            )
+
+            # 分类测试 2: 启用 openmemory 权限开关
+            classified_with_om = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=True,
+                verify=False,
+            )
+
+            execute_with_om = [f.name for f in classified_with_om["execute"]]
+            assert "05_openmemory_roles_and_grants.sql" in execute_with_om, (
+                "启用 apply_openmemory_grants 后，05_openmemory_roles_and_grants.sql 应在执行列表中"
+            )
+            assert "05_scm_sync_runs.sql" in execute_with_om, (
+                "05_scm_sync_runs.sql 应始终在执行列表中（作为 DDL）"
+            )
+
+    def test_prefix_05_execution_order(self):
+        """
+        验证前缀 05 多文件的执行顺序
+
+        预期：按文件名字典序排列（05_openmemory_* 在 05_scm_* 之前）
+        """
+        import tempfile
+
+        from engram.logbook.migrate import classify_sql_files, scan_sql_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # 创建模拟文件
+            (tmp_path / "05_scm_sync_runs.sql").write_text("-- SCM sync runs", encoding="utf-8")
+            (tmp_path / "05_openmemory_roles_and_grants.sql").write_text(
+                "-- OpenMemory permission", encoding="utf-8"
+            )
+
+            scan_result = scan_sql_files(tmp_path)
+            files = scan_result["files"]
+
+            # 验证排序顺序（按文件名字典序）
+            file_names = [f.name for _, f in files]
+            # openmemory 在字典序上排在 scm 之前
+            assert file_names.index("05_openmemory_roles_and_grants.sql") < file_names.index(
+                "05_scm_sync_runs.sql"
+            ), "05_openmemory_* 应在 05_scm_* 之前（按文件名字典序）"
+
+            # 验证带 openmemory 开关的执行顺序
+            classified = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=True,
+                verify=False,
+            )
+
+            execute_names = [f.name for f in classified["execute"]]
+            # 两个文件都应在执行列表中
+            assert "05_openmemory_roles_and_grants.sql" in execute_names
+            assert "05_scm_sync_runs.sql" in execute_names
+
+    def test_prefix_05_only_openmemory_file(self):
+        """
+        验证仅存在 openmemory 类型的 05 文件时的分类行为
+
+        预期：作为 Permission，默认不执行，需开关启用
+        """
+        import tempfile
+
+        from engram.logbook.migrate import classify_sql_files, scan_sql_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # 只创建 openmemory 类型的 05 文件
+            (tmp_path / "01_logbook_schema.sql").write_text("-- DDL", encoding="utf-8")
+            (tmp_path / "05_openmemory_roles_and_grants.sql").write_text(
+                "-- OpenMemory permission", encoding="utf-8"
+            )
+
+            scan_result = scan_sql_files(tmp_path)
+            files = scan_result["files"]
+
+            # 不启用开关时
+            classified = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=False,
+                verify=False,
+            )
+
+            # 05_openmemory 应在 permissions 列表
+            permission_names = [f.name for f in classified["permissions"]]
+            assert "05_openmemory_roles_and_grants.sql" in permission_names
+
+            # 05_openmemory 不应在 ddl 列表
+            ddl_names = [f.name for f in classified["ddl"]]
+            assert "05_openmemory_roles_and_grants.sql" not in ddl_names
+
+            # 05_openmemory 不应在默认执行列表
+            execute_names = [f.name for f in classified["execute"]]
+            assert "05_openmemory_roles_and_grants.sql" not in execute_names
+
+    def test_prefix_05_only_non_openmemory_file(self):
+        """
+        验证仅存在非 openmemory 类型的 05 文件时的分类行为
+
+        预期：作为 DDL 默认执行
+        """
+        import tempfile
+
+        from engram.logbook.migrate import classify_sql_files, scan_sql_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # 只创建非 openmemory 类型的 05 文件
+            (tmp_path / "01_logbook_schema.sql").write_text("-- DDL", encoding="utf-8")
+            (tmp_path / "05_scm_sync_runs.sql").write_text("-- SCM sync runs", encoding="utf-8")
+
+            scan_result = scan_sql_files(tmp_path)
+            files = scan_result["files"]
+
+            classified = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=False,
+                verify=False,
+            )
+
+            # 05_scm 应在 ddl 列表
+            ddl_names = [f.name for f in classified["ddl"]]
+            assert "05_scm_sync_runs.sql" in ddl_names
+
+            # 05_scm 应在默认执行列表
+            execute_names = [f.name for f in classified["execute"]]
+            assert "05_scm_sync_runs.sql" in execute_names
+
+            # permissions 列表应为空
+            assert len(classified["permissions"]) == 0
+
+    def test_verify_directory_isolation_not_broken(self):
+        """
+        验证 verify 目录隔离规则不被 05 前缀多文件场景破坏
+
+        预期：
+        - verify/ 子目录中的文件仍正确识别
+        - 主目录的 05 文件分类不影响 verify 目录
+        - verify 脚本仍需 verify=True 才执行
+        """
+        import tempfile
+
+        from engram.logbook.migrate import classify_sql_files, scan_sql_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            verify_path = tmp_path / "verify"
+            verify_path.mkdir()
+
+            # 主目录文件
+            (tmp_path / "01_logbook_schema.sql").write_text("-- DDL", encoding="utf-8")
+            (tmp_path / "05_scm_sync_runs.sql").write_text("-- SCM sync runs", encoding="utf-8")
+            (tmp_path / "05_openmemory_roles_and_grants.sql").write_text(
+                "-- OpenMemory permission", encoding="utf-8"
+            )
+
+            # verify 子目录文件
+            (verify_path / "99_verify_permissions.sql").write_text(
+                "-- Verify permissions", encoding="utf-8"
+            )
+
+            # 扫描（包含 verify 子目录）
+            scan_result = scan_sql_files(tmp_path, include_verify_subdir=True)
+            files = scan_result["files"]
+            duplicates = scan_result["duplicates"]
+
+            # 验证 verify 文件被扫描到
+            file_names = [f.name for _, f in files]
+            assert "99_verify_permissions.sql" in file_names, (
+                "verify 目录中的 99 前缀文件应被扫描到"
+            )
+
+            # 验证 05 前缀重复检测不包含 verify 目录的文件
+            assert "05" in duplicates
+            assert "99" not in duplicates, "99 前缀只有一个文件，不应标记为重复"
+
+            # 分类测试：不启用 verify
+            classified_no_verify = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=True,
+                verify=False,
+            )
+
+            # verify 脚本应在 verify 列表
+            verify_names = [f.name for f in classified_no_verify["verify"]]
+            assert "99_verify_permissions.sql" in verify_names
+
+            # verify 脚本不应在 execute 列表
+            execute_names = [f.name for f in classified_no_verify["execute"]]
+            assert "99_verify_permissions.sql" not in execute_names, (
+                "verify=False 时，99 前缀文件不应在执行列表"
+            )
+
+            # 分类测试：启用 verify
+            classified_with_verify = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=True,
+                verify=True,
+            )
+
+            # verify 脚本应在 execute 列表
+            execute_with_verify = [f.name for f in classified_with_verify["execute"]]
+            assert "99_verify_permissions.sql" in execute_with_verify, (
+                "verify=True 时，99 前缀文件应在执行列表"
+            )
+
+            # 验证 05 文件分类不受 verify 开关影响
+            ddl_names = [f.name for f in classified_with_verify["ddl"]]
+            assert "05_scm_sync_runs.sql" in ddl_names
+            permission_names = [f.name for f in classified_with_verify["permissions"]]
+            assert "05_openmemory_roles_and_grants.sql" in permission_names
+
+    def test_verify_dir_only_contains_99_prefix(self):
+        """
+        验证 verify 子目录中放入非 99 前缀文件时的处理
+
+        预期：非 99 前缀文件仍按其前缀分类，但会被扫描到
+        """
+        import tempfile
+
+        from engram.logbook.migrate import classify_sql_files, scan_sql_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            verify_path = tmp_path / "verify"
+            verify_path.mkdir()
+
+            # 在 verify 目录放入非 99 前缀文件（不规范用法，但需处理）
+            (verify_path / "99_verify_permissions.sql").write_text(
+                "-- Verify permissions", encoding="utf-8"
+            )
+            (verify_path / "01_misplaced_ddl.sql").write_text(
+                "-- Misplaced DDL in verify dir", encoding="utf-8"
+            )
+
+            scan_result = scan_sql_files(tmp_path, include_verify_subdir=True)
+            files = scan_result["files"]
+
+            # 两个文件都应被扫描到
+            assert len(files) == 2
+
+            # 分类
+            classified = classify_sql_files(
+                files,
+                apply_roles=False,
+                apply_openmemory_grants=False,
+                verify=True,
+            )
+
+            # 01 前缀应归类为 DDL
+            ddl_names = [f.name for f in classified["ddl"]]
+            assert "01_misplaced_ddl.sql" in ddl_names
+
+            # 99 前缀应归类为 verify
+            verify_names = [f.name for f in classified["verify"]]
+            assert "99_verify_permissions.sql" in verify_names
+
+    def test_scan_without_verify_subdir_excludes_verify_files(self):
+        """
+        验证 include_verify_subdir=False 时不扫描 verify 子目录
+
+        预期：verify 子目录中的文件不会出现在扫描结果中
+        """
+        import tempfile
+
+        from engram.logbook.migrate import scan_sql_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            verify_path = tmp_path / "verify"
+            verify_path.mkdir()
+
+            # 主目录文件
+            (tmp_path / "05_scm_sync_runs.sql").write_text("-- SCM sync runs", encoding="utf-8")
+            (tmp_path / "05_openmemory_roles_and_grants.sql").write_text(
+                "-- OpenMemory permission", encoding="utf-8"
+            )
+
+            # verify 子目录文件
+            (verify_path / "99_verify_permissions.sql").write_text(
+                "-- Verify permissions", encoding="utf-8"
+            )
+
+            # 不包含 verify 子目录
+            scan_result = scan_sql_files(tmp_path, include_verify_subdir=False)
+            files = scan_result["files"]
+
+            file_names = [f.name for _, f in files]
+            assert "99_verify_permissions.sql" not in file_names, (
+                "include_verify_subdir=False 时不应扫描到 verify 目录中的文件"
+            )
+            assert "05_scm_sync_runs.sql" in file_names
+            assert "05_openmemory_roles_and_grants.sql" in file_names
 
 
 class TestDocumentationConsistency:

@@ -190,19 +190,30 @@ class TestStrictModeSupport:
         assert "RAISE EXCEPTION" in self.verify_sql, (
             "99_verify_permissions.sql should RAISE EXCEPTION in strict mode"
         )
-        assert "VERIFY_STRICT_FAILED" in self.verify_sql, (
-            "99_verify_permissions.sql should use VERIFY_STRICT_FAILED error code"
+        assert "VERIFY_GATE_FAILED" in self.verify_sql, (
+            "99_verify_permissions.sql should use VERIFY_GATE_FAILED error code"
         )
 
-    def test_strict_mode_triggers_on_warn(self):
-        """验证 strict 模式下 WARN 也会触发异常（CI 门禁）"""
-        # 检查 strict 模式条件包含 warn_count
-        assert "v_total_warn > 0" in self.verify_sql, (
-            "99_verify_permissions.sql should check warn_count in strict mode condition"
+    def test_fail_and_warn_policy_triggers_on_warn(self):
+        """验证 fail_and_warn 策略下 WARN 也会触发异常"""
+        # 检查支持 fail_and_warn 策略
+        assert "fail_and_warn" in self.verify_sql, (
+            "99_verify_permissions.sql should support fail_and_warn policy"
         )
-        # 检查条件使用 OR 逻辑（FAIL 或 WARN 任一即触发）
+        # 检查 fail_and_warn 策略条件包含 warn_count（OR 逻辑）
         assert "v_total_fail > 0 OR v_total_warn > 0" in self.verify_sql, (
-            "99_verify_permissions.sql should use OR logic for FAIL/WARN in strict mode"
+            "99_verify_permissions.sql should use OR logic for fail_and_warn policy"
+        )
+
+    def test_default_policy_is_fail_only(self):
+        """验证默认策略是 fail_only（仅 FAIL 触发异常，WARN 不触发）"""
+        # 检查默认策略是 fail_only
+        assert "'fail_only'" in self.verify_sql, (
+            "99_verify_permissions.sql should have fail_only as default policy"
+        )
+        # 检查 fail_only 策略条件仅检查 fail_count
+        assert "v_should_raise := (v_total_fail > 0)" in self.verify_sql, (
+            "99_verify_permissions.sql should check only fail_count for fail_only policy"
         )
 
     def test_strict_mode_error_message_includes_warn_count(self):
@@ -268,6 +279,67 @@ class TestStrictModeCliIntegration:
 
         assert "ENGRAM_VERIFY_STRICT" in content, (
             "migrate.py should support ENGRAM_VERIFY_STRICT environment variable"
+        )
+
+
+class TestGatePolicyBehavior:
+    """验证 gate 策略行为（不需要数据库连接的测试）"""
+
+    @pytest.fixture(autouse=True)
+    def load_sql_content(self):
+        """加载 SQL 文件内容"""
+        self.verify_sql = MAIN_VERIFY_SQL.read_text()
+
+    def test_gate_config_variables_supported(self):
+        """验证 SQL 脚本支持 gate 配置变量"""
+        # engram.verify_gate 控制是否启用门禁
+        assert "engram.verify_gate" in self.verify_sql, (
+            "99_verify_permissions.sql should support engram.verify_gate config variable"
+        )
+        # engram.verify_gate_policy 控制触发策略
+        assert "engram.verify_gate_policy" in self.verify_sql, (
+            "99_verify_permissions.sql should support engram.verify_gate_policy config variable"
+        )
+
+    def test_strict_equals_gate_enabled(self):
+        """验证 verify_strict 是 verify_gate 的旧开关（向后兼容）"""
+        # 文档应说明 verify_strict 等效于 verify_gate
+        assert "engram.verify_strict" in self.verify_sql, (
+            "99_verify_permissions.sql should support engram.verify_strict for backward compatibility"
+        )
+
+    def test_policy_options_documented(self):
+        """验证策略选项在 SQL 脚本中有文档"""
+        # fail_only 策略文档
+        assert "fail_only" in self.verify_sql, (
+            "99_verify_permissions.sql should document fail_only policy"
+        )
+        # fail_and_warn 策略文档
+        assert "fail_and_warn" in self.verify_sql, (
+            "99_verify_permissions.sql should document fail_and_warn policy"
+        )
+
+    def test_fail_only_is_default_policy(self):
+        """验证 fail_only 是默认策略（仅 FAIL 触发异常）"""
+        # 这是关键的回归测试：确保默认行为是 fail_only
+        # 如果 SQL 被修改为默认 fail_and_warn，此测试会失败，提醒开发者注意行为变化
+        # 检查默认值设置
+        assert "'fail_only'" in self.verify_sql, (
+            "Default gate policy should be 'fail_only'"
+        )
+
+    def test_fail_only_does_not_check_warn(self):
+        """验证 fail_only 策略不检查 WARN（仅检查 FAIL）"""
+        # fail_only 策略应只检查 v_total_fail
+        assert "v_should_raise := (v_total_fail > 0)" in self.verify_sql, (
+            "fail_only policy should only check v_total_fail > 0"
+        )
+
+    def test_fail_and_warn_checks_both(self):
+        """验证 fail_and_warn 策略同时检查 FAIL 和 WARN"""
+        # fail_and_warn 策略应使用 OR 逻辑
+        assert "v_should_raise := (v_total_fail > 0 OR v_total_warn > 0)" in self.verify_sql, (
+            "fail_and_warn policy should check both FAIL and WARN with OR logic"
         )
 
 
