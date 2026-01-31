@@ -31,12 +31,41 @@ ruff format --check src/ tests/
 ### 1.3 类型检查
 
 ```bash
-# 本地执行
+# 本地执行（基线对比模式）
+make typecheck-gate
+
+# 严格模式（任何错误阻断）
+make typecheck-strict
+
+# 或使用原始 mypy
 make typecheck
 
 # CI 对应步骤 (lint job)
-mypy src/engram/
+python scripts/ci/check_mypy_gate.py --gate baseline --mypy-path src/engram/
 ```
+
+**mypy Gate 三档**：
+
+| Gate 级别 | Makefile 命令 | 退出码 | 说明 |
+|-----------|---------------|--------|------|
+| `baseline` | `make typecheck-gate` | 0=无新增, 1=有新增 | **当前默认** |
+| `strict` | `make typecheck-strict` | 0=无错误, 1=有错误 | 发布前检查 |
+| `off` | - | 始终 0 | 跳过检查 |
+
+**基线管理命令**：
+
+```bash
+# 更新基线（需 reviewer 批准）
+make mypy-baseline-update
+
+# 或直接调用脚本
+python scripts/ci/check_mypy_gate.py --write-baseline --mypy-path src/engram/
+
+# 统计基线错误数
+wc -l scripts/ci/mypy_baseline.txt
+```
+
+> **详细说明**: 参见 [ADR: mypy 基线管理与 Gate 门禁策略](../architecture/adr_mypy_baseline_and_gating.md)
 
 ### 1.4 Schema 校验
 
@@ -118,7 +147,9 @@ make ci
 |--------|----------|--------|------------|
 | Lint | `make lint` | `lint` | 否 |
 | 格式检查 | `make format-check` | `lint` | 否 |
-| 类型检查 | `make typecheck` | `lint` | 否 |
+| 类型检查（基线模式） | `make typecheck-gate` | `lint` | 否 |
+| 类型检查（严格模式） | `make typecheck-strict` | - | 否 |
+| 更新 mypy 基线 | `make mypy-baseline-update` | - | 否 |
 | Schema 校验 | `make check-schemas` | `schema-validate` | 否 |
 | 环境变量一致性 | `make check-env-consistency` | `env-var-consistency` | 否 |
 | Logbook 一致性 | `make check-logbook-consistency` | `logbook-consistency` | 否 |
@@ -274,3 +305,5 @@ Fixtures 校验结果:
 - [CI 工作流配置](../../.github/workflows/ci.yml)
 - [安装指南](../installation.md)
 - [环境变量参考](../reference/environment_variables.md)
+- [ADR: mypy 基线管理与 Gate 门禁策略](../architecture/adr_mypy_baseline_and_gating.md)
+- [mypy 基线管理指南](../dev/mypy_baseline.md)

@@ -4,6 +4,20 @@
 
 ---
 
+## 迭代回归记录索引
+
+| 迭代 | 日期 | 状态 | 详细记录 | 说明 |
+|------|------|------|----------|------|
+| **Iteration 10** | 2026-02-01 | ⚠️ PARTIAL | [iteration_10_regression.md](iteration_10_regression.md) | 当前活跃迭代；lint ✅，mypy ❌ (86 新增)，gateway 15 失败，acceptance ✅ |
+| Iteration 9 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_9_regression.md](iteration_9_regression.md) | 已被 Iteration 10 取代；lint ✅，mypy ❌，4 测试失败 |
+| Iteration 7 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_7_regression.md](iteration_7_regression.md) | 已被 Iteration 9 取代 |
+| Iteration 6 | 2026-01-30 | ⚠️ PARTIAL | [iteration_6_regression.md](iteration_6_regression.md) | 124 个 ruff 错误（已在 Iteration 9 修复） |
+| Iteration 5 | 2026-01-29 | ✅ PASS | [iteration_5_regression.md](iteration_5_regression.md) | - |
+| Iteration 4 | 2026-01-28 | ✅ PASS | [iteration_4_regression.md](iteration_4_regression.md) | - |
+| Iteration 3 | 2026-01-27 | ✅ PASS | [iteration_3_regression.md](iteration_3_regression.md) | - |
+
+---
+
 ## 模板说明
 
 每次验收记录应包含以下字段：
@@ -18,6 +32,172 @@
 | **已知限制** | 当前迭代的已知限制与约束 |
 | **未覆盖范围** | 本次未执行的测试及原因 |
 | **风险评估** | 未覆盖范围带来的潜在风险 |
+
+---
+
+## 本地复现 CI 的最小命令集
+
+本节说明如何在本地环境中复现 GitHub Actions CI 的全部检查。
+
+### 快速运行（单命令）
+
+```bash
+# 运行所有 CI 检查（与 GitHub Actions 对齐）
+make ci
+```
+
+### CI 检查项对照表
+
+| CI Job | Makefile 目标 | 脚本/命令 | 说明 |
+|--------|---------------|-----------|------|
+| **lint** | `make lint` | `ruff check src/ tests/` | 代码 lint 检查 |
+| **lint** | `make format-check` | `ruff format --check src/ tests/` | 代码格式检查 |
+| **lint** | `make typecheck-gate` | `scripts/ci/check_mypy_gate.py --gate baseline` | mypy 基线对比检查 |
+| **mypy-strict-island** | `make typecheck-strict-island` | `scripts/ci/check_mypy_gate.py --gate strict-island` | 核心模块 mypy strict 检查 |
+| **mypy-metrics** | `make typecheck-metrics` | `scripts/ci/mypy_metrics.py --output artifacts/mypy_metrics.json` | mypy 指标报告（条目数、目录分布、error-code 分布） |
+| **schema-validate** | `make check-schemas` | `scripts/validate_schemas.py --validate-fixtures` | JSON Schema 校验 |
+| **env-var-consistency** | `make check-env-consistency` | `scripts/ci/check_env_var_consistency.py` | 环境变量一致性 |
+| **logbook-consistency** | `make check-logbook-consistency` | `scripts/verify_logbook_consistency.py` | Logbook 配置一致性 |
+| **migration-sanity** | `make check-migration-sanity` | SQL 文件存在性检查 | SQL 迁移文件检查 |
+| **scm-sync-consistency** | `make check-scm-sync-consistency` | `scripts/verify_scm_sync_consistency.py` | SCM Sync 一致性 |
+| **sql-safety** | `make check-sql-safety` | `pytest tests/logbook/test_sql_migrations_safety.py` | SQL 高危语句检测 |
+| **gateway-di-boundaries** | `make check-gateway-di-boundaries` | `scripts/ci/check_gateway_di_boundaries.py` | Gateway DI 边界检查 |
+| **no-root-wrappers-usage** | `make check-no-root-wrappers` | `scripts/ci/check_no_root_wrappers_usage.py` | 根目录 wrapper 导入禁令 |
+| **cli-entrypoints-consistency** | `make check-cli-entrypoints` | `scripts/verify_cli_entrypoints_consistency.py` | CLI 入口点一致性 |
+| **test** | `make test-gateway` | `pytest tests/gateway/ -v` | Gateway 测试（需数据库） |
+| **test** | `make test-acceptance` | `pytest tests/acceptance/ -v` | 验收测试（需数据库） |
+
+### 分步运行（调试用）
+
+```bash
+# 1. 代码质量检查（无需数据库）
+make lint              # ruff lint（全量检查）
+make lint-f821         # ruff lint（专项：F821 未定义名称）
+make format-check      # ruff format 检查
+make typecheck-gate    # mypy 基线对比
+make typecheck-strict-island  # mypy strict-island 核心模块
+
+# 2. 一致性检查（无需数据库）
+make check-schemas            # JSON Schema 校验
+make check-env-consistency    # 环境变量一致性
+make check-logbook-consistency # Logbook 配置一致性
+make check-migration-sanity   # SQL 文件检查
+make check-scm-sync-consistency # SCM Sync 一致性
+
+# 3. 边界与安全检查（无需数据库）
+make check-sql-safety           # SQL 高危语句检测
+make check-gateway-di-boundaries # Gateway DI 边界
+make check-no-root-wrappers     # 根目录 wrapper 禁令
+make check-cli-entrypoints      # CLI 入口点一致性
+
+# 4. 测试（需要数据库）
+# 先启动数据库服务
+export POSTGRES_DSN="postgresql://postgres:postgres@localhost:5432/engram_test"
+export TEST_PG_DSN="$POSTGRES_DSN"
+export TEST_PG_ADMIN_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
+
+make test-gateway      # Gateway 测试
+make test-acceptance   # 验收测试
+```
+
+### CI 与 Makefile 环境变量对照
+
+| CI 环境变量 | Makefile/本地值 | 说明 |
+|-------------|-----------------|------|
+| `POSTGRES_DSN` | `postgresql://postgres:postgres@localhost:5432/engram_test` | 数据库连接 |
+| `TEST_PG_DSN` | 同 `POSTGRES_DSN` | 测试用数据库连接 |
+| `TEST_PG_ADMIN_DSN` | `postgresql://postgres:postgres@localhost:5432/postgres` | 管理员连接（DDL 操作） |
+| `ENGRAM_TESTING` | `1` | 测试模式标志 |
+| `ENGRAM_VERIFY_GATE` | `strict` | 验证门禁级别 |
+| `ENGRAM_MYPY_GATE` | `baseline` | mypy 门禁模式（兼容 `MYPY_GATE`） |
+| `PROJECT_KEY` | `test` | 项目标识 |
+
+### 专项 Lint 检查使用说明
+
+除全量 `make lint` 外，还提供专项 lint 检查目标，用于快速定位特定类型问题：
+
+| 目标 | 检查内容 | 使用场景 |
+|------|----------|----------|
+| `make lint` | 全量 ruff 检查 | CI 门禁、PR 合入前、完整代码审查 |
+| `make lint-f821` | F821 undefined-name（未定义名称） | 快速定位变量/函数未定义错误、重构后检查遗漏 |
+
+**何时使用专项检查**：
+- **快速迭代调试**：修改代码后只关心特定类型错误时，专项检查更快
+- **重构后验证**：删除/重命名函数后，用 `lint-f821` 快速检测遗漏的引用
+- **CI 失败排查**：CI 报告 F821 错误时，本地用专项检查快速复现
+
+**何时使用全量检查**：
+- **PR 提交前**：确保所有 lint 规则通过
+- **CI 门禁**：`make ci` 包含全量 lint
+- **代码审查**：全面评估代码质量
+
+### 注意事项
+
+1. **无数据库检查**：`make ci` 中的大部分检查无需数据库，仅 `check-sql-safety` 需要 pytest 但不需要真实数据库连接
+2. **完整测试**：运行 `make test` 需要 PostgreSQL + pgvector 服务
+3. **CI 精确复现**：若需完全复现 CI 环境，建议使用 Docker:
+   ```bash
+   docker compose -f docker-compose.unified.yml up -d postgres
+   make ci && make test
+   ```
+
+---
+
+## mypy 类型化健康指标
+
+> **详细策略**：参见 [ADR: mypy 基线管理与 Gate 门禁策略](../architecture/adr_mypy_baseline_and_gating.md)
+>
+> **CI Artifact**：`artifacts/mypy_metrics.json`（由 `scripts/ci/mypy_metrics.py` 生成）
+
+### mypy_metrics.json 结构说明
+
+CI 每次运行会生成 `mypy_metrics.json`，包含以下指标：
+
+| 字段 | 说明 |
+|------|------|
+| `summary.total_errors` | Baseline 中的错误总数（不含 note） |
+| `summary.total_notes` | Baseline 中的 note 总数（上下文信息） |
+| `by_directory` | 按目录前缀（`src/engram/gateway/`、`src/engram/logbook/`）聚合的错误分布 |
+| `by_error_code` | 按 mypy error-code（如 `[arg-type]`、`[return-value]`）聚合的错误分布 |
+| `by_error_type` | 按错误类型描述（如 "Incompatible types in"）聚合的 top 20 |
+| `strict_island.paths` | pyproject.toml 中配置的 Strict Island 路径列表 |
+| `strict_island.count` | Strict Island 路径数量 |
+
+### 核心指标定义
+
+| 指标 | 定义 | 查询命令 | 目标值 |
+|------|------|----------|--------|
+| **Baseline 条目数** | 基线文件中的错误总数 | `wc -l scripts/ci/mypy_baseline.txt` | 0 |
+| **Strict Island 覆盖率** | 已启用 strict 的模块占比 | 见 `pyproject.toml` 的 `[[tool.mypy.overrides]]` | 100% |
+| **近 30 天新增错误** | 最近 30 天基线净增加数 | `git log -p --since="30 days ago" -- scripts/ci/mypy_baseline.txt` | 0 |
+
+### 当前指标状态
+
+| 指标 | 当前值 | 状态 | 更新日期 |
+|------|--------|------|----------|
+| Baseline 条目数 | ~143 | 🔴 红色 | 2026-02-01 |
+| Strict Island 覆盖率 | ~25% (17 modules) | 🟡 黄色 | 2026-02-01 |
+| 近 30 天新增错误 | 0 | 🟢 绿色 | 2026-02-01 |
+
+### 切换阶段追踪
+
+| 阶段 | 描述 | 触发条件 | 状态 |
+|------|------|----------|------|
+| **阶段 0** | Gate=baseline（所有分支） | - | **当前** |
+| **阶段 1** | master=strict, PR=baseline | 基线 ≤ 20 | 待触发 |
+| **阶段 2** | 所有分支=strict | 基线 = 0, 阶段 1 稳定 2 周 | 待触发 |
+| **阶段 3** | 归档基线文件，全面 strict | 阶段 2 稳定 2 周 | 待触发 |
+
+### 迭代收敛计划
+
+| 迭代 | 收敛范围 | 目标错误数 | 状态 |
+|------|----------|------------|------|
+| v1.0 | `src/engram/gateway/` | < 100 | 📋 进行中 |
+| v1.1 | `[no-any-return]`, `[no-untyped-def]` | < 50 | 待开始 |
+| v1.2 | `src/engram/logbook/` 核心模块 (cursor, outbox, governance) | < 30 | 📋 进行中 |
+| v1.3 | `[import-untyped]` | < 20 | 待开始 |
+| v1.4 | 高风险模块: `di.py`, `container.py`, `migrate.py` | < 10 | 待开始 |
+| v2.0 | 全量 strict | 0 | 待开始 |
 
 ---
 
@@ -334,7 +514,9 @@ make acceptance-logbook-only
 |------|------|
 | `SKIP_DEPLOY=1` | 跳过 up-logbook（复用已有 PostgreSQL） |
 | `SKIP_MIGRATE=1` | 跳过迁移（Schema 已存在） |
-| `SKIP_VERIFY_PERMISSIONS=1` | 跳过权限验证 |
+| `ENGRAM_VERIFY_GATE=off` | 跳过权限验证（替代已移除的 `SKIP_VERIFY_PERMISSIONS`） |
+
+> **注意**：`SKIP_VERIFY_PERMISSIONS=1` 已移除（无实际实现）。如需跳过权限验证，请使用 `ENGRAM_VERIFY_GATE=off` 或 `--verify-gate=off`。
 
 **产出**: `.artifacts/acceptance-logbook-only/`（summary.json、steps.log、health.json、test-results-index.json、diagnostics/）
 
@@ -926,6 +1108,8 @@ python3 scripts/acceptance/render_acceptance_matrix.py \
 
 | 日期 | Commit | 结果 | 记录文件 | 备注 |
 |------|--------|------|----------|------|
+| 2026-02-01 | - | **PARTIAL** | [iteration_10_regression.md](iteration_10_regression.md) | **Iteration 10 回归验证**：lint ✅，mypy ❌ (86 新增错误)，gateway 测试 ⚠️ (15 失败/807 通过)，acceptance ✅ (158 通过) |
+| 2026-02-01 | - | **PARTIAL** | [iteration_9_regression.md](iteration_9_regression.md) | **Iteration 9 回归验证**：lint ✅，mypy ❌ (77 新增错误)，gateway 测试 ⚠️ (4 失败/813 通过)，acceptance ✅ (143 通过) |
 | 2026-01-30 | `4d5d607` | **PASS** | [`.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json`](.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json) | acceptance-logbook-only 通过；执行步骤：`up-logbook` → `migrate-logbook-stepwise` → `verify-permissions-logbook` → `logbook-smoke` → `test-logbook-unit` |
 | 2026-01-30 | `4d5d607` | **PASS** | [`.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json`](.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json) | acceptance-unified-min 通过；执行步骤：`deploy` → `verify-unified (HTTP_ONLY_MODE)` → `test-logbook-unit` → `test-gateway-integration (HTTP_ONLY_MODE)` |
 | 2026-01-30 | - | PASS | [iteration10_step_tokens.txt](.artifacts/naming-audit/iteration10_step_tokens.txt), [iteration10_legacy_alias_scan.json](.artifacts/naming-audit/iteration10_legacy_alias_scan.json) | **迭代 10 命名治理审计**：step token 扫描 95 处（均为合规的 `Step N` 流程编号格式）；legacy alias 检测 0 处违规（570 文件扫描通过） |
@@ -1112,6 +1296,71 @@ python scripts/unified_stack_gate_contract.py dump-rules
 ```
 SKIPPED (HTTP_ONLY_MODE: Outbox Worker 集成测试需要 Docker 和数据库)
 ```
+
+---
+
+## Import 迁移验收检查
+
+本节说明根目录 Wrapper 模块迁移的验收检查项。
+
+### 迁移验收 Checklist
+
+| # | 检查项 | 验证命令 | 通过标准 |
+|---|--------|----------|----------|
+| 1 | 无新增弃用模块导入 | `make check-no-root-wrappers` | 退出码 0 |
+| 2 | Allowlist 条目未过期 | `python scripts/ci/check_no_root_wrappers_allowlist.py` | 无过期警告 |
+| 3 | CLI 入口一致性 | `make check-cli-entrypoints` | pyproject.toml 与文档一致 |
+| 4 | 弃用警告正确输出 | 手动验证（见下方） | 警告格式正确 |
+| 5 | 测试覆盖迁移后路径 | `pytest tests/ -v -k "cli or import"` | 无测试失败 |
+
+### 弃用警告验证
+
+迁移后，弃用入口应输出统一格式的警告：
+
+```bash
+# 验证根目录入口
+python artifact_cli.py --help 2>&1 | head -15
+
+# 期望输出包含：
+# ⚠️  DEPRECATION WARNING
+# [DEPRECATED] 'artifact_cli.py' 已弃用，计划在 v2.0 版本移除。
+# 请使用以下方式替代:
+#     - engram-artifacts [args]
+```
+
+### 迁移相关测试用例
+
+| 测试文件 | 验证内容 | 需要例外声明 |
+|----------|----------|--------------|
+| `tests/logbook/test_artifacts_cli.py` | `engram-artifacts` CLI 功能 | 否 |
+| `tests/logbook/test_artifact_gc.py` | Artifact GC 功能（使用新路径） | 否 |
+| `tests/logbook/test_identity_sync.py` | 身份同步功能 | 否 |
+| `tests/gateway/test_importerror_optional_deps_contract.py` | 可选依赖缺失时的错误处理 | 否 |
+| `tests/logbook/test_deprecation_warnings.py`（如有） | 弃用警告正确发出 | **是**（测试弃用行为） |
+
+### 批量迁移 PR 验收
+
+提交批量迁移 PR 时，除常规 CI 检查外，还需验证：
+
+| 检查项 | 说明 |
+|--------|------|
+| **测试无新增失败** | 对比 PR 前后的测试通过数 |
+| **无遗漏的 import** | `make check-no-root-wrappers --verbose` 无新增违规 |
+| **例外声明有效** | 新增的 inline marker 格式正确、未过期 |
+| **文档同步更新** | 迁移映射文档与代码一致 |
+
+### 迁移验收与常规验收的关系
+
+迁移验收检查已集成到常规 CI 流程：
+
+| CI Job | 包含的迁移检查 |
+|--------|----------------|
+| **lint** | - |
+| **no-root-wrappers-usage** | `check_no_root_wrappers_usage.py`（核心检查） |
+| **cli-entrypoints-consistency** | CLI 入口与 pyproject.toml 一致性 |
+| **test** | 测试迁移后的 import 路径是否正常工作 |
+
+无需单独运行迁移验收，`make ci` 已覆盖所有迁移相关检查。
 
 ---
 
