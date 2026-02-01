@@ -1,0 +1,275 @@
+{
+  "$schema": "../schemas/acceptance_workflow_coverage_v1.schema.json",
+  "version": "1.0.0",
+
+  "ssot_references": {
+    "profile_definitions": "src/engram/unified_stack/gate_contract.py::PROFILE_CONFIGS",
+    "step_definitions": "src/engram/unified_stack/gate_contract.py::StepName",
+    "capability_definitions": "src/engram/unified_stack/gate_contract.py::detect_capabilities",
+    "acceptance_matrix": "docs/acceptance/00_acceptance_matrix.md",
+    "ci_workflow": ".github/workflows/ci.yml",
+    "nightly_workflow": ".github/workflows/nightly.yml"
+  },
+
+  "targets": {
+    "acceptance-unified-min": {
+      "name": "acceptance-unified-min",
+      "description": "CI PR 快速验证（HTTP 模式），适用于 PR 合入前的轻量级验证。不执行降级测试和 Docker 容器操作。",
+      "profile": "http_only",
+      "required_steps": [
+        "health_checks",
+        "memory_store",
+        "memory_query"
+      ],
+      "optional_steps": [
+        "db_invariants"
+      ],
+      "required_evidence_paths": [
+        {
+          "path": "acceptance-unified-min/summary.json",
+          "description": "验收摘要（结果、时间、环境变量等）",
+          "required": true
+        },
+        {
+          "path": "acceptance-unified-min/steps.log",
+          "description": "步骤执行日志（含时间戳和状态）",
+          "required": true
+        },
+        {
+          "path": "acceptance-unified-min/verify-results.json",
+          "description": "统一栈验证详细结果（健康检查、API 测试）",
+          "required": true
+        },
+        {
+          "path": "acceptance-unified-min/test-results-index.json",
+          "description": "测试报告文件索引",
+          "required": false
+        },
+        {
+          "path": "acceptance-unified-min/diagnostics/",
+          "description": "失败时的诊断信息目录",
+          "required": false
+        }
+      ],
+      "ci_implementation": {
+        "mode": "composed",
+        "workflow_file": "ci.yml",
+        "composed_steps": [
+          {
+            "name": "deploy",
+            "description": "启动统一栈",
+            "command": "docker compose -f docker-compose.unified.yml up -d"
+          },
+          {
+            "name": "verify-unified",
+            "description": "统一栈验证（HTTP_ONLY_MODE=1）",
+            "command": "make verify-unified",
+            "env_overrides": {
+              "HTTP_ONLY_MODE": "1"
+            }
+          },
+          {
+            "name": "test-logbook",
+            "description": "Logbook 测试",
+            "command": "make test-logbook"
+          },
+          {
+            "name": "test-gateway-integration",
+            "description": "Gateway 集成测试（跳过降级测试）",
+            "command": "make test-gateway-integration",
+            "env_overrides": {
+              "HTTP_ONLY_MODE": "1",
+              "SKIP_DEGRADATION_TEST": "1",
+              "GATE_PROFILE": "http_only"
+            }
+          },
+          {
+            "name": "record_acceptance_run",
+            "description": "记录验收运行（含 CI metadata）",
+            "command": "python scripts/acceptance/record_acceptance_run.py",
+            "metadata_fields": ["workflow", "profile", "github_run_id", "event_name", "sha", "python_version"]
+          },
+          {
+            "name": "render_acceptance_matrix",
+            "description": "渲染 acceptance 矩阵摘要",
+            "command": "python scripts/acceptance/render_acceptance_matrix.py --output-dir .artifacts --runs-dir .artifacts/acceptance-runs"
+          },
+          {
+            "name": "upload_acceptance_artifacts",
+            "description": "上传 acceptance artifacts",
+            "artifact_paths": [".artifacts/acceptance-runs/*", ".artifacts/acceptance-matrix.md", ".artifacts/acceptance-matrix.json"]
+          }
+        ],
+        "depends_on": [
+          "lint",
+          "schema-validate",
+          "migration-sanity"
+        ],
+        "notes": "CI 采用组合式覆盖策略：不直接执行 make acceptance-unified-min，而是在 workflow 中分步执行核心步骤，以支持细粒度条件检查和独立 artifact 收集。"
+      },
+      "nightly_implementation": {
+        "mode": "composed",
+        "workflow_file": "nightly.yml",
+        "composed_steps": [
+          {
+            "name": "deploy",
+            "description": "启动统一栈（与 CI 共享）",
+            "command": "docker compose -f docker-compose.unified.yml up -d"
+          },
+          {
+            "name": "test-gateway-integration",
+            "description": "Gateway 集成测试（HTTP 模式）",
+            "command": "pytest tests/gateway/test_unified_stack_integration.py -v --gate-profile http_only",
+            "env_overrides": {
+              "GATE_PROFILE": "http_only"
+            }
+          }
+        ],
+        "notes": "Nightly 主要执行 acceptance-unified-full，但也可包含 min 验证作为前置检查。"
+      },
+      "environment": {
+        "HTTP_ONLY_MODE": "1",
+        "SKIP_DEGRADATION_TEST": "1",
+        "GATE_PROFILE": "http_only"
+      },
+      "capabilities": [
+        "openmemory_endpoint_present"
+      ]
+    },
+
+    "acceptance-unified-full": {
+      "name": "acceptance-unified-full",
+      "description": "Nightly/发布前完整验收（FULL 模式），包含降级测试、DB 不变量检查和完整集成测试。需要 Docker 权限和 POSTGRES_DSN。",
+      "profile": "full",
+      "required_steps": [
+        "health_checks",
+        "db_invariants",
+        "memory_store",
+        "memory_query",
+        "jsonrpc",
+        "degradation"
+      ],
+      "optional_steps": [],
+      "required_evidence_paths": [
+        {
+          "path": "acceptance-unified-full/summary.json",
+          "description": "验收摘要（结果、时间、环境变量等）",
+          "required": true
+        },
+        {
+          "path": "acceptance-unified-full/steps.log",
+          "description": "步骤执行日志（含时间戳和状态）",
+          "required": true
+        },
+        {
+          "path": "acceptance-unified-full/verify-results.json",
+          "description": "统一栈验证详细结果（含降级测试结果）",
+          "required": true
+        },
+        {
+          "path": "acceptance-unified-full/test-results-index.json",
+          "description": "测试报告文件索引",
+          "required": true
+        },
+        {
+          "path": "acceptance-unified-full/diagnostics/",
+          "description": "失败时的诊断信息目录",
+          "required": false
+        }
+      ],
+      "ci_implementation": {
+        "mode": "composed",
+        "workflow_file": "ci.yml",
+        "job_name": "unified-stack-http-only",
+        "notes": "CI 中仅在 workflow_dispatch 或特定标签时可选运行 FULL 模式。常规 PR 使用 acceptance-unified-min。"
+      },
+      "nightly_implementation": {
+        "mode": "direct",
+        "workflow_file": "nightly.yml",
+        "job_name": "unified-stack-full",
+        "makefile_target": "acceptance-unified-full",
+        "composed_steps": [
+          {
+            "name": "detect-capabilities",
+            "description": "环境能力检测",
+            "command": "python scripts/unified_stack_gate_contract.py detect-capabilities --json"
+          },
+          {
+            "name": "validate-profile",
+            "description": "Gate Contract 校验（FULL profile）",
+            "command": "python scripts/unified_stack_gate_contract.py validate-profile full --json"
+          },
+          {
+            "name": "deploy",
+            "description": "启动 Docker Compose 统一栈",
+            "command": "docker compose -f docker-compose.unified.yml up -d"
+          },
+          {
+            "name": "wait-healthy",
+            "description": "等待服务健康",
+            "command": "健康检查循环（PostgreSQL、Gateway、OpenMemory）"
+          },
+          {
+            "name": "test-gateway-integration-full",
+            "description": "Gateway 集成测试（FULL profile，含降级测试）",
+            "command": "pytest tests/gateway/test_unified_stack_integration.py -v --gate-profile full",
+            "env_overrides": {
+              "GATE_PROFILE": "full",
+              "RUN_INTEGRATION_TESTS": "1",
+              "SKIP_DEGRADATION_TEST": "0"
+            }
+          },
+          {
+            "name": "verify-unified-full",
+            "description": "统一栈完整验证",
+            "command": "python scripts/verify_unified_stack.py --profile full --json-out .artifacts/verify-results.json --self-check --verbose",
+            "env_overrides": {
+              "VERIFY_FULL": "1"
+            }
+          },
+          {
+            "name": "make-verify-unified",
+            "description": "Makefile 验证目标",
+            "command": "make verify-unified",
+            "env_overrides": {
+              "VERIFY_FULL": "1"
+            }
+          }
+        ],
+        "notes": "Nightly workflow 直接启动完整服务栈并运行 FULL profile 验证。缺失能力必须 fail（不能静默跳过）。"
+      },
+      "environment": {
+        "VERIFY_FULL": "1",
+        "HTTP_ONLY_MODE": "0",
+        "SKIP_DEGRADATION_TEST": "0",
+        "GATE_PROFILE": "full"
+      },
+      "capabilities": [
+        "openmemory_endpoint_present",
+        "docker_available",
+        "docker_daemon_ok",
+        "can_stop_openmemory",
+        "db_access_available",
+        "postgres_dsn_present"
+      ]
+    }
+  },
+
+  "profile_mapping": {
+    "http_only": {
+      "integration_test_target": "make test-gateway-integration",
+      "acceptance_target": "make acceptance-unified-min",
+      "verify_unified_flags": "HTTP_ONLY_MODE=1"
+    },
+    "standard": {
+      "integration_test_target": "make test-gateway-integration",
+      "acceptance_target": "make acceptance-unified-min",
+      "verify_unified_flags": "SKIP_DEGRADATION_TEST=1"
+    },
+    "full": {
+      "integration_test_target": "make test-gateway-integration-full",
+      "acceptance_target": "make acceptance-unified-full",
+      "verify_unified_flags": "VERIFY_FULL=1 HTTP_ONLY_MODE=0 SKIP_DEGRADATION_TEST=0"
+    }
+  }
+}

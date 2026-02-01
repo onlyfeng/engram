@@ -6,15 +6,19 @@
 
 ## 迭代回归记录索引
 
-| 迭代 | 日期 | 状态 | 详细记录 | 说明 |
-|------|------|------|----------|------|
-| **Iteration 10** | 2026-02-01 | ⚠️ PARTIAL | [iteration_10_regression.md](iteration_10_regression.md) | 当前活跃迭代；lint ✅，mypy ❌ (86 新增)，gateway 15 失败，acceptance ✅ |
-| Iteration 9 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_9_regression.md](iteration_9_regression.md) | 已被 Iteration 10 取代；lint ✅，mypy ❌，4 测试失败 |
-| Iteration 7 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_7_regression.md](iteration_7_regression.md) | 已被 Iteration 9 取代 |
-| Iteration 6 | 2026-01-30 | ⚠️ PARTIAL | [iteration_6_regression.md](iteration_6_regression.md) | 124 个 ruff 错误（已在 Iteration 9 修复） |
-| Iteration 5 | 2026-01-29 | ✅ PASS | [iteration_5_regression.md](iteration_5_regression.md) | - |
-| Iteration 4 | 2026-01-28 | ✅ PASS | [iteration_4_regression.md](iteration_4_regression.md) | - |
-| Iteration 3 | 2026-01-27 | ✅ PASS | [iteration_3_regression.md](iteration_3_regression.md) | - |
+| 迭代 | 日期 | 状态 | 计划 | 详细记录 | 说明 |
+|------|------|------|------|----------|------|
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [iteration_12_plan.md](iteration_12_plan.md) | [iteration_12_regression.md](iteration_12_regression.md) | 当前活跃迭代 |
+| Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_11_plan.md](iteration_11_plan.md) | [iteration_11_regression.md](iteration_11_regression.md) | 已被 Iteration 12 取代 |
+| Iteration 10 | 2026-02-01 | 🔄 SUPERSEDED | - | [iteration_10_regression.md](iteration_10_regression.md) | 已被 Iteration 11 取代；lint ✅，mypy ❌ (86 新增)，gateway 15 失败，acceptance ✅ |
+| Iteration 9 | 2026-02-01 | 🔄 SUPERSEDED | - | [iteration_9_regression.md](iteration_9_regression.md) | 已被 Iteration 10 取代；lint ✅，mypy ❌，4 测试失败 |
+| Iteration 8 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_8_plan.md](iteration_8_plan.md) | [iteration_8_regression.md](iteration_8_regression.md) | 已被 Iteration 9 取代 |
+| Iteration 7 | 2026-02-01 | 🔄 SUPERSEDED | - | [iteration_7_regression.md](iteration_7_regression.md) | 已被 Iteration 9 取代 |
+| Iteration 6 | 2026-01-30 | ⚠️ PARTIAL | - | [iteration_6_regression.md](iteration_6_regression.md) | 124 个 ruff 错误（已在 Iteration 9 修复） |
+| Iteration 5 | 2026-01-29 | ✅ PASS | - | [iteration_5_regression.md](iteration_5_regression.md) | - |
+| Iteration 4 | 2026-01-28 | ✅ PASS | [iteration_4_plan.md](iteration_4_plan.md) | [iteration_4_regression.md](iteration_4_regression.md) | - |
+| Iteration 3 | 2026-01-27 | ✅ PASS | - | [iteration_3_regression.md](iteration_3_regression.md) | - |
+| Iteration 2 | 2026-01-26 | ✅ PASS | [iteration_2_plan.md](iteration_2_plan.md) | [iteration_2_regression.md](iteration_2_regression.md) | - |
 
 ---
 

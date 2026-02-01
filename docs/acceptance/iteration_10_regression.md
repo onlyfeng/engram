@@ -1,3 +1,7 @@
+> **⚠️ Superseded by Iteration 11**
+>
+> 本文档已被 [Iteration 11 回归记录](iteration_11_regression.md) 取代。
+
 # Iteration 10 Regression - CI 流水线验证记录
 
 ## 执行信息
