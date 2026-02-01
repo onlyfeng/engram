@@ -16,12 +16,14 @@ engram_logbook.views - 生成 logbook 的视图文件
 import csv
 import json as _json
 import shutil
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from engram.logbook import db
 from engram.logbook.config import get_effective_artifacts_root
+from engram.logbook.db import ItemWithLatestEventRow
 from engram.logbook.hashing import get_file_info
 from engram.logbook.io import log_info
 from engram.logbook.uri import normalize_uri
@@ -53,12 +55,14 @@ def format_datetime(dt: Optional[datetime]) -> str:
     return dt.isoformat()
 
 
-def generate_manifest_csv(items: List[Dict[str, Any]], out_path: Path) -> Dict[str, Any]:
+def generate_manifest_csv(
+    items: Sequence[ItemWithLatestEventRow], out_path: Path
+) -> Dict[str, Any]:
     """
     生成 manifest.csv
 
     Args:
-        items: item 列表
+        items: item 列表（类型化字典序列）
         out_path: 输出路径
 
     Returns:
@@ -107,13 +111,13 @@ def generate_manifest_csv(items: List[Dict[str, Any]], out_path: Path) -> Dict[s
 
 
 def generate_index_md(
-    items: List[Dict[str, Any]], out_path: Path, limit: int = DEFAULT_LIMIT
+    items: Sequence[ItemWithLatestEventRow], out_path: Path, limit: int = DEFAULT_LIMIT
 ) -> Dict[str, Any]:
     """
     生成 index.md（最近 N 条 item 的导航）
 
     Args:
-        items: item 列表
+        items: item 列表（类型化字典序列）
         out_path: 输出路径
         limit: 显示的最大条目数
 

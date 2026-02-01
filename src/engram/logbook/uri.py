@@ -313,6 +313,7 @@ class ParsedUri:
     uri_type: UriType  # URI 类型
     is_remote: bool  # 是否为远程 URI
     is_local: bool  # 是否为本地 URI（file:// 或无 scheme）
+    netloc: Optional[str] = None  # 网络位置（host:port 或 s3/gs 的 bucket）
 
     def __repr__(self) -> str:
         return f"ParsedUri(type={self.uri_type.value}, scheme={self.scheme}, path={self.path!r})"
@@ -361,6 +362,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.FILE,
                 is_remote=False,
                 is_local=True,
+                netloc=parsed.netloc or None,
             )
 
         elif scheme in ("http", "https"):
@@ -371,6 +373,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.HTTP,
                 is_remote=True,
                 is_local=False,
+                netloc=parsed.netloc or None,
             )
 
         elif scheme == "s3":
@@ -385,6 +388,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.S3,
                 is_remote=True,
                 is_local=False,
+                netloc=parsed.netloc or None,
             )
 
         elif scheme == "gs":
@@ -399,6 +403,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.GS,
                 is_remote=True,
                 is_local=False,
+                netloc=parsed.netloc or None,
             )
 
         elif scheme == "ftp":
@@ -409,6 +414,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.FTP,
                 is_remote=True,
                 is_local=False,
+                netloc=parsed.netloc or None,
             )
 
         elif scheme == "memory":
@@ -428,6 +434,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.MEMORY,
                 is_remote=False,
                 is_local=True,
+                netloc=parsed.netloc or None,
             )
 
         elif scheme == "artifact":
@@ -447,6 +454,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.ARTIFACT,
                 is_remote=False,
                 is_local=True,
+                netloc=parsed.netloc or None,
             )
 
         else:
@@ -458,6 +466,7 @@ def parse_uri(uri: str) -> ParsedUri:
                 uri_type=UriType.UNKNOWN,
                 is_remote=True,  # 保守处理，未知 scheme 视为远程
                 is_local=False,
+                netloc=parsed.netloc or None,
             )
 
     # 无 scheme：视为 artifact 相对路径
@@ -468,6 +477,7 @@ def parse_uri(uri: str) -> ParsedUri:
         uri_type=UriType.ARTIFACT,
         is_remote=False,
         is_local=True,
+        netloc=None,
     )
 
 

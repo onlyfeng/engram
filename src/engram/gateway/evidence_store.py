@@ -33,7 +33,7 @@ try:
         get_artifact_store,
     )
     from engram.logbook.db import attach as db_attach
-    from engram.logbook.uri import build_attachment_evidence_uri
+    from engram.logbook.uri import EvidenceUri, build_attachment_evidence_uri
 except ImportError as e:
     raise ImportError(
         f'evidence_store 需要 engram_logbook 模块: {e}\n请先安装:\n  pip install -e ".[full]"'
@@ -213,12 +213,13 @@ class EvidenceUploadResult(BaseModel):
             - attachment_id == 0: 使用物理存储路径 artifact_uri（fallback）
         """
         # 构建 canonical evidence URI
+        canonical_uri: EvidenceUri
         if self.attachment_id > 0:
             # 使用 canonical 格式: memory://attachments/<attachment_id>/<sha256>
             canonical_uri = build_attachment_evidence_uri(self.attachment_id, self.sha256)
         else:
-            # 无 attachment 记录时，fallback 到 artifact_uri
-            canonical_uri = self.artifact_uri
+            # 无 attachment 记录时，fallback 到 artifact_uri（显式构造 EvidenceUri）
+            canonical_uri = EvidenceUri(self.artifact_uri)
 
         evidence = {
             "uri": canonical_uri,

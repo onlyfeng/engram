@@ -245,7 +245,7 @@ def _build_ministat_from_stats(stats: dict, source_id: Optional[str] = None) -> 
     total = int(stats.get("total", 0) or 0)
     additions = int(stats.get("additions", 0) or 0)
     deletions = int(stats.get("deletions", 0) or 0)
-    short_sha = (_extract_rev_or_sha(source_id) or "unknown")[:7]
+    short_sha = (_extract_rev_or_sha(source_id) if source_id else "unknown")[:7]
     return (
         f"ministat [{short_sha}] degraded: "
         f"{total} file(s) changed, {additions} insertion(s)(+), {deletions} deletion(s)(-)"

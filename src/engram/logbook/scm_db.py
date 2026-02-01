@@ -1638,6 +1638,7 @@ def pause_rate_limit_bucket(
     *,
     reason: str = "manual_pause",
     namespace: str = "scm.rate_limit",
+    record_429: bool = False,
 ) -> Dict[str, Any]:
     """
     暂停速率限制桶
@@ -1678,6 +1679,15 @@ def pause_rate_limit_bucket(
         value["paused_until"] = paused_until
         value["pause_reason"] = reason
         value["paused_at"] = now_ts
+
+        # 记录 429 信息（当 record_429=True）
+        if record_429:
+            meta = value.get("meta_json", {})
+            if not isinstance(meta, dict):
+                meta = {}
+            meta["last_429_at"] = now_ts
+            meta["last_retry_after"] = pause_duration_seconds
+            value["meta_json"] = meta
 
         # upsert
         cur.execute(
@@ -2175,3 +2185,201 @@ def get_circuit_breaker_inconsistencies(conn: psycopg.Connection[Any]) -> List[D
         # 检查 2: half_open 状态超过合理时间（可选，留作扩展）
 
     return inconsistencies
+
+
+# ============ 速率限制令牌桶函数（PostgresRateLimiter 使用） ============
+
+
+class RateLimitTokenResult:
+    """consume_rate_limit_token 的返回结果"""
+
+    def __init__(self, allowed: bool, wait_seconds: float = 0.0):
+        self.allowed = allowed
+        self.wait_seconds = wait_seconds
+
+
+def consume_rate_limit_token(
+    conn: psycopg.Connection[Any],
+    instance_key: str,
+    tokens_needed: float = 1.0,
+    *,
+    default_rate: float = 10.0,
+    default_burst: int = 20,
+    namespace: str = "scm.rate_limit",
+) -> RateLimitTokenResult:
+    """
+    从令牌桶中消费令牌（用于 PostgresRateLimiter）
+
+    实现令牌桶算法：
+    - 桶按照 rate 速率补充令牌
+    - 桶最大容量为 burst
+    - 如果当前令牌不足，返回需要等待的时间
+
+    Args:
+        conn: 数据库连接
+        instance_key: 实例 key（如 gitlab:gitlab.example.com）
+        tokens_needed: 需要消费的令牌数量
+        default_rate: 默认令牌补充速率（tokens/sec）
+        default_burst: 默认最大令牌容量
+        namespace: 命名空间
+
+    Returns:
+        RateLimitTokenResult: 包含 allowed 和 wait_seconds
+    """
+    key = f"bucket:{instance_key}"
+    now_ts = time.time()
+
+    with _dict_cursor(conn) as cur:
+        # 获取或初始化桶状态
+        cur.execute(
+            """
+            SELECT value_json FROM logbook.kv
+            WHERE namespace = %s AND key = %s
+            FOR UPDATE
+            """,
+            (namespace, key),
+        )
+        row = cur.fetchone()
+
+        if row and row["value_json"]:
+            value = row["value_json"]
+            if isinstance(value, str):
+                value = json.loads(value)
+        else:
+            # 初始化新桶
+            value = {
+                "tokens": float(default_burst),
+                "last_refill": now_ts,
+                "rate": default_rate,
+                "burst": default_burst,
+            }
+
+        # 检查是否被暂停
+        paused_until = value.get("paused_until", 0)
+        if paused_until > now_ts:
+            wait_time = paused_until - now_ts
+            return RateLimitTokenResult(allowed=False, wait_seconds=wait_time)
+
+        # 计算令牌补充
+        rate = value.get("rate", default_rate)
+        burst = value.get("burst", default_burst)
+        last_refill = value.get("last_refill", now_ts)
+        elapsed = now_ts - last_refill
+        current_tokens = min(burst, value.get("tokens", burst) + elapsed * rate)
+
+        # 检查是否有足够令牌
+        if current_tokens >= tokens_needed:
+            # 消费令牌
+            new_tokens = current_tokens - tokens_needed
+            value["tokens"] = new_tokens
+            value["last_refill"] = now_ts
+            value["rate"] = rate
+            value["burst"] = burst
+
+            # 更新数据库
+            cur.execute(
+                """
+                INSERT INTO logbook.kv (namespace, key, value_json)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (namespace, key) DO UPDATE
+                SET value_json = EXCLUDED.value_json,
+                    updated_at = now()
+                """,
+                (namespace, key, json.dumps(value)),
+            )
+
+            return RateLimitTokenResult(allowed=True, wait_seconds=0.0)
+
+        # 令牌不足，计算需要等待的时间
+        tokens_deficit = tokens_needed - current_tokens
+        wait_seconds = tokens_deficit / rate
+
+        # 更新 last_refill 时间（即使没有消费，也更新令牌状态）
+        value["tokens"] = current_tokens
+        value["last_refill"] = now_ts
+        value["rate"] = rate
+        value["burst"] = burst
+
+        cur.execute(
+            """
+            INSERT INTO logbook.kv (namespace, key, value_json)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (namespace, key) DO UPDATE
+            SET value_json = EXCLUDED.value_json,
+                updated_at = now()
+            """,
+            (namespace, key, json.dumps(value)),
+        )
+
+        return RateLimitTokenResult(allowed=False, wait_seconds=wait_seconds)
+
+
+def get_rate_limit_status(
+    conn: psycopg.Connection[Any],
+    instance_key: str,
+    *,
+    namespace: str = "scm.rate_limit",
+) -> Optional[Dict[str, Any]]:
+    """
+    获取速率限制桶的完整状态（用于测试和诊断）
+
+    返回包含以下字段的字典：
+    - instance_key: 实例标识
+    - rate: 令牌补充速率
+    - burst: 最大令牌容量
+    - current_tokens: 当前令牌数量
+    - is_paused: 是否被暂停
+    - pause_remaining_seconds: 剩余暂停时间
+    - meta_json: 元数据（包含 429 信息等）
+
+    Args:
+        conn: 数据库连接
+        instance_key: 实例 key
+        namespace: 命名空间
+
+    Returns:
+        状态字典，如果桶不存在返回 None
+    """
+    key = f"bucket:{instance_key}"
+    now_ts = time.time()
+
+    with _dict_cursor(conn) as cur:
+        cur.execute(
+            """
+            SELECT value_json, updated_at FROM logbook.kv
+            WHERE namespace = %s AND key = %s
+            """,
+            (namespace, key),
+        )
+        row = cur.fetchone()
+
+        if not row or not row["value_json"]:
+            return None
+
+        value = row["value_json"]
+        if isinstance(value, str):
+            value = json.loads(value)
+
+        # 计算当前令牌数量（考虑时间流逝的补充）
+        rate = value.get("rate", 10.0)
+        burst = value.get("burst", 20)
+        last_refill = value.get("last_refill", now_ts)
+        elapsed = now_ts - last_refill
+        current_tokens = min(burst, value.get("tokens", burst) + elapsed * rate)
+
+        # 检查暂停状态
+        paused_until = value.get("paused_until", 0)
+        is_paused = paused_until > now_ts
+        pause_remaining = max(0, paused_until - now_ts) if is_paused else 0
+
+        return {
+            "instance_key": instance_key,
+            "rate": rate,
+            "burst": burst,
+            "current_tokens": current_tokens,
+            "is_paused": is_paused,
+            "pause_remaining_seconds": pause_remaining,
+            "paused_until": paused_until if paused_until > 0 else None,
+            "meta_json": value.get("meta_json"),
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }

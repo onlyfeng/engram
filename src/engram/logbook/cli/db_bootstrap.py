@@ -43,8 +43,69 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, TypedDict
 from urllib.parse import urlparse, urlunparse
+
+if TYPE_CHECKING:
+    from psycopg import Connection
+
+
+class DeploymentModeResult(TypedDict):
+    """detect_deployment_mode() 返回类型"""
+
+    mode: str  # "logbook-only" | "unified-stack" | "invalid"
+    skip_roles: bool
+    set_passwords: list[str]
+    missing_passwords: list[str]
+    code: str
+    message: str
+
+
+class SchemaCheckResult(TypedDict, total=False):
+    """check_om_schema_not_public() 返回类型"""
+
+    ok: bool
+    code: str
+    value: str
+    message: str
+    remediation: str
+
+
+class AdminCheckResult(TypedDict, total=False):
+    """check_admin_privileges() 返回类型"""
+
+    ok: bool
+    code: str
+    message: str
+    details: dict[str, bool]
+    skipped: bool
+
+
+class PrecheckResult(TypedDict):
+    """run_precheck() 返回类型"""
+
+    ok: bool
+    checks: dict[str, SchemaCheckResult | AdminCheckResult]
+    failed_codes: list[str]
+
+
+class RoleCreationResult(TypedDict, total=False):
+    """create_or_update_login_role() 返回类型"""
+
+    ok: bool
+    code: str
+    message: str
+    remediation: str
+    created: bool
+    updated: bool
+
+
+class AllRolesResult(TypedDict):
+    """create_all_login_roles() 返回类型"""
+
+    ok: bool
+    failed_codes: list[str]
+    remediation: str
 
 
 class BootstrapErrorCode:
@@ -95,7 +156,7 @@ SERVICE_ACCOUNT_PASSWORD_ENVS = [
 ]
 
 
-def detect_deployment_mode() -> Dict[str, object]:
+def detect_deployment_mode() -> DeploymentModeResult:
     """
     检测部署模式：logbook-only vs unified-stack
 
@@ -105,17 +166,10 @@ def detect_deployment_mode() -> Dict[str, object]:
     - 部分设置 → 配置错误（需要全部设置或全部不设置）
 
     返回:
-        {
-            "mode": "logbook-only" | "unified-stack" | "invalid",
-            "skip_roles": bool,
-            "set_passwords": list[str],  # 已设置的环境变量
-            "missing_passwords": list[str],  # 缺失的环境变量
-            "code": str,  # 错误码（如有）
-            "message": str,
-        }
+        DeploymentModeResult TypedDict
     """
-    set_passwords = []
-    missing_passwords = []
+    set_passwords: list[str] = []
+    missing_passwords: list[str] = []
 
     for env_var in SERVICE_ACCOUNT_PASSWORD_ENVS:
         value = os.environ.get(env_var, "").strip()
@@ -129,56 +183,60 @@ def detect_deployment_mode() -> Dict[str, object]:
 
     if set_count == 0:
         # logbook-only 模式：不创建服务账号
-        return {
-            "mode": "logbook-only",
-            "skip_roles": True,
-            "set_passwords": set_passwords,
-            "missing_passwords": missing_passwords,
-            "code": BootstrapErrorCode.SKIP_MODE_ACTIVE,
-            "message": "logbook-only 模式：未设置任何服务账号密码，跳过 login role 创建",
-        }
+        return DeploymentModeResult(
+            mode="logbook-only",
+            skip_roles=True,
+            set_passwords=set_passwords,
+            missing_passwords=missing_passwords,
+            code=BootstrapErrorCode.SKIP_MODE_ACTIVE,
+            message="logbook-only 模式：未设置任何服务账号密码，跳过 login role 创建",
+        )
     elif set_count == total:
         # unified-stack 模式：创建所有服务账号
-        return {
-            "mode": "unified-stack",
-            "skip_roles": False,
-            "set_passwords": set_passwords,
-            "missing_passwords": missing_passwords,
-            "code": "",
-            "message": f"unified-stack 模式：已设置全部 {total} 个服务账号密码",
-        }
+        return DeploymentModeResult(
+            mode="unified-stack",
+            skip_roles=False,
+            set_passwords=set_passwords,
+            missing_passwords=missing_passwords,
+            code="",
+            message=f"unified-stack 模式：已设置全部 {total} 个服务账号密码",
+        )
     else:
         # 部分设置：配置错误
-        return {
-            "mode": "invalid",
-            "skip_roles": False,
-            "set_passwords": set_passwords,
-            "missing_passwords": missing_passwords,
-            "code": BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD,
-            "message": (
+        return DeploymentModeResult(
+            mode="invalid",
+            skip_roles=False,
+            set_passwords=set_passwords,
+            missing_passwords=missing_passwords,
+            code=BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD,
+            message=(
                 f"配置错误：已设置 {set_count}/{total} 个密码。"
                 f"unified-stack 模式要求全部设置，logbook-only 模式要求全部不设置。"
                 f"\n缺失: {', '.join(missing_passwords)}"
             ),
-        }
+        )
 
 
-def check_om_schema_not_public(om_schema: str) -> Dict[str, object]:
+def check_om_schema_not_public(om_schema: str | None) -> SchemaCheckResult:
     """检查 OpenMemory schema 不为 public"""
+    # 确保 om_schema 为 str
     if om_schema is None:
         om_schema = ""
+    elif not isinstance(om_schema, str):
+        om_schema = str(om_schema)
+
     if om_schema.lower() == "public":
-        return {
-            "ok": False,
-            "code": BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC,
-            "value": om_schema,
-            "message": "om_schema 不允许为 public",
-            "remediation": "请设置 OM_PG_SCHEMA 为非 public 的 schema",
-        }
-    return {"ok": True, "code": "", "value": om_schema, "message": "ok"}
+        return SchemaCheckResult(
+            ok=False,
+            code=BootstrapErrorCode.PRECHECK_SCHEMA_PUBLIC,
+            value=om_schema,
+            message="om_schema 不允许为 public",
+            remediation="请设置 OM_PG_SCHEMA 为非 public 的 schema",
+        )
+    return SchemaCheckResult(ok=True, code="", value=om_schema, message="ok")
 
 
-def check_admin_privileges(conn) -> Dict[str, object]:
+def check_admin_privileges(conn: Connection[tuple[object, ...]]) -> AdminCheckResult:
     """检查当前用户是否有足够权限创建角色"""
     with conn.cursor() as cur:
         cur.execute("SELECT rolsuper, rolcreaterole FROM pg_roles WHERE rolname = current_user")
@@ -186,32 +244,34 @@ def check_admin_privileges(conn) -> Dict[str, object]:
     is_superuser = bool(row[0]) if row else False
     can_create_role = bool(row[1]) if row else False
     ok = is_superuser or can_create_role
-    return {
-        "ok": ok,
-        "code": "" if ok else BootstrapErrorCode.PRECHECK_NO_CREATEROLE,
-        "message": "ok" if ok else "缺少 createrole 权限",
-        "details": {"is_superuser": is_superuser, "can_create_role": can_create_role},
-    }
+    return AdminCheckResult(
+        ok=ok,
+        code="" if ok else BootstrapErrorCode.PRECHECK_NO_CREATEROLE,
+        message="ok" if ok else "缺少 createrole 权限",
+        details={"is_superuser": is_superuser, "can_create_role": can_create_role},
+    )
 
 
 def run_precheck(
     *,
-    admin_dsn: Optional[str],
+    admin_dsn: str | None,
     om_schema: str,
     quiet: bool = False,
     skip_db_check: bool = False,
-) -> Dict[str, object]:
+) -> PrecheckResult:
     """执行预检"""
-    checks: Dict[str, Dict[str, object]] = {}
-    failed_codes: List[str] = []
+    checks: dict[str, SchemaCheckResult | AdminCheckResult] = {}
+    failed_codes: list[str] = []
 
     schema_check = check_om_schema_not_public(om_schema)
     checks["om_schema_not_public"] = schema_check
-    if not schema_check["ok"]:
-        failed_codes.append(schema_check["code"])
+    if not schema_check.get("ok"):
+        code = schema_check.get("code", "")
+        if isinstance(code, str) and code:
+            failed_codes.append(code)
 
     if skip_db_check or not admin_dsn:
-        checks["admin_privileges"] = {"ok": True, "skipped": True}
+        checks["admin_privileges"] = AdminCheckResult(ok=True, skipped=True)
     else:
         import psycopg
 
@@ -222,40 +282,42 @@ def run_precheck(
             finally:
                 conn.close()
         except Exception as exc:
-            admin_check = {
-                "ok": False,
-                "code": BootstrapErrorCode.PRECHECK_NO_CREATEROLE,
-                "message": f"无法连接数据库或权限不足: {exc}",
-            }
+            admin_check = AdminCheckResult(
+                ok=False,
+                code=BootstrapErrorCode.PRECHECK_NO_CREATEROLE,
+                message=f"无法连接数据库或权限不足: {exc}",
+            )
         checks["admin_privileges"] = admin_check
         if not admin_check.get("ok"):
-            failed_codes.append(admin_check.get("code", BootstrapErrorCode.PRECHECK_NO_CREATEROLE))
+            code = admin_check.get("code", BootstrapErrorCode.PRECHECK_NO_CREATEROLE)
+            if isinstance(code, str) and code:
+                failed_codes.append(code)
 
-    return {
-        "ok": len(failed_codes) == 0,
-        "checks": checks,
-        "failed_codes": failed_codes,
-    }
+    return PrecheckResult(
+        ok=len(failed_codes) == 0,
+        checks=checks,
+        failed_codes=failed_codes,
+    )
 
 
 def create_or_update_login_role(
-    conn,
+    conn: Connection[tuple[object, ...]],
     *,
     role_name: str,
-    password: Optional[str],
-    inherit_role: Optional[str] = None,
+    password: str | None,
+    inherit_role: str | None = None,
     quiet: bool = False,
-) -> Dict[str, object]:
+) -> RoleCreationResult:
     """创建或更新登录角色"""
     from psycopg import sql
 
     if not password:
-        return {
-            "ok": False,
-            "code": BootstrapErrorCode.ROLE_CREATION_MISSING_PASSWORD,
-            "message": "缺少密码",
-            "remediation": f"请设置 {role_name} 的密码",
-        }
+        return RoleCreationResult(
+            ok=False,
+            code=BootstrapErrorCode.ROLE_CREATION_MISSING_PASSWORD,
+            message="缺少密码",
+            remediation=f"请设置 {role_name} 的密码",
+        )
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
@@ -285,28 +347,28 @@ def create_or_update_login_role(
                     )
                 except Exception:
                     pass
-        return {
-            "ok": True,
-            "created": created,
-            "updated": updated,
-        }
+        return RoleCreationResult(
+            ok=True,
+            created=created,
+            updated=updated,
+        )
     except Exception as exc:
-        return {
-            "ok": False,
-            "code": BootstrapErrorCode.ROLE_CREATION_FAILED,
-            "message": str(exc),
-            "remediation": "请检查数据库权限与角色状态",
-        }
+        return RoleCreationResult(
+            ok=False,
+            code=BootstrapErrorCode.ROLE_CREATION_FAILED,
+            message=str(exc),
+            remediation="请检查数据库权限与角色状态",
+        )
 
 
 def create_all_login_roles(
-    conn,
+    conn: Connection[tuple[object, ...]],
     *,
-    passwords: Dict[str, str],
+    passwords: dict[str, str],
     quiet: bool = False,
-) -> Dict[str, object]:
+) -> AllRolesResult:
     """创建所有登录角色"""
-    failed_codes: List[str] = []
+    failed_codes: list[str] = []
     for role_name, env_key, inherit_role in LOGIN_ROLES:
         password = passwords.get(role_name) or os.environ.get(env_key)
         result = create_or_update_login_role(
@@ -317,15 +379,17 @@ def create_all_login_roles(
             quiet=quiet,
         )
         if not result.get("ok"):
-            failed_codes.append(result.get("code"))
-    return {
-        "ok": len(failed_codes) == 0,
-        "failed_codes": [c for c in failed_codes if c],
-        "remediation": "请提供缺失的角色密码" if failed_codes else "",
-    }
+            code = result.get("code", "")
+            if isinstance(code, str) and code:
+                failed_codes.append(code)
+    return AllRolesResult(
+        ok=len(failed_codes) == 0,
+        failed_codes=failed_codes,
+        remediation="请提供缺失的角色密码" if failed_codes else "",
+    )
 
 
-def parse_db_from_dsn(dsn: str) -> Optional[str]:
+def parse_db_from_dsn(dsn: str) -> str | None:
     """从 DSN 解析数据库名"""
     if not dsn:
         return None

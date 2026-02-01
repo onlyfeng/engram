@@ -188,7 +188,7 @@ def redact_dict(
     if sensitive_keys:
         all_sensitive_keys.update(k.lower() for k in sensitive_keys)
 
-    result = {}
+    result: Dict[str, Any] = {}
     for key, value in data.items():
         key_lower = key.lower() if isinstance(key, str) else str(key).lower()
 

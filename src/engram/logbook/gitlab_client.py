@@ -480,7 +480,7 @@ class PostgresRateLimiter:
             True 如果成功获取，False 如果超时或被拒绝
         """
         # 延迟导入避免循环依赖
-        from ..db import consume_rate_limit_token
+        from engram.logbook.scm_db import consume_rate_limit_token
 
         max_wait = timeout if timeout is not None else self._max_wait_seconds
         start_time = time.time()
@@ -554,7 +554,7 @@ class PostgresRateLimiter:
             retry_after: Retry-After 头的值（秒）
             reset_time: RateLimit-Reset 头的值（Unix 时间戳）
         """
-        from ..db import pause_rate_limit_bucket
+        from engram.logbook.scm_db import pause_rate_limit_bucket
 
         now = time.time()
         pause_seconds: float
@@ -631,7 +631,7 @@ class PostgresRateLimiter:
 
     def get_bucket_status(self) -> Optional[Dict[str, Any]]:
         """从 Postgres 获取当前桶状态"""
-        from ..db import get_rate_limit_status
+        from engram.logbook.scm_db import get_rate_limit_status
 
         try:
             with self._get_conn() as conn:

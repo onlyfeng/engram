@@ -79,7 +79,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     """延迟导入非 ports 模块的符号"""
     if name in _LAZY_IMPORTS:
         import importlib

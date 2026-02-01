@@ -46,7 +46,10 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.type_defs import CopySourceTypeDef
 
 from .artifact_ops_audit import (
     write_delete_audit_event,
@@ -92,6 +95,12 @@ class ArtifactDeleteNotSupportedError(ArtifactDeleteError):
     """当前存储类型不支持删除操作"""
 
     error_type = "ARTIFACT_DELETE_NOT_SUPPORTED"
+
+
+class ArtifactDeleteConfigurationError(ArtifactDeleteError):
+    """删除操作的配置错误（如 bucket 未配置）"""
+
+    error_type = "ARTIFACT_DELETE_CONFIGURATION_ERROR"
 
 
 # =============================================================================
@@ -277,6 +286,8 @@ def _delete_file_uri_artifact(
                 trash_root = file_path.parent.parent
                 relative_path = Path(file_path.parent.name) / file_path.name
 
+            # relative_path 在此处保证已赋值（通过循环或上面的 fallback）
+            assert relative_path is not None
             trash_path = trash_root / trash_prefix / relative_path
 
             # 确保 trash 目录存在
@@ -344,8 +355,21 @@ def _delete_object_store_artifact(
 
     Raises:
         ArtifactDeleteOpsCredentialsRequiredError: 需要 ops 凭证但未提供
+        ArtifactDeleteConfigurationError: bucket 未配置
     """
     normalized_uri = normalize_uri(uri)
+
+    # 严格检查 bucket 配置
+    bucket = store.bucket
+    if bucket is None:
+        raise ArtifactDeleteConfigurationError(
+            "对象存储 bucket 未配置。\n"
+            "请设置 ENGRAM_S3_BUCKET 环境变量或在 config.toml 中配置 bucket",
+            {
+                "uri": normalized_uri,
+                "hint": "设置 ENGRAM_S3_BUCKET 环境变量",
+            },
+        )
 
     # 强制 ops 凭证检查
     if require_ops and not store.is_ops_credentials():
@@ -386,27 +410,30 @@ def _delete_object_store_artifact(
             # 软删除：复制到 trash 前缀然后删除原文件
             trash_key = f"{trash_prefix.rstrip('/')}/{key}"
 
+            # 构造 CopySource（bucket 和 key 均已验证非 None）
+            copy_source: CopySourceTypeDef = {"Bucket": bucket, "Key": key}
+
             # 使用 MetadataDirective='COPY' 保留所有用户元数据
             client.copy_object(
-                Bucket=store.bucket,
-                CopySource={"Bucket": store.bucket, "Key": key},
+                Bucket=bucket,
+                CopySource=copy_source,
                 Key=trash_key,
                 MetadataDirective="COPY",
             )
 
             # 删除原对象
-            client.delete_object(Bucket=store.bucket, Key=key)
+            client.delete_object(Bucket=bucket, Key=key)
 
             return ArtifactDeleteResult(
                 uri=normalized_uri,
                 deleted=True,
                 existed=True,
                 trashed=True,
-                trash_path=f"s3://{store.bucket}/{trash_key}",
+                trash_path=f"s3://{bucket}/{trash_key}",
             )
         else:
             # 硬删除
-            client.delete_object(Bucket=store.bucket, Key=key)
+            client.delete_object(Bucket=bucket, Key=key)
 
             return ArtifactDeleteResult(
                 uri=normalized_uri,
@@ -634,11 +661,23 @@ def delete_physical_uri(
                 {"uri": uri},
             )
 
+        # 严格检查 store.bucket 是否已配置
+        store_bucket = store.bucket
+        if store_bucket is None:
+            raise ArtifactDeleteConfigurationError(
+                "对象存储 bucket 未配置。\n"
+                "请设置 ENGRAM_S3_BUCKET 环境变量或在 config.toml 中配置 bucket",
+                {
+                    "uri": uri,
+                    "hint": "设置 ENGRAM_S3_BUCKET 环境变量",
+                },
+            )
+
         # 验证 bucket 匹配
-        if store.bucket != bucket:
+        if store_bucket != bucket:
             raise ArtifactDeleteNotSupportedError(
-                f"URI bucket ({bucket}) 与配置的 bucket ({store.bucket}) 不匹配",
-                {"uri": uri, "uri_bucket": bucket, "store_bucket": store.bucket},
+                f"URI bucket ({bucket}) 与配置的 bucket ({store_bucket}) 不匹配",
+                {"uri": uri, "uri_bucket": bucket, "store_bucket": store_bucket},
             )
 
         # 移除 store.prefix 获取逻辑 URI

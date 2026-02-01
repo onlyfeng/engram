@@ -59,12 +59,12 @@ def _get_dsn(args: argparse.Namespace) -> str:
 
     # 1. 命令行参数优先
     if hasattr(args, "dsn") and args.dsn:
-        return args.dsn
+        return str(args.dsn)
 
     # 2. 配置文件
     if hasattr(args, "config") and args.config:
         try:
-            import tomllib
+            import tomllib  # type: ignore[import-not-found]
         except ImportError:
             import tomli as tomllib
 
@@ -72,7 +72,7 @@ def _get_dsn(args: argparse.Namespace) -> str:
             config = tomllib.load(f)
             dsn = config.get("postgres", {}).get("dsn")
             if dsn:
-                return dsn
+                return str(dsn)
 
     # 3. 环境变量
     dsn = os.environ.get("POSTGRES_DSN")
@@ -223,8 +223,8 @@ def _handle_get_repo(args: argparse.Namespace, opts: Dict[str, Any]) -> int:
         return EXIT_SUCCESS
 
     except Exception as e:
-        error = EngramDatabaseError(f"数据库操作失败: {e}", {"exception": str(e)})
-        output_json(error.to_dict(), pretty=opts["pretty"], quiet=opts["quiet"])
+        db_error = EngramDatabaseError(f"数据库操作失败: {e}", {"exception": str(e)})
+        output_json(db_error.to_dict(), pretty=opts["pretty"], quiet=opts["quiet"])
         return EXIT_ERROR
 
 

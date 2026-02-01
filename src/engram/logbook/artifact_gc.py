@@ -21,7 +21,7 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from engram.logbook.artifact_ops_audit import (
     write_gc_delete_audit_event,
@@ -401,8 +401,7 @@ def get_referenced_uris(
         dsn = os.environ.get("POSTGRES_DSN") or os.environ.get("TEST_PG_DSN")
     if not dsn:
         raise GCDatabaseError("未配置 POSTGRES_DSN")
-    from engram_logbook.db import get_connection
-
+    from engram.logbook.db import get_connection
     from engram.logbook.errors import DbConnectionError
 
     search_path = search_path or ["scm", "logbook", "public"]
@@ -503,6 +502,7 @@ def run_gc(
 
     bucket = os.environ.get("ENGRAM_S3_BUCKET") if backend == "object" else None
 
+    store: Union[LocalArtifactsStore, FileUriStore]
     if backend == "local":
         if not artifacts_root:
             raise GCPrefixError("artifacts_root 不能为空")
@@ -511,8 +511,9 @@ def run_gc(
     elif backend == "file":
         if not artifacts_root:
             raise GCPrefixError("artifacts_root 不能为空")
-        store = FileUriStore(allowed_roots=[artifacts_root])
-        scanned = scan_file_uri_artifacts(store, prefix, allowed_prefixes=allowed_prefixes)
+        file_store = FileUriStore(allowed_roots=[artifacts_root])
+        store = file_store
+        scanned = scan_file_uri_artifacts(file_store, prefix, allowed_prefixes=allowed_prefixes)
     else:
         if not artifacts_root:
             artifacts_root = os.getcwd()
@@ -586,8 +587,12 @@ def run_gc(
                 )
             else:
                 file_uri = f"file://{candidate.full_path}"
-                store = FileUriStore(allowed_roots=[artifacts_root] if artifacts_root else None)
-                success, error = delete_file_uri_file(store, file_uri, trash_prefix=trash_prefix)
+                delete_store = FileUriStore(
+                    allowed_roots=[artifacts_root] if artifacts_root else []
+                )
+                success, error = delete_file_uri_file(
+                    delete_store, file_uri, trash_prefix=trash_prefix
+                )
 
             if success:
                 candidate.status = "ok"

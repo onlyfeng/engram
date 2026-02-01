@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import psycopg
 from psycopg.rows import dict_row
@@ -27,6 +27,7 @@ def get_patch_blobs_to_update(
     batch_size: int = DEFAULT_BATCH_SIZE,
     only_missing: bool = False,
 ) -> List[Dict[str, Any]]:
+    params: Union[Tuple[int], Tuple[str, int]]
     if only_missing:
         query = """
             SELECT blob_id, source_type, source_id, sha256, chunking_version
@@ -57,6 +58,7 @@ def get_attachments_to_update(
     batch_size: int = DEFAULT_BATCH_SIZE,
     only_missing: bool = False,
 ) -> List[Dict[str, Any]]:
+    params: Union[Tuple[int], Tuple[str, int]]
     if only_missing:
         query = """
             SELECT attachment_id, item_id, kind, uri, sha256, meta_json
