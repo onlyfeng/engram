@@ -34,7 +34,7 @@ grep "Iteration M" docs/acceptance/00_acceptance_matrix.md
 
 ### 步骤 1.2：在旧迭代文档头部添加 Superseded 声明
 
-在 `docs/acceptance/iteration_N_regression.md` 文件**最开头**（任何其他内容之前）添加：
+在 `docs/acceptance/iteration_N_regression.md` 文件**前 20 行内**添加 superseded 声明（推荐在标题之前）：
 
 ```markdown
 > **⚠️ Superseded by Iteration M**
@@ -43,17 +43,21 @@ grep "Iteration M" docs/acceptance/00_acceptance_matrix.md
 > 请参阅后续迭代的回归记录获取最新验收状态。
 
 ---
+
+# Iteration N 回归验证
+（原有内容）
 ```
 
 **格式约束**（来源：[adr_iteration_docs_workflow.md](../architecture/adr_iteration_docs_workflow.md) R6 规则）：
 
 | 约束 | 要求 |
 |------|------|
-| **位置** | 文件最开头，在任何其他内容（包括标题）之前 |
+| **位置** | 文件前 20 行内（推荐在标题之前，以便读者第一时间看到） |
 | **格式** | 使用 blockquote（`>`）包裹 |
-| **标识符** | 必须包含 `Superseded by Iteration M` 字样（M 为后继迭代编号） |
+| **关键短语** | 必须包含 `Superseded by Iteration M` 字样（M 为后继迭代编号） |
 | **后继链接** | 必须使用相对路径 `[Iteration M](iteration_M_regression.md)` 格式 |
-| **分隔线** | 声明后必须添加 `---` 分隔线，与原有内容分隔 |
+| **编号一致性** | M 必须与索引表「说明」字段声明的后继编号一致 |
+| **分隔线** | 声明后建议添加 `---` 分隔线，与原有内容分隔 |
 
 ### 步骤 1.3：更新索引表
 
@@ -95,7 +99,7 @@ python scripts/ci/check_no_iteration_links_in_docs.py --superseded-only --verbos
 | R3 | 后继迭代排在被取代迭代上方 |
 | R4 | 无环形引用（A→B→A） |
 | R5 | 无多后继（仅一个直接后继） |
-| R6 | regression 文件有 `Superseded by Iteration X` 声明（CI 脚本正则匹配） |
+| R6 | regression 文件前 20 行内必须包含 `Superseded by Iteration M`，且后继编号 M 与索引表一致 |
 
 ---
 
@@ -284,30 +288,45 @@ python scripts/ci/check_no_iteration_links_in_docs.py --verbose
 
 **规则来源**：[00_acceptance_matrix.md](../acceptance/00_acceptance_matrix.md#superseded-一致性规则) R4
 
-### 坑 6：缺少 Superseded 声明
+### 坑 6：缺少 Superseded 声明或编号不一致
 
-**错误示例**：
+**错误示例 1**（缺少声明）：
 
 ```markdown
-❌ 索引表标记为 SUPERSEDED，但 regression 文件头部无 Superseded 声明
+❌ 索引表标记为 SUPERSEDED，但 regression 文件前 20 行无 Superseded 声明
 ```
 
-**正确格式**（必须包含 `Superseded by Iteration X`）：
+**错误示例 2**（编号不一致）：
+
+索引表声明「已被 Iteration 11 取代」，但 regression 文件写的是：
+
+```markdown
+❌ > **⚠️ Superseded by Iteration 12**
+```
+
+**正确格式**（前 20 行内包含 `Superseded by Iteration M`，M 与索引表一致）：
 
 ```markdown
 > **⚠️ Superseded by Iteration 10**
 >
 > 本迭代已被 [Iteration 10](iteration_10_regression.md) 取代，不再维护。
+> 请参阅后续迭代的回归记录获取最新验收状态。
+
+---
+
+# Iteration N 回归验证
+（原有内容）
 ```
 
 **避免方法**：
 
-- 两处必须同步更新：索引表 + 文档头部
-- 声明必须包含 `Superseded by Iteration X` 字样（CI 脚本 R6 规则会检测此格式）
+- 两处必须同步更新：索引表「说明」字段 + regression 文件前 20 行
+- 声明必须包含 `Superseded by Iteration M` 字样（CI 脚本 R6 规则会检测此格式）
+- **后继编号 M 必须与索引表一致**
 - 参考 R6 格式规范：[adr_iteration_docs_workflow.md](../architecture/adr_iteration_docs_workflow.md#r6-格式规范与示例)
 - 模板示例：[iteration_regression.template.md](../acceptance/_templates/iteration_regression.template.md#superseded-by-可选区块)
 
-**规则来源**：[00_acceptance_matrix.md](../acceptance/00_acceptance_matrix.md#r6-文档头部锚点格式规范) R6
+**规则来源**：[00_acceptance_matrix.md](../acceptance/00_acceptance_matrix.md#r6-regression-声明必须存在) R6
 
 ---
 
@@ -383,4 +402,4 @@ git commit -m "docs: 将 Iteration 9 标记为 SUPERSEDED，被 Iteration 10 取
 
 ---
 
-_更新时间：2026-02-01（统一 Superseded by Iteration X 格式，与 CI 脚本 R6 逻辑一致）_
+_更新时间：2026-02-02（R6 格式规范与 CI 脚本统一：前 20 行内、后继编号一致性检查）_

@@ -47,7 +47,7 @@
 | MCP-INV-06 | 同一请求的 correlation_id 必须唯一且一致 | 入口生成后传递到所有子调用，确保审计可追溯 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestCorrelationIdSingleSourceContract` |
 | MCP-INV-07 | 旧协议格式必须被兼容处理 | `{tool, arguments}` 格式自动识别并正确路由 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestLegacyProtocolComplete` |
 | MCP-INV-08 | 错误码与分类必须一一对应 | -32700→protocol, -32602→validation, -32001→dependency 等 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorDataContractCompliance` |
-| MCP-INV-09 | ErrorReason 公开常量必须与白名单一致 | 通过反射提取公开常量，与 VALID_ERROR_REASONS 完全相等 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorReasonWhitelistConsistency` |
+| MCP-INV-09 | ErrorReason 公开常量必须与 Schema enum 一致 | 通过反射提取 `McpErrorReason` 公开常量，与 `mcp_jsonrpc_error_v1.schema.json` 的 `error_reason.enum` 完全相等 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorReasonWhitelistConsistency` |
 
 ### 1.2 允许变更
 
@@ -646,11 +646,13 @@ except Exception as e:
 
 | 层级 | 命名规则 | 示例 | 单一事实来源 |
 |------|----------|------|--------------|
-| **协议层** | 大写 + 下划线 | `PARSE_ERROR`, `METHOD_NOT_FOUND` | `src/engram/gateway/error_codes.py:McpErrorReason`（`mcp_rpc.py:ErrorReason` 为兼容别名） |
-| **校验层** | 大写 + 下划线 | `MISSING_REQUIRED_PARAM`, `UNKNOWN_TOOL` | `src/engram/gateway/error_codes.py:McpErrorReason`（`mcp_rpc.py:ErrorReason` 为兼容别名） |
+| **协议层** | 大写 + 下划线 | `PARSE_ERROR`, `METHOD_NOT_FOUND` | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
+| **校验层** | 大写 + 下划线 | `MISSING_REQUIRED_PARAM`, `UNKNOWN_TOOL` | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
 | **业务层** | 小写 + 下划线 | `policy_passed`, `team_write_disabled` | `policy.py` |
-| **依赖层** | 大写 + 下划线 | `OPENMEMORY_CONNECTION_FAILED` | `src/engram/gateway/error_codes.py:McpErrorReason`（`mcp_rpc.py:ErrorReason` 为兼容别名） |
+| **依赖层** | 大写 + 下划线 | `OPENMEMORY_CONNECTION_FAILED` | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
 | **Outbox 层** | 小写 + 下划线 | `outbox_flush_success`, `outbox_stale` | `engram_logbook.errors:ErrorCode` |
+
+> **门禁验证**：MCP 层（协议/校验/依赖）ErrorReason 一致性由 `scripts/ci/check_mcp_jsonrpc_error_contract.py` 验证。
 
 ### 4.4 ErrorCode 与 ErrorReason 使用场景
 
@@ -1106,13 +1108,71 @@ MCP 工具执行核心入口。
 
 ### 5.6 公共 API 导出 (public_api.py)
 
-| 导出项 | 来源 | 说明 |
-|--------|------|------|
-| `execute_tool` | `entrypoints.tool_executor` | MCP 工具执行入口 |
-| `GatewayDeps` | `di` | 依赖容器实现类 |
-| `GatewayDepsProtocol` | `di` | 依赖容器 Protocol |
-| `RequestContext` | `di` | 请求上下文 |
-| `LogbookAdapter` | `logbook_adapter` | Logbook 适配器 |
+> **SSOT**: 详细导出项分析参见 [gateway_public_api_surface.md](../architecture/gateway_public_api_surface.md)
+> **向后兼容策略**: 参见 [§11 Public API 向后兼容策略](#11-public-api-向后兼容策略)
+
+#### Tier A: 核心稳定层（主版本内接口不变，直接导入）
+
+| 导出项 | 来源 | 说明 | 插件作者推荐度 |
+|--------|------|------|--------------|
+| `RequestContext` | `di` | 请求上下文 dataclass | ⭐⭐⭐ 推荐 |
+| `GatewayDeps` | `di` | 依赖容器实现类 | ⭐⭐ 可用 |
+| `GatewayDepsProtocol` | `di` | 依赖容器 Protocol | ⭐⭐⭐ 推荐 |
+| `WriteAuditPort` | `services.ports` | 审计写入端口 Protocol | ⭐⭐⭐ 推荐 |
+| `UserDirectoryPort` | `services.ports` | 用户目录端口 Protocol | ⭐⭐⭐ 推荐 |
+| `ActorPolicyConfigPort` | `services.ports` | Actor 策略配置端口 Protocol | ⭐⭐⭐ 推荐 |
+| `ToolExecutorPort` | `services.ports` | 工具执行器端口 Protocol | ⭐⭐⭐ 推荐 |
+| `ToolRouterPort` | `services.ports` | 工具路由器端口 Protocol | ⭐⭐⭐ 推荐 |
+| `ToolDefinition` | `services.ports` | 工具定义 dataclass | ⭐⭐⭐ 推荐 |
+| `ToolCallContext` | `services.ports` | 工具调用上下文 | ⭐⭐⭐ 推荐 |
+| `ToolCallResult` | `services.ports` | 工具调用结果 | ⭐⭐⭐ 推荐 |
+| `McpErrorCode` | `error_codes` | JSON-RPC 错误码常量 | ⭐⭐⭐ 推荐 |
+| `McpErrorCategory` | `error_codes` | 错误分类常量 | ⭐⭐⭐ 推荐 |
+| `McpErrorReason` | `error_codes` | 错误原因码常量 | ⭐⭐⭐ 推荐 |
+| `ToolResultErrorCode` | `result_error_codes` | 工具结果错误码 | ⭐⭐⭐ 推荐 |
+
+#### Tier B: 可选依赖层（延迟导入，失败时抛出 ImportError + 安装指引）
+
+| 导出项 | 来源 | 说明 | 外部依赖 | 插件作者推荐度 |
+|--------|------|------|----------|--------------|
+| `LogbookAdapter` | `logbook_adapter` | Logbook 数据库适配器 | engram_logbook | ⭐ 谨慎 |
+| `get_adapter` | `logbook_adapter` | 获取 LogbookAdapter 单例 | engram_logbook | ⭐ 谨慎 |
+| `get_reliability_report` | `logbook_adapter` | 获取可靠性统计报告 | engram_logbook | ⭐ 谨慎 |
+| `execute_tool` | `entrypoints.tool_executor` | MCP 工具执行入口 | Gateway 完整 | ⭐ 谨慎 |
+| `dispatch_jsonrpc_request` | `mcp_rpc` | JSON-RPC 请求分发便捷函数 | Gateway 完整 | ⭐ 谨慎 |
+| `JsonRpcDispatchResult` | `mcp_rpc` | JSON-RPC 分发结果类型 | Gateway 完整 | ⭐ 谨慎 |
+
+##### Tier B JSON-RPC 分发入口使用说明
+
+`dispatch_jsonrpc_request` 和 `JsonRpcDispatchResult` 从 v1.2 开始作为 Tier B 符号导出，供需要完整 JSON-RPC 分发能力的集成方使用。
+
+**安全导入模式**：
+
+```python
+try:
+    from engram.gateway.public_api import dispatch_jsonrpc_request, JsonRpcDispatchResult
+    JSONRPC_DISPATCH_AVAILABLE = True
+except ImportError:
+    JSONRPC_DISPATCH_AVAILABLE = False
+```
+
+**推荐场景**：
+- 需要在非标准入口执行 JSON-RPC 请求分发
+- 构建自定义的 MCP 代理/网关
+
+**不推荐场景**（应使用 Tier A 错误码常量）：
+- 仅需要错误码进行错误处理
+- 仅需要构造错误响应
+
+> **测试锚点**：`tests/gateway/test_public_api_import_contract.py::TestTierBImports`
+
+#### Tier C: 便捷/内部层（可能在次版本调整签名）
+
+| 导出项 | 来源 | 说明 | 替代方案 |
+|--------|------|------|----------|
+| `create_request_context` | `di` | 便捷工厂函数 | 直接用 `RequestContext(...)` |
+| `create_gateway_deps` | `di` | 便捷工厂函数 | 直接用 `GatewayDeps(...)` |
+| `generate_correlation_id` | `di` | 生成 correlation_id | 通常由中间件自动生成 |
 
 ### 5.7 辅助函数汇总
 
@@ -1263,10 +1323,13 @@ Reconcile → 通过 correlation_id 追溯完整链路
 
 | 文档 | 路径 |
 |------|------|
+| **Gateway Public API / JSON-RPC SSOT 地图** | [gateway_public_api_jsonrpc_ssot_map.md](./gateway_public_api_jsonrpc_ssot_map.md) |
 | MCP JSON-RPC 错误模型契约 | [mcp_jsonrpc_error_v1.md](./mcp_jsonrpc_error_v1.md) |
 | MCP 契约决策与版本策略 (ADR) | [mcp_jsonrpc_error_v1.md §13](./mcp_jsonrpc_error_v1.md#13-契约决策与版本策略-adr) |
 | Gateway 能力边界 | [../gateway/07_capability_boundary.md](../gateway/07_capability_boundary.md) |
 | Gateway 审计原子性 ADR | [../architecture/adr_gateway_audit_atomicity.md](../architecture/adr_gateway_audit_atomicity.md) |
+| Gateway Public API JSON-RPC Surface ADR | [../architecture/adr_gateway_public_api_jsonrpc_surface.md](../architecture/adr_gateway_public_api_jsonrpc_surface.md) |
+| Gateway Public API Surface 导出项分析 | [../architecture/gateway_public_api_surface.md](../architecture/gateway_public_api_surface.md) |
 | Gateway Logbook 边界契约 | [gateway_logbook_boundary.md](./gateway_logbook_boundary.md) |
 | 审计/证据/关联性契约 | [gateway_audit_evidence_correlation_contract.md](./gateway_audit_evidence_correlation_contract.md) |
 | Outbox Lease 契约 | [outbox_lease_v1.md](./outbox_lease_v1.md) |
@@ -1310,21 +1373,40 @@ Reconcile → 通过 correlation_id 追溯完整链路
 | 契约元素 | 权威来源 | 路径 | 说明 |
 |----------|----------|------|------|
 | ErrorData 结构 | JSON Schema | `schemas/mcp_jsonrpc_error_v1.schema.json` | 结构定义的最高权威 |
-| ErrorCategory 枚举 | 代码 | `src/engram/gateway/mcp_rpc.py:ErrorCategory` | 运行时枚举定义 |
-| ErrorReason 常量 | 代码 | `src/engram/gateway/mcp_rpc.py:ErrorReason` | 公开常量定义 |
-| 错误码映射 | 代码 | `src/engram/gateway/mcp_rpc.py:JsonRpcCode` | -32xxx 错误码 |
+| ErrorCategory 枚举 | 代码 | `src/engram/gateway/error_codes.py:McpErrorCategory` | 运行时枚举定义 |
+| ErrorReason 常量 | 代码 | `src/engram/gateway/error_codes.py:McpErrorReason` | 公开常量定义 |
+| error.data.reason 枚举 | JSON Schema + 代码 + 门禁 | 见下方三源 SSOT | 三源一致性由门禁保证 |
+| 错误码映射 | 代码 | `src/engram/gateway/error_codes.py:McpErrorCode` | -32xxx 错误码 |
 | correlation_id 格式 | 测试 | `test_mcp_jsonrpc_contract.py::TestCorrelationIdHeaderAlignment` | 格式契约守护 |
+
+##### error.data.reason 三源 SSOT
+
+`error.data.reason` 字段的有效值由以下三个来源共同定义，CI 门禁确保一致性：
+
+| 权威来源 | 路径 | 作用 |
+|----------|------|------|
+| **JSON Schema** | `schemas/mcp_jsonrpc_error_v1.schema.json` 的 `definitions.error_reason.enum` | 结构验证的最高权威 |
+| **代码实现** | `src/engram/gateway/error_codes.py:McpErrorReason` | 运行时常量定义 |
+| **门禁脚本** | `scripts/ci/check_mcp_jsonrpc_error_contract.py` | 双向验证一致性 |
+
+**验证命令**：
+```bash
+make check-mcp-error-contract
+```
 
 **校验链**：
 ```
-mcp_jsonrpc_error_v1.schema.json
-    ↓ 被引用于
-ErrorData (mcp_rpc.py)
+mcp_jsonrpc_error_v1.schema.json (definitions.error_reason.enum)
+    ↓ 双向验证
+McpErrorReason (error_codes.py)
     ↓ 被测试于
-TestErrorDataSchemaValidation (test_mcp_jsonrpc_contract.py)
+TestErrorReasonWhitelistConsistency (test_mcp_jsonrpc_contract.py)
     ↓ 被描述于
 mcp_jsonrpc_error_v1.md
 ```
+
+> **⚠️ 已废弃**：`mcp_rpc.py:VALID_ERROR_REASONS` 已废弃，不再作为权威来源。
+> 新代码应使用 `error_codes.py:McpErrorReason` 或 `error_codes.py:PUBLIC_MCP_ERROR_REASONS`。
 
 #### 9.2.2 AuditEvent 域
 
@@ -1370,9 +1452,13 @@ gateway_contract_convergence.md §3.2
 
 | 契约元素 | 权威来源 | 路径 | 说明 |
 |----------|----------|------|------|
-| JSON-RPC 错误码 | 代码 | `src/engram/gateway/mcp_rpc.py:JsonRpcCode` | -32xxx 常量 |
-| ErrorReason 白名单 | 代码 | `src/engram/gateway/mcp_rpc.py:VALID_ERROR_REASONS` | 公开常量集合 |
+| JSON-RPC 错误码 | 代码 | `src/engram/gateway/error_codes.py:McpErrorCode` | -32xxx 常量 |
+| ErrorReason 枚举 | Schema + 代码 | `schemas/mcp_jsonrpc_error_v1.schema.json` + `error_codes.py:McpErrorReason` | 三源 SSOT，详见 §9.2.1 |
+| ErrorReason 契约列表 | 代码 | `src/engram/gateway/error_codes.py:PUBLIC_MCP_ERROR_REASONS` | 对外承诺的 reason 码集合 |
 | reason 命名规范 | 文档 | `gateway_contract_convergence.md §4.3` | 大写/小写规则 |
+
+> **⚠️ 已废弃**：`mcp_rpc.py:VALID_ERROR_REASONS` 已废弃。
+> 请使用 `error_codes.py:PUBLIC_MCP_ERROR_REASONS` 或直接引用 `McpErrorReason` 类常量。
 
 ### 9.3 权威来源维护规则
 
@@ -1400,10 +1486,11 @@ gateway_contract_convergence.md §3.2
 | 域 | 权威文件 | 作用 |
 |----|----------|------|
 | MCP 错误结构 | `schemas/mcp_jsonrpc_error_v1.schema.json` | ErrorData 结构定义 |
+| MCP ErrorReason 枚举 | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` | JSON-RPC reason 码定义（三源 SSOT） |
+| MCP 错误码合约门禁 | `scripts/ci/check_mcp_jsonrpc_error_contract.py` | Schema ↔ 代码一致性验证 |
 | 审计事件结构 | `schemas/audit_event_v1.schema.json` | AuditEvent 结构定义 |
 | 可靠性报告结构 | `schemas/reliability_report_v1.schema.json` | ReliabilityReport 结构定义 |
 | ErrorCode 枚举 | `src/engram/logbook/errors.py` | Outbox reason 码定义 |
-| ErrorReason 枚举 | `src/engram/gateway/mcp_rpc.py` | JSON-RPC reason 码定义 |
 | 契约测试 | `tests/gateway/test_*_contract.py` | 各域契约守护 |
 | 契约文档 | `docs/contracts/*.md` | 人类可读契约说明 |
 
@@ -1662,7 +1749,241 @@ WHERE reason LIKE '%:outbox:12345';
 
 ---
 
-## 11. 版本历史
+## 11. Public API 向后兼容策略
+
+> **适用于**: `src/engram/gateway/public_api.py`
+>
+> **完整导入指南**：Tier 分层定义、导出项清单、ImportError 消息格式规范、try/except 可复制代码片段，请参见：
+> **[gateway_public_api_surface.md](../architecture/gateway_public_api_surface.md)**（插件作者导入指南单一入口）
+
+本章定义 Gateway Public API 的**向后兼容策略不变量**，确保插件作者可以安全依赖公共接口。
+详细的导入模式和代码示例请参考上述单一入口文档。
+
+### 11.1 Tier 分层与稳定性承诺
+
+| Tier | 名称 | 导入方式 | 稳定性承诺 | 典型符号 |
+|------|------|----------|-----------|----------|
+| **A** | 核心稳定层 | 直接导入 | 主版本内接口不变 | Protocol, 数据类, 错误码 |
+| **B** | 可选依赖层 | 延迟导入 | 主版本内接口不变 | 实现类, 需外部依赖的函数 |
+| **C** | 便捷/内部层 | 直接导入 | 可能在次版本调整签名 | 便捷工厂函数 |
+
+> **详细说明**：完整的 Tier 分层定义、各 Tier 符号清单、避免 Tier C 的原因与替代方案，参见 [gateway_public_api_surface.md §Tier 分层定义](../architecture/gateway_public_api_surface.md#tier-分层定义)
+
+### 11.2 不变量
+
+| 编号 | 不变量 | 说明 | 测试锚点 |
+|------|--------|------|----------|
+| API-INV-01 | `__all__` 中的 Tier A 符号主版本内不可移除 | 插件依赖稳定性 | `tests/gateway/test_public_api_exports.py::TestTierAExports` |
+| API-INV-02 | Tier A Protocol 方法签名主版本内不可变更 | 接口兼容性 | `tests/gateway/test_public_api_exports.py::TestProtocolSignatures` |
+| API-INV-03 | Tier B 导入失败必须抛出包含模块名和安装指引的 `ImportError` | 用户友好的错误提示 | `tests/gateway/test_public_api_lazy_import.py::TestImportErrorFormat` |
+| API-INV-04 | 错误码常量值主版本内不可变更 | 客户端错误处理依赖 | `tests/gateway/test_error_codes.py::TestErrorCodeConstants` |
+
+### 11.3 Tier B 失败语义
+
+当 Tier B 符号依赖的模块不可用时，在 `from ... import` 语句执行时即触发懒加载并抛出 `ImportError`。
+
+> **详细说明**：触发时机、错误消息格式模板、必需字段要求、安装指引映射表，参见 [gateway_public_api_surface.md §Tier B 失败语义](../architecture/gateway_public_api_surface.md#tier-b-失败语义重要)
+
+### 11.4 允许变更
+
+| 变更类型 | Tier A | Tier B | Tier C | 约束 |
+|----------|--------|--------|--------|------|
+| 新增符号到 `__all__` | ✅ | ✅ | ✅ | 必须同步更新文档 |
+| 新增可选参数 | ✅ | ✅ | ✅ | 必须有默认值 |
+| 扩展返回类型字段 | ✅ | ✅ | ✅ | 新字段必须可选 |
+| 修改便捷函数签名 | ❌ | ❌ | ⚠️ | Tier C 需废弃期 |
+| 移除符号 | ❌ | ❌ | ⚠️ | 至少 2 个次版本废弃期 |
+
+### 11.5 禁止变更
+
+| 禁止变更 | 原因 | 测试保护 |
+|----------|------|----------|
+| ❌ 移除 Tier A/B 符号 | 破坏插件兼容性 | `TestTierAExports`, `TestTierBExports` |
+| ❌ 修改 Protocol 方法签名 | 破坏类型契约 | `TestProtocolSignatures` |
+| ❌ 修改错误码常量值 | 破坏错误处理逻辑 | `TestErrorCodeConstants` |
+| ❌ 变更 Tier B 失败消息格式 | 破坏依赖检测脚本 | `TestImportErrorFormat` |
+| ❌ 移除 `__all__` 导出声明 | 破坏 `from public_api import *` | `TestAllExportsPresent` |
+
+### 11.6 变更流程
+
+当需要修改 Public API 时，必须遵循以下流程：
+
+1. **提案阶段**：在本文档添加变更提案，评估影响范围
+2. **实现阶段**：更新 `public_api.py` 和 `gateway_public_api_surface.md`
+3. **废弃期**：移除符号需至少保留 2 个次版本的废弃警告
+4. **最终移除**：在主版本升级时执行
+
+### 11.6.0 模块路径是契约的一部分
+
+> **核心原则**：对于 Tier A/B 符号，其导入路径（module path）本身就是对外承诺的契约一部分。
+
+当插件作者使用 `from engram.gateway.public_api import SomeSymbol` 时，他们不仅依赖符号名称，也依赖导入路径的稳定性。因此：
+
+| 约束 | 说明 |
+|------|------|
+| **路径稳定性承诺** | Tier A/B 符号的导入路径在主版本内不可变更 |
+| **内部重构透明** | 内部模块可重构（如拆分、合并），但必须通过 `public_api.py` 维持稳定的对外导入路径 |
+| **实现模块可移动** | 实现代码可移动到新模块，但 `public_api.py` 的 `__all__` 和导出逻辑必须保持兼容 |
+
+#### 保持路径稳定的策略
+
+当需要移动/拆分实现模块时，有两种策略：
+
+| 策略 | 适用场景 | 实现方式 |
+|------|----------|----------|
+| **A. Re-export Shim** | 旧模块有外部直接引用 | 旧模块保留为 shim，re-export 新模块符号 |
+| **B. public_api 内部调整** | 仅通过 public_api 导出 | 更新 `public_api.py` 的 import 路径，外部无感知 |
+
+**策略 A 示例**（旧模块有外部直接引用）：
+
+```python
+# 旧路径: engram.gateway.old_module
+# 新路径: engram.gateway.new_module
+
+# src/engram/gateway/old_module.py（保留为 shim）
+import warnings
+from .new_module import SomeSymbol as _SomeSymbol
+
+def SomeSymbol(*args, **kwargs):
+    warnings.warn(
+        "从 engram.gateway.old_module 导入 SomeSymbol 已废弃，"
+        "请改用 engram.gateway.new_module.SomeSymbol",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _SomeSymbol(*args, **kwargs)
+```
+
+**策略 B 示例**（仅通过 public_api 导出）：
+
+```python
+# src/engram/gateway/public_api.py
+# 内部 import 路径变更（插件作者无感知）
+from .new_module import SomeSymbol  # 新路径
+# from .old_module import SomeSymbol  # 旧路径（已替换）
+
+__all__ = ["SomeSymbol"]  # 对外导出不变
+```
+
+#### Tier B 符号的特殊处理
+
+对于 Tier B（延迟导入）符号，路径变更通过 `_TIER_B_LAZY_IMPORTS` 字典管理：
+
+```python
+# src/engram/gateway/public_api.py
+_TIER_B_LAZY_IMPORTS = {
+    "SomeSymbol": ".new_module",  # 更新为新路径
+    # "SomeSymbol": ".old_module",  # 旧路径（已替换）
+}
+```
+
+外部通过 `from engram.gateway.public_api import SomeSymbol` 导入时，路径变更对其透明。
+
+### 11.6.1 拆分模块时保留旧 import path 的策略
+
+当需要将模块拆分（如从 `di.py` 拆出 `correlation_id.py`）时，必须保留旧的 import path 以维护向后兼容性。
+
+#### Shim/Re-export 文件策略
+
+**原则**：旧模块保留为 shim 文件，re-export 新模块的符号。
+
+**示例**：将 `generate_correlation_id` 从 `di.py` 拆分到 `correlation_id.py`
+
+```python
+# src/engram/gateway/di.py（旧模块，保留为 shim）
+import warnings
+from .correlation_id import generate_correlation_id as _generate_correlation_id
+
+def generate_correlation_id() -> str:
+    """[废弃] 请使用 engram.gateway.correlation_id.generate_correlation_id"""
+    warnings.warn(
+        "从 engram.gateway.di 导入 generate_correlation_id 已废弃，"
+        "请改用 engram.gateway.correlation_id.generate_correlation_id",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _generate_correlation_id()
+
+# 保持 __all__ 导出以支持 from di import *
+__all__ = [
+    # ... 其他符号 ...
+    "generate_correlation_id",  # 废弃但保留
+]
+```
+
+#### 废弃期规则
+
+| 阶段 | 版本跨度 | 行为 |
+|------|----------|------|
+| **Phase 1: 废弃警告** | 至少 2 个次版本 | 旧路径可用但发出 `DeprecationWarning` |
+| **Phase 2: 错误警告** | 至少 1 个次版本 | 旧路径发出 `FutureWarning`，提示即将移除 |
+| **Phase 3: 移除** | 主版本升级时 | 从旧模块移除 shim，仅保留新路径 |
+
+**示例时间线**：
+
+| 版本 | 旧路径 `di.generate_correlation_id` | 新路径 `correlation_id.generate_correlation_id` |
+|------|-------------------------------------|------------------------------------------------|
+| v1.2 | ✅ 可用 + DeprecationWarning | ✅ 推荐 |
+| v1.3 | ✅ 可用 + FutureWarning | ✅ 推荐 |
+| v1.4 | ✅ 可用 + FutureWarning | ✅ 推荐 |
+| v2.0 | ❌ 移除（ImportError） | ✅ 唯一路径 |
+
+#### 测试锚点
+
+| 测试 | 验证内容 |
+|------|----------|
+| `test_public_api_deprecated_import_warning.py` | 废弃路径发出正确的 DeprecationWarning |
+| `test_public_api_exports.py` | 新旧路径均在 `__all__` 中直到移除 |
+
+#### public_api.py 的特殊处理
+
+`public_api.py` 作为插件作者的唯一入口，在模块拆分时：
+
+1. **保持 `__all__` 稳定**：符号名不变，仅内部 import 路径变更
+2. **无需废弃警告**：`public_api.py` 的 import 路径本身不变，插件作者无感知
+3. **更新内部 import**：从新模块导入，无需 shim
+
+```python
+# src/engram/gateway/public_api.py
+# 内部 import 路径变更（插件作者无感知）
+from .correlation_id import generate_correlation_id  # 新路径
+# from .di import generate_correlation_id  # 旧路径（已替换）
+```
+
+### 11.7 插件作者推荐导入
+
+> **完整指南**：推荐导入策略、Tier A/B/C 可复制代码片段、禁止模式示例，参见 [gateway_public_api_surface.md §推荐导入路径](../architecture/gateway_public_api_surface.md#推荐导入路径)
+
+**核心原则**：优先依赖 Protocol/错误码/数据类（Tier A），避免直接依赖实现类（Tier B 需检查依赖），避免便捷函数（Tier C）。
+
+### 11.8 测试锚点索引
+
+| 测试类 | 文件 | 覆盖契约 |
+|--------|------|----------|
+| `TestTierAImports` | `test_public_api_import_contract.py` | API-INV-01 (Tier A 导入) |
+| `TestTierBImports` | `test_public_api_import_contract.py` | API-INV-01 (Tier B 延迟导入) |
+| `TestImportErrorMessageFormat` | `test_public_api_import_error_message_contract.py` | API-INV-03 (错误消息格式) |
+| `TestErrorCodeConstants` | `test_mcp_jsonrpc_contract.py` | API-INV-04 (错误码常量) |
+| `TestPublicApiExports` | `test_public_api_exports.py` | `__all__` 完整性 |
+
+### 11.9 最小验收命令集
+
+> 详细的验收命令、CI Job 对应关系、变更类型风险评估，参见 [gateway_public_api_surface.md §验收命令](../architecture/gateway_public_api_surface.md#验收命令)
+
+```bash
+# 通过 Makefile 目标执行（推荐）
+make check-gateway-public-api-surface check-gateway-import-surface check-gateway-public-api-docs-sync
+
+# 运行 Gateway 测试（包含 public_api 契约测试）
+make test-gateway
+
+# 或运行完整 CI 检查
+make ci
+```
+
+---
+
+## 12. 版本历史
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
@@ -1672,3 +1993,8 @@ WHERE reason LIKE '%:outbox:12345';
 | v1.3 | 2026-02-01 | 新增 §3.1.1 两阶段审计协议详解（pending 前置条件、finalize 幂等约束、patch 合并策略）；新增 §3.1.2 单阶段 reject 审计协议；新增 §2.1.2 语义锚点列表（correlation_id/outbox_id/memory_id/payload_sha/source/extra）及 SQL 示例 |
 | v1.4 | 2026-02-01 | 新增 §4.6.1 -32000 废弃决策；更新 §8 相关文档索引添加契约决策 ADR 引用 |
 | v1.5 | 2026-02-01 | 新增第10章 Gateway 路由策略（OpenMemory→Outbox）与错误语义，包含决策输入矩阵、MemoryStoreResponse 响应契约、finalize 状态转换规则、intended_action 字段规范 |
+| v1.6 | 2026-02-02 | 新增第11章 Public API 向后兼容策略，包含 Tier 分层定义、失败语义、变更流程、插件作者推荐导入 |
+| v1.7 | 2026-02-02 | 更新 §8 相关文档索引，添加 Gateway Public API JSON-RPC Surface ADR 引用 |
+| v1.8 | 2026-02-02 | SSOT 修正：§5.6 明确 `dispatch_jsonrpc_request`/`JsonRpcDispatchResult` 为 Tier B 导出；§9/§4.3 将 error.data.reason 权威来源更新为三源 SSOT（Schema + error_codes.py:McpErrorReason + 门禁脚本），废弃 `mcp_rpc.py:VALID_ERROR_REASONS` 引用；§11.8 测试锚点更新为真实存在的测试文件 |
+| v1.9 | 2026-02-02 | 新增 §11.6.1 拆分模块时保留旧 import path 的策略（Shim/Re-export 文件策略、废弃期规则）；§11.9 最小验收命令统一引用 Makefile 目标 |
+| v2.0 | 2026-02-02 | 新增 §11.6.0 模块路径是契约的一部分：明确模块路径稳定性承诺、保持路径稳定的两种策略（Re-export Shim / public_api 内部调整）、Tier B 符号的特殊处理 |

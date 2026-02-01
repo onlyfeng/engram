@@ -1383,13 +1383,13 @@ jobs:
 name: {wf_name.upper()}
 on: [push]
 jobs:
-  {contract[wf_name]['job_ids'][0]}:
-    name: {contract[wf_name]['job_names'][0]}
+  {contract[wf_name]["job_ids"][0]}:
+    name: {contract[wf_name]["job_names"][0]}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: {contract[wf_name]['required_jobs'][0]['required_steps'][1]}
+      - name: {contract[wf_name]["required_jobs"][0]["required_steps"][1]}
         run: echo "test"
 """
             with open(workflow_path, "w") as f:

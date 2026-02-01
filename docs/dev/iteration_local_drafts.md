@@ -14,6 +14,13 @@
 
 当迭代计划成熟并准备好与团队共享时，再晋升到 `docs/acceptance/`。
 
+> **SSOT 来源说明**
+>
+> 已晋升的迭代（如 Iteration 4、Iteration 5 等）以 `docs/acceptance/` 目录下的文件为权威来源（SSOT）。
+> `.iteration/` 目录仅用于**新迭代的草稿**，不包含任何已晋升迭代的历史记录。
+>
+> 如需查阅历史迭代的计划或回归记录，请直接参阅 `docs/acceptance/iteration_<N>_plan.md` 和 `docs/acceptance/iteration_<N>_regression.md`。
+
 ---
 
 ## 目录结构
@@ -33,13 +40,62 @@
 
 ---
 
+## Makefile 快捷命令
+
+以下 Makefile 目标提供了迭代工作流的快捷入口：
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `make iteration-init N=<n>` | 初始化本地迭代草稿 | `make iteration-init N=13` |
+| `make iteration-init N=next` | 初始化下一可用编号的草稿 | `make iteration-init N=next` |
+| `make iteration-init-next` | 同上（更简洁） | `make iteration-init-next` |
+| `make iteration-promote N=<n>` | 将草稿晋升到 SSOT | `make iteration-promote N=13` |
+| `make iteration-export N=<n>` | 导出草稿为 zip（推荐用于分享） | `make iteration-export N=13` |
+| `make iteration-snapshot N=<n>` | 快照 SSOT 到本地只读副本（⚠️ 不可 promote） | `make iteration-snapshot N=10` |
+| `make iteration-audit` | 生成审计报告 | `make iteration-audit` |
+
+### 快速工作流示例
+
+```bash
+# 1. 初始化下一迭代草稿
+make iteration-init-next
+# 输出: ✅ Iteration 14 本地草稿已初始化
+
+# 2. 编辑草稿...
+# .iteration/14/plan.md
+# .iteration/14/regression.md
+
+# 3. 导出草稿分享（可选）
+make iteration-export N=14
+
+# 4. 晋升到 SSOT
+make iteration-promote N=14
+
+# 5. 验证
+make check-iteration-docs
+```
+
+---
+
 ## 从模板初始化
 
 ### 使用脚本初始化（推荐）
 
 ```bash
-# 直接指定目标迭代编号
+# 自动选择下一可用编号（推荐）
+python scripts/iteration/init_local_iteration.py --next
+# 或使用 Makefile 快捷命令:
+# make iteration-init-next
+
+# 示例输出:
+# 📌 自动选择下一可用编号: 14
+#
+# ✅ Iteration 14 本地草稿已初始化
+
+# 或直接指定目标迭代编号
 python scripts/iteration/init_local_iteration.py 12
+# 或使用 Makefile 快捷命令:
+# make iteration-init N=12
 
 # 如果编号已在 SSOT 中存在，脚本会报错并建议下一可用编号
 # 示例输出:
@@ -52,6 +108,8 @@ python scripts/iteration/init_local_iteration.py 12
 # 💡 建议: 使用下一可用编号 12
 #    python scripts/iteration/init_local_iteration.py 12
 ```
+
+> **💡 推荐**：使用 `--next`（或 `-n`）/ `make iteration-init-next` 可避免手动查询可用编号，脚本会自动选择当前最大编号 + 1，并在输出中打印实际使用的编号。
 
 脚本会自动：
 
@@ -109,7 +167,10 @@ cp docs/acceptance/_templates/iteration_regression.template.md .iteration/$NEXT_
 ### 使用脚本晋升（推荐）
 
 ```bash
-# 基本晋升
+# 基本晋升（使用 Makefile 快捷命令）
+make iteration-promote N=13
+
+# 或直接调用脚本（更多参数支持）
 python scripts/iteration/promote_iteration.py 13
 
 # 指定日期和状态
@@ -312,7 +373,76 @@ make check-iteration-docs-superseded-only
 - 草稿不会被意外提交
 - 每个开发者可以有自己的本地草稿
 
-如果需要共享草稿，请使用其他方式（如 Slack、邮件）或直接晋升到 `docs/acceptance/`。
+如果需要共享草稿，请参阅下方「草稿分享与协作」章节。
+
+---
+
+## 草稿分享与协作
+
+当需要与团队成员分享本地草稿时，有两条主路径可选：
+
+### 路径 A：临时分享（粘贴到 PR/IM）
+
+**适用场景**：临时讨论、快速反馈、非正式对齐。
+
+```bash
+# 方式 1：打包为 zip（推荐用于分享）
+python scripts/iteration/export_local_iteration.py 13 --output-zip .artifacts/iteration_13_draft.zip
+# 或使用 Makefile 快捷命令
+make iteration-export N=13
+
+# 方式 2：导出到 stdout（便于复制粘贴）
+python scripts/iteration/export_local_iteration.py 13 | pbcopy  # macOS
+
+# 方式 3：导出到目录
+python scripts/iteration/export_local_iteration.py 13 --output-dir .artifacts/iteration-draft-export/
+```
+
+导出后，可将内容粘贴到：
+- PR 描述或评论
+- Slack / 企业微信等 IM 工具
+- 邮件
+
+> **注意**：`.artifacts/` 目录同样在 `.gitignore` 中排除，导出文件不会被版本控制。
+
+### 路径 B：正式分享（晋升并标记为 PLANNING）
+
+**适用场景**：需要可被链接、长期引用、团队协作编辑的场景。
+
+若草稿已基本成型，且需要：
+- 在其他文档中通过 Markdown 链接引用
+- 多人协作编辑
+- 作为正式记录保存
+
+则应直接晋升到 `docs/acceptance/`：
+
+```bash
+# 晋升并标记为 PLANNING 状态
+python scripts/iteration/promote_iteration.py 13 --status PLANNING
+
+# 预览模式（不实际执行）
+python scripts/iteration/promote_iteration.py 13 --status PLANNING --dry-run
+```
+
+晋升后，在 `00_acceptance_matrix.md` 索引表中会自动添加 `🔄 PLANNING` 状态的条目，表示该迭代仍在计划阶段。
+
+### 引用约束（重要）
+
+| 类型 | 示例 | 允许 |
+|------|------|------|
+| **Markdown 链接** | 如 `[text]` + `(.iteration/...)` 形式 | ❌ **禁止** |
+| **文本提及** | `参考本地 .iteration/13/ 中的草稿` | ✅ 允许 |
+| **inline code 提及** | `本地草稿位于 \`.iteration/13/plan.md\`` | ✅ 允许 |
+
+**禁止项**：
+- 版本化文档（`docs/`、`README.md` 等）内**不得出现** `.iteration/` 的 Markdown 链接
+- 原因：`.iteration/` 不在版本控制中，链接必然失效
+
+**允许项**：
+- 可用普通文本或 inline code 提及 `.iteration/...` 路径作为"本地备注"
+- 这种提及不会创建可点击的链接，仅作为参考说明
+
+> **CI 检查**：`make check-iteration-docs` 会自动检测版本化文档中的 `.iteration/` Markdown 链接并报错。
 
 ---
 
@@ -349,6 +479,83 @@ make check-iteration-docs-superseded-only
 
 ---
 
+## 快照 SSOT 到本地（只读副本）
+
+当需要在本地阅读或实验已晋升的迭代文档时，可使用快照功能将 SSOT 复制到本地。
+
+### 使用 Makefile 快捷命令（推荐）
+
+```bash
+# 快照 Iteration 10 到默认目录 .iteration/_export/10/
+make iteration-snapshot N=10
+
+# 快照到自定义目录
+make iteration-snapshot N=10 OUT=.iteration/ssot/10/
+
+# 强制覆盖已存在的快照
+make iteration-snapshot N=10 FORCE=1
+
+# 列出 SSOT 中可用的迭代编号
+python scripts/iteration/snapshot_ssot_iteration.py --list
+```
+
+### 使用脚本快照
+
+```bash
+# 快照 Iteration 10 到默认目录 .iteration/_export/10/
+python scripts/iteration/snapshot_ssot_iteration.py 10
+
+# 快照到自定义目录
+python scripts/iteration/snapshot_ssot_iteration.py 10 --output-dir .iteration/ssot/10/
+
+# 强制覆盖已存在的快照
+python scripts/iteration/snapshot_ssot_iteration.py 10 --force
+
+# 列出 SSOT 中可用的迭代编号
+python scripts/iteration/snapshot_ssot_iteration.py --list
+```
+
+脚本会自动：
+
+1. 将 `docs/acceptance/iteration_<N>_plan.md` 复制到 `.iteration/_export/<N>/plan.md`
+2. 将 `docs/acceptance/iteration_<N>_regression.md` 复制到 `.iteration/_export/<N>/regression.md`
+3. 创建 `README.md` 说明文件，标注来源和只读性质
+4. 幂等操作：相同内容跳过，不同内容需要 `--force`
+
+### ⚠️ 重要警告：不可 promote 覆盖旧编号
+
+> **SSOT 编号一旦使用即为永久占用，快照副本不能替代原始文件。**
+
+快照仅供以下用途：
+
+| 用途 | 说明 | 允许 |
+|------|------|------|
+| **阅读参考** | 查阅历史迭代的计划和回归记录 | ✅ |
+| **本地实验** | 修改副本进行实验（不影响 SSOT） | ✅ |
+| **模板参考** | 参考已完成迭代的结构编写新迭代 | ✅ |
+| **promote 覆盖** | 修改后 promote 到同一编号 | ❌ **禁止** |
+
+**禁止操作示例**：
+
+```bash
+# ❌ 错误：试图用快照覆盖 SSOT
+python scripts/iteration/snapshot_ssot_iteration.py 10
+# 修改 .iteration/_export/10/plan.md
+cp .iteration/_export/10/plan.md .iteration/10/plan.md
+python scripts/iteration/promote_iteration.py 10 --force  # ❌ 不应这样做！
+```
+
+**正确做法**：如需基于旧迭代创建新内容，应使用新编号：
+
+```bash
+# ✅ 正确：使用新编号
+python scripts/iteration/init_local_iteration.py --next  # 获取下一可用编号
+# 在新编号的草稿中参考旧迭代内容
+python scripts/iteration/promote_iteration.py <NEW_N>
+```
+
+---
+
 ## 审计与检查
 
 ### 审计工具
@@ -356,9 +563,13 @@ make check-iteration-docs-superseded-only
 | 工具 | 用途 | 命令 |
 |------|------|------|
 | **CI 门禁检查** | 自动化检查 SUPERSEDED 一致性（阻断式） | `make check-iteration-docs` |
-| **审计报告脚本** | 生成完整审计报告（非阻断） | `python scripts/iteration/audit_iteration_docs.py` |
+| **审计报告脚本** | 生成完整审计报告（非阻断） | `make iteration-audit` |
 
 ```bash
+# 使用 Makefile 快捷命令（输出到 .artifacts/iteration-audit/）
+make iteration-audit
+
+# 或直接调用脚本
 # 生成审计报告到 stdout
 python scripts/iteration/audit_iteration_docs.py
 
@@ -368,6 +579,146 @@ python scripts/iteration/audit_iteration_docs.py --output-dir .artifacts/iterati
 
 > **注意**：审计报告为一次性快照，**不是 SSOT**。
 > `docs/acceptance/_drafts/` 中的报告仅作为历史样例保留。
+
+---
+
+## 证据落盘
+
+当需要记录迭代验收测试的执行证据时，可使用 `record_iteration_evidence.py` 脚本将证据写入版本化目录。
+
+### 基本用法
+
+```bash
+# 基本用法（自动获取当前 commit sha）
+python scripts/iteration/record_iteration_evidence.py 13
+
+# 指定 commit sha
+python scripts/iteration/record_iteration_evidence.py 13 --commit abc1234
+
+# 从 JSON 文件读取命令结果
+python scripts/iteration/record_iteration_evidence.py 13 --commands-json .artifacts/acceptance-runs/run_123.json
+
+# 直接传入命令结果 JSON 字符串
+python scripts/iteration/record_iteration_evidence.py 13 --commands '{"make ci": {"exit_code": 0, "summary": "passed"}}'
+
+# 指定 CI 运行 URL
+python scripts/iteration/record_iteration_evidence.py 13 --ci-run-url https://github.com/org/repo/actions/runs/123
+
+# 预览模式（不实际写入）
+python scripts/iteration/record_iteration_evidence.py 13 --dry-run
+```
+
+### 输入参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `iteration_number` | 迭代编号（必须） | - |
+| `--commit`, `-c` | commit SHA | 自动获取当前 HEAD |
+| `--commands` | 命令结果 JSON 字符串 | - |
+| `--commands-json` | 命令结果 JSON 文件路径 | - |
+| `--ci-run-url` | CI 运行 URL（可选） | - |
+| `--dry-run`, `-n` | 预览模式，不实际写入 | false |
+
+### 输出格式
+
+证据文件写入 `docs/acceptance/evidence/` 目录，命名格式：
+
+```
+iteration_<N>_<timestamp>_<commit>.json
+```
+
+示例：`iteration_13_20260202_143025_abc1234.json`
+
+输出 JSON 结构：
+
+```json
+{
+  "iteration_number": 13,
+  "commit_sha": "abc1234567890...",
+  "timestamp": "2026-02-02T14:30:25.123456",
+  "commands": [
+    {
+      "command": "make ci",
+      "exit_code": 0,
+      "summary": "passed",
+      "duration_seconds": 45.2
+    }
+  ],
+  "ci_run_url": "https://github.com/org/repo/actions/runs/123",
+  "metadata": {}
+}
+```
+
+### 命令结果 JSON 格式
+
+支持两种输入格式：
+
+**格式 1：简单字典格式**
+
+```json
+{
+  "make ci": {"exit_code": 0, "summary": "passed"},
+  "make test": {"exit_code": 0, "summary": "all tests passed"}
+}
+```
+
+**格式 2：数组格式**
+
+```json
+[
+  {"command": "make ci", "exit_code": 0, "summary": "passed"},
+  {"command": "make test", "exit_code": 0, "summary": "all tests passed"}
+]
+```
+
+### 敏感信息脱敏
+
+脚本内置敏感信息检测，以下类型的数据会被自动替换为 `[REDACTED]`：
+
+| 敏感键名模式 | 示例 |
+|--------------|------|
+| `*password*` | `db_password`, `PASSWORD` |
+| `*dsn*` | `DATABASE_DSN`, `postgres_dsn` |
+| `*token*` | `auth_token`, `API_TOKEN` |
+| `*secret*` | `client_secret`, `SECRET_KEY` |
+| `*key*` | `api_key`, `private_key` |
+| `*credential*` | `aws_credential` |
+| `*auth*` | `auth_header`, `oauth_code` |
+
+同时检测值本身是否像敏感信息（如数据库连接字符串、Bearer token 等）。
+
+**示例输出（脱敏后）**：
+
+```json
+{
+  "commands": [
+    {
+      "command": "make ci",
+      "exit_code": 0,
+      "env": {
+        "DATABASE_DSN": "[REDACTED]",
+        "API_TOKEN": "[REDACTED]"
+      }
+    }
+  ]
+}
+```
+
+### 典型工作流
+
+```bash
+# 1. 运行门禁检查
+make ci
+
+# 2. 记录证据
+python scripts/iteration/record_iteration_evidence.py 13 \
+  --commands '{"make ci": {"exit_code": 0, "summary": "passed"}}' \
+  --ci-run-url https://github.com/org/repo/actions/runs/123
+
+# 3. 提交证据
+git add docs/acceptance/evidence/
+git commit -m "evidence: Iteration 13 验收证据"
+```
 
 ---
 
@@ -381,7 +732,9 @@ python scripts/iteration/audit_iteration_docs.py --output-dir .artifacts/iterati
 | [adr_iteration_docs_workflow.md](../architecture/adr_iteration_docs_workflow.md) | 迭代文档工作流 ADR |
 | [scripts/iteration/init_local_iteration.py](../../scripts/iteration/init_local_iteration.py) | 初始化脚本 |
 | [scripts/iteration/promote_iteration.py](../../scripts/iteration/promote_iteration.py) | 晋升脚本 |
+| [scripts/iteration/snapshot_ssot_iteration.py](../../scripts/iteration/snapshot_ssot_iteration.py) | SSOT 快照脚本 |
 | [scripts/iteration/audit_iteration_docs.py](../../scripts/iteration/audit_iteration_docs.py) | 审计报告脚本 |
+| [scripts/iteration/record_iteration_evidence.py](../../scripts/iteration/record_iteration_evidence.py) | 证据落盘脚本 |
 
 ---
 
@@ -398,5 +751,11 @@ python scripts/iteration/audit_iteration_docs.py --output-dir .artifacts/iterati
 | 2026-02-01 | 新增「晋升 SOP（强制步骤）」章节：定义 SSOT 边界、晋升必做清单、SUPERSEDED 附加步骤 |
 | 2026-02-02 | 新增 `promote_iteration.py` 晋升脚本：自动复制草稿、更新索引、处理 SUPERSEDED |
 | 2026-02-02 | 新增「审计与检查」章节：介绍 `audit_iteration_docs.py` 脚本和 CI 门禁检查 |
+| 2026-02-02 | 新增「草稿分享与协作」章节：定义路径 A（临时分享）和路径 B（晋升为 PLANNING）、引用约束规则 |
+| 2026-02-02 | 新增 `--next` 参数支持：自动选择下一可用编号（与显式编号互斥），推荐优先使用 |
+| 2026-02-02 | 新增「Makefile 快捷命令」章节：`iteration-init`、`iteration-init-next`、`iteration-promote`、`iteration-export`、`iteration-audit` |
+| 2026-02-02 | 新增「快照 SSOT 到本地」章节：`snapshot_ssot_iteration.py` 脚本支持复制已晋升迭代到本地阅读/实验，强调不可 promote 覆盖旧编号 |
+| 2026-02-02 | 新增 `make iteration-snapshot` Makefile 快捷命令，支持 `N=`、`OUT=`、`FORCE=1` 参数 |
+| 2026-02-02 | 新增「证据落盘」章节：`record_iteration_evidence.py` 脚本支持记录验收证据到 `docs/acceptance/evidence/`，内置敏感信息脱敏 |
 
 _更新时间：2026-02-02_

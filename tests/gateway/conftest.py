@@ -334,6 +334,9 @@ def reset_all_gateway_state():
     - logbook_adapter: 适配器单例
     - openmemory_client: 客户端单例
     - container: 全局依赖容器
+    - mcp_rpc: correlation_id 和 tool_executor
+    - middleware: request correlation_id
+    - engram.gateway: 懒加载缓存
 
     用于测试间隔离，确保每个测试从干净状态开始。
     """
@@ -367,6 +370,35 @@ def reset_all_gateway_state():
 
         reset_container()
     except ImportError:
+        pass
+
+    # 重置 mcp_rpc ContextVar 和全局变量
+    try:
+        from engram.gateway.mcp_rpc import (
+            reset_current_correlation_id_for_testing,
+            reset_tool_executor_for_testing,
+        )
+
+        reset_current_correlation_id_for_testing()
+        reset_tool_executor_for_testing()
+    except (ImportError, AttributeError):
+        pass
+
+    # 重置 middleware ContextVar
+    try:
+        from engram.gateway.middleware import reset_request_correlation_id_for_testing
+
+        reset_request_correlation_id_for_testing()
+    except (ImportError, AttributeError):
+        pass
+
+    # 重置 engram.gateway 懒加载缓存
+    try:
+        import engram.gateway as gateway_module
+
+        if hasattr(gateway_module, "_reset_gateway_lazy_import_cache_for_testing"):
+            gateway_module._reset_gateway_lazy_import_cache_for_testing()
+    except (ImportError, AttributeError):
         pass
 
 

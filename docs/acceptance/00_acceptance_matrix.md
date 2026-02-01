@@ -8,7 +8,8 @@
 
 | 迭代 | 日期 | 状态 | 计划 | 详细记录 | 说明 |
 |------|------|------|------|----------|------|
-| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [iteration_12_plan.md](iteration_12_plan.md) | [iteration_12_regression.md](iteration_12_regression.md) | 当前活跃迭代 |
+| **Iteration 13** | 2026-02-02 | ✅ PASS | [iteration_13_plan.md](iteration_13_plan.md) | [iteration_13_regression.md](iteration_13_regression.md) | 所有最小门禁通过：Workflow 合约 (v2.13.0)、Gateway Public API、CI 测试 (608 passed)、Gateway 测试 (1042 passed) |
+| Iteration 12 | 2026-02-02 | ✅ PASS | [iteration_12_plan.md](iteration_12_plan.md) | [iteration_12_regression.md](iteration_12_regression.md) | Gateway 测试全绿（1005 通过/206 跳过），修复 ImportError/patch 路径/状态隔离等问题 |
 | Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_11_plan.md](iteration_11_plan.md) | [iteration_11_regression.md](iteration_11_regression.md) | 已被 Iteration 12 取代 |
 | Iteration 10 | 2026-02-01 | 🔄 SUPERSEDED | - | [iteration_10_regression.md](iteration_10_regression.md) | 已被 Iteration 11 取代；lint ✅，mypy ❌ (86 新增)，gateway 15 失败，acceptance ✅ |
 | Iteration 9 | 2026-02-01 | 🔄 SUPERSEDED | - | [iteration_9_regression.md](iteration_9_regression.md) | 已被 Iteration 10 取代；lint ✅，mypy ❌，4 测试失败 |
@@ -19,6 +20,329 @@
 | Iteration 4 | 2026-01-28 | ✅ PASS | [iteration_4_plan.md](iteration_4_plan.md) | [iteration_4_regression.md](iteration_4_regression.md) | - |
 | Iteration 3 | 2026-01-27 | ✅ PASS | - | [iteration_3_regression.md](iteration_3_regression.md) | - |
 | Iteration 2 | 2026-01-26 | ✅ PASS | [iteration_2_plan.md](iteration_2_plan.md) | [iteration_2_regression.md](iteration_2_regression.md) | - |
+
+---
+
+## SUPERSEDED 一致性规则与索引完整性规则
+
+本节定义了迭代回归记录索引的一致性规则，由 `scripts/ci/check_no_iteration_links_in_docs.py` 自动校验。
+
+### SUPERSEDED 一致性规则 (R1-R6)
+
+适用于索引表中状态为 `🔄 SUPERSEDED` 的迭代条目。
+
+| 规则 ID | 规则名称 | 说明 |
+|---------|----------|------|
+| **R1** | 后继链接必须存在 | 说明字段必须包含后继声明 |
+| **R2** | 后继必须在索引表中 | 被引用的后继迭代必须已在索引表中存在 |
+| **R3** | 后继排序在上方 | 后继迭代在表格中的位置必须在被取代迭代上方 |
+| **R4** | 禁止环形引用 | 不允许 A→B→A 的循环取代链 |
+| **R5** | 禁止多后继 | 每个迭代只能有一个直接后继 |
+| **R6** | regression 声明必须存在 | regression 文件顶部必须有标准 superseded 声明 |
+
+#### R1: 后继链接必须存在
+
+**要求**: SUPERSEDED 迭代的「说明」字段必须包含后继声明。
+
+**格式要求**:
+- `已被 Iteration X 取代`（中文）
+- `Superseded by Iteration X`（英文）
+
+**✅ 正确示例**:
+
+```markdown
+| Iteration 10 | 2026-02-01 | 🔄 SUPERSEDED | - | [...] | 已被 Iteration 11 取代 |
+```
+
+**❌ 失败示例**:
+
+```markdown
+| Iteration 10 | 2026-02-01 | 🔄 SUPERSEDED | - | [...] | 文档整理 |
+```
+
+**修复建议**: 在说明字段添加 `已被 Iteration X 取代`。
+
+#### R2: 后继必须在索引表中
+
+**要求**: 后继声明中引用的迭代必须已存在于索引表中。
+
+**✅ 正确示例**（Iteration 12 已在索引表中）:
+
+```markdown
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [...] | [...] | 当前活跃迭代 |
+| Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 12 取代 |
+```
+
+**❌ 失败示例**（Iteration 13 不在索引表中）:
+
+```markdown
+| Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 13 取代 |
+```
+
+**修复建议**: 先在索引表中添加后继迭代条目，再标记当前迭代为 SUPERSEDED。
+
+#### R3: 后继排序在上方
+
+**要求**: 后继迭代在索引表中的位置必须在被取代迭代的上方（行号更小）。
+
+**✅ 正确示例**（Iteration 12 在 Iteration 11 上方）:
+
+```markdown
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [...] | [...] | 当前活跃迭代 |
+| Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 12 取代 |
+```
+
+**❌ 失败示例**（Iteration 12 在 Iteration 11 下方）:
+
+```markdown
+| Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 12 取代 |
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [...] | [...] | 当前活跃迭代 |
+```
+
+**修复建议**: 调整索引表行顺序，将后继迭代移到被取代迭代的上方。
+
+#### R4: 禁止环形引用
+
+**要求**: 不允许形成循环取代链（如 A→B→A 或 A→B→C→A）。
+
+**❌ 失败示例**:
+
+```markdown
+| Iteration 11 | ... | 🔄 SUPERSEDED | ... | ... | 已被 Iteration 12 取代 |
+| Iteration 12 | ... | 🔄 SUPERSEDED | ... | ... | 已被 Iteration 11 取代 |
+```
+
+**修复建议**: 检查取代链，确保形成单向 DAG（有向无环图）。
+
+#### R5: 禁止多后继
+
+**要求**: 每个迭代只能声明一个直接后继。
+
+**✅ 正确示例**:
+
+```markdown
+| Iteration 10 | ... | 🔄 SUPERSEDED | ... | ... | 已被 Iteration 11 取代 |
+```
+
+**❌ 失败示例**:
+
+```markdown
+| Iteration 10 | ... | 🔄 SUPERSEDED | ... | ... | 已被 Iteration 11、Iteration 12 取代 |
+```
+
+**修复建议**: 保留最终后继，移除多余的后继声明。
+
+#### R6: regression 声明必须存在
+
+**要求**: SUPERSEDED 迭代的 regression 文件**前 20 行内**必须包含关键短语 `Superseded by Iteration M`，且后继编号 M 必须与索引表一致。
+
+**CI 检查逻辑**（`scripts/ci/check_no_iteration_links_in_docs.py::check_regression_file_superseded_header`）:
+1. 扫描文件前 20 行
+2. 使用正则 `Superseded\s+by\s+Iteration\s*(\d+)`（不区分大小写）匹配
+3. 验证声明中的后继编号与索引表一致
+
+**✅ 正确示例**（文件 `iteration_10_regression.md` 顶部）:
+
+```markdown
+> **⚠️ Superseded by Iteration 11**
+>
+> 本迭代已被 [Iteration 11](iteration_11_regression.md) 取代，不再维护。
+> 请参阅后续迭代的回归记录获取最新验收状态。
+
+---
+
+# Iteration 10 回归验证
+（原有内容）
+```
+
+**格式约束**:
+
+| 约束 | 要求 |
+|------|------|
+| **位置** | 文件前 20 行内（推荐在标题之前，以便读者第一时间看到） |
+| **格式** | 使用 blockquote（`>`）包裹 |
+| **关键短语** | 必须包含 `Superseded by Iteration M` 字样（M 为后继迭代编号） |
+| **后继链接** | 必须使用相对路径 `[Iteration M](iteration_M_regression.md)` 格式 |
+| **编号一致性** | M 必须与索引表「说明」字段声明的后继编号一致 |
+
+**❌ 失败示例 1**（缺少 superseded 声明）:
+
+```markdown
+# Iteration 10 回归验证
+
+本文档记录 Iteration 10 的回归验证结果。
+```
+
+**❌ 失败示例 2**（superseded 编号与索引表不一致）:
+
+索引表声明「已被 Iteration 11 取代」，但 regression 文件写的是：
+
+```markdown
+> **⚠️ Superseded by Iteration 12**
+```
+
+**修复建议**: 在 regression 文件前 20 行内添加标准声明，确保后继编号与索引表一致。
+
+### 索引完整性规则 (R7-R9)
+
+适用于整个索引表的完整性校验。
+
+| 规则 ID | 规则名称 | 说明 |
+|---------|----------|------|
+| **R7** | 链接文件必须存在 | 索引表中 plan_link/regression_link 指向的文件必须存在 |
+| **R8** | 文件必须被索引 | `docs/acceptance/iteration_*_regression.md` 必须在索引表中 |
+| **R9** | 索引降序排列 | 索引表中 iteration 编号必须降序（最新迭代在最前） |
+
+#### R7: 链接文件必须存在
+
+**要求**: 索引表中引用的 plan 或 regression 文件必须实际存在于 `docs/acceptance/` 目录。
+
+**✅ 正确示例**（文件 `iteration_12_plan.md` 存在）:
+
+```markdown
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [iteration_12_plan.md](iteration_12_plan.md) | [...] | 当前活跃迭代 |
+```
+
+**❌ 失败示例**（文件不存在）:
+
+```markdown
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [iteration_12_plan.md](iteration_12_plan.md) | [...] | 当前活跃迭代 |
+# 但 docs/acceptance/iteration_12_plan.md 文件不存在
+```
+
+**修复建议**:
+- 创建缺失的文件，或
+- 将链接改为 `-`（表示无计划文档）
+
+#### R8: 文件必须被索引
+
+**要求**: `docs/acceptance/` 目录下的 `iteration_*_regression.md` 和 `iteration_*_plan.md` 文件必须在索引表中有对应条目。
+
+**✅ 正确示例**（文件已在索引中引用）:
+
+文件 `docs/acceptance/iteration_10_regression.md` 存在，且索引表有：
+
+```markdown
+| Iteration 10 | 2026-02-01 | 🔄 SUPERSEDED | - | [iteration_10_regression.md](iteration_10_regression.md) | 已被 Iteration 11 取代 |
+```
+
+**❌ 失败示例**（孤儿文件）:
+
+文件 `docs/acceptance/iteration_10_regression.md` 存在，但索引表中没有 Iteration 10 条目。
+
+**修复建议**:
+- 在索引表中添加对应的迭代条目，或
+- 删除不再需要的孤儿文件
+
+#### R9: 索引降序排列
+
+**要求**: 索引表中的迭代编号必须按降序排列（最新迭代在最前）。
+
+**✅ 正确示例**:
+
+```markdown
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [...] | [...] | 当前活跃迭代 |
+| Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 12 取代 |
+| Iteration 10 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 11 取代 |
+```
+
+**❌ 失败示例**（顺序错误）:
+
+```markdown
+| Iteration 10 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 11 取代 |
+| Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [...] | [...] | 已被 Iteration 12 取代 |
+| **Iteration 12** | 2026-02-02 | ⚠️ PARTIAL | [...] | [...] | 当前活跃迭代 |
+```
+
+**修复建议**: 将 Iteration 12 行移到表格最上方，Iteration 11 次之，以此类推。
+
+### 校验命令
+
+```bash
+# 完整检查（.iteration/ 链接 + SUPERSEDED + 索引完整性）
+python scripts/ci/check_no_iteration_links_in_docs.py
+
+# 仅检查 SUPERSEDED 一致性
+python scripts/ci/check_no_iteration_links_in_docs.py --superseded-only
+
+# 仅检查索引完整性
+python scripts/ci/check_no_iteration_links_in_docs.py --integrity-only
+
+# 详细输出
+python scripts/ci/check_no_iteration_links_in_docs.py --verbose
+
+# 仅统计（不阻断 CI）
+python scripts/ci/check_no_iteration_links_in_docs.py --stats-only
+
+# 输出机器可读的 JSON 修复建议（快速定位 R3/R9 排序问题）
+python scripts/ci/check_no_iteration_links_in_docs.py --suggest-fixes
+```
+
+### 快速定位排序问题（--suggest-fixes）
+
+当遇到 R3（后继排序在下方）或 R9（索引降序排列）违规时，可使用 `--suggest-fixes` 输出机器可读的 JSON 修复建议：
+
+```bash
+# 输出 JSON 格式的修复建议
+python scripts/ci/check_no_iteration_links_in_docs.py --suggest-fixes
+```
+
+**输出示例**（R3 违规）：
+
+```json
+{
+  "violations_count": 1,
+  "suggestions_count": 1,
+  "suggestions": [
+    {
+      "rule_id": "R3",
+      "iteration_number": 7,
+      "action": "move_above",
+      "description": "将 Iteration 9 行移动到 Iteration 7 行的上方",
+      "target_iteration": 9,
+      "file": "docs/acceptance/00_acceptance_matrix.md"
+    }
+  ]
+}
+```
+
+**输出示例**（R9 违规）：
+
+```json
+{
+  "violations_count": 1,
+  "suggestions_count": 1,
+  "suggestions": [
+    {
+      "rule_id": "R9",
+      "iteration_number": 10,
+      "action": "move_above",
+      "description": "将 Iteration 10 行移动到 Iteration 5 行的上方（索引应按迭代编号降序排列）",
+      "target_iteration": 5,
+      "file": "docs/acceptance/00_acceptance_matrix.md"
+    }
+  ]
+}
+```
+
+**字段说明**：
+
+| 字段 | 说明 |
+|------|------|
+| `rule_id` | 违反的规则 ID（R1-R9） |
+| `iteration_number` | 违规的迭代编号 |
+| `action` | 建议的操作类型（如 `move_above`、`add_successor_declaration`） |
+| `description` | 人类可读的修复说明 |
+| `target_iteration` | 目标迭代编号（移动操作时指定） |
+| `file` | 需要修改的文件路径 |
+
+**使用场景**：
+
+1. **CI 失败快速定位**：将 JSON 输出解析后直接定位需要修改的行
+2. **自动化修复脚本**：基于 `action` 和 `target_iteration` 字段实现自动修复
+3. **编辑器集成**：IDE 插件可解析输出并提供 Quick Fix 功能
+
+**注意**：`--suggest-fixes` 不改变阻断逻辑，仅提供额外的机器可读输出。存在违规时仍返回退出码 1。
 
 ---
 
@@ -263,7 +587,7 @@ make test-gateway-integration
 | **环境** | macOS 15.7.3 / Darwin 24.6.0 (arm64) / Docker N/A / PostgreSQL N/A |
 | **执行命令** | 见下方 |
 | **结果** | **PASS** |
-| **验收记录** | [`.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json`](.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json) |
+| **验收记录** | `.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json`（本地执行记录，commit `4d5d607`） |
 
 **执行命令**:
 
@@ -348,7 +672,7 @@ python3 scripts/acceptance/record_acceptance_run.py \
 | **环境** | macOS Darwin 24.6.0 (x86_64) / Docker N/A |
 | **执行命令** | 见下方 |
 | **结果** | **PASS** |
-| **验收记录** | [`.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json`](.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json) |
+| **验收记录** | `.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json`（本地执行记录，commit `4d5d607`） |
 
 **执行命令**（acceptance-unified-min 步骤）:
 
@@ -1103,8 +1427,73 @@ python3 scripts/acceptance/render_acceptance_matrix.py \
 在填写迭代验收记录时，可引用自动生成的记录文件：
 
 ```markdown
-**验收记录**: [`.artifacts/acceptance-runs/20260130T143022Z_acceptance-logbook-only.json`](.artifacts/acceptance-runs/20260130T143022Z_acceptance-logbook-only.json)
+**验收记录**: `.artifacts/acceptance-runs/<timestamp>_<name>.json`（本地执行记录，commit `<sha>`）
 ```
+
+---
+
+## 证据引用规范
+
+本节定义在迭代文档和验收记录中引用证据的规范格式。
+
+> **完整策略**：参见 [ADR: 迭代文档工作流](../architecture/adr_iteration_docs_workflow.md#35-版本化证据文件)
+
+### 引用格式对照表
+
+| 证据来源 | 引用格式 | 示例 | 说明 |
+|----------|----------|------|------|
+| **版本化文档** | 相对路径 Markdown 链接 | `[计划](iteration_13_plan.md)` | ✅ 推荐 |
+| **版本化证据文件** | 相对路径 Markdown 链接 | `[证据](evidence/iteration_13_evidence.json)` | ✅ 推荐，用于结构化证据 |
+| **CI Run URL** | 完整 URL | `[CI #1234](https://github.com/.../runs/1234)` | ✅ 最推荐，永久有效 |
+| **CI Artifact** | URL + 说明 | `报告见 CI Artifacts (90 天有效)` | ⚠️ 有时效性 |
+| **本地草稿 (`.iteration/`)** | **禁止链接**，仅文本提及 | `参考 .iteration/ 中的草稿` | ❌ Markdown 链接禁止 |
+| **运行时产物 (`.artifacts/`)** | **禁止链接**，仅文本提及 | `本地产物位于 .artifacts/` | ❌ Markdown 链接禁止 |
+
+### `.artifacts/` 和 `.iteration/` 引用约束
+
+**核心规则**：`.artifacts/` 与 `.iteration/` 一样，**不得在版本化文档中以 Markdown 链接形式出现**。
+
+| 类型 | `.artifacts/` 示例 | `.iteration/` 示例 | 允许 |
+|------|-------------------|-------------------|------|
+| **Markdown 链接** | `[报告]` + `(.artifacts/...)` | `[草稿]` + `(.iteration/...)` | ❌ **禁止** |
+| **文本提及** | `本地产物位于 .artifacts/` | `参考 .iteration/ 中的草稿` | ✅ 允许 |
+| **inline code** | `` `.artifacts/test-results.xml` `` | `` `.iteration/13/plan.md` `` | ✅ 允许 |
+
+**理由**：
+
+1. `.artifacts/` 和 `.iteration/` 均在 `.gitignore` 中，不纳入版本控制
+2. 链接指向的文件在其他机器或 CI 环境中不存在，必然失效
+3. CI Artifacts 有保留期限（通常 30-90 天），链接会过期
+
+### 版本化证据文件
+
+当需要持久化结构化证据时，应将证据文件存储在 `docs/acceptance/evidence/` 目录。
+
+**命名规范**：
+
+| 格式 | 示例 | 适用场景 |
+|------|------|----------|
+| `iteration_<N>_evidence.json` | `iteration_13_evidence.json` | 单一迭代综合证据 |
+| `iteration_<N>_<ts>.json` | `iteration_13_20260202.json` | 多次验收的时间快照 |
+
+**引用示例**：
+
+```markdown
+## 验收证据
+
+详细证据见 [iteration_13_evidence.json](evidence/iteration_13_evidence.json)。
+
+关键指标摘要：
+- CI 门禁：✅ 全部通过
+- 测试覆盖：608 passed, 0 failed
+- CI Run: [GitHub Actions #1234](https://github.com/.../actions/runs/1234)
+```
+
+### 推荐引用方式优先级
+
+1. **CI Run URL**（最推荐）：永久有效、可追溯、包含完整上下文
+2. **版本化证据文件链接**：适用于需要结构化数据的场景
+3. **文档内嵌摘要**：关键信息在文档中直接可见，无需跳转
 
 ---
 
@@ -1114,9 +1503,9 @@ python3 scripts/acceptance/render_acceptance_matrix.py \
 |------|--------|------|----------|------|
 | 2026-02-01 | - | **PARTIAL** | [iteration_10_regression.md](iteration_10_regression.md) | **Iteration 10 回归验证**：lint ✅，mypy ❌ (86 新增错误)，gateway 测试 ⚠️ (15 失败/807 通过)，acceptance ✅ (158 通过) |
 | 2026-02-01 | - | **PARTIAL** | [iteration_9_regression.md](iteration_9_regression.md) | **Iteration 9 回归验证**：lint ✅，mypy ❌ (77 新增错误)，gateway 测试 ⚠️ (4 失败/813 通过)，acceptance ✅ (143 通过) |
-| 2026-01-30 | `4d5d607` | **PASS** | [`.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json`](.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json) | acceptance-logbook-only 通过；执行步骤：`up-logbook` → `migrate-logbook-stepwise` → `verify-permissions-logbook` → `logbook-smoke` → `test-logbook-unit` |
-| 2026-01-30 | `4d5d607` | **PASS** | [`.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json`](.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json) | acceptance-unified-min 通过；执行步骤：`deploy` → `verify-unified (HTTP_ONLY_MODE)` → `test-logbook-unit` → `test-gateway-integration (HTTP_ONLY_MODE)` |
-| 2026-01-30 | - | PASS | [iteration10_step_tokens.txt](.artifacts/naming-audit/iteration10_step_tokens.txt), [iteration10_legacy_alias_scan.json](.artifacts/naming-audit/iteration10_legacy_alias_scan.json) | **迭代 10 命名治理审计**：step token 扫描 95 处（均为合规的 `Step N` 流程编号格式）；legacy alias 检测 0 处违规（570 文件扫描通过） |
+| 2026-01-30 | `4d5d607` | **PASS** | `.artifacts/acceptance-runs/20260130T000804Z_acceptance-logbook-only.json`（本地） | acceptance-logbook-only 通过；执行步骤：`up-logbook` → `migrate-logbook-stepwise` → `verify-permissions-logbook` → `logbook-smoke` → `test-logbook-unit` |
+| 2026-01-30 | `4d5d607` | **PASS** | `.artifacts/acceptance-runs/20260130T000805Z_acceptance-unified-min.json`（本地） | acceptance-unified-min 通过；执行步骤：`deploy` → `verify-unified (HTTP_ONLY_MODE)` → `test-logbook-unit` → `test-gateway-integration (HTTP_ONLY_MODE)` |
+| 2026-01-30 | - | PASS | `.artifacts/naming-audit/iteration10_step_tokens.txt`, `.artifacts/naming-audit/iteration10_legacy_alias_scan.json`（本地审计记录） | **迭代 10 命名治理审计**：step token 扫描 95 处（均为合规的 `Step N` 流程编号格式）；legacy alias 检测 0 处违规（570 文件扫描通过） |
 
 ### 未覆盖范围（2026-01-30）
 

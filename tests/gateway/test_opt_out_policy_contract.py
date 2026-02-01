@@ -298,11 +298,53 @@ class TestOptOutPolicyContract:
 # ============================================================================
 
 
+def _is_inside_multiline_string(lines: list[str], target_line_idx: int) -> bool:
+    """
+    判断给定行是否在多行字符串内部
+
+    通过从文件开头扫描到目标行，跟踪三引号的开闭状态。
+    注意：这是简化实现，不处理转义字符和嵌套情况，但足以覆盖常见场景。
+
+    Args:
+        lines: 文件的所有行
+        target_line_idx: 目标行的索引（0-based）
+
+    Returns:
+        True 如果目标行在多行字符串内部
+    """
+    in_triple_double = False  # 在 """ 内部
+    in_triple_single = False  # 在 ''' 内部
+
+    for i in range(target_line_idx + 1):
+        line = lines[i]
+
+        # 跳过注释行（不在字符串内部时）
+        if not in_triple_double and not in_triple_single:
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+
+        # 统计三引号出现次数（简化：不处理同一行多个三引号的复杂情况）
+        triple_double_count = line.count('"""')
+        triple_single_count = line.count("'''")
+
+        # 更新 """ 状态
+        if triple_double_count % 2 == 1:
+            in_triple_double = not in_triple_double
+
+        # 更新 ''' 状态
+        if triple_single_count % 2 == 1:
+            in_triple_single = not in_triple_single
+
+    return in_triple_double or in_triple_single
+
+
 def scan_sys_modules_violations() -> list[SysModulesViolation]:
     """
     扫描 tests/gateway/ 目录中所有直接写入 sys.modules["engram.gateway..."] 的操作
 
     只检查不在白名单中的文件。
+    跳过多行字符串（如 subprocess 脚本）中的代码。
 
     Returns:
         违规列表
@@ -331,8 +373,8 @@ def scan_sys_modules_violations() -> list[SysModulesViolation]:
             if stripped.startswith("#"):
                 continue
 
-            # 跳过文档字符串中的内容（简化检查）
-            if '"""' in line or "'''" in line:
+            # 跳过多行字符串内部的内容（如 subprocess 脚本）
+            if _is_inside_multiline_string(lines, line_num - 1):
                 continue
 
             for pattern in SYS_MODULES_WRITE_PATTERNS:

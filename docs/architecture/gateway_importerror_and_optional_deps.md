@@ -474,21 +474,23 @@ from . import logbook_adapter  # import engram.gateway 时触发整个依赖链
 from . import openmemory_client
 from .main import app  # 触发 create_app()
 
-# ✅ 正确: 懒加载策略
+# ✅ 正确: 懒加载策略（当前实现）
 # src/engram/gateway/__init__.py
 from typing import TYPE_CHECKING
 
-__all__ = ["logbook_adapter", "openmemory_client", "outbox_worker"]
+__all__ = ["__version__", "logbook_adapter", "openmemory_client", "outbox_worker"]
 
 if TYPE_CHECKING:
     from . import logbook_adapter as logbook_adapter
     from . import openmemory_client as openmemory_client
+    from . import outbox_worker as outbox_worker
+
+_LAZY_SUBMODULES = {"logbook_adapter", "openmemory_client", "outbox_worker"}
 
 def __getattr__(name: str):
     """懒加载子模块"""
-    import importlib
-    _lazy_submodules = {"logbook_adapter", "openmemory_client", "outbox_worker"}
-    if name in _lazy_submodules:
+    if name in _LAZY_SUBMODULES:
+        import importlib
         module = importlib.import_module(f".{name}", __name__)
         globals()[name] = module
         return module
@@ -500,7 +502,17 @@ def __getattr__(name: str):
 - 允许静态类型检查（`TYPE_CHECKING` 块）同时保持运行时轻量
 - 支持选择性导入：`from engram.gateway import logbook_adapter` 仅加载所需模块
 
-**当前实现**: `src/engram/gateway/__init__.py` 已采用此模式，参考其实现。
+**当前实现**: `src/engram/gateway/__init__.py` 已采用此模式。
+
+### 原则 7: `public_api.py` 采用 Tier 分层延迟导入
+
+> **详细文档**：完整的 Tier 分层定义、导出项清单、ImportError 消息格式规范，请参见：
+> **[gateway_public_api_surface.md](./gateway_public_api_surface.md)**（插件作者导入指南单一入口）
+
+**核心原则**:
+- **Tier A**: 核心稳定层，直接导入，无外部依赖
+- **Tier B**: 可选依赖层，延迟导入，失败时抛出含安装指引的 `ImportError`
+- **Tier C**: 便捷/内部层，可能在次版本调整
 
 ---
 
@@ -674,8 +686,30 @@ pytest tests/acceptance/test_gateway_startup.py -v
 
 ---
 
+## 插件作者注意事项
+
+> **完整指南**：插件作者导入策略、Tier 分层详细定义、try/except 可复制代码片段、ImportError 消息格式契约，请参见：
+> **[gateway_public_api_surface.md](./gateway_public_api_surface.md)**（单一入口文档）
+
+### 核心原则
+
+- **只依赖 Tier A 符号**：ports/错误码/RequestContext，无外部依赖且主版本内接口不变
+- **Tier B 符号需检查依赖**：使用 try/except 模式检查 `ImportError`
+- **避免 Tier C 符号**：便捷函数可能在次版本调整，使用 Tier A 替代方案
+
+### 相关文档
+
+| 文档 | 说明 |
+|------|------|
+| [gateway_public_api_surface.md](./gateway_public_api_surface.md) | **插件作者导入指南单一入口** — Tier 分层定义、导出项分析、可复制代码片段 |
+| [gateway_contract_convergence.md §11](../contracts/gateway_contract_convergence.md#11-public-api-向后兼容策略) | 向后兼容策略不变量 |
+| [mcp_jsonrpc_error_v1.md](../contracts/mcp_jsonrpc_error_v1.md) | 错误码契约 |
+
+---
+
 ## 相关文档
 
 - [ADR: Gateway DI 与入口边界统一](./adr_gateway_di_and_entry_boundary.md)
 - [Gateway 设计文档](../gateway/06_gateway_design.md)
 - [环境变量参考](../reference/environment_variables.md)
+- [Gateway Public API Surface](./gateway_public_api_surface.md)

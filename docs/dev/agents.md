@@ -45,19 +45,39 @@ make test              # 可选：运行测试（需数据库）
 # 一键运行所有 CI 检查（推荐）
 make ci
 
-# 或分步执行
-make lint                              # 代码风格检查
-make format-check                      # 格式检查
-make typecheck-gate                    # mypy 类型检查（baseline 模式）
-make check-cli-entrypoints             # CLI 入口点一致性检查
-make check-schemas                     # JSON Schema 校验
-make check-noqa-policy                 # noqa 注释策略检查
-make check-no-root-wrappers            # 根目录 wrapper 禁止导入检查
-make validate-workflows-strict         # Workflow 合约校验（严格模式）
-make check-workflow-contract-docs-sync # Workflow 合约与文档同步检查
-make check-mcp-error-contract          # MCP JSON-RPC 错误码合约检查
-pytest tests/ci/ -q                    # CI 脚本测试
+# 或分步执行（按 make ci 依赖顺序）
+make lint                               # 代码风格检查（ruff check）
+make format-check                       # 格式检查（ruff format --check）
+make typecheck                          # mypy 类型检查
+make check-schemas                      # JSON Schema 校验
+make check-env-consistency              # 环境变量一致性检查
+make check-logbook-consistency          # Logbook 配置一致性检查
+make check-migration-sanity             # SQL 迁移文件检查
+make check-scm-sync-consistency         # SCM Sync 一致性检查
+make check-gateway-error-reason-usage   # Gateway ErrorReason 使用规范检查
+make check-gateway-public-api-surface   # Gateway Public API 导入表面检查
+make check-gateway-public-api-docs-sync # Gateway Public API 文档同步检查
+make check-gateway-di-boundaries        # Gateway DI 边界检查
+make check-gateway-import-surface       # Gateway __init__.py 懒加载策略检查
+make check-gateway-correlation-id-single-source  # Gateway correlation_id 单一来源检查
+make check-iteration-docs               # 迭代文档规范检查
+make validate-workflows-strict          # Workflow 合约校验（严格模式）
+make check-workflow-contract-docs-sync  # Workflow 合约与文档同步检查
+make check-workflow-contract-version-policy  # Workflow 合约版本策略检查
+make check-mcp-error-contract           # MCP JSON-RPC 错误码合约检查
+make check-mcp-error-docs-sync          # MCP JSON-RPC 错误码文档与 Schema 同步检查
+
+# 可选的独立检查（未包含在 make ci 中）
+make typecheck-gate                     # mypy baseline 模式检查（用于增量修复）
+make check-cli-entrypoints              # CLI 入口点一致性检查
+make check-noqa-policy                  # noqa 注释策略检查
+make check-no-root-wrappers             # 根目录 wrapper 禁止导入检查
+pytest tests/ci/ -q                     # CI 脚本测试
+make test-iteration-tools               # 迭代工具脚本测试（无需数据库）
 ```
+
+> **迭代回归 Runbook**：详细的最小门禁命令块（含预期输出关键字和通过标准）请参阅当前活跃迭代的回归记录：
+> - [Iteration 13 Regression Runbook](../acceptance/iteration_13_regression.md#最小门禁命令块)
 
 ### 核心门禁脚本
 
@@ -70,7 +90,15 @@ pytest tests/ci/ -q                    # CI 脚本测试
 | `scripts/verify_scm_sync_consistency.py` | SCM Sync 一致性 | `make check-scm-sync-consistency` |
 | `scripts/ci/check_noqa_policy.py` | noqa 注释策略检查 | `make check-noqa-policy` |
 | `scripts/ci/check_no_root_wrappers_usage.py` | 根目录 wrapper 禁止导入 | `make check-no-root-wrappers` |
-| `scripts/ci/check_no_root_wrappers_allowlist.py` | 根目录 wrapper allowlist 校验 | `make check-no-root-wrappers` |
+| `scripts/ci/check_gateway_error_reason_usage.py` | Gateway ErrorReason 使用规范 | `make check-gateway-error-reason-usage` |
+| `scripts/ci/check_gateway_public_api_import_surface.py` | Gateway Public API 导入表面 | `make check-gateway-public-api-surface` |
+| `scripts/ci/check_gateway_di_boundaries.py` | Gateway DI 边界 | `make check-gateway-di-boundaries` |
+| `scripts/ci/check_gateway_correlation_id_single_source.py` | Gateway correlation_id 单一来源 | `make check-gateway-correlation-id-single-source` |
+| `scripts/ci/check_mcp_jsonrpc_error_contract.py` | MCP JSON-RPC 错误码合约 | `make check-mcp-error-contract` |
+| `scripts/ci/check_mcp_jsonrpc_error_docs_sync.py` | MCP JSON-RPC 错误码文档同步 | `make check-mcp-error-docs-sync` |
+| `scripts/ci/validate_workflows.py` | Workflow 合约校验 | `make validate-workflows-strict` |
+| `scripts/ci/check_workflow_contract_docs_sync.py` | Workflow 合约与文档同步 | `make check-workflow-contract-docs-sync` |
+| `scripts/ci/check_workflow_contract_version_policy.py` | Workflow 合约版本策略 | `make check-workflow-contract-version-policy` |
 
 ---
 
@@ -133,7 +161,15 @@ make check-cli-entrypoints
 > **外部参考**：
 > - [Cursor Agent 模式文档](https://docs.cursor.com/chat/agent) - Agent 基础用法
 > - [Model Context Protocol (MCP)](https://docs.cursor.com/context/model-context-protocol) - 上下文管理
+> - [MCP Server 安装指南](https://docs.cursor.com/context/model-context-protocol#adding-mcp-servers) - MCP Server 添加方法
+> - [MCP Server 目录](https://cursor.directory/) - 社区 MCP Server 列表
 > - [Cursor Rules 配置](https://docs.cursor.com/context/rules-for-ai) - 自定义 Agent 行为
+> - [Project Rules](https://docs.cursor.com/context/rules-for-ai#project-rules) - 项目级 Rules 配置
+>
+> **本仓库映射**：
+> - `AGENTS.md`（根目录）→ Cursor Workspace Rules（自动加载）
+> - `configs/mcp/.mcp.json.example` → MCP 配置 SSOT
+> - `docs/gateway/02_mcp_integration_cursor.md` → Gateway MCP 集成指南
 
 对于复杂任务，建议按职责划分子代理：
 
@@ -296,6 +332,7 @@ Cursor 2.4 引入的 [Skills](https://cursor.com/docs/context/skills) 与声明�
 | `scripts/ci/gateway_deps_db_allowlist.json` | CI 代理 | Gateway deps.db 迁移 allowlist |
 | `.github/workflows/ci.yml` | CI 代理 | CI 流水线定义 |
 | `.github/workflows/nightly.yml` | CI 代理 | Nightly 流水线定义 |
+| `scripts/ci/workflow_contract.v1.json` | CI 代理 | Workflow 合约定义（需与 ci.yml 同步） |
 | `docs/reference/environment_variables.md` | 文档代理 | 环境变量参考（SSOT） |
 | `docs/architecture/cli_entrypoints.md` | 文档代理 | CLI 入口点文档 |
 | `configs/import_migration_map.json` | CI 代理 | 导入迁移映射 |
@@ -338,10 +375,15 @@ make ci                          # 完整 CI 检查（合并前）
 
 ```bash
 # 必须运行
-make typecheck-gate              # mypy baseline 模式检查
+make typecheck                   # mypy 类型检查
+make validate-workflows-strict   # Workflow 合约校验（严格模式）
+make check-workflow-contract-docs-sync   # Workflow 合约与文档同步检查
+make check-workflow-contract-version-policy  # Workflow 合约版本策略检查
+
+# 可选独立检查
+make typecheck-gate              # mypy baseline 模式检查（用于增量修复）
 make check-noqa-policy           # noqa 注释策略检查
 make check-no-root-wrappers      # 根目录 wrapper 禁止导入检查
-make validate-workflows-strict   # Workflow 合约校验（严格模式）
 
 # baseline 更新时
 make mypy-baseline-update        # 更新 mypy 基线（需串行）
@@ -362,8 +404,11 @@ make ci                          # 完整 CI 检查（合并前）
 
 ```bash
 # 必须运行
-make check-cli-entrypoints       # CLI 入口点一致性检查
 make check-env-consistency       # 环境变量一致性检查
+make check-iteration-docs        # 迭代文档规范检查
+
+# 可选独立检查
+make check-cli-entrypoints       # CLI 入口点一致性检查
 
 # 推荐运行
 make check-schemas               # JSON Schema 校验（若修改 schemas/）
@@ -384,8 +429,14 @@ make ci                          # 完整 CI 检查（合并前）
 # 必须运行
 make lint                        # 代码风格检查
 make format-check                # 格式检查
-make typecheck-gate              # mypy baseline 模式检查
+make typecheck                   # mypy 类型检查
 make check-gateway-di-boundaries # Gateway DI 边界检查
+make check-gateway-public-api-surface  # Gateway Public API 导入表面检查
+make check-gateway-public-api-docs-sync  # Gateway Public API 文档同步检查
+make check-gateway-import-surface  # Gateway __init__.py 懒加载策略检查
+make check-gateway-correlation-id-single-source  # Gateway correlation_id 单一来源检查
+make check-mcp-error-contract    # MCP JSON-RPC 错误码合约检查
+make check-mcp-error-docs-sync   # MCP JSON-RPC 错误码文档同步检查
 make test-gateway                # Gateway 测试
 
 # 推荐运行
@@ -409,10 +460,10 @@ make ci                          # 完整 CI 检查（合并前）
 
 | 代理类型 | 必须运行 | 推荐运行 |
 |----------|----------|----------|
-| **SQL** | `check-migration-sanity`, `verify-permissions`, `check-sql-inventory-consistency` | `migrate-plan`, `ci` |
-| **CI** | `typecheck-gate`, `check-noqa-policy`, `check-no-root-wrappers`, `validate-workflows-strict` | `mypy-baseline-update`, `ci` |
-| **文档** | `check-cli-entrypoints`, `check-env-consistency` | `check-schemas`, `ci` |
-| **Gateway** | `lint`, `format-check`, `typecheck-gate`, `check-gateway-di-boundaries`, `test-gateway` | `test-logbook`, `ci` |
+| **SQL** | `check-migration-sanity`, `verify-permissions` | `migrate-plan`, `ci` |
+| **CI** | `typecheck`, `validate-workflows-strict`, `check-workflow-contract-docs-sync`, `check-workflow-contract-version-policy` | `typecheck-gate`, `check-noqa-policy`, `mypy-baseline-update`, `ci` |
+| **文档** | `check-env-consistency`, `check-iteration-docs` | `check-cli-entrypoints`, `check-schemas`, `ci` |
+| **Gateway** | `lint`, `format-check`, `typecheck`, `check-gateway-di-boundaries`, `check-gateway-public-api-surface`, `check-gateway-public-api-docs-sync`, `check-gateway-import-surface`, `check-gateway-correlation-id-single-source`, `check-mcp-error-contract`, `check-mcp-error-docs-sync`, `test-gateway` | `test-logbook`, `ci` |
 
 ---
 
@@ -591,6 +642,7 @@ python scripts/ci/check_mypy_gate.py --verbose  # 查看详细错误
 - **禁止在 SSOT 文档中保留草稿目录链接**：`.iteration/` 和 `.artifacts/` 是临时草稿目录，不应在正式文档中被引用
 - **PR 模板检查项**：提交 PR 时需确认无草稿目录可点击链接
 - **CI 检查**（如启用）：`make check-no-iteration-links` 会检测草稿目录链接
+- **草稿分享推荐方式**：若需与团队共享本地草稿，推荐使用 `make iteration-export N=<编号>` 导出分享包，或直接晋升为 SSOT（`--status PLANNING`），**禁止在文档中链接 `.iteration/` 路径**。详见 [迭代文档本地草稿工作流](iteration_local_drafts.md#草稿分享与协作)
 
 ---
 
@@ -637,8 +689,13 @@ python scripts/ci/check_mypy_gate.py --verbose  # 查看详细错误
 |------|------|
 | Cursor Agent 模式 | [docs.cursor.com/chat/agent](https://docs.cursor.com/chat/agent) |
 | Model Context Protocol | [docs.cursor.com/context/model-context-protocol](https://docs.cursor.com/context/model-context-protocol) |
+| MCP Server 添加方法 | [docs.cursor.com/.../model-context-protocol#adding-mcp-servers](https://docs.cursor.com/context/model-context-protocol#adding-mcp-servers) |
+| MCP Server 目录 | [cursor.directory](https://cursor.directory/) |
 | Cursor Rules 配置 | [docs.cursor.com/context/rules-for-ai](https://docs.cursor.com/context/rules-for-ai) |
+| Project Rules | [docs.cursor.com/.../rules-for-ai#project-rules](https://docs.cursor.com/context/rules-for-ai#project-rules) |
 | Claude API 文档 | [docs.anthropic.com](https://docs.anthropic.com) |
+
+> **MCP 配置 SSOT**：本仓库的 MCP 配置以 `configs/mcp/.mcp.json.example` 为权威来源，外部链接仅作行为参考。
 
 ---
 
@@ -679,11 +736,39 @@ ruff format src/ tests/
 
 ---
 
-更新时间：2026-02-01
+更新时间：2026-02-02
 
 ---
 
 ## 变更日志
+
+### v1.8 (2026-02-02)
+- 同步 `make ci` 依赖：将 `check-mcp-error-contract` 和 `check-mcp-error-docs-sync` 移到「分步执行」部分
+- 更新核心门禁脚本表格：添加 `check_mcp_jsonrpc_error_docs_sync.py` 和 `check_workflow_contract_version_policy.py` 映射
+- 更新 Gateway 代理最小门禁命令：添加 `check-gateway-public-api-docs-sync`、`check-gateway-import-surface`、`check-mcp-error-contract`、`check-mcp-error-docs-sync`
+- 更新门禁命令速查表：Gateway 代理完整包含所有 gateway 和 MCP 相关检查
+- 更新共享文件单点负责表格：添加 `scripts/ci/workflow_contract.v1.json`
+- 同步更新根目录 AGENTS.md
+
+### v1.7 (2026-02-02)
+- 增强子代理分工建议：添加「本仓库映射」说明 Cursor Rules/MCP SSOT 位置
+- 同步更新外部参考链接，确认 Cursor Rules/MCP install/MCP directory 链接有效
+
+### v1.6 (2026-02-02)
+- 同步 Makefile 实际目标：按 `make ci` 依赖顺序列出所有检查命令
+- 添加 Makefile alias targets：`typecheck-gate`, `check-cli-entrypoints`, `check-noqa-policy`, `check-no-root-wrappers`, `check-mcp-error-contract`, `mypy-baseline-update`
+- 更新核心门禁脚本表格：添加 gateway 相关检查脚本映射
+- 更新子代理门禁命令：区分「必须运行」（`make ci` 包含）和「可选独立检查」
+
+### v1.5 (2026-02-02)
+- `make ci` 依赖链对齐 GitHub Actions：添加 `check-iteration-docs`, `validate-workflows-strict`, `check-workflow-contract-docs-sync`
+- 更新门禁命令速查表：CI 代理添加 `check-workflow-contract-docs-sync`；文档代理添加 `check-iteration-docs`；Gateway 代理添加 `check-gateway-public-api-surface`
+- 同步更新 `workflow_contract.v1.json` 的 `make.targets_required`
+
+### v1.4 (2026-02-02)
+- 新增「最小验证工作流」段落中对迭代回归 Runbook 的链接
+- 创建 Iteration 13 Regression Runbook（含最小门禁命令块、预期输出关键字、通过标准）
+- 同步更新根目录 AGENTS.md
 
 ### v1.3 (2026-02-01)
 - 新增「Cursor 2.4+ Subagents 能力与本仓库实践」章节

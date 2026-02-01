@@ -230,16 +230,21 @@ interface ErrorData {
 
 ### 推荐导入路径
 
-**外部集成/插件开发者** 应从稳定公共 API 导入：
+**外部集成/插件开发者** 应从稳定公共 API 导入（所有错误码均为 **Tier A 核心稳定层**）：
 
 ```python
 from engram.gateway.public_api import (
-    McpErrorCode,
-    McpErrorCategory,
-    McpErrorReason,
-    ToolResultErrorCode,
+    # Tier A: 这些符号主版本内接口不变，可安全依赖
+    McpErrorCode,       # JSON-RPC 错误码（如 -32602, -32001）
+    McpErrorCategory,   # 错误分类（protocol/validation/business/dependency/internal）
+    McpErrorReason,     # 错误原因码（如 UNKNOWN_TOOL, OPENMEMORY_UNAVAILABLE）
+    ToolResultErrorCode,  # 业务层 result.error_code 错误码
 )
 ```
+
+> **Tier A 稳定性承诺**：上述错误码常量属于核心稳定层，主版本内不会变更常量值。
+> 插件作者可安全依赖这些符号进行错误处理逻辑。
+> 详见 [gateway_public_api_surface.md](../architecture/gateway_public_api_surface.md)
 
 **内部模块** 可直接从定义模块导入：
 

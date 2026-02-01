@@ -683,8 +683,8 @@ class TestPublicApiImportSafe:
         测试 di 模块不导入 mcp_rpc
 
         契约：
-        - di.py 中的 generate_correlation_id 是内联实现
-        - 导入 di 模块不应触发 mcp_rpc 的加载
+        - di.py 从 correlation_id.py 导入 generate_correlation_id
+        - 导入 di 模块不应触发 mcp_rpc/pydantic 的加载
         """
         script = """
         import sys

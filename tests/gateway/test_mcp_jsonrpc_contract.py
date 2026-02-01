@@ -32,37 +32,14 @@ ADAPTER_MODULE = "engram.gateway.logbook_adapter"
 
 # ===================== 契约断言辅助函数 =====================
 
+from engram.gateway.error_codes import PUBLIC_MCP_ERROR_REASONS
 
 # 有效的错误分类（契约定义）
 VALID_ERROR_CATEGORIES = ["protocol", "validation", "business", "dependency", "internal"]
 
-# 有效的错误原因码（契约定义）
-VALID_ERROR_REASONS = {
-    # protocol
-    "PARSE_ERROR",
-    "INVALID_REQUEST",
-    "METHOD_NOT_FOUND",
-    # validation
-    "MISSING_REQUIRED_PARAM",
-    "INVALID_PARAM_TYPE",
-    "INVALID_PARAM_VALUE",
-    "UNKNOWN_TOOL",
-    # business
-    "POLICY_REJECT",
-    "AUTH_FAILED",
-    "ACTOR_UNKNOWN",
-    "GOVERNANCE_UPDATE_DENIED",
-    # dependency
-    "OPENMEMORY_UNAVAILABLE",
-    "OPENMEMORY_CONNECTION_FAILED",
-    "OPENMEMORY_API_ERROR",
-    "LOGBOOK_DB_UNAVAILABLE",
-    "LOGBOOK_DB_CHECK_FAILED",
-    # internal
-    "INTERNAL_ERROR",
-    "TOOL_EXECUTOR_NOT_REGISTERED",
-    "UNHANDLED_EXCEPTION",
-}
+# 有效的错误原因码（从 PUBLIC_MCP_ERROR_REASONS 构建，用于断言）
+# 契约参见: docs/contracts/mcp_jsonrpc_error_v1.md §4
+VALID_ERROR_REASONS: set[str] = set(PUBLIC_MCP_ERROR_REASONS)
 
 
 def assert_error_data_contract(

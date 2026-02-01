@@ -115,6 +115,10 @@ def scan_iteration_files(acceptance_dir: Path) -> list[IterationFile]:
         file_type = match.group(2)
 
         # 检查文件头部是否有 superseded 声明
+        # 注意：以下检查逻辑与 scripts/ci/check_no_iteration_links_in_docs.py 的
+        # check_regression_file_superseded_header 函数保持一致（同一 regex / 同一位置约束）
+        # - 位置约束：检查前 20 行
+        # - 正则表达式：r"Superseded\s+by\s+Iteration\s*(\d+)"（忽略大小写）
         has_header = False
         successor = None
         try:

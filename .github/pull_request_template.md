@@ -56,13 +56,22 @@
 ### 迭代文档变更（如修改以下文件则必填）
 
 > 涉及 `.iteration/**`、`docs/acceptance/iteration_*_*.md`、`docs/acceptance/00_acceptance_matrix.md` 时，请勾选并说明：
+> 详见 [迭代文档本地草稿工作流](docs/dev/iteration_local_drafts.md) 和 [ADR: 迭代文档工作流](docs/architecture/adr_iteration_docs_workflow.md)
 
 - [ ] **已阅读** [迭代文档本地草稿工作流](docs/dev/iteration_local_drafts.md)
 - [ ] **已运行** `make check-iteration-docs` 本地验证通过（或确认 CI 会自动检查）
 - [ ] **未引入 .iteration/ 链接**（禁止在文档中链接到 .iteration/ 目录）
 - [ ] **SUPERSEDED 声明一致**（如标记迭代为已取代，regression 文件顶部有正确声明）
+- [ ] **占位符/模板说明已清理**（晋升后的文件已移除 `<!-- 模板说明 -->` 区块，已替换所有 `{PLACEHOLDER}` 占位符）
+- [ ] **草稿分享方式正确**（若需共享草稿，使用 `make iteration-export N=<编号>` 导出为 zip 包或目录，或直接晋升为 SSOT PLANNING 状态，禁止在文档中链接 `.iteration/`）
 
-> 如未修改上述文件，可跳过此节。便捷命令：`make iteration-init N=<编号>` 初始化 / `make iteration-promote N=<编号>` 晋升
+> 如未修改上述文件，可跳过此节。
+> 
+> **便捷命令**：
+> - `make iteration-init N=<编号>` 初始化本地草稿
+> - `make iteration-promote N=<编号>` 晋升草稿到 SSOT
+> - `make iteration-export N=<编号>` 导出草稿为 zip（推荐用于分享）
+> - `make iteration-snapshot N=<编号>` 快照 SSOT 到本地只读副本（⚠️ 不可 promote 覆盖旧编号）
 
 ### 提交前检查
 

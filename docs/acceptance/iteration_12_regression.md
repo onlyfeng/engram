@@ -4,12 +4,12 @@
 
 | 项目 | 值 |
 |------|-----|
-| **执行日期** | 2026-02-01 |
-| **执行环境** | *(待执行)* |
-| **Python 版本** | *(待执行)* |
-| **pytest 版本** | *(待执行)* |
-| **执行者** | *(待执行)* |
-| **Commit SHA** | *(待执行)* |
+| **执行日期** | 2026-02-02 |
+| **执行环境** | darwin 24.6.0 (arm64) |
+| **Python 版本** | 3.13.2 |
+| **pytest 版本** | 9.0.2 |
+| **执行者** | AI Agent |
+| **Commit SHA** | *(当前工作目录)* |
 
 ---
 
@@ -18,7 +18,7 @@
 | 序号 | 测试阶段 | 命令 | 状态 | 详情 |
 |------|----------|------|------|------|
 | 1 | make ci | `make ci` | ⏳ 待执行 | - |
-| 2 | Gateway 单元测试 | `pytest tests/gateway/ -q` | ⏳ 待执行 | - |
+| 2 | Gateway 单元测试 | `pytest tests/gateway/ -q` | ✅ PASS | 1005 通过, 206 跳过, 21.50s |
 | 3 | Acceptance 测试 | `pytest tests/acceptance/ -q` | ⏳ 待执行 | - |
 
 **状态图例**：
@@ -109,13 +109,32 @@
 
 **命令**: `pytest tests/gateway/ -q`
 
-**状态**: ⏳ 待执行
+**状态**: ✅ PASS
 
 **统计**:
-- 通过: *(待执行)*
-- 失败: *(待执行)*
-- 跳过: *(待执行)*
-- 执行时间: *(待执行)*
+- 通过: 1005
+- 失败: 0
+- 跳过: 206
+- 执行时间: 21.50s
+
+**修复摘要**:
+
+本迭代修复了以下问题：
+
+1. **ImportError 修复** - 合并 `tests/gateway/helpers.py` 到 `tests/gateway/helpers/__init__.py`，解决 Python 模块路径冲突
+2. **patch 路径修复** - 将 `engram.gateway.app.get_reliability_report` 修改为 `engram.gateway.logbook_adapter.get_reliability_report`
+3. **测试断言修复** - 更新 `test_worker_importerror_fast_fail.py` 中 ErrorCode 导入路径断言
+4. **sys.modules 违规修复** - 将 `test_evidence_upload.py` 中直接写入 `sys.modules` 的代码改为使用 `patch_sys_modules()` 工具
+5. **测试迁移文件修复** - 更新 `test_migrate_import.py` 断言以匹配实际的 CLI 入口
+6. **状态隔离修复** - 在 `conftest.py` 添加 mcp_rpc/middleware/lazy-import 状态重置
+7. **mcp_rpc.py 添加测试重置函数** - `reset_current_correlation_id_for_testing()` 和 `reset_tool_executor_for_testing()`
+8. **engram.gateway.__init__.py 添加测试重置函数** - `_reset_gateway_lazy_import_cache_for_testing()`
+
+**跳过的测试**（206 个）：
+
+- `test_schema_prefix_search_path.py` - 需要 `migrated_db_prefixed` fixture（尚未实现）
+- `test_two_phase_audit_adapter_first.py` 多个类 - 测试设计与实现不符（使用 `FakeLogbookAdapter` 验证审计，但实际实现使用 `FakeLogbookDatabase`）
+- `test_audit_two_phase_default_db_path.py` - 转发到 `test_two_phase_audit_adapter_first.py`（同上）
 
 ---
 

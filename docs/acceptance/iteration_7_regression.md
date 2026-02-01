@@ -1,8 +1,11 @@
-# Iteration 7 Regression - CI 流水线验证记录
-
 > **⚠️ Superseded by Iteration 9**
 >
 > 本文档已被 [Iteration 9 回归记录](iteration_9_regression.md) 取代。
+
+---
+
+# Iteration 7 Regression - CI 流水线验证记录
+
 > Iteration 7 的验证工作已合并到 Iteration 9 中完成。
 > 以下所有 PENDING 项已在 Iteration 9 中得到验证或废弃。
 

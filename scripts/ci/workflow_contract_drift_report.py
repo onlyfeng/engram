@@ -48,6 +48,7 @@ from validate_workflows import (
     extract_workflow_make_calls,
     parse_makefile_targets,
 )
+from workflow_contract_common import discover_workflow_keys
 
 # ============================================================================
 # Data Classes
@@ -138,29 +139,6 @@ class WorkflowContractDriftAnalyzer:
         except yaml.YAMLError as e:
             print(f"警告: 解析 workflow YAML 失败 ({workflow_file}): {e}", file=sys.stderr)
             return None
-
-    def discover_workflow_keys(self) -> list[str]:
-        """动态发现 contract 中的 workflow 定义 key"""
-        metadata_keys = {
-            "$schema",
-            "version",
-            "description",
-            "last_updated",
-            "make",
-            "frozen_step_text",
-            "frozen_job_names",
-        }
-
-        workflow_keys: list[str] = []
-        for key, value in self.contract.items():
-            if key.startswith("_"):
-                continue
-            if key in metadata_keys:
-                continue
-            if isinstance(value, dict) and "file" in value:
-                workflow_keys.append(key)
-
-        return sorted(workflow_keys)
 
     def analyze_job_ids(
         self,
@@ -620,7 +598,7 @@ class WorkflowContractDriftAnalyzer:
         if not self.load_contract():
             return self.report
 
-        workflow_keys = self.discover_workflow_keys()
+        workflow_keys = discover_workflow_keys(self.contract)
 
         # 应用 workflow 过滤器
         if self.workflow_filter:

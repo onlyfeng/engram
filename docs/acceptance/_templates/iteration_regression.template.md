@@ -232,28 +232,41 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 
 ## Superseded by …（可选区块）
 
-当迭代被后续迭代取代时，**必须**在回归记录开头添加此区块。
+当迭代被后续迭代取代时，**必须**在回归记录**前 20 行内**添加 superseded 声明。
 
-### 格式要求
+### CI 检查逻辑
+
+`scripts/ci/check_no_iteration_links_in_docs.py::check_regression_file_superseded_header`：
+1. 扫描文件前 20 行
+2. 使用正则 `Superseded\s+by\s+Iteration\s*(\d+)`（不区分大小写）匹配
+3. 验证声明中的后继编号与索引表一致
+
+### 推荐格式
+
+推荐在标题之前添加，以便读者第一时间看到：
 
 ```markdown
-> **⚠️ Superseded by Iteration {K}**
+> **⚠️ Superseded by Iteration {M}**
 >
-> 本迭代已被 [Iteration {K}](iteration_{K}_regression.md) 取代，不再维护。
+> 本迭代已被 [Iteration {M}](iteration_{M}_regression.md) 取代，不再维护。
 > 请参阅后续迭代的回归记录获取最新验收状态。
 
 ---
+
+# Iteration {N} 回归验证
+（原有内容）
 ```
 
 **格式约束**：
 
 | 约束 | 要求 |
 |------|------|
-| **位置** | 文件最开头，在任何其他内容（包括标题）之前 |
+| **位置** | 文件前 20 行内（推荐在标题之前，以便读者第一时间看到） |
 | **格式** | 使用 blockquote（`>`）包裹 |
-| **标识符** | 必须包含 `⚠️ Superseded by Iteration {K}` 字样（{K} 为后继迭代编号） |
-| **后继链接** | **必须**使用相对路径 `[Iteration {K}](iteration_{K}_regression.md)` 格式，指向实际存在的后继迭代回归记录 |
-| **分隔线** | 声明后必须添加 `---` 分隔线，与原有内容分隔 |
+| **关键短语** | 必须包含 `Superseded by Iteration {M}` 字样（{M} 为后继迭代编号） |
+| **后继链接** | **必须**使用相对路径 `[Iteration {M}](iteration_{M}_regression.md)` 格式，指向实际存在的后继迭代回归记录 |
+| **编号一致性** | {M} 必须与索引表「说明」字段声明的后继编号一致 |
+| **分隔线** | 声明后建议添加 `---` 分隔线，与原有内容分隔 |
 
 > **统一来源**：本格式规范与 [adr_iteration_docs_workflow.md](../../architecture/adr_iteration_docs_workflow.md) 的 R6 规则保持一致。
 
@@ -261,7 +274,7 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 
 | 约束 | 要求 |
 |------|------|
-| **R1: 后继链接必须存在** | `Iteration M` 必须是有效的相对链接，指向实际存在的回归记录文件 |
+| **R1: 后继链接必须存在** | `Iteration {M}` 必须是有效的相对链接，指向实际存在的回归记录文件 |
 | **R2: 后继必须在索引中** | 被引用的后继迭代必须已在 `00_acceptance_matrix.md` 的索引表中出现 |
 | **R3: 后继排序在上方** | 后继迭代在索引表中的位置必须在本迭代**上方**（最新迭代在最前） |
 | **R4: 禁止环形引用** | 不允许 A→B→A 的循环 superseded 链 |
@@ -283,7 +296,7 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 
 **场景**：Iteration 7 被 Iteration 9 取代
 
-在 `iteration_7_regression.md` 开头添加：
+在 `iteration_7_regression.md` 前 20 行内（推荐在标题之前）添加：
 
 ```markdown
 > **⚠️ Superseded by Iteration 9**
@@ -297,7 +310,7 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 （原有内容保持不变）
 ```
 
-同时在 `00_acceptance_matrix.md` 索引表中更新：
+同时在 `00_acceptance_matrix.md` 索引表中更新（注意：后继编号必须与 regression 文件中的一致）：
 
 ```markdown
 | Iteration 9 | 2026-02-01 | ⚠️ PARTIAL | - | [iteration_9_regression.md](iteration_9_regression.md) | 当前活跃迭代 |
@@ -340,4 +353,4 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 
 ---
 
-_模板版本：v1.1 | 更新日期：2026-02-01（R6 格式规范统一）_
+_模板版本：v1.2 | 更新日期：2026-02-02（R6 格式规范与 CI 脚本统一：前 20 行内、后继编号一致性检查）_

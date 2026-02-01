@@ -1,0 +1,3 @@
+# 此目录用于存放迭代验收证据 JSON 文件
+# 文件命名格式: iteration_<N>_<timestamp>_<commit>.json
+# 详见 docs/dev/iteration_local_drafts.md 的"证据落盘"章节

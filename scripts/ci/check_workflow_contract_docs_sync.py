@@ -31,26 +31,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from workflow_contract_common import discover_workflow_keys
+
 # ============================================================================
 # Constants
 # ============================================================================
 
 DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
 DEFAULT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
-
-# Metadata/legacy 字段排除列表 - 这些 key 不是 workflow 定义
-METADATA_KEYS = frozenset(
-    [
-        "$schema",
-        "version",
-        "description",
-        "last_updated",
-        "make",
-        "frozen_step_text",
-        "frozen_job_names",
-        # _changelog_* 和 _*_note 等下划线前缀字段通过前缀检查排除
-    ]
-)
 
 # 文档中各 workflow 章节的锚点关键字（用于章节定位和切片）
 # 检查 job_ids/job_names 时，只在对应 workflow 章节内匹配
@@ -136,44 +124,6 @@ class SyncResult:
     def add_warning(self, warning: str) -> None:
         """添加警告"""
         self.warnings.append(warning)
-
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-
-def discover_workflow_keys(contract: dict[str, Any]) -> list[str]:
-    """动态发现 contract 中的 workflow 定义 key
-
-    通过扫描顶层 dict，筛选符合 workflow 结构特征的 key：
-    1. value 是 dict 类型
-    2. value 包含 "file" 字段（workflow 定义的必需字段）
-    3. key 不在 METADATA_KEYS 排除列表中
-    4. key 不以下划线开头（排除 _changelog_*, _*_note 等注释字段）
-
-    Args:
-        contract: 加载的 contract JSON dict
-
-    Returns:
-        发现的 workflow key 列表，按字母序排序
-    """
-    workflow_keys: list[str] = []
-
-    for key, value in contract.items():
-        # 排除下划线前缀字段（changelog, notes 等）
-        if key.startswith("_"):
-            continue
-
-        # 排除已知 metadata 字段
-        if key in METADATA_KEYS:
-            continue
-
-        # 检查是否符合 workflow 结构特征：dict 且包含 "file" 字段
-        if isinstance(value, dict) and "file" in value:
-            workflow_keys.append(key)
-
-    return sorted(workflow_keys)
 
 
 # ============================================================================

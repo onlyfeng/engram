@@ -3,9 +3,11 @@
 
 用法:
     python scripts/iteration/init_local_iteration.py <iteration_number>
+    python scripts/iteration/init_local_iteration.py --next
 
 示例:
     python scripts/iteration/init_local_iteration.py 4
+    python scripts/iteration/init_local_iteration.py --next
 
 功能:
     - 检测目标编号是否已在 docs/acceptance/ 中存在（SSOT 冲突检测）
@@ -13,6 +15,7 @@
     - 创建 .iteration/README.md（如不存在）
     - 创建 .iteration/<N>/plan.md（从模板填充）
     - 创建 .iteration/<N>/regression.md（从模板填充）
+    - 支持 --next 参数自动选择下一可用编号
 """
 
 from __future__ import annotations
@@ -222,15 +225,17 @@ def init_iteration(
     plan_template = read_template("iteration_plan.template.md")
     regression_template = read_template("iteration_regression.template.md")
 
-    # 创建 plan.md
+    # 创建 plan.md（先检查是否存在，再写入）
     plan_path = iteration_path / "plan.md"
+    plan_existed = plan_path.exists()
     plan_path.write_text(plan_template, encoding="utf-8")
-    results[str(plan_path)] = "created" if not plan_path.exists() else "overwritten"
+    results[str(plan_path)] = "overwritten" if plan_existed else "created"
 
-    # 创建 regression.md
+    # 创建 regression.md（先检查是否存在，再写入）
     regression_path = iteration_path / "regression.md"
+    regression_existed = regression_path.exists()
     regression_path.write_text(regression_template, encoding="utf-8")
-    results[str(regression_path)] = "created" if not regression_path.exists() else "overwritten"
+    results[str(regression_path)] = "overwritten" if regression_existed else "created"
 
     return results
 
@@ -245,14 +250,27 @@ def main() -> int:
     python scripts/iteration/init_local_iteration.py 4
     python scripts/iteration/init_local_iteration.py 5 --force
     python scripts/iteration/init_local_iteration.py 5 --refresh-readme
+    python scripts/iteration/init_local_iteration.py --next
 
 详细说明请参阅 docs/dev/iteration_local_drafts.md
         """,
     )
-    parser.add_argument(
+
+    # 迭代编号组：iteration_number 与 --next 互斥
+    number_group = parser.add_mutually_exclusive_group(required=True)
+    number_group.add_argument(
         "iteration_number",
         type=int,
+        nargs="?",
+        default=None,
         help="迭代编号（正整数）",
+    )
+    number_group.add_argument(
+        "--next",
+        "-n",
+        dest="use_next",
+        action="store_true",
+        help="自动选择下一可用编号（当前最大编号 + 1）",
     )
     parser.add_argument(
         "--force",
@@ -268,12 +286,20 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    # 确定迭代编号
+    if args.use_next:
+        iteration_number = get_next_available_number()
+        print(f"📌 自动选择下一可用编号: {iteration_number}")
+        print()
+    else:
+        iteration_number = args.iteration_number
+
     try:
         results = init_iteration(
-            args.iteration_number, force=args.force, refresh_readme=args.refresh_readme
+            iteration_number, force=args.force, refresh_readme=args.refresh_readme
         )
 
-        print(f"✅ Iteration {args.iteration_number} 本地草稿已初始化")
+        print(f"✅ Iteration {iteration_number} 本地草稿已初始化")
         print()
         print("创建的文件:")
         for path, status in results.items():
@@ -288,8 +314,8 @@ def main() -> int:
 
         print()
         print("下一步:")
-        print(f"  1. 编辑 .iteration/{args.iteration_number}/plan.md 起草迭代计划")
-        print(f"  2. 编辑 .iteration/{args.iteration_number}/regression.md 记录回归测试")
+        print(f"  1. 编辑 .iteration/{iteration_number}/plan.md 起草迭代计划")
+        print(f"  2. 编辑 .iteration/{iteration_number}/regression.md 记录回归测试")
         print("  3. 计划成熟后，参照 docs/dev/iteration_local_drafts.md 晋升到 docs/acceptance/")
 
         return 0

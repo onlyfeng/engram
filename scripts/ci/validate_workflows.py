@@ -30,7 +30,6 @@ import yaml
 
 # Optional jsonschema support
 try:
-    import jsonschema
     from jsonschema import Draft7Validator
     from jsonschema import ValidationError as JsonSchemaValidationError
 
@@ -39,6 +38,7 @@ except ImportError:
     HAS_JSONSCHEMA = False
     JsonSchemaValidationError = Exception  # type: ignore
 
+from workflow_contract_common import discover_workflow_keys
 
 # ============================================================================
 # Data Classes
@@ -1131,22 +1131,9 @@ class WorkflowContractValidator:
         # 获取所有 workflow 定义
         workflows = self.contract.get("workflows", {})
         if not workflows:
-            meta_keys = {
-                "$schema",
-                "version",
-                "description",
-                "last_updated",
-                "make",
-                "frozen_step_text",
-                "frozen_job_names",
-                "step_name_aliases",
-            }
-            # 排除 _changelog_* 字段
-            for key, value in self.contract.items():
-                if key.startswith("_"):
-                    continue
-                if key not in meta_keys and isinstance(value, dict) and "file" in value:
-                    workflows[key] = value
+            # v1.1+ 格式：使用 discover_workflow_keys 动态发现
+            for key in discover_workflow_keys(self.contract):
+                workflows[key] = self.contract[key]
 
         for workflow_name, workflow_def in workflows.items():
             job_ids = workflow_def.get("job_ids", [])
@@ -1170,7 +1157,7 @@ class WorkflowContractValidator:
                             f"  2. 确保两个数组长度相同，且位置一一对应\n"
                             f"  3. 运行 make validate-workflows 验证"
                         ),
-                        expected=f"job_ids.length == job_names.length",
+                        expected="job_ids.length == job_names.length",
                         actual=f"job_ids.length={len(job_ids)}, job_names.length={len(job_names)}",
                         location=f"{workflow_name}.job_ids / {workflow_name}.job_names",
                     )
@@ -1292,27 +1279,9 @@ class WorkflowContractValidator:
         # 2. v1.1+: {"ci": {...}, "nightly": {...}} (无 workflows 包装)
         workflows = self.contract.get("workflows", {})
         if not workflows:
-            meta_keys = {
-                "$schema",
-                "version",
-                "description",
-                "last_updated",
-                "make",
-                "frozen_step_text",
-                "frozen_job_names",
-                "step_name_aliases",
-                "_changelog_v1.3.0",
-                "_changelog_v1.4.0",
-                "_changelog_v2.0.0",
-                "_changelog_v2.1.0",
-                "_changelog_v2.2.0",
-                "_changelog_v2.3.0",
-                "_changelog_v2.4.0",
-                "_changelog_v2.5.0",
-            }
-            for key, value in self.contract.items():
-                if key not in meta_keys and isinstance(value, dict) and "file" in value:
-                    workflows[key] = value
+            # v1.1+ 格式：使用 discover_workflow_keys 动态发现
+            for key in discover_workflow_keys(self.contract):
+                workflows[key] = self.contract[key]
 
         # 检查 1: required_steps 是否都在 frozen_step_text.allowlist 中
         for workflow_name, workflow_def in workflows.items():
@@ -1455,22 +1424,9 @@ class WorkflowContractValidator:
         workflows = self.contract.get("workflows", {})
 
         if not workflows:
-            # v1.1+ 格式：直接从顶层获取 workflow 定义
-            # 排除元数据字段
-            meta_keys = {
-                "$schema",
-                "version",
-                "description",
-                "last_updated",
-                "make",
-                "frozen_step_text",
-                "step_name_aliases",
-                "_changelog_v1.3.0",
-                "_changelog_v1.4.0",
-            }
-            for key, value in self.contract.items():
-                if key not in meta_keys and isinstance(value, dict) and "file" in value:
-                    workflows[key] = value
+            # v1.1+ 格式：使用 discover_workflow_keys 动态发现
+            for key in discover_workflow_keys(self.contract):
+                workflows[key] = self.contract[key]
 
         for workflow_name, workflow_contract in workflows.items():
             self.validate_workflow(workflow_name, workflow_contract)
@@ -1517,7 +1473,9 @@ class WorkflowContractValidator:
         all_required_steps: set[str] = set()
         all_required_job_names: set[str] = set()
 
-        for workflow_key in ["ci", "nightly"]:
+        # 动态发现所有 workflow keys，而非硬编码 ["ci", "nightly"]
+        workflow_keys = discover_workflow_keys(self.contract)
+        for workflow_key in workflow_keys:
             workflow_contract = self.contract.get(workflow_key, {})
             for job in workflow_contract.get("required_jobs", []):
                 job_name = job.get("name", "")

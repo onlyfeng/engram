@@ -142,11 +142,20 @@ make test
 
 #### 2.2 引用约束
 
+| 类型 | 示例 | 允许 |
+|------|------|------|
+| **Markdown 链接** | 如 `[text]` + `(.iteration/...)` 形式 | ❌ **禁止** |
+| **文本提及** | `参考本地 .iteration/13/ 中的草稿` | ✅ 允许 |
+| **inline code 提及** | `本地草稿位于 \`.iteration/13/plan.md\`` | ✅ 允许 |
+
 **允许的引用方式**：
 
 ```markdown
 <!-- 在代码注释或口头交流中 -->
 # 参考本地 .iteration/notes.md 中的草稿思路
+
+<!-- 在版本化文档中用文本提及（非链接） -->
+本地草稿位于 `.iteration/13/plan.md`，晋升后将迁移至 docs/acceptance/
 ```
 
 **禁止的引用方式**：
@@ -162,6 +171,7 @@ make test
 1. `.iteration/` 不在版本控制中，链接必然失效
 2. 避免将非 SSOT 内容误认为权威文档
 3. 保持版本化文档的自包含性
+4. CI 门禁 (`make check-iteration-docs`) 会检测并拒绝 Markdown 链接
 
 #### 2.3 迁移路径
 
@@ -171,6 +181,73 @@ make test
 .iteration/iteration_5_draft.md
         ↓ 成熟后迁移
 docs/acceptance/iteration_5_plan.md
+```
+
+#### 2.4 跨人协作与可链接引用
+
+##### 存在性声明
+
+**`.iteration/` 的存在性不保证**：
+
+- `.iteration/` 目录为**本地草稿**，在 `.gitignore` 中排除，**不纳入版本控制**
+- **每个开发者的 `.iteration/` 内容不同**：目录可能不存在、内容可能不同、随时可能被删除或重建
+- 因此，**任何指向 `.iteration/` 的链接必然不稳定**，无法在跨人场景中可靠工作
+
+##### 跨人协作场景的入口选择
+
+当需要**跨人协作**或**可链接引用**时，不要依赖 `.iteration/`，应根据场景选择以下入口：
+
+| 场景 | 推荐入口 | 说明 |
+|------|----------|------|
+| **需要可链接引用** | `docs/acceptance/` SSOT | 版本化、永久有效、团队共享 |
+| **短期协作分享** | 导出分享包 | 使用 `export_local_iteration.py` 生成可分享的文档包 |
+| **仅提示路径（非链接）** | 文本 / inline code | 例如 `参考 .iteration/13/` 或 `` `.iteration/13/plan.md` `` |
+
+##### 入口选择决策
+
+```
+是否需要跨人协作 / 可链接引用？
+    │
+    ├─ 否（仅本地使用）
+    │     → 直接使用 .iteration/
+    │
+    └─ 是 → 选择入口类型
+              │
+              ├─ 需要永久可链接？
+              │     → SSOT：docs/acceptance/iteration_<N>_*.md
+              │        （需先完成晋升流程）
+              │
+              ├─ 短期协作（未晋升草稿）？
+              │     → 使用导出脚本生成分享包：
+              │        python scripts/iteration/export_local_iteration.py 13
+              │
+              └─ 仅提示路径（不需要链接可点击）？
+                    → 文本/inline code 提及：
+                       "参考 `.iteration/13/plan.md`"
+```
+
+##### 示例
+
+**❌ 错误做法**（跨人场景依赖 `.iteration/`）：
+
+```markdown
+<!-- 在版本化文档或 PR 描述中使用 Markdown 链接 -->
+详见 [迭代计划](.iteration/13/plan.md)   <!-- ❌ 链接必然不稳定 -->
+```
+
+**✅ 正确做法**（按场景选择入口）：
+
+```markdown
+<!-- 场景 1：需要可链接引用 → 使用 SSOT -->
+详见 [Iteration 13 计划](docs/acceptance/iteration_13_plan.md)
+
+<!-- 场景 2：短期协作 → 生成分享包后附件发送 -->
+# 在本地执行，打包为 zip（推荐）
+python scripts/iteration/export_local_iteration.py 13 --output-zip /tmp/iteration_13_draft.zip
+# 然后通过 Slack / 邮件发送该 zip 文件
+
+<!-- 场景 3：仅提示路径 → 文本 / inline code -->
+本地草稿位于 `.iteration/13/plan.md`，晋升后将迁移至 docs/acceptance/
 ```
 
 ---
@@ -184,6 +261,7 @@ docs/acceptance/iteration_5_plan.md
 | **规范性文档** | `docs/` | 是 | 是 | 迭代计划、回归记录、ADR |
 | **测试结果快照** | `docs/` 或 PR 描述 | 是 | 是 | 关键测试输出的文本摘要 |
 | **CI Artifacts** | CI 系统 | 否 | 否 | 完整测试报告、覆盖率报告、构建日志 |
+| **Nightly 审计报告** | CI Artifacts | 否 | 否 | 迭代文档审计快照（90 天保留） |
 | **本地草稿** | `.iteration/` | 否 | 否 | 临时笔记、WIP 计划 |
 
 #### 3.2 入库策略（版本化证据）
@@ -237,14 +315,153 @@ $ make ci
 - Lint 错误: 0
 ```
 
-#### 3.4 证据引用规范
+#### 3.4 Nightly 审计报告策略
+
+**Nightly 审计报告定位**：
+
+| 属性 | 值 |
+|------|-----|
+| **来源** | `nightly.yml` 中的 `iteration-audit` job |
+| **生成命令** | `make iteration-audit` |
+| **输出目录** | `.artifacts/iteration-audit/` |
+| **Artifact 名称** | `iteration-audit-<run_number>-<run_id>` |
+| **保留周期** | 90 天 |
+| **SSOT 状态** | **否**（仅观察性报告） |
+| **阻断行为** | **非阻断**（审计问题不影响 Nightly 流水线状态） |
+
+**定位说明**：
+
+- **仅观察**：Nightly 审计报告用于定期观察迭代文档的一致性状态，**不作为 SSOT**
+- **非阻断**：审计发现的问题仅产生警告，不阻断 Nightly 流水线
+- **回溯性**：90 天保留期便于按日期回溯历史审计状态
+- **与 CI 门禁的关系**：阻断式检查由 `make check-iteration-docs` 负责（在 PR CI 中执行），Nightly 审计为补充观察
+
+**使用场景**：
+
+1. **定期巡检**：每日自动生成，无需人工触发
+2. **问题追溯**：当发现文档一致性问题时，可回溯历史报告定位引入时间
+3. **审计留痕**：为代码审查或合规需求提供历史证据
+
+#### 3.5 版本化证据文件
+
+**定义**：版本化证据文件是指纳入 Git 版本控制、用于记录迭代验收证据的结构化文件。
+
+**存储位置**：`docs/acceptance/evidence/`
+
+**命名规范**：
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| `iteration_<N>_evidence.json` | `iteration_13_evidence.json` | 单一迭代的综合证据文件 |
+| `iteration_<N>_<ts>.json` | `iteration_13_20260202T143022Z.json` | 带时间戳的快照（多次验收场景） |
+
+**格式 SSOT**：[schemas/iteration_evidence_v1.schema.json](../../schemas/iteration_evidence_v1.schema.json)
+
+**Schema 约束摘要**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `iteration_number` | ✅ | 迭代编号（正整数） |
+| `recorded_at` | ✅ | 记录时间（ISO 8601 UTC） |
+| `commit_sha` | ✅ | Git commit SHA（7-40 字符） |
+| `runner` | ✅ | 执行环境（os/python/arch 必填） |
+| `commands` | ✅ | 门禁命令数组（name/command/result 必填） |
+| `links` | ❌ | 可选链接（ci_run_url、pr_url 等） |
+| `notes` | ❌ | 补充说明 |
+| `overall_result` | ❌ | 整体结果（PASS/PARTIAL/FAIL） |
+
+**安全约束**：Schema 明确禁止在任何字段中包含敏感信息（密码、API 密钥、DSN 原文、内部 IP 等）。
+
+**文件内容示例**：
+
+```json
+{
+  "$schema": "./iteration_evidence_v1.schema.json",
+  "iteration_number": 13,
+  "recorded_at": "2026-02-02T14:30:22Z",
+  "commit_sha": "abc1234def5678901234567890abcdef12345678",
+  "runner": {
+    "os": "ubuntu-22.04",
+    "python": "3.11.9",
+    "arch": "x86_64"
+  },
+  "commands": [
+    {
+      "name": "ci",
+      "command": "make ci",
+      "result": "PASS",
+      "summary": "所有检查通过",
+      "duration_seconds": 45
+    }
+  ],
+  "links": {
+    "ci_run_url": "https://github.com/.../actions/runs/1234"
+  },
+  "notes": "所有最小门禁通过",
+  "overall_result": "PASS",
+  "sensitive_data_declaration": true
+}
+```
+
+**与 `.artifacts/` 的区别**：
+
+| 属性 | `docs/acceptance/evidence/` | `.artifacts/` |
+|------|----------------------------|---------------|
+| **版本控制** | ✅ 纳入 Git | ❌ 在 `.gitignore` 中排除 |
+| **SSOT** | ✅ 作为迭代证据的 SSOT | ❌ 非 SSOT，仅运行时产物 |
+| **Markdown 链接** | ✅ 允许 | ❌ **禁止** |
+| **生命周期** | 永久保留 | 临时产物，CI 90 天保留 |
+
+**`.artifacts/` 引用约束**：
+
+`.artifacts/` 与 `.iteration/` 一样，**不得在版本化文档中以 Markdown 链接形式出现**。
+
+| 类型 | 示例 | 允许 |
+|------|------|------|
+| **Markdown 链接** | `[报告](.artifacts/test-results.xml)` | ❌ **禁止** |
+| **文本提及** | `本地产物位于 .artifacts/acceptance-runs/` | ✅ 允许 |
+| **inline code 提及** | `` `.artifacts/acceptance-unified-min/summary.json` `` | ✅ 允许 |
+
+**理由**：
+
+1. `.artifacts/` 不在版本控制中，链接必然失效
+2. 同一 commit 在不同机器上的 `.artifacts/` 内容不同
+3. CI 产物有保留期限（通常 30-90 天），链接会过期
+
+#### 3.6 证据引用规范
+
+**推荐引用格式**：
 
 | 证据来源 | 引用格式 | 示例 |
 |----------|----------|------|
 | 版本化文档 | 相对路径 Markdown 链接 | `[计划](iteration_5_plan.md)` |
+| 版本化证据文件 | 相对路径 Markdown 链接 | `[证据](evidence/iteration_13_evidence.json)` |
 | CI Run | 完整 URL | `[CI #1234](https://github.com/.../runs/1234)` |
 | CI Artifact | URL + 说明 | `报告见 CI Artifacts (90 天有效)` |
-| 本地草稿 | **禁止链接**，仅文本提及 | `参考 .iteration/ 中的草稿` |
+| 本地草稿 (`.iteration/`) | **禁止链接**，仅文本提及 | `参考 .iteration/ 中的草稿` |
+| 运行时产物 (`.artifacts/`) | **禁止链接**，仅文本提及 | `本地产物位于 .artifacts/` |
+
+**推荐的证据引用方式**（按优先级）：
+
+1. **CI Run URL**：最推荐，永久有效且可追溯
+   ```markdown
+   > **CI Run**: [GitHub Actions #1234](https://github.com/.../actions/runs/1234)
+   ```
+
+2. **版本化证据文件链接**：适用于需要结构化数据的场景
+   ```markdown
+   详细证据见 [iteration_13_evidence.json](evidence/iteration_13_evidence.json)
+   ```
+
+3. **文档内嵌摘要**：适用于关键信息需要在文档中直接可见的场景
+   ```markdown
+   ## 验收证据
+
+   | 门禁 | 状态 | 说明 |
+   |------|------|------|
+   | `make ci` | ✅ PASS | 全部通过 |
+   | `make test` | ✅ PASS | 608 passed, 0 failed |
+   ```
 
 ---
 
@@ -425,7 +642,7 @@ ls docs/acceptance/iteration_*_*.md | \
 | 工具 | 用途 | 命令 |
 |------|------|------|
 | **CI 门禁检查** | 自动化检查 SUPERSEDED 一致性（阻断式） | `make check-iteration-docs` |
-| **审计报告脚本** | 生成完整审计报告（非阻断） | `python scripts/iteration/audit_iteration_docs.py` |
+| **审计报告脚本** | 生成完整审计报告（非阻断） | `make iteration-audit` |
 
 **审计脚本用法**：
 
@@ -535,7 +752,14 @@ python scripts/ci/check_no_iteration_links_in_docs.py --skip-superseded-check --
 
 #### R6 格式规范与示例
 
-当迭代状态变更为 `🔄 SUPERSEDED` 时，对应的 `iteration_N_regression.md` 文件**顶部**（任何其他内容之前）必须添加以下标准声明：
+当迭代状态变更为 `🔄 SUPERSEDED` 时，对应的 `iteration_N_regression.md` 文件**前 20 行内**必须包含关键短语 `Superseded by Iteration M`，且后继编号 M 必须与索引表一致。
+
+**CI 检查逻辑**（`scripts/ci/check_no_iteration_links_in_docs.py::check_regression_file_superseded_header`）：
+1. 扫描文件前 20 行
+2. 使用正则 `Superseded\s+by\s+Iteration\s*(\d+)`（不区分大小写）匹配
+3. 验证声明中的后继编号与索引表一致
+
+**推荐格式**（在标题之前添加，以便读者第一时间看到）：
 
 ```markdown
 > **⚠️ Superseded by Iteration M**
@@ -544,19 +768,32 @@ python scripts/ci/check_no_iteration_links_in_docs.py --skip-superseded-check --
 > 请参阅后续迭代的回归记录获取最新验收状态。
 
 ---
+
+# Iteration N 回归验证
+（原有内容）
 ```
 
 **格式约束**：
 
 | 约束 | 要求 |
 |------|------|
-| **位置** | 文件最开头，在任何其他内容（包括标题）之前 |
+| **位置** | 文件前 20 行内（推荐在标题之前，以便读者第一时间看到） |
 | **格式** | 使用 blockquote（`>`）包裹 |
-| **标识符** | 必须包含 `⚠️ Superseded by Iteration M` 字样（M 为后继迭代编号） |
-| **后继链接** | 必须使用相对路径 `[Iteration M](iteration_M_regression.md)` 格式 |
-| **分隔线** | 声明后必须添加 `---` 分隔线，与原有内容分隔 |
+| **关键短语** | 必须包含 `Superseded by Iteration M` 字样（M 为后继迭代编号） |
+| **后继链接** | **必须**使用相对路径 `[Iteration M](iteration_M_regression.md)` 格式，指向实际存在的后继迭代回归记录 |
+| **编号一致性** | M 必须与索引表「说明」字段声明的后继编号一致 |
+| **分隔线** | 声明后建议添加 `---` 分隔线，与原有内容分隔 |
 
-> **统一示例来源**：本格式规范与 [iteration_regression.template.md](../acceptance/_templates/iteration_regression.template.md) 和 [iteration_superseded_workflow.md](../dev/iteration_superseded_workflow.md) 保持一致。
+> **统一示例来源**：本格式规范与 [iteration_regression.template.md](../acceptance/_templates/iteration_regression.template.md) 保持一致。CI 检查使用 `scripts/ci/check_no_iteration_links_in_docs.py` 的 `check_regression_file_superseded_header` 函数验证。
+
+**历史写法兼容性**：
+
+CI 检查使用宽松正则 `Superseded\s+by\s+Iteration\s*(\d+)`（忽略大小写），可兼容以下历史变体：
+- `Superseded by Iteration 10` ✅
+- `superseded by iteration10` ✅
+- `Superseded  by  Iteration  10` ✅
+
+但**新建文件必须使用上述标准格式**。历史文件如不符合标准格式，建议在下次编辑时一并更新为标准格式（无兼容窗口，直接迁移）。
 
 ### 手动检查项（建议）
 
@@ -590,3 +827,10 @@ done
 | 2026-02-01 | v1.3 | 增补「R6 格式规范与示例」：统一文档头部锚点格式，与 template 和 workflow 保持一致 |
 | 2026-02-01 | v1.4 | 增补「SSOT 边界与非 SSOT 文档定义」章节：定义 SSOT 边界、非 SSOT 文档（如 iteration_changelog）定位、索引一致性规则 R-SSOT-1~4 |
 | 2026-02-02 | v1.5 | 增补「审计工具与报告」：定义 `_drafts/` 为历史样例（非 SSOT）、新增 `audit_iteration_docs.py` 脚本生成报告 |
+| 2026-02-02 | v1.6 | 统一 R6 格式规范：前 20 行内必须包含 `Superseded by Iteration M`、后继编号与索引表一致、与 CI 脚本实现对齐 |
+| 2026-02-02 | v1.7 | 增补「2.2 引用约束」：添加引用类型表格、明确禁止项（Markdown 链接）与允许项（文本/inline code 提及） |
+| 2026-02-02 | v1.8 | 更新审计工具命令：`make iteration-audit` 替代直接脚本调用 |
+| 2026-02-02 | v1.8 | 增补「2.4 跨人协作与可链接引用」：声明 `.iteration/` 存在性不保证、定义跨人协作场景的入口选择（SSOT/导出分享包/文本提示） |
+| 2026-02-02 | v1.9 | 增补「3.4 Nightly 审计报告策略」：定义 nightly 审计报告定位（非 SSOT、仅观察、90 天保留） |
+| 2026-02-02 | v1.10 | 增补「3.5 版本化证据文件」：定义 `docs/acceptance/evidence/` 版本化证据文件规范，明确 `.artifacts/` 引用约束（与 `.iteration/` 一致禁止 Markdown 链接），扩展证据引用推荐格式 |
+| 2026-02-02 | v1.11 | 增补证据格式 SSOT：引用 `schemas/iteration_evidence_v1.schema.json` 作为版本化证据文件的格式 SSOT，添加 Schema 约束摘要表格及安全约束说明 |

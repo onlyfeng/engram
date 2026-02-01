@@ -10,10 +10,18 @@
 > - [MCP 协议规范][mcp-spec] — Model Context Protocol 官方规范
 > - [MCP JSON-RPC 传输规范][mcp-transport] — HTTP 传输层协议细节
 > - [Cursor MCP 配置指南][cursor-mcp] — Cursor IDE 官方 MCP 集成文档
+> - [MCP Server 添加方法][cursor-mcp-install] — 如何在 Cursor 中添加 MCP Server
+> - [MCP Server 目录][mcp-directory] — 社区 MCP Server 列表
+> - [Cursor Rules 配置][cursor-rules] — 自定义 Agent 行为规则
+>
+> **SSOT 声明**：本仓库 MCP 配置以 `configs/mcp/.mcp.json.example` 为权威来源，外部链接仅作行为参考。
 
 [mcp-spec]: https://modelcontextprotocol.io/specification "MCP Protocol Specification"
 [mcp-transport]: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports "MCP Transports - Streamable HTTP"
 [cursor-mcp]: https://docs.cursor.com/context/model-context-protocol "Cursor MCP Documentation"
+[cursor-mcp-install]: https://docs.cursor.com/context/model-context-protocol#adding-mcp-servers "Adding MCP Servers"
+[mcp-directory]: https://cursor.directory/ "MCP Server Directory"
+[cursor-rules]: https://docs.cursor.com/context/rules-for-ai "Cursor Rules for AI"
 
 ## 方案 A（推荐）：Cursor -> Memory Gateway -> OpenMemory
 优点：
@@ -42,14 +50,16 @@
 
 在项目根目录创建 `.cursor/mcp.json`（或编辑 `~/.cursor/mcp.json` 全局配置）：
 
+> **注意**：配置示例参见 `configs/mcp/.mcp.json.example`
+
 **最小配置**：
 
 ```json
 {
   "mcpServers": {
-    "memory-gateway": {
+    "engram": {
       "type": "http",
-      "url": "http://localhost:8787/mcp"
+      "url": "http://127.0.0.1:8787/mcp"
     }
   }
 }
@@ -60,7 +70,7 @@
 ```json
 {
   "mcpServers": {
-    "memory-gateway": {
+    "engram": {
       "type": "http",
       "url": "https://gateway.example.com/mcp",
       "headers": {
@@ -77,11 +87,11 @@
 ```json
 {
   "mcpServers": {
-    "memory-gateway-dev": {
+    "engram-dev": {
       "type": "http",
-      "url": "http://localhost:8787/mcp"
+      "url": "http://127.0.0.1:8787/mcp"
     },
-    "memory-gateway-prod": {
+    "engram-prod": {
       "type": "http",
       "url": "https://gateway.prod.example.com/mcp",
       "headers": {
@@ -127,7 +137,7 @@ Gateway 服务端需要以下环境变量：
 
 ```bash
 # HTTP 健康检查
-curl -sf http://localhost:8787/health && echo "Gateway OK"
+curl -sf http://127.0.0.1:8787/health && echo "Gateway OK"
 
 # 预期响应
 {"status":"ok","mode":"FULL","capabilities":{"openmemory":true,"logbook":true}}
@@ -137,7 +147,7 @@ curl -sf http://localhost:8787/health && echo "Gateway OK"
 
 ```bash
 # OpenMemory
-curl -sf http://localhost:8080/health && echo "OpenMemory OK"
+curl -sf http://127.0.0.1:8080/health && echo "OpenMemory OK"
 
 # PostgreSQL (通过 Logbook CLI)
 POSTGRES_DSN="postgresql://..." python -c "from engram_logbook.db import get_conn; print('Logbook OK')"
@@ -147,7 +157,7 @@ POSTGRES_DSN="postgresql://..." python -c "from engram_logbook.db import get_con
 
 ```bash
 # 测试 tools/list
-curl -X POST http://localhost:8787/mcp \
+curl -X POST http://127.0.0.1:8787/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
@@ -160,7 +170,7 @@ curl -X POST http://localhost:8787/mcp \
 #!/bin/bash
 set -e
 
-GATEWAY_URL=${GATEWAY_URL:-http://localhost:8787}
+GATEWAY_URL=${GATEWAY_URL:-http://127.0.0.1:8787}
 
 echo "=== Gateway 集成验收 ==="
 
@@ -252,7 +262,7 @@ GATEWAY_LOG_REQUESTS=1 make up-gateway
 ```json
 {
   "mcpServers": {
-    "memory-gateway": {
+    "engram": {
       "type": "http",
       "url": "http://<server-ip>:<gateway-port>/mcp"
     }
@@ -290,9 +300,9 @@ GATEWAY_LOG_REQUESTS=1 make up-gateway
 ```json
 {
   "mcpServers": {
-    "memory-gateway": {
+    "engram": {
       "type": "http",
-      "url": "http://192.168.1.100:3001/mcp",
+      "url": "http://192.168.1.100:8787/mcp",
       "headers": {
         "Authorization": "Bearer <your-api-key>"
       }
@@ -451,6 +461,8 @@ Gateway `/mcp` 端点支持两种协议格式，通过请求体字段自动识�
 
 本章节汇总与 MCP 集成相关的外部文档，便于追踪协议变更与最佳实践。
 
+> **SSOT 声明**：本仓库 MCP 配置以 `configs/mcp/.mcp.json.example` 为权威来源，外部链接仅作行为参考。
+
 ### MCP 协议规范
 
 | 资源 | 说明 |
@@ -464,7 +476,11 @@ Gateway `/mcp` 端点支持两种协议格式，通过请求体字段自动识�
 | 资源 | 说明 |
 |------|------|
 | [Cursor MCP 文档][cursor-mcp] | Cursor IDE 官方 MCP 配置与使用指南 |
+| [MCP Server 添加方法][cursor-mcp-install] | 如何在 Cursor 中添加和配置 MCP Server |
+| [MCP Server 目录][mcp-directory] | 社区 MCP Server 列表（cursor.directory） |
 | [Cursor Agent 模式][cursor-agent] | Agent 模式下的 MCP 工具调用行为 |
+| [Cursor Rules 配置][cursor-rules] | 自定义 Agent 行为规则（Project Rules / User Rules） |
+| [Project Rules][cursor-project-rules] | 项目级 Rules 配置方法 |
 
 ### 相关 ADR
 
@@ -475,9 +491,30 @@ Gateway `/mcp` 端点支持两种协议格式，通过请求体字段自动识�
 ---
 
 > **版本追踪**：本文档基于 MCP 规范 2025-03-26 版本编写。当上游规范更新时，请同步检查兼容性。
+>
+> **文档更新**：2026-02-02（审查外部链接，确认 Cursor Rules/MCP install/MCP directory 链接有效；增强 SSOT 配置示例）
+
+---
+
+## Cursor Rules 与本仓库映射
+
+本仓库的 `AGENTS.md`（根目录）作为 [Cursor Workspace Rules][cursor-rules] 自动加载，提供 AI Agent 协作规范。
+
+| Cursor 概念 | 本仓库对应 | 说明 |
+|-------------|-----------|------|
+| **Workspace Rules** | `AGENTS.md` | 自动应用于所有对话，定义门禁命令、子代理分工 |
+| **Project Rules** | `.cursor/` 目录（可选） | 项目级规则，可继承 workspace rules |
+| **User Rules** | Cursor 设置中配置 | 个人偏好，如语言设置 |
+| **MCP 配置** | `configs/mcp/.mcp.json.example` | MCP Server 连接配置模板（SSOT） |
+
+详细的 Agent 协作指南见 [docs/dev/agents.md](../dev/agents.md)。
 
 [mcp-spec]: https://modelcontextprotocol.io/specification "MCP Protocol Specification"
 [mcp-transport]: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports "MCP Transports"
 [mcp-tools]: https://modelcontextprotocol.io/specification/2025-03-26/server/tools "MCP Tools"
 [cursor-mcp]: https://docs.cursor.com/context/model-context-protocol "Cursor MCP Documentation"
+[cursor-mcp-install]: https://docs.cursor.com/context/model-context-protocol#adding-mcp-servers "Adding MCP Servers"
+[mcp-directory]: https://cursor.directory/ "MCP Server Directory"
 [cursor-agent]: https://docs.cursor.com/chat/agent "Cursor Agent Mode"
+[cursor-rules]: https://docs.cursor.com/context/rules-for-ai "Cursor Rules for AI"
+[cursor-project-rules]: https://docs.cursor.com/context/rules-for-ai#project-rules "Project Rules"

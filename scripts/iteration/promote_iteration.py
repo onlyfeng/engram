@@ -82,9 +82,7 @@ class SSOTConflictError(Exception):
     def __init__(self, iteration_number: int, suggested_number: int) -> None:
         self.iteration_number = iteration_number
         self.suggested_number = suggested_number
-        super().__init__(
-            f"Iteration {iteration_number} 已在 docs/acceptance/ 中存在（SSOT 冲突）"
-        )
+        super().__init__(f"Iteration {iteration_number} 已在 docs/acceptance/ 中存在（SSOT 冲突）")
 
 
 class SourceNotFoundError(Exception):
@@ -100,15 +98,104 @@ class FileConflictError(Exception):
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        super().__init__(
-            f"目标文件已存在且内容不同: {path}\n"
-            f"使用 --force 参数强制覆盖"
-        )
+        super().__init__(f"目标文件已存在且内容不同: {path}\n使用 --force 参数强制覆盖")
+
+
+class SupersedeValidationError(Exception):
+    """当 --supersede 目标迭代不满足前置条件时抛出。
+
+    前置条件（与 check_no_iteration_links_in_docs.py R6/R7 对齐）：
+    - OLD_N 必须在 00_acceptance_matrix.md 索引表中存在
+    - OLD_N 的 regression 文件必须存在
+    """
+
+    def __init__(self, old_iteration: int, reason: str, suggestion: str) -> None:
+        self.old_iteration = old_iteration
+        self.reason = reason
+        self.suggestion = suggestion
+        super().__init__(f"--supersede {old_iteration} 前置校验失败: {reason}")
 
 
 # ============================================================================
 # 辅助函数
 # ============================================================================
+
+
+def validate_supersede_target(old_iteration: int) -> None:
+    """校验 --supersede 目标迭代是否满足前置条件。
+
+    前置条件（与 check_no_iteration_links_in_docs.py R6/R7 对齐）：
+    1. OLD_N 必须在 00_acceptance_matrix.md 索引表中存在
+    2. OLD_N 的 regression 文件必须存在（索引中有链接且文件实际存在）
+
+    Args:
+        old_iteration: 要被取代的旧迭代编号
+
+    Raises:
+        SupersedeValidationError: 如果前置条件不满足
+    """
+    # 检查索引表是否存在
+    if not MATRIX_FILE.exists():
+        raise SupersedeValidationError(
+            old_iteration,
+            reason="索引表 00_acceptance_matrix.md 不存在",
+            suggestion="请先创建 docs/acceptance/00_acceptance_matrix.md",
+        )
+
+    # 解析索引表获取已索引的迭代
+    indexed = get_indexed_iteration_numbers()
+
+    # 条件 1: OLD_N 必须在索引表中
+    if old_iteration not in indexed:
+        raise SupersedeValidationError(
+            old_iteration,
+            reason=f"Iteration {old_iteration} 不在索引表中",
+            suggestion=(
+                f"请先将 Iteration {old_iteration} 添加到 docs/acceptance/00_acceptance_matrix.md，\n"
+                f"或使用 promote_iteration.py {old_iteration} 晋升该迭代"
+            ),
+        )
+
+    # 条件 2: OLD_N 的 regression 文件必须存在
+    # 首先检查索引中是否有 regression_link
+    content = MATRIX_FILE.read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"\|\s*\*{{0,2}}Iteration\s+{old_iteration}\*{{0,2}}\s*\|",
+        re.IGNORECASE,
+    )
+
+    regression_file = SSOT_DIR / f"iteration_{old_iteration}_regression.md"
+    has_regression_link = False
+
+    for line in content.splitlines():
+        if pattern.match(line):
+            # 检查该行是否有 regression 链接
+            if f"iteration_{old_iteration}_regression.md" in line:
+                has_regression_link = True
+            break
+
+    # 检查 regression 文件是否实际存在
+    if not regression_file.exists():
+        if has_regression_link:
+            # R7 违规：索引中有链接但文件不存在
+            raise SupersedeValidationError(
+                old_iteration,
+                reason=f"索引表中有 regression 链接但文件不存在: {regression_file.name}",
+                suggestion=(
+                    f"请创建 docs/acceptance/iteration_{old_iteration}_regression.md，\n"
+                    "或修复索引表中的链接"
+                ),
+            )
+        else:
+            # 索引中无链接且文件不存在
+            raise SupersedeValidationError(
+                old_iteration,
+                reason=f"Iteration {old_iteration} 的 regression 文件不存在",
+                suggestion=(
+                    f"请创建 docs/acceptance/iteration_{old_iteration}_regression.md，\n"
+                    f"并在索引表中添加对应的 regression_link"
+                ),
+            )
 
 
 def get_ssot_iteration_numbers() -> set[int]:
@@ -298,8 +385,16 @@ def create_index_entry(
     Returns:
         格式化的表格行
     """
-    plan_cell = f"[iteration_{iteration_number}_plan.md](iteration_{iteration_number}_plan.md)" if plan_link else "-"
-    regression_cell = f"[iteration_{iteration_number}_regression.md](iteration_{iteration_number}_regression.md)" if regression_link else "-"
+    plan_cell = (
+        f"[iteration_{iteration_number}_plan.md](iteration_{iteration_number}_plan.md)"
+        if plan_link
+        else "-"
+    )
+    regression_cell = (
+        f"[iteration_{iteration_number}_regression.md](iteration_{iteration_number}_regression.md)"
+        if regression_link
+        else "-"
+    )
     status_display = status_to_display(status)
 
     return f"| **Iteration {iteration_number}** | {date} | {status_display} | {plan_cell} | {regression_cell} | {description} |"
@@ -328,6 +423,10 @@ def update_matrix_for_supersede(
 ) -> str:
     """更新索引表中旧迭代的状态为 SUPERSEDED。
 
+    6 列表格格式: | 迭代 | 日期 | 状态 | 计划 | 详细记录 | 说明 |
+    split("|") 后: [空, 迭代, 日期, 状态, 计划, 详细记录, 说明, 空]
+    索引:           0    1     2     3     4      5        6     7
+
     Args:
         content: 文件内容
         old_iteration: 被取代的迭代编号
@@ -346,11 +445,13 @@ def update_matrix_for_supersede(
         if pattern.match(line):
             # 解析并更新该行
             cells = line.split("|")
-            if len(cells) >= 6:
-                # 更新状态列
+            # 6 列表格: | 迭代 | 日期 | 状态 | 计划 | 详细记录 | 说明 |
+            # cells: ["", " 迭代 ", " 日期 ", " 状态 ", " 计划 ", " 详细记录 ", " 说明 ", ""]
+            if len(cells) >= 8:  # 空 + 6列 + 空 = 8
+                # 更新状态列 (index 3)
                 cells[3] = " 🔄 SUPERSEDED "
-                # 更新说明列
-                cells[-2] = f" 已被 Iteration {new_iteration} 取代 "
+                # 更新说明列 (index 6) - 包含唯一后继声明
+                cells[6] = f" 已被 Iteration {new_iteration} 取代 "
                 lines[i] = "|".join(cells)
             break
 
@@ -366,13 +467,15 @@ def add_superseded_header(content: str, successor: int) -> str:
     """在 regression 文件顶部添加 superseded 声明。
 
     如果已存在声明，则更新后继编号。
-    格式遵循 iteration_regression.template.md 的 R6 规范格式。
 
-    期望格式:
-    > **⚠️ Superseded by Iteration X**
-    >
-    > 本迭代已被 [Iteration X](iteration_X_regression.md) 取代，不再维护。
-    > 请参阅后续迭代的回归记录获取最新验收状态。
+    格式来源（SSOT）:
+        docs/acceptance/_templates/iteration_regression.template.md 的 "Superseded by …" 章节
+
+    格式要求:
+        - 位置：文件最开头，必须在首个非空内容（包括标题）之前
+        - 包含 `⚠️ Superseded by Iteration X` 标识符
+        - 包含后继链接 `[Iteration X](iteration_X_regression.md)`
+        - 以 `---` 分隔线结尾
 
     Args:
         content: 文件内容
@@ -382,6 +485,7 @@ def add_superseded_header(content: str, successor: int) -> str:
         更新后的内容
     """
     # R6 规范格式（与 iteration_regression.template.md 一致）
+    # 包含: blockquote 包裹 + 后继链接 + --- 分隔线
     superseded_header = f"""> **⚠️ Superseded by Iteration {successor}**
 >
 > 本迭代已被 [Iteration {successor}](iteration_{successor}_regression.md) 取代，不再维护。
@@ -413,8 +517,23 @@ def add_superseded_header(content: str, successor: int) -> str:
             content,
         )
     else:
-        # 在文件最开头插入
-        content = superseded_header + content
+        # 插入到首个非空内容之前
+        lines = content.splitlines(keepends=True)
+        leading_empty_count = 0
+        for line in lines:
+            if line.strip() == "":
+                leading_empty_count += 1
+            else:
+                break
+
+        if leading_empty_count > 0:
+            # 保留开头的空行，在其后插入
+            leading_empty = "".join(lines[:leading_empty_count])
+            rest_content = "".join(lines[leading_empty_count:])
+            content = leading_empty + superseded_header + rest_content
+        else:
+            # 无开头空行，直接在最前面插入
+            content = superseded_header + content
 
     return content
 
@@ -482,8 +601,16 @@ def promote_iteration(
     existing_ssot = get_ssot_iteration_numbers()
     if iteration_number in existing_ssot and not force:
         # 检查是否为幂等操作（内容相同）
-        plan_identical = files_are_identical(src_plan, dst_plan) if src_plan.exists() and dst_plan.exists() else False
-        regression_identical = files_are_identical(src_regression, dst_regression) if src_regression.exists() and dst_regression.exists() else False
+        plan_identical = (
+            files_are_identical(src_plan, dst_plan)
+            if src_plan.exists() and dst_plan.exists()
+            else False
+        )
+        regression_identical = (
+            files_are_identical(src_regression, dst_regression)
+            if src_regression.exists() and dst_regression.exists()
+            else False
+        )
 
         if not (plan_identical and regression_identical):
             suggested = get_next_available_number()
@@ -538,6 +665,11 @@ def promote_iteration(
 
     # 处理 --supersede
     if supersede is not None:
+        # 前置校验（与 check_no_iteration_links_in_docs.py R6/R7 对齐）
+        # 仅在非 dry-run 模式下强制校验
+        if not dry_run:
+            validate_supersede_target(supersede)
+
         # 更新索引表中旧迭代的状态
         if MATRIX_FILE.exists():
             content = MATRIX_FILE.read_text(encoding="utf-8")
@@ -710,10 +842,16 @@ def main() -> int:
             print(f"  - {regression_file.relative_to(REPO_ROOT)}", file=sys.stderr)
         print(file=sys.stderr)
         print(f"💡 建议: 使用下一可用编号 {e.suggested_number}", file=sys.stderr)
-        print(f"   python scripts/iteration/promote_iteration.py {e.suggested_number}", file=sys.stderr)
+        print(
+            f"   python scripts/iteration/promote_iteration.py {e.suggested_number}",
+            file=sys.stderr,
+        )
         print(file=sys.stderr)
         print("或使用 --force 参数强制覆盖:", file=sys.stderr)
-        print(f"   python scripts/iteration/promote_iteration.py {e.iteration_number} --force", file=sys.stderr)
+        print(
+            f"   python scripts/iteration/promote_iteration.py {e.iteration_number} --force",
+            file=sys.stderr,
+        )
         return 1
 
     except SourceNotFoundError as e:
@@ -723,11 +861,32 @@ def main() -> int:
         print(f"  .iteration/{args.iteration_number}/", file=sys.stderr)
         print(file=sys.stderr)
         print("使用以下命令初始化本地迭代:", file=sys.stderr)
-        print(f"   python scripts/iteration/init_local_iteration.py {args.iteration_number}", file=sys.stderr)
+        print(
+            f"   python scripts/iteration/init_local_iteration.py {args.iteration_number}",
+            file=sys.stderr,
+        )
         return 1
 
     except FileConflictError as e:
         print(f"❌ 错误: {e}", file=sys.stderr)
+        return 1
+
+    except SupersedeValidationError as e:
+        print(f"❌ 错误: {e}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("--supersede 前置校验失败（与 R6/R7 规则对齐）:", file=sys.stderr)
+        print(f"  原因: {e.reason}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("💡 建议:", file=sys.stderr)
+        for line in e.suggestion.split("\n"):
+            print(f"   {line}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("参考文档:", file=sys.stderr)
+        print("  - docs/acceptance/00_acceptance_matrix.md (SUPERSEDED 一致性规则)", file=sys.stderr)
+        print(
+            "  - scripts/ci/check_no_iteration_links_in_docs.py (R6/R7 规则)",
+            file=sys.stderr,
+        )
         return 1
 
 

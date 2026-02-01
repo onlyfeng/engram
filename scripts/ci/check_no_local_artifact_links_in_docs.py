@@ -39,7 +39,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List
 
-
 # ============================================================================
 # 数据结构
 # ============================================================================
@@ -125,11 +124,30 @@ def expand_paths(paths: List[str], project_root: Path) -> List[Path]:
 # ============================================================================
 
 
+def remove_inline_code(line: str) -> str:
+    """
+    移除行内的 inline code（反引号包围的内容）。
+
+    这样可以避免匹配到 inline code 中作为示例展示的链接。
+
+    Args:
+        line: 原始行内容
+
+    Returns:
+        移除 inline code 后的行内容
+    """
+    # 匹配 `...` 形式的 inline code（包括 `` ` `` 形式的转义反引号）
+    # 使用非贪婪匹配，处理多个 inline code
+    return re.sub(r"`+[^`]+`+", "", line)
+
+
 def scan_file_for_artifact_links(file_path: Path) -> Iterator[ArtifactLinkViolation]:
     """
     扫描单个文件中的 .artifacts/ 链接。
 
-    跳过 Markdown 代码块（```...```）内的内容，因为代码块中的示例不应被检测。
+    跳过以下内容：
+    1. Markdown 代码块（```...```）内的内容
+    2. Inline code（`...`）内的内容
 
     Args:
         file_path: 要扫描的文件路径
@@ -155,7 +173,10 @@ def scan_file_for_artifact_links(file_path: Path) -> Iterator[ArtifactLinkViolat
         if in_code_block:
             continue
 
-        for match in ARTIFACT_LINK_PATTERN.finditer(line):
+        # 移除 inline code，避免匹配到示例内容
+        line_without_inline_code = remove_inline_code(line)
+
+        for match in ARTIFACT_LINK_PATTERN.finditer(line_without_inline_code):
             yield ArtifactLinkViolation(
                 file=file_path,
                 line_number=line_number,

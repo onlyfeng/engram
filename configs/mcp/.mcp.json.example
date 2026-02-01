@@ -1,4 +1,11 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_comment": [
+    "Engram Gateway MCP 配置示例（SSOT）",
+    "使用方法：复制到 ~/.cursor/mcp.json 或项目 .cursor/mcp.json",
+    "文档：docs/gateway/02_mcp_integration_cursor.md",
+    "外部参考：https://docs.cursor.com/context/model-context-protocol"
+  ],
   "mcpServers": {
     "engram": {
       "type": "http",

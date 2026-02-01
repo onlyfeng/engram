@@ -799,9 +799,18 @@ class TestEvidenceUploadDependencyMissing:
             assert isinstance(result, dict)
             assert result["ok"] is False
 
-    def test_error_reason_dependency_missing_exists(self):
-        """验证 ErrorReason.DEPENDENCY_MISSING 常量存在"""
-        from engram.gateway.mcp_rpc import ErrorReason
+    def test_tool_result_error_code_dependency_missing_exists(self):
+        """
+        验证 ToolResultErrorCode.DEPENDENCY_MISSING 常量存在
 
-        assert hasattr(ErrorReason, "DEPENDENCY_MISSING")
-        assert ErrorReason.DEPENDENCY_MISSING == "DEPENDENCY_MISSING"
+        注意：DEPENDENCY_MISSING 属于业务层错误码 (ToolResultErrorCode)，
+        不属于 JSON-RPC 层错误码 (McpErrorReason/ErrorReason)。
+
+        边界说明：
+        - McpErrorReason/ErrorReason: 用于 JSON-RPC error.data.reason
+        - ToolResultErrorCode: 用于工具执行结果 result.error_code
+        """
+        from engram.gateway.result_error_codes import ToolResultErrorCode
+
+        assert hasattr(ToolResultErrorCode, "DEPENDENCY_MISSING")
+        assert ToolResultErrorCode.DEPENDENCY_MISSING == "DEPENDENCY_MISSING"
