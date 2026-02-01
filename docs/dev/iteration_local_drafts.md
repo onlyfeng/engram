@@ -589,20 +589,33 @@ python scripts/iteration/audit_iteration_docs.py --output-dir .artifacts/iterati
 ### 基本用法
 
 ```bash
-# 基本用法（自动获取当前 commit sha）
+# 基本用法（自动获取当前 commit sha，输出到 canonical 文件）
 python scripts/iteration/record_iteration_evidence.py 13
 
-# 指定 commit sha
+# 指定 CI 运行 URL（推荐：便于追溯）
+python scripts/iteration/record_iteration_evidence.py 13 \
+  --ci-run-url https://github.com/org/repo/actions/runs/123
+
+# 指定 commit sha（用于非 HEAD 状态）
 python scripts/iteration/record_iteration_evidence.py 13 --commit abc1234
 
+# 添加单个命令记录（NAME:COMMAND:RESULT 格式，可多次使用）
+python scripts/iteration/record_iteration_evidence.py 13 \
+  --add-command 'lint:make lint:PASS' \
+  --add-command 'typecheck:make typecheck:PASS' \
+  --add-command 'test:make test:PASS'
+
 # 从 JSON 文件读取命令结果
-python scripts/iteration/record_iteration_evidence.py 13 --commands-json .artifacts/acceptance-runs/run_123.json
+python scripts/iteration/record_iteration_evidence.py 13 \
+  --commands-json .artifacts/acceptance-runs/run_123.json
 
 # 直接传入命令结果 JSON 字符串
-python scripts/iteration/record_iteration_evidence.py 13 --commands '{"make ci": {"exit_code": 0, "summary": "passed"}}'
+python scripts/iteration/record_iteration_evidence.py 13 \
+  --commands '{"make ci": {"exit_code": 0, "summary": "passed"}}'
 
-# 指定 CI 运行 URL
-python scripts/iteration/record_iteration_evidence.py 13 --ci-run-url https://github.com/org/repo/actions/runs/123
+# 添加备注说明
+python scripts/iteration/record_iteration_evidence.py 13 \
+  --notes "所有门禁通过，验收完成"
 
 # 预览模式（不实际写入）
 python scripts/iteration/record_iteration_evidence.py 13 --dry-run
@@ -614,44 +627,62 @@ python scripts/iteration/record_iteration_evidence.py 13 --dry-run
 |------|------|--------|
 | `iteration_number` | 迭代编号（必须） | - |
 | `--commit`, `-c` | commit SHA | 自动获取当前 HEAD |
+| `--add-command`, `-a` | 添加命令记录（NAME:COMMAND:RESULT 格式，可多次使用） | - |
+| `--add-command-json` | 添加命令记录（JSON 格式，可多次使用） | - |
 | `--commands` | 命令结果 JSON 字符串 | - |
 | `--commands-json` | 命令结果 JSON 文件路径 | - |
 | `--ci-run-url` | CI 运行 URL（可选） | - |
+| `--notes` | 补充说明（可选） | - |
+| `--runner-label` | CI runner 标签（可选） | - |
 | `--dry-run`, `-n` | 预览模式，不实际写入 | false |
 
 ### 输出格式
 
-证据文件写入 `docs/acceptance/evidence/` 目录，命名格式：
+证据文件写入 `docs/acceptance/evidence/` 目录，使用 **canonical 命名策略**（固定文件名，每次覆盖）：
 
-```
-iteration_<N>_<timestamp>_<commit>.json
-```
+| 命名类型 | 文件名格式 | 说明 |
+|----------|-----------|------|
+| **Canonical（默认）** | `iteration_<N>_evidence.json` | 固定文件名，每次覆盖 |
+| Snapshot（可选） | `iteration_<N>_<YYYYMMDD_HHMMSS>.json` | 带时间戳，用于历史记录 |
+| Snapshot+SHA（可选） | `iteration_<N>_<YYYYMMDD_HHMMSS>_<sha7>.json` | 带时间戳和 commit SHA |
 
-示例：`iteration_13_20260202_143025_abc1234.json`
+示例：`iteration_13_evidence.json`
 
-输出 JSON 结构：
+输出 JSON 结构（符合 `iteration_evidence_v1.schema.json`）：
 
 ```json
 {
+  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
   "iteration_number": 13,
-  "commit_sha": "abc1234567890...",
-  "timestamp": "2026-02-02T14:30:25.123456",
+  "recorded_at": "2026-02-02T14:30:25Z",
+  "commit_sha": "abc1234567890abcdef...",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.11.9",
+    "arch": "arm64"
+  },
   "commands": [
     {
+      "name": "ci",
       "command": "make ci",
-      "exit_code": 0,
-      "summary": "passed",
-      "duration_seconds": 45.2
+      "result": "PASS",
+      "summary": "All checks passed",
+      "duration_seconds": 45.2,
+      "exit_code": 0
     }
   ],
-  "ci_run_url": "https://github.com/org/repo/actions/runs/123",
-  "metadata": {}
+  "links": {
+    "ci_run_url": "https://github.com/org/repo/actions/runs/123",
+    "regression_doc_url": "docs/acceptance/iteration_13_regression.md"
+  },
+  "overall_result": "PASS",
+  "sensitive_data_declaration": true
 }
 ```
 
 ### 命令结果 JSON 格式
 
-支持两种输入格式：
+支持多种输入格式：
 
 **格式 1：简单字典格式**
 
@@ -668,6 +699,15 @@ iteration_<N>_<timestamp>_<commit>.json
 [
   {"command": "make ci", "exit_code": 0, "summary": "passed"},
   {"command": "make test", "exit_code": 0, "summary": "all tests passed"}
+]
+```
+
+**格式 3：Schema 格式（完整）**
+
+```json
+[
+  {"name": "lint", "command": "make lint", "result": "PASS", "summary": "ruff check passed"},
+  {"name": "typecheck", "command": "make typecheck", "result": "PASS"}
 ]
 ```
 
@@ -704,21 +744,58 @@ iteration_<N>_<timestamp>_<commit>.json
 }
 ```
 
+### Schema 校验
+
+```bash
+# 校验证据文件是否符合 schema（推荐在提交前运行）
+python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v1.schema.json
+
+# 校验成功无输出，失败会显示具体错误
+```
+
 ### 典型工作流
 
 ```bash
 # 1. 运行门禁检查
 make ci
 
-# 2. 记录证据
+# 2. 记录证据（推荐方式：使用 --add-command 添加命令记录）
+python scripts/iteration/record_iteration_evidence.py 13 \
+  --add-command 'ci:make ci:PASS' \
+  --ci-run-url https://github.com/org/repo/actions/runs/123 \
+  --notes "所有门禁通过"
+
+# 或传入 JSON 格式的命令结果
 python scripts/iteration/record_iteration_evidence.py 13 \
   --commands '{"make ci": {"exit_code": 0, "summary": "passed"}}' \
   --ci-run-url https://github.com/org/repo/actions/runs/123
 
-# 3. 提交证据
-git add docs/acceptance/evidence/
+# 3. 校验 schema（可选但推荐）
+python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v1.schema.json
+
+# 4. 提交证据
+git add docs/acceptance/evidence/iteration_13_evidence.json
 git commit -m "evidence: Iteration 13 验收证据"
 ```
+
+### 在 regression 文档中引用
+
+在 `iteration_<N>_regression.md` 末尾添加证据引用，使用相对路径 `evidence/iteration_<N>_evidence.json`：
+
+```markdown
+## 验收证据
+
+| 项目 | 值 |
+|------|-----|
+| **证据文件** | [`iteration_13_evidence.json`](evidence/iteration_13_evidence.json) |
+| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **记录时间** | 2026-02-02T14:30:25Z |
+| **Commit SHA** | `abc1234` |
+
+> **校验命令**: `python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v1.schema.json`
+```
+
+完整模板参见 [iteration_evidence_snippet.template.md](../acceptance/_templates/iteration_evidence_snippet.template.md)
 
 ---
 

@@ -583,18 +583,146 @@ def process(data: dict | None) -> str:
 
 ## 7. 第三方库类型桩（Stubs）管理策略
 
+### 7.0 Stubs 策略决策指南
+
+当遇到 `[import-untyped]` 或 `[import-not-found]` 错误时，按以下优先级选择解决方案：
+
+#### 7.0.1 决策流程图
+
+```
+遇到第三方库类型缺失
+        │
+        ▼
+┌───────────────────┐
+│ 库是否有官方 py.typed？│──是──▶ 升级到支持类型的版本
+└───────────────────┘
+        │否
+        ▼
+┌───────────────────┐
+│ typeshed 有 types-XXX？│──是──▶ 添加到 dev 依赖（推荐）
+└───────────────────┘
+        │否
+        ▼
+┌───────────────────┐
+│ 社区有 XXX-stubs？   │──是──▶ 添加到 dev 依赖
+└───────────────────┘
+        │否
+        ▼
+┌───────────────────┐
+│ 仅少量 API 使用？    │──是──▶ 本地 vendor stub（typings/）
+└───────────────────┘
+        │否
+        ▼
+┌───────────────────────────────┐
+│ 模块级 ignore_missing_imports │
+│ （禁止用于 strict-island）    │
+└───────────────────────────────┘
+```
+
+#### 7.0.2 何时安装 types 包（推荐）
+
+| 条件 | 操作 | 示例 |
+|------|------|------|
+| typeshed 官方维护 | `pip install types-XXX` | `types-requests`, `types-PyYAML` |
+| 社区活跃维护 | `pip install XXX-stubs` | `boto3-stubs[s3]` |
+| 版本兼容性好 | 添加到 `pyproject.toml` dev 依赖 | 见当前配置 |
+
+**当前已配置的 stubs 包**（SSOT: `pyproject.toml`）：
+
+```toml
+# 类型桩（与 requirements-dev.txt 保持同步）
+"types-requests>=2.28.0",
+"types-PyYAML>=6.0.0",
+"boto3-stubs[s3]>=1.28.0",
+```
+
+#### 7.0.3 何时使用本地 vendor stub（typings/）
+
+| 场景 | 说明 |
+|------|------|
+| **仅使用少量 API** | 为 2-3 个函数写 stub 比安装完整包更轻量 |
+| **库类型不完整需补丁** | 官方 stubs 缺少某些定义，需要本地扩展 |
+| **内部/私有库** | 无公开 stubs 包的内部依赖 |
+| **临时过渡** | 等待上游修复期间的临时方案 |
+
+**创建本地 stub 步骤**：
+
+1. 创建 `typings/` 目录（仓库根目录）
+2. 在 `pyproject.toml` 中配置 mypy：
+   ```toml
+   [tool.mypy]
+   mypy_path = "typings"
+   ```
+3. 创建 stub 文件（如 `typings/some_lib/__init__.pyi`）：
+   ```python
+   # typings/some_lib/__init__.pyi
+   def some_function(arg: str) -> int: ...
+   ```
+
+**注意**：本地 stub 需要维护，优先考虑安装官方 stubs 包。
+
+#### 7.0.4 何时允许 ignore_missing_imports（最后手段）
+
+> **⚠️ 强制约束**：`ignore_missing_imports = true` **禁止**用于 Strict Island 模块。
+
+| 允许场景 | 配置方式 | 约束 |
+|---------|---------|------|
+| 确实无任何 stubs 的遗留库 | 模块级 `[[tool.mypy.overrides]]` | 仅限非 strict-island |
+| 库内部模块（如 `lib._internal`） | 精准指定模块名 | 避免通配符 |
+| 测试辅助库（如 mock 工具） | 单独配置 | 不影响生产代码 |
+
+**禁止场景**：
+
+| 禁止 | 原因 |
+|------|------|
+| 全局 `ignore_missing_imports = true` | 隐藏所有类型问题 |
+| Strict Island 模块使用 | 违反类型安全承诺 |
+| 有 stubs 包但懒得安装 | 应添加到 dev 依赖 |
+
+**精准豁免配置示例**（仅限非 strict-island）：
+
+```toml
+# --- 第三方库桩缺失时的精准豁免 ---
+# ⚠️ 禁止用于 strict_island_paths 中的模块
+[[tool.mypy.overrides]]
+module = [
+    "legacy_untyped_lib.*",
+    "internal_tool",
+]
+ignore_missing_imports = true
+```
+
+#### 7.0.5 Strict Island 的硬性约束
+
+Strict Island 模块（定义在 `[tool.engram.mypy].strict_island_paths`）有以下强制要求：
+
+| 约束 | 配置 | 检查 |
+|------|------|------|
+| 禁止忽略缺失导入 | `ignore_missing_imports = false` | `check_strict_island_admission.py` |
+| 必须有类型桩 | 所有导入都需要类型信息 | `mypy --strict` |
+| 新增依赖必须有 stubs | 添加库时同步添加 stubs | PR Review |
+
+**如果 Strict Island 模块需要新依赖**：
+
+1. 优先选择有 `py.typed` 的库
+2. 其次安装 `types-XXX` 或 `XXX-stubs`
+3. 必要时创建本地 stub（`typings/`）
+4. **绝对禁止**使用 `ignore_missing_imports = true`
+
+---
+
 ### 7.1 当前第三方依赖类型支持情况
 
-| 库 | 类型支持方式 | 来源 | 备注 |
-|----|-------------|------|------|
-| `psycopg` | 内置 py.typed | 官方 | 3.x 版本内置完整类型 |
-| `yaml (PyYAML)` | types-PyYAML | typeshed | dev 依赖中配置 |
-| `requests` | types-requests | typeshed | dev 依赖中配置 |
-| `fastapi` | 内置 py.typed | 官方 | 完整类型支持 |
-| `pydantic` | 内置 py.typed | 官方 | 完整类型支持 |
-| `typer` | 内置 py.typed | 官方 | 完整类型支持 |
-| `httpx` | 内置 py.typed | 官方 | 完整类型支持 |
-| `boto3` | boto3-stubs | 社区 | dev 依赖中配置（[s3] extra） |
+| 库 | 类型支持方式 | 来源 | 版本要求 | 备注 |
+|----|-------------|------|---------|------|
+| `psycopg` | 内置 py.typed | 官方 | `>=3.1.0` | 3.x 版本内置完整类型 |
+| `yaml (PyYAML)` | types-PyYAML | typeshed | `>=6.0.0` | dev 依赖中配置 |
+| `requests` | types-requests | typeshed | `>=2.28.0` | dev 依赖中配置 |
+| `fastapi` | 内置 py.typed | 官方 | `>=0.100.0` | 完整类型支持 |
+| `pydantic` | 内置 py.typed | 官方 | `>=2.0.0` | 完整类型支持 |
+| `typer` | 内置 py.typed | 官方 | `>=0.9.0` | 完整类型支持 |
+| `httpx` | 内置 py.typed | 官方 | `>=0.24.0` | 完整类型支持 |
+| `boto3` | boto3-stubs | 社区 | `>=1.28.0` | dev 依赖中配置（[s3] extra） |
 
 ### 7.2 Strict Island 的 import 检查策略
 

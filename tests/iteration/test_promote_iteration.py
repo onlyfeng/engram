@@ -14,23 +14,18 @@ Fixtures 使用临时目录构造 .iteration/ + docs/acceptance/ 结构。
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
 # 导入检查脚本的解析函数用于一致性断言
-from check_no_iteration_links_in_docs import (
+from scripts.ci.check_no_iteration_links_in_docs import (
     check_index_integrity,
     check_superseded_consistency,
     parse_acceptance_matrix,
 )
-from promote_iteration import (
+from scripts.iteration.promote_iteration import (
     SourceNotFoundError,
     SSOTConflictError,
     SupersedeValidationError,

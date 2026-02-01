@@ -37,7 +37,12 @@ make typecheck-gate                     # mypy baseline 模式检查（用于增
 make check-cli-entrypoints              # CLI 入口点一致性检查
 make check-noqa-policy                  # noqa 注释策略检查
 make check-no-root-wrappers             # 根目录 wrapper 禁止导入检查
+make check-workflow-contract-doc-anchors  # Workflow 合约文档锚点检查
 pytest tests/ci/ -q                     # CI 脚本测试
+
+# 建议工具（辅助开发，不阻断 CI）
+python scripts/ci/suggest_workflow_contract_updates.py --json  # 生成合约更新建议（JSON）
+python scripts/ci/suggest_workflow_contract_updates.py --markdown  # 生成合约更新建议（Markdown）
 ```
 
 > **迭代回归 Runbook**：详细的最小门禁命令块（含预期输出关键字和通过标准）请参阅：[Iteration 13 Regression Runbook](docs/acceptance/iteration_13_regression.md#最小门禁命令块)
@@ -103,7 +108,7 @@ make test              # 可选：运行测试（需数据库）
 | 代理角色 | 主要职责 | 关键路径 | 最小门禁 |
 |----------|----------|----------|----------|
 | **SQL / 数据库** | SQL 迁移、权限配置 | `sql/*.sql` | `check-migration-sanity`, `verify-permissions` |
-| **CI / 工程质量** | CI 脚本、mypy baseline | `scripts/ci/*.py` | `typecheck`, `validate-workflows-strict`, `check-workflow-contract-docs-sync`, `check-workflow-contract-version-policy` |
+| **CI / 工程质量** | CI 脚本、mypy baseline | `scripts/ci/*.py` | `typecheck`, `validate-workflows-strict`, `check-workflow-contract-docs-sync`, `check-workflow-contract-version-policy`, `check-workflow-contract-doc-anchors` |
 | **文档** | 架构文档、API 契约 | `docs/**/*.md` | `check-env-consistency`, `check-iteration-docs` |
 | **Gateway / 业务逻辑** | Handler、Service 开发 | `src/engram/gateway/` | `lint`, `check-gateway-di-boundaries`, `check-gateway-public-api-surface`, `check-gateway-public-api-docs-sync`, `check-gateway-import-surface`, `check-gateway-correlation-id-single-source`, `check-mcp-error-contract`, `check-mcp-error-docs-sync` |
 
@@ -195,6 +200,8 @@ make test              # 可选：运行测试（需数据库）
 | Subagent 拆分模板 | [docs/dev/agents.md#subagent-拆分模板](docs/dev/agents.md#subagent-拆分模板) |
 | 草稿→SSOT 晋升流程 | [docs/dev/agents.md#5-草稿ssot-晋升流程](docs/dev/agents.md#5-草稿ssot-晋升流程) |
 | CI 门禁 Runbook | [docs/dev/ci_gate_runbook.md](docs/dev/ci_gate_runbook.md) |
+| 迭代操作手册 | [docs/dev/iteration_runbook.md](docs/dev/iteration_runbook.md) |
+| 迭代本地草稿指南 | [docs/dev/iteration_local_drafts.md](docs/dev/iteration_local_drafts.md) |
 | 迭代回归 Runbook | [docs/acceptance/iteration_13_regression.md](docs/acceptance/iteration_13_regression.md) |
 | CI 配置 | `.github/workflows/ci.yml` |
 | Makefile | `Makefile` |
@@ -206,4 +213,4 @@ make test              # 可选：运行测试（需数据库）
 
 ---
 
-更新时间：2026-02-02（同步 Makefile 实际目标：添加 gateway 相关检查命令、补充 alias targets）
+更新时间：2026-02-02（添加 check-workflow-contract-doc-anchors 门禁、suggest_workflow_contract_updates 建议工具）

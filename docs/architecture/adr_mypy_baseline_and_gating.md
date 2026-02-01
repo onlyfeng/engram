@@ -48,49 +48,69 @@ Gate=off:
 
 ### 2.2 CI 配置示例
 
-CI 采用两步流程：先由 `resolve_mypy_gate.py` 根据迁移阶段解析 gate 值，再由 `check_mypy_gate.py` 执行检查。
+CI 采用三步流程：
+1. **baseline_count 计算** - 优先使用 `mypy_metrics.py` 的 `total_errors` 口径
+2. **gate 解析** - 由 `resolve_mypy_gate.py` 根据迁移阶段解析
+3. **mypy 检查** - 由 `check_mypy_gate.py` 执行检查
+
+**baseline_count 口径说明**：
+
+| 口径 | 命令 | 说明 | 使用场景 |
+|------|------|------|----------|
+| **mypy_metrics**（主口径） | `mypy_metrics.py` → `summary.total_errors` | 仅计入 `error:` 行，排除 `note:` 行 | **CI 默认使用** |
+| **wc -l**（备选） | `wc -l < mypy_baseline.txt` | 包含 `note:` 行，数值略高 | Fallback |
 
 ```yaml
-# .github/workflows/ci.yml
+# .github/workflows/ci.yml - lint job 中的 mypy 检查步骤
 
-# 步骤 1: 统计 baseline 错误数（用于阈值判断）
+# 步骤 1: 统计 baseline 错误数（优先 mypy_metrics 口径）
 - name: Count mypy baseline errors
   id: baseline-count
   run: |
-    BASELINE_FILE="scripts/ci/mypy_baseline.txt"
-    if [ -f "$BASELINE_FILE" ]; then
-      COUNT=$(wc -l < "$BASELINE_FILE" | tr -d ' ')
+    # 优先使用 mypy_metrics.py 获取准确的 total_errors（排除 note 行）
+    mkdir -p artifacts
+    if python -m scripts.ci.mypy_metrics --output artifacts/mypy_metrics.json 2>/dev/null; then
+      COUNT=$(python -c "import json; print(json.load(open('artifacts/mypy_metrics.json'))['summary']['total_errors'])" 2>/dev/null || echo "0")
+      echo "[INFO] 使用 mypy_metrics 口径: total_errors=${COUNT}"
     else
-      COUNT=0
+      # Fallback: 使用 wc -l（备选口径）
+      BASELINE_FILE="scripts/ci/mypy_baseline.txt"
+      if [ -f "$BASELINE_FILE" ]; then
+        COUNT=$(wc -l < "$BASELINE_FILE" | tr -d ' ')
+      else
+        COUNT=0
+      fi
+      echo "[WARN] mypy_metrics 不可用，使用 wc -l fallback: count=${COUNT}"
     fi
     echo "count=${COUNT}" >> $GITHUB_OUTPUT
 
 # 步骤 2: 解析 mypy gate（根据 phase、分支、阈值等）
+# 回滚开关: ENGRAM_MYPY_GATE_OVERRIDE (优先级最高)
 - name: Resolve mypy gate
   id: resolve-mypy-gate
   run: |
-    GATE=$(python scripts/ci/resolve_mypy_gate.py \
+    GATE=$(python -m scripts.ci.resolve_mypy_gate \
       --phase "${{ vars.ENGRAM_MYPY_MIGRATION_PHASE || '0' }}" \
       --override "${{ vars.ENGRAM_MYPY_GATE_OVERRIDE || '' }}" \
       --threshold "${{ vars.ENGRAM_MYPY_STRICT_THRESHOLD || '0' }}" \
       --baseline-count "${{ steps.baseline-count.outputs.count }}" \
       --branch "${{ github.head_ref || '' }}" \
       --ref "${{ github.ref }}" \
-      --verbose)
+      --explain)
     echo "gate=${GATE}" >> $GITHUB_OUTPUT
 
 # 步骤 3: 执行 mypy 检查（使用解析后的 gate）
-- name: mypy type check (baseline)
+- name: Run mypy type check
   run: |
-    python scripts/ci/check_mypy_gate.py \
+    python -m scripts.ci.check_mypy_gate \
       --gate "${{ steps.resolve-mypy-gate.outputs.gate }}" \
       --baseline-file scripts/ci/mypy_baseline.txt \
       --mypy-path src/engram/ \
       --verbose
 
 # 步骤 4: strict-island 检查（核心模块必须零错误）
-- name: mypy strict-island check
-  run: python scripts/ci/check_mypy_gate.py --gate strict-island --verbose
+- name: Run mypy strict-island check
+  run: python -m scripts.ci.check_mypy_gate --gate strict-island --verbose
 ```
 
 **脚本职责分工**：
@@ -314,6 +334,33 @@ Baseline 变更审核：
 - [ ] 是否有明确的修复计划
 ```
 
+### 4.5 清零决策规则（阈值 ≤ 30）
+
+> **核心原则**：当 baseline 错误数处于可修复范围内（≤ 30），**默认策略是修复并清零**，禁止通过更新 baseline 逃逸问题。
+
+#### 默认策略：必须修复
+
+以下错误类型**必须修复**，不允许净增 baseline：
+
+| 错误类型 | 示例错误码 | 处理策略 |
+|----------|-----------|----------|
+| 导入错误 | `[import-not-found]`, `[import-untyped]` | 安装 stubs 或创建本地 stub |
+| Optional 边界 | `[arg-type]`, `[assignment]` | 添加 None 检查或类型收窄 |
+| 属性缺失 | `[attr-defined]` | 修复类型定义 |
+| 返回值类型 | `[no-any-return]`, `[return-value]` | 明确返回类型注解 |
+
+#### 例外场景（允许净增）
+
+**仅以下场景**允许 baseline 净增，且**必须绑定 issue**：
+
+| 例外场景 | 要求 |
+|----------|------|
+| 第三方 stubs 缺失（无 `types-XXX` 包） | 必须附 issue 链接 |
+| 类型系统局限（mypy bug） | 必须附 mypy issue |
+| 待上游修复（依赖库问题） | 必须附上游 PR/issue |
+
+> 详细规则参见 [mypy 基线管理 §4.2a](../dev/mypy_baseline.md#42a-清零决策规则阈值--30)
+
 ---
 
 ## 5. 迁移路线：Baseline → Strict
@@ -496,7 +543,15 @@ return "strict"  # 所有分支统一 strict
 
 #### 阶段 3：全面 Strict + 清理
 
-**触发条件**：阶段 2 稳定运行 ≥ 2 周且 Baseline 仍为空
+**触发条件**（所有条件必须同时满足）：
+
+| 条件 | 检查方法 | 通过标准 |
+|------|----------|----------|
+| **Baseline 清零** | `python -m scripts.ci.mypy_metrics --output - \| jq '.summary.total_errors'` | **= 0** |
+| **阶段 2 稳定期** | 查看 CI 历史和 `ENGRAM_MYPY_MIGRATION_PHASE` 设置时间 | ≥ 2 周无回滚 |
+| **无 Override 状态** | 检查 `ENGRAM_MYPY_GATE_OVERRIDE` | 空或未设置 |
+| **Strict Island 通过** | `make typecheck-strict-island` | 退出码 0 |
+| **近 30 天净增 = 0** | Git diff 统计 baseline 文件变更 | 无净增错误 |
 
 **操作清单**：
 

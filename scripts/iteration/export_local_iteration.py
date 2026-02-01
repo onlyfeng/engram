@@ -35,7 +35,6 @@ import sys
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from typing import List, Optional
 
@@ -325,18 +324,14 @@ def export_iteration(
 
         if regression_content is not None:
             regression_output = output_dir / "regression.md"
-            regression_output.write_text(
-                header + regression_content + footer, encoding="utf-8"
-            )
+            regression_output.write_text(header + regression_content + footer, encoding="utf-8")
             output_files.append(str(regression_output))
 
     return ExportResult(
         success=True,
         message=f"Iteration {iteration_number} 草稿导出完成",
         plan_content=header + plan_content + footer if plan_content else None,
-        regression_content=(
-            header + regression_content + footer if regression_content else None
-        ),
+        regression_content=(header + regression_content + footer if regression_content else None),
         warnings=all_warnings,
         output_files=output_files,
     )

@@ -39,30 +39,39 @@
 
 ### 2.1 汇总统计
 
-| 指标 | 数值 |
-|------|------|
-| 总错误数 | **0** ✅ |
-| 总 note 数 | 0 |
-| 总行数 | 0 |
+> **⚠️ 动态口径**：以下数值以 `scripts/ci/mypy_baseline.txt` 为准，请运行验证命令获取实时数据。
 
-**检查结果**:
-- `make typecheck-gate`: 通过 (当前错误数 0，基线错误数 0)
-- `make typecheck-strict-island`: 通过 (Strict Island 错误数 0)
-- `scripts/ci/mypy_baseline.txt`: 空文件 ✅
-- `artifacts/mypy_current.txt`: 空文件 ✅
+| 指标 | 获取方式 |
+|------|----------|
+| 总错误数 | `grep -c "error:" scripts/ci/mypy_baseline.txt` |
+| 总 note 数 | `grep -c "note:" scripts/ci/mypy_baseline.txt` |
+| 总行数 | `wc -l < scripts/ci/mypy_baseline.txt` |
+
+**验证命令**:
+```bash
+# 获取当前统计
+echo "总行数: $(wc -l < scripts/ci/mypy_baseline.txt)"
+echo "错误数: $(grep -c 'error:' scripts/ci/mypy_baseline.txt || echo 0)"
+echo "note数: $(grep -c 'note:' scripts/ci/mypy_baseline.txt || echo 0)"
+
+# 完整检查
+make typecheck-gate
+make typecheck-strict-island
+```
 
 ### 2.2 按目录分布
 
-| 目录 | 错误数 | note 数 | 占比 |
-|------|--------|---------|------|
-| `src/engram/logbook/` | 0 | 0 | - ✅ |
-| `src/engram/gateway/` | 0 | 0 | - ✅ |
+> **动态查询**：
+> ```bash
+> grep -o 'src/engram/[^/]*/' scripts/ci/mypy_baseline.txt | sort | uniq -c | sort -rn
+> ```
 
 ### 2.3 按 error-code 分布
 
-| error-code | 数量 |
-|------------|------|
-| (无错误) | 0 ✅ |
+> **动态查询**：
+> ```bash
+> grep -oE '\[[a-z-]+\]' scripts/ci/mypy_baseline.txt | sort | uniq -c | sort -rn
+> ```
 
 ---
 
@@ -71,18 +80,48 @@
 > **数据来源**: `scripts/ci/mypy_baseline.txt`（`wc -l` 获取行数，逐行检查文件）  
 > **查询命令**: `grep -c "error:" scripts/ci/mypy_baseline.txt` 或 `python scripts/ci/mypy_metrics.py --stdout`
 
-### 3.1 Top 错误文件表格（当前快照）
+### 3.1 Top 错误文件表格（动态查询）
 
-| 文件 | 当前错误数 | 主要错误码/类型 | 预估修复策略 | 目标迭代 | 负责人 |
-|------|------------|----------------|--------------|----------|--------|
-| (无错误文件) | 0 | - | - | - | - |
+> **动态查询**（按文件聚合错误数）：
+> ```bash
+> grep "error:" scripts/ci/mypy_baseline.txt | cut -d: -f1 | sort | uniq -c | sort -rn | head -10
+> ```
 
 ### 3.2 按模块聚合
 
-| 模块 | 文件数 | 错误数 | 建议清零迭代 | 状态 |
-|------|--------|--------|--------------|------|
-| `gateway/` | 0 | 0 | - | ✅ 已清零 |
-| `logbook/` | 0 | 0 | - | ✅ 已清零 |
+> **动态查询**：
+> ```bash
+> grep "error:" scripts/ci/mypy_baseline.txt | grep -oE 'src/engram/(gateway|logbook)' | sort | uniq -c
+> ```
+
+> **验证清零状态**：当查询结果为空时，表示该模块已清零。
+
+---
+
+## 3A. 清零决策规则
+
+> **阈值 ≤ 30 时适用**：当 baseline 错误数处于可修复范围内，**默认策略是修复并清零**。
+>
+> 详细规则参见 [mypy 基线管理 §4.2a 清零决策规则](./mypy_baseline.md#42a-清零决策规则阈值--30)
+
+### 3A.1 决策要点
+
+| 场景 | 策略 | 是否允许净增 |
+|------|------|--------------|
+| 错误属于可修复类型（导入/Optional/属性/返回值） | **必须修复** | ❌ 禁止 |
+| 第三方 stubs 缺失（无 `types-XXX` 包） | 允许净增 | ✅ 必须绑定 issue |
+| 类型系统局限（mypy bug） | 允许净增 | ✅ 必须绑定 issue |
+| 待上游修复 | 允许净增 | ✅ 必须绑定 issue |
+
+### 3A.2 可修复错误类型
+
+以下错误码**必须修复**，不允许更新 baseline 逃逸：
+
+- `[import-not-found]` / `[import-untyped]` → 安装 stubs 或创建本地 stub
+- `[arg-type]` / `[assignment]` → 添加 None 检查或类型收窄
+- `[attr-defined]` → 修复类型定义
+- `[no-any-return]` / `[return-value]` → 明确返回类型
+- `[operator]` → 修复操作数类型
 
 ---
 
@@ -269,25 +308,31 @@ pytest tests/your_module/ -v
 | **准入前提** | 候选模块 baseline 错误数 = 0 |
 | **验收标准** | CI 通过 + `check_strict_island_admission.py` 检查通过 |
 
-**当前候选队列**：
+**候选队列（计划/目标）**：
 
-> **注意**: 以下模块已全部纳入 Strict Island，候选队列已清空。
+> **SSOT**: 以 `configs/mypy_strict_island_candidates.json` 为准。
 >
-> 下一阶段扩面候选（待规划）：
+> **查看当前候选**：
+> ```bash
+> cat configs/mypy_strict_island_candidates.json | jq '.candidates[]'
+> ```
+>
+> **下一阶段扩面目标**（待加入候选队列）：
 > - `src/engram/logbook/scm_*.py`（SCM 子系统）
 > - `src/engram/gateway/app.py`（Gateway 应用入口）
 > - `src/engram/gateway/main.py`（主入口）
 
-| 优先级 | 候选路径 | 目标迭代 | 状态 | 备注 |
-|--------|----------|----------|------|------|
-| - | `src/engram/logbook/db.py` | Iter 12 | ✅ 已纳入 | 数据库核心模块 |
-| - | `src/engram/logbook/views.py` | Iter 12 | ✅ 已纳入 | 视图层 |
-| - | `src/engram/logbook/artifact_gc.py` | Iter 12 | ✅ 已纳入 | 制品垃圾回收 |
-| - | `src/engram/logbook/cursor.py` | Iter 12 | ✅ 已纳入 | 游标管理 |
-| - | `src/engram/logbook/outbox.py` | Iter 12 | ✅ 已纳入 | Outbox 模式 |
-| - | `src/engram/logbook/governance.py` | Iter 12 | ✅ 已纳入 | 治理逻辑 |
-| - | `src/engram/gateway/handlers/` | Iter 12 | ✅ 已纳入 | Gateway Handler 层 |
-| - | `src/engram/gateway/audit_event.py` | Iter 12 | ✅ 已纳入 | 审计事件 |
+| 优先级 | 候选路径 | 目标 | 计划状态 | 备注 |
+|--------|----------|------|----------|------|
+| P4 | `src/engram/logbook/scm_db.py` | 纳入 Island | 待加入候选 | SCM 数据库层 |
+| P4 | `src/engram/logbook/scm_sync_runner.py` | 纳入 Island | 待加入候选 | SCM 同步核心 |
+| P5 | `src/engram/gateway/app.py` | 纳入 Island | 待加入候选 | Gateway 应用入口 |
+| P5 | `src/engram/gateway/main.py` | 纳入 Island | 待加入候选 | 主入口 |
+
+> **验证已纳入状态**：
+> ```bash
+> python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['tool']['engram']['mypy']['strict_island_paths']))"
+> ```
 
 **候选晋升流程**：
 
@@ -341,18 +386,22 @@ src/engram/logbook/views.py
 src/engram/logbook/artifact_gc.py
 ```
 
-**分阶段扩面计划**：
+**分阶段扩面计划（目标）**：
 
-> 所有原计划模块已纳入 Strict Island，下一阶段扩面待规划。
+> **SSOT**:
+> - 候选队列：`configs/mypy_strict_island_candidates.json`
+> - 已纳入列表：`pyproject.toml` 的 `[tool.engram.mypy].strict_island_paths`
 
-| 阶段 | 模块 | 状态 | 备注 |
-|------|------|------|------|
-| 阶段 1 | `gateway/di.py`, `container.py`, `services/` | ✅ 已纳入 | 初始核心模块 |
-| 阶段 2 | `logbook/config.py`, `uri.py` | ✅ 已纳入 | Logbook 配置模块 |
-| 阶段 3 | `gateway/handlers/`, `policy.py`, `audit_event.py` | ✅ 已纳入 | Gateway 扩展模块 |
-| 阶段 3 | `logbook/cursor.py`, `governance.py`, `outbox.py` | ✅ 已纳入 | Logbook 数据结构 |
-| 阶段 4 | `logbook/db.py`, `views.py`, `artifact_gc.py` | ✅ 已纳入 | Logbook 数据库层 |
-| 阶段 5 | `logbook/scm_*.py` | 📋 待规划 | SCM 子系统 |
+| 阶段 | 模块 | 计划目标 | 备注 |
+|------|------|----------|------|
+| 阶段 1 | `gateway/di.py`, `container.py`, `services/` | 目标：纳入 Island | 初始核心模块 |
+| 阶段 2 | `logbook/config.py`, `uri.py` | 目标：纳入 Island | Logbook 配置模块 |
+| 阶段 3 | `gateway/handlers/`, `policy.py`, `audit_event.py` | 目标：纳入 Island | Gateway 扩展模块 |
+| 阶段 3 | `logbook/cursor.py`, `governance.py`, `outbox.py` | 目标：纳入 Island | Logbook 数据结构 |
+| 阶段 4 | `logbook/db.py`, `views.py`, `artifact_gc.py` | 目标：纳入 Island | Logbook 数据库层 |
+| 阶段 5 | `logbook/scm_*.py` | 待加入候选队列 | SCM 子系统 |
+
+> **验证实际状态**：以 `pyproject.toml` 中的 `strict_island_paths` 为准。
 
 ---
 
@@ -373,12 +422,16 @@ wc -l scripts/ci/mypy_baseline.txt
 ### 7.2 历史趋势
 
 > **更新规则**: 每次 baseline 变更后更新此表，记录趋势变化。
+>
+> **获取当前错误数**：`wc -l < scripts/ci/mypy_baseline.txt`
 
 | 日期 | 总错误数 | 净变化 | 备注 |
 |------|----------|--------|------|
 | 2026-02-01 | 37 | - | 初始快照 |
 | 2026-02-01 | 8 | **-29** | gateway/ 清零，logbook/ 大幅减少 |
-| 2026-02-01 | 0 | **-8** | 🎉 **全面清零！** logbook/ 错误全部修复 |
+| 2026-02-02 | 30 | +22 | 新增 logbook 模块错误（见 baseline 文件） |
+
+> **注意**: 历史记录保留供参考，当前状态以 `scripts/ci/mypy_baseline.txt` 为准。
 
 ---
 

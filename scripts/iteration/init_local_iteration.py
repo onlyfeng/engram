@@ -118,9 +118,7 @@ class SSOTConflictError(Exception):
     def __init__(self, iteration_number: int, suggested_number: int) -> None:
         self.iteration_number = iteration_number
         self.suggested_number = suggested_number
-        super().__init__(
-            f"Iteration {iteration_number} 已在 docs/acceptance/ 中存在（SSOT 冲突）"
-        )
+        super().__init__(f"Iteration {iteration_number} 已在 docs/acceptance/ 中存在（SSOT 冲突）")
 
 
 def check_ssot_conflict(iteration_number: int) -> None:
@@ -208,10 +206,7 @@ def init_iteration(
     iteration_path = ITERATION_DIR / str(iteration_number)
 
     if iteration_path.exists() and not force:
-        raise FileExistsError(
-            f"迭代目录已存在: {iteration_path}\n"
-            f"使用 --force 参数强制覆盖"
-        )
+        raise FileExistsError(f"迭代目录已存在: {iteration_path}\n使用 --force 参数强制覆盖")
 
     iteration_path.mkdir(parents=True, exist_ok=True)
 
@@ -332,7 +327,10 @@ def main() -> int:
             print(f"  - {regression_file.relative_to(REPO_ROOT)}", file=sys.stderr)
         print(file=sys.stderr)
         print(f"💡 建议: 使用下一可用编号 {e.suggested_number}", file=sys.stderr)
-        print(f"   python scripts/iteration/init_local_iteration.py {e.suggested_number}", file=sys.stderr)
+        print(
+            f"   python scripts/iteration/init_local_iteration.py {e.suggested_number}",
+            file=sys.stderr,
+        )
         return 1
     except FileExistsError as e:
         print(f"❌ 错误: {e}", file=sys.stderr)

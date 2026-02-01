@@ -14,10 +14,16 @@
 - **基线文件**：记录当前已知的 mypy 错误
 - **渐进收敛**：逐步修复基线中的错误，分模块提高类型覆盖率
 
-> **当前状态（2026-02-01）**：
-> - ✅ mypy 错误数：**0**（baseline 文件已清空）
-> - ✅ strict-island 模式：**通过**（11 个核心模块零错误）
-> - 🎯 **可进入 Phase 推进准备**：当前已满足 Phase 2 → Phase 3 归档条件
+> **当前状态（自动化验证口径）**：
+> - 📊 **mypy 错误数**：以 `wc -l scripts/ci/mypy_baseline.txt` 为准
+> - 📊 **strict-island 模式**：以 `make typecheck-strict-island` 为准
+> - 📋 **迁移阶段**：以 Repository Variable `ENGRAM_MYPY_MIGRATION_PHASE` 为准
+>
+> **验证命令**：
+> ```bash
+> wc -l scripts/ci/mypy_baseline.txt  # 查看当前错误数
+> make typecheck-strict-island        # 验证 strict-island 状态
+> ```
 >
 > 详见 [§6. 迁移路线](#6-迁移路线) 和 [CI 门禁 Runbook §4.3](./ci_gate_runbook.md#43-phase-2--phase-3)
 
@@ -125,6 +131,63 @@ grep -o 'src/engram/[^/]*/' scripts/ci/mypy_baseline.txt | sort | uniq -c | sort
 - 类型系统局限（附 issue 链接）
 - 遗留代码暂无法修复（附修复计划）
 
+### 4.2a 清零决策规则（阈值 ≤ 30）
+
+> **核心原则**：当 baseline 错误数处于可修复范围内时，**默认策略是修复并清零**，禁止通过更新 baseline 逃逸问题。
+
+**阈值定义**：当 `wc -l scripts/ci/mypy_baseline.txt` ≤ 30 时，适用本规则。
+
+#### 默认策略：修复并清零
+
+当错误类型属于以下类别时，**必须修复**，不允许更新 baseline：
+
+| 错误类型 | 错误码示例 | 处理策略 |
+|----------|-----------|----------|
+| **导入错误** | `[import-not-found]`, `[import-untyped]` | 安装 stubs 包或创建本地 stub |
+| **Optional 边界** | `[arg-type]`, `[assignment]` | 添加 None 检查或类型收窄 |
+| **属性缺失** | `[attr-defined]` | 修复类型定义或添加类型断言 |
+| **返回值类型** | `[no-any-return]`, `[return-value]` | 明确返回类型注解 |
+| **操作符类型** | `[operator]` | 修复类型或添加 assert |
+
+#### 例外场景（允许净增）
+
+**仅以下场景**允许 baseline 净增，且**必须绑定 issue**：
+
+| 例外场景 | 要求 | 示例 |
+|----------|------|------|
+| **第三方 stubs 缺失** | 必须附 issue 链接，说明上游状态 | `[import-untyped]` 且无 `types-XXX` 包 |
+| **类型系统局限** | 必须附 mypy/typing issue | 复杂泛型、Protocol 不兼容 |
+| **待上游修复** | 必须附上游 PR/issue | 依赖库类型定义错误 |
+
+**净增审批流程**：
+
+```markdown
+### Baseline 净增申请
+
+- [ ] 已确认错误无法通过修复解决
+- [ ] 已关联 Issue: #___
+- [ ] Issue 已标记 `tech-debt` 标签
+- [ ] 已说明预计修复时间/条件
+```
+
+#### 决策流程图
+
+```
+baseline 错误数 ≤ 30?
+    │
+    ├── 是 → 错误类型是否可修复（见上表）?
+    │         │
+    │         ├── 是 → 修复并清零（禁止更新 baseline）
+    │         │
+    │         └── 否 → 属于例外场景?
+    │                   │
+    │                   ├── 是 → 允许净增，必须绑定 issue
+    │                   │
+    │                   └── 否 → 修复并清零
+    │
+    └── 否 → 按常规审批流程（§4.2）
+```
+
 ### 4.3 更新步骤
 
 1. **本地验证**：确认新增错误无法修复
@@ -178,26 +241,31 @@ Reviewer 在批准基线更新时应检查：
 python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['tool']['engram']['mypy']['strict_island_paths']))"
 ```
 
-**分阶段扩面计划**：
+**分阶段扩面计划（目标）**：
 
-| 阶段 | 模块 | 目标 | 状态 | 验收命令 |
-|------|------|------|------|----------|
-| P0 | `gateway/di.py` | `disallow_untyped_defs = true` | ✅ 已纳入 | `mypy src/engram/gateway/di.py` |
-| P0 | `gateway/container.py` | `disallow_untyped_defs = true` | ✅ 已纳入 | `mypy src/engram/gateway/container.py` |
-| P0 | `gateway/services/` | `disallow_untyped_defs = true` | ✅ 已纳入 | `mypy src/engram/gateway/services/` |
-| P0 | `logbook/config.py` | `disallow_untyped_defs = true` | ✅ 已纳入 | `mypy src/engram/logbook/config.py` |
-| P0 | `logbook/uri.py` | `disallow_untyped_defs = true` | ✅ 已纳入 | `mypy src/engram/logbook/uri.py` |
-| P1 | `gateway/handlers/` | 函数签名完整类型注解 | ✅ 已纳入 | `mypy src/engram/gateway/handlers/` |
-| P1 | `gateway/policy.py` | 策略模块类型化 | ✅ 已纳入 | `mypy src/engram/gateway/policy.py` |
-| P1 | `gateway/audit_event.py` | 审计事件模块类型化 | ✅ 已纳入 | `mypy src/engram/gateway/audit_event.py` |
-| P2 | `logbook/cursor.py` | 游标管理类型化 | ✅ 已纳入 | `mypy src/engram/logbook/cursor.py` |
-| P2 | `logbook/governance.py` | 治理逻辑类型化 | ✅ 已纳入 | `mypy src/engram/logbook/governance.py` |
-| P2 | `logbook/outbox.py` | Outbox 模式类型化 | ✅ 已纳入 | `mypy src/engram/logbook/outbox.py` |
-| P3 | `logbook/db.py` | 核心数据库操作类型化 | ✅ 已纳入 | `mypy src/engram/logbook/db.py` |
-| P3 | `logbook/views.py` | 视图层类型化 | ✅ 已纳入 | `mypy src/engram/logbook/views.py` |
-| P3 | `logbook/artifact_gc.py` | 制品垃圾回收类型化 | ✅ 已纳入 | `mypy src/engram/logbook/artifact_gc.py` |
-| P4 | `logbook/scm_*.py` | SCM 子系统类型化 | 📋 待规划 | - |
-| P5 | 其他模块 | 全面类型覆盖 | 📋 待规划 | - |
+> **SSOT**: 扩面候选队列以 `configs/mypy_strict_island_candidates.json` 为准。
+> 已纳入 Strict Island 的模块以 `pyproject.toml` 的 `[tool.engram.mypy].strict_island_paths` 为准。
+
+| 阶段 | 模块 | 目标 | 计划状态 | 验收命令 |
+|------|------|------|----------|----------|
+| P0 | `gateway/di.py` | `disallow_untyped_defs = true` | 目标：纳入 Island | `mypy src/engram/gateway/di.py` |
+| P0 | `gateway/container.py` | `disallow_untyped_defs = true` | 目标：纳入 Island | `mypy src/engram/gateway/container.py` |
+| P0 | `gateway/services/` | `disallow_untyped_defs = true` | 目标：纳入 Island | `mypy src/engram/gateway/services/` |
+| P0 | `logbook/config.py` | `disallow_untyped_defs = true` | 目标：纳入 Island | `mypy src/engram/logbook/config.py` |
+| P0 | `logbook/uri.py` | `disallow_untyped_defs = true` | 目标：纳入 Island | `mypy src/engram/logbook/uri.py` |
+| P1 | `gateway/handlers/` | 函数签名完整类型注解 | 目标：纳入 Island | `mypy src/engram/gateway/handlers/` |
+| P1 | `gateway/policy.py` | 策略模块类型化 | 目标：纳入 Island | `mypy src/engram/gateway/policy.py` |
+| P1 | `gateway/audit_event.py` | 审计事件模块类型化 | 目标：纳入 Island | `mypy src/engram/gateway/audit_event.py` |
+| P2 | `logbook/cursor.py` | 游标管理类型化 | 目标：纳入 Island | `mypy src/engram/logbook/cursor.py` |
+| P2 | `logbook/governance.py` | 治理逻辑类型化 | 目标：纳入 Island | `mypy src/engram/logbook/governance.py` |
+| P2 | `logbook/outbox.py` | Outbox 模式类型化 | 目标：纳入 Island | `mypy src/engram/logbook/outbox.py` |
+| P3 | `logbook/db.py` | 核心数据库操作类型化 | 目标：纳入 Island | `mypy src/engram/logbook/db.py` |
+| P3 | `logbook/views.py` | 视图层类型化 | 目标：纳入 Island | `mypy src/engram/logbook/views.py` |
+| P3 | `logbook/artifact_gc.py` | 制品垃圾回收类型化 | 目标：纳入 Island | `mypy src/engram/logbook/artifact_gc.py` |
+| P4 | `logbook/scm_*.py` | SCM 子系统类型化 | 待加入候选队列 | - |
+| P5 | 其他模块 | 全面类型覆盖 | 待加入候选队列 | - |
+
+> **验证已纳入状态**：`python -c "import tomllib; paths=tomllib.load(open('pyproject.toml','rb'))['tool']['engram']['mypy']['strict_island_paths']; print('纳入' if 'src/engram/gateway/di.py' in paths else '未纳入')"`
 
 **准入条件**（模块加入 Strict Island 前必须满足）：
 1. 模块在 baseline 中错误数 = 0
@@ -486,7 +554,10 @@ python scripts/ci/check_mypy_gate.py --archive-baseline
 **A**: 优先修复类型错误。如果是误报或无法修复：
 
 1. 添加 `# type: ignore[error-code]` 注释并说明原因
-2. 如果是第三方库问题，在 `pyproject.toml` 中配置 `ignore_missing_imports`
+2. 如果是第三方库问题，参考 [Stubs 策略决策指南](./mypy_error_playbook.md#70-stubs-策略决策指南)：
+   - 优先安装 `types-XXX` 或 `XXX-stubs` 包
+   - 其次创建本地 stub（`typings/`）
+   - **最后手段**：在 `pyproject.toml` 中配置模块级 `ignore_missing_imports`（禁止用于 strict-island）
 3. 最后手段：更新基线（需 reviewer 批准）
 
 ### 8.2 Q: 为什么移除行号？
@@ -518,6 +589,29 @@ disallow_untyped_defs = true
 ```
 
 然后修复该模块的所有类型错误。
+
+### 8.3a Q: 遇到第三方库类型缺失（import-untyped）怎么办？
+
+**A**: 按优先级选择解决方案（详见 [Stubs 策略决策指南](./mypy_error_playbook.md#70-stubs-策略决策指南)）：
+
+1. **安装 stubs 包**（推荐）：
+   ```bash
+   # 检查 typeshed 是否有对应包
+   pip install types-XXX  # 如 types-requests, types-PyYAML
+   # 或社区维护的包
+   pip install XXX-stubs  # 如 boto3-stubs[s3]
+   ```
+   然后添加到 `pyproject.toml` 的 dev 依赖。
+
+2. **创建本地 stub**（`typings/`）：仅在使用少量 API 或需要补丁时使用。
+
+3. **模块级豁免**（最后手段）：
+   ```toml
+   [[tool.mypy.overrides]]
+   module = "untyped_lib.*"
+   ignore_missing_imports = true
+   ```
+   > **⚠️ 禁止**用于 strict-island 模块。
 
 ### 8.4 Q: 基线文件冲突怎么解决？
 
@@ -553,8 +647,10 @@ disallow_untyped_defs = true
 | [ADR: mypy 基线管理与 Gate 门禁策略](../architecture/adr_mypy_baseline_and_gating.md) | 设计决策与迁移路线 |
 | [ADR: Logbook Strict Island 扩展计划](../architecture/adr_logbook_strict_island_expansion_config_uri_db.md) | **Logbook 模块纳入计划、临时 ignore 策略、清零顺序** |
 | [mypy 错误码修复 Playbook](./mypy_error_playbook.md) | 错误码清理路线、修复模板 |
+| [Stubs 策略决策指南](./mypy_error_playbook.md#70-stubs-策略决策指南) | **类型桩选择策略、本地 stub、ignore_missing_imports 约束** |
 | [环境变量参考](../reference/environment_variables.md) | ENGRAM_MYPY_GATE 变量说明 |
 | `scripts/ci/check_mypy_gate.py` | mypy 门禁检查脚本（SSOT） |
 | `scripts/ci/mypy_baseline.txt` | 当前基线文件 |
-| `pyproject.toml` | mypy 配置 |
+| `pyproject.toml` | mypy 配置、dev 依赖（含类型桩） |
+| `requirements-dev.txt` | 开发依赖（与 pyproject.toml 同步） |
 | `.github/workflows/ci.yml` | CI 集成配置 |

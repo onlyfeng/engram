@@ -189,6 +189,13 @@ class TestGetSnapshotReadmeContent:
         assert "promote" in content.lower() or "覆盖" in content
         assert "禁止" in content or "不可" in content or "不能" in content
 
+    def test_contains_do_not_promote_sentinel(self):
+        """测试 README 包含 DO_NOT_PROMOTE=true sentinel"""
+        content = get_snapshot_readme_content(10, Path("docs/acceptance"))
+
+        # sentinel 必须是可机器识别的格式
+        assert "DO_NOT_PROMOTE=true" in content
+
 
 # ============================================================================
 # 路径创建测试

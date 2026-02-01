@@ -243,3 +243,9 @@ python3 scripts/ci/check_mypy_gate.py --gate baseline --mypy-path src/engram/
 - [Mypy 基线文档](../dev/mypy_baseline.md)
 - [CLI 入口文档](../architecture/cli_entrypoints.md)
 - [No Root Wrappers 迁移映射](../architecture/no_root_wrappers_migration_map.md)
+
+---
+
+## 验收证据
+
+- [iteration_9_evidence.json](evidence/iteration_9_evidence.json)

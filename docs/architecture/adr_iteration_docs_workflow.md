@@ -348,12 +348,39 @@ $ make ci
 
 **存储位置**：`docs/acceptance/evidence/`
 
-**命名规范**：
+**命名规范（统一）**：
 
-| 格式 | 示例 | 说明 |
-|------|------|------|
-| `iteration_<N>_evidence.json` | `iteration_13_evidence.json` | 单一迭代的综合证据文件 |
-| `iteration_<N>_<ts>.json` | `iteration_13_20260202T143022Z.json` | 带时间戳的快照（多次验收场景） |
+| 类型 | 格式 | 示例 | 说明 |
+|------|------|------|------|
+| **Canonical（规范）** | `iteration_<N>_evidence.json` | `iteration_13_evidence.json` | 单一迭代的综合证据文件，**推荐使用**，每次更新覆盖 |
+| **Snapshot（快照）** | `iteration_<N>_<YYYYMMDD_HHMMSS>.json` | `iteration_13_20260202_143000.json` | 历史快照，用于需要保留多次验收记录的场景 |
+| **Snapshot+SHA** | `iteration_<N>_<YYYYMMDD_HHMMSS>_<sha7>.json` | `iteration_13_20260202_143000_abc1234.json` | 带 commit SHA 的历史快照 |
+
+**生成方式**：
+
+| 类型 | 生成命令 | 说明 |
+|------|----------|------|
+| Canonical | `python scripts/iteration/record_iteration_evidence.py <N>` | 脚本默认输出，覆盖已有文件 |
+| Snapshot | 手动复制：`cp iteration_<N>_evidence.json iteration_<N>_<YYYYMMDD_HHMMSS>.json` | 需保留历史时手动创建 |
+
+**回归文档引用策略**：
+
+在 `iteration_<N>_regression.md` 中引用证据文件时，**推荐使用 canonical 文件**：
+
+```markdown
+## 验收证据
+
+详细证据见 [iteration_13_evidence.json](evidence/iteration_13_evidence.json)。
+```
+
+如有多次验收需要追溯，可同时引用快照：
+
+```markdown
+## 验收证据
+
+- 最新证据：[iteration_13_evidence.json](evidence/iteration_13_evidence.json)
+- 历史快照：[iteration_13_20260201_103000.json](evidence/iteration_13_20260201_103000.json)（首次验收）
+```
 
 **格式 SSOT**：[schemas/iteration_evidence_v1.schema.json](../../schemas/iteration_evidence_v1.schema.json)
 
@@ -427,6 +454,88 @@ $ make ci
 1. `.artifacts/` 不在版本控制中，链接必然失效
 2. 同一 commit 在不同机器上的 `.artifacts/` 内容不同
 3. CI 产物有保留期限（通常 30-90 天），链接会过期
+
+**证据文件占位符/草稿策略**：
+
+| 场景 | 策略 | 说明 |
+|------|------|------|
+| **正式证据** | 使用 `record_iteration_evidence.py` 脚本生成 | ✅ 推荐，自动脱敏、格式合规 |
+| **占位符/草稿** | ❌ **禁止提交到版本库** | 模板仅供参考，不要手动创建草稿文件提交 |
+| **测试/调试** | 使用 `--dry-run` 预览 | 脚本支持预览模式，不实际写入 |
+
+**推荐流程**：
+
+```
+1. 运行门禁命令（make ci 等）
+            ↓
+2. 使用 record_iteration_evidence.py 生成证据
+            ↓
+3. 验证生成的 JSON 符合 schema
+            ↓
+4. 提交到版本库（git add docs/acceptance/evidence/）
+```
+
+**禁止的做法**：
+
+- ❌ 手动创建包含 `{PLACEHOLDER}` 或 `TODO` 的草稿证据文件并提交
+- ❌ 复制模板文件到 `evidence/` 目录并手动编辑
+- ❌ 提交不完整或未脱敏的证据文件
+
+**模板用途**：`docs/acceptance/_templates/iteration_evidence.template.json` 仅用于：
+
+- 文档参考（了解字段含义）
+- 脚本开发参考
+- **不用于直接复制生成证据文件**
+
+**可执行清单（生成合规证据文件）**：
+
+照做以下步骤即可得到符合规范的版本化证据文件：
+
+```bash
+# ====== 步骤 1：运行门禁命令 ======
+make ci
+# 记录运行结果（退出码、关键输出）
+
+# ====== 步骤 2：生成证据文件 ======
+# 基本用法（自动获取 commit sha）
+python scripts/iteration/record_iteration_evidence.py <N>
+
+# 推荐：指定 CI 运行 URL
+python scripts/iteration/record_iteration_evidence.py <N> \
+  --ci-run-url https://github.com/<org>/<repo>/actions/runs/<run_id>
+
+# 可选：传入命令执行结果
+python scripts/iteration/record_iteration_evidence.py <N> \
+  --commands '{"make ci": {"exit_code": 0, "summary": "passed"}}'
+
+# ====== 步骤 3：验证 schema 合规 ======
+# 可选但推荐：使用 jsonschema 校验
+python -c "
+import json
+from jsonschema import validate
+with open('schemas/iteration_evidence_v1.schema.json') as f:
+    schema = json.load(f)
+with open('docs/acceptance/evidence/iteration_<N>_evidence.json') as f:
+    data = json.load(f)
+validate(data, schema)
+print('✅ Schema 校验通过')
+"
+
+# ====== 步骤 4：提交到版本库 ======
+git add docs/acceptance/evidence/iteration_<N>_evidence.json
+git commit -m "evidence: Iteration <N> 验收证据"
+```
+
+**检查清单**：
+
+| # | 检查项 | 通过标准 |
+|---|--------|----------|
+| 1 | 文件命名 | `iteration_<N>_evidence.json`（N 为整数） |
+| 2 | 存储位置 | `docs/acceptance/evidence/` 目录下 |
+| 3 | Schema 声明 | 包含 `"$schema": "..."` 字段 |
+| 4 | 必填字段 | `iteration_number`, `recorded_at`, `commit_sha`, `runner`, `commands` |
+| 5 | 敏感信息 | 无 PASSWORD/DSN/TOKEN 等敏感值（脚本自动脱敏） |
+| 6 | 格式 | JSON 格式正确，缩进 2 空格 |
 
 #### 3.6 证据引用规范
 
@@ -834,3 +943,4 @@ done
 | 2026-02-02 | v1.9 | 增补「3.4 Nightly 审计报告策略」：定义 nightly 审计报告定位（非 SSOT、仅观察、90 天保留） |
 | 2026-02-02 | v1.10 | 增补「3.5 版本化证据文件」：定义 `docs/acceptance/evidence/` 版本化证据文件规范，明确 `.artifacts/` 引用约束（与 `.iteration/` 一致禁止 Markdown 链接），扩展证据引用推荐格式 |
 | 2026-02-02 | v1.11 | 增补证据格式 SSOT：引用 `schemas/iteration_evidence_v1.schema.json` 作为版本化证据文件的格式 SSOT，添加 Schema 约束摘要表格及安全约束说明 |
+| 2026-02-02 | v1.12 | 收敛「3.5 版本化证据文件」命名规范为统一套（canonical + snapshot）、添加回归文档引用策略、补充占位符/草稿策略及可执行清单 |

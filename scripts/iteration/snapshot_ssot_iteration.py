@@ -67,9 +67,7 @@ class SourceNotFoundError(Exception):
     def __init__(self, iteration_number: int, available: List[int]) -> None:
         self.iteration_number = iteration_number
         self.available = available
-        super().__init__(
-            f"Iteration {iteration_number} 不存在于 SSOT (docs/acceptance/)"
-        )
+        super().__init__(f"Iteration {iteration_number} 不存在于 SSOT (docs/acceptance/)")
 
 
 class FileConflictError(Exception):
@@ -143,6 +141,8 @@ def get_snapshot_readme_content(iteration_number: int, source_dir: Path) -> str:
         source_display = f"{source_dir}/"
 
     return f"""# Iteration {iteration_number} 快照（只读副本）
+
+<!-- DO_NOT_PROMOTE=true -->
 
 > **⚠️ 警告：此目录为 SSOT 的只读快照，仅供本地阅读和实验。**
 

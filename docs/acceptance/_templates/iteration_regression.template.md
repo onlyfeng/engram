@@ -189,6 +189,53 @@
 make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 ```
 
+### 最小门禁命令块（可选）
+
+> **提示**：如需生成特定 profile 的最小门禁命令块，可使用脚本自动生成：
+>
+> ```bash
+> # 生成完整门禁命令块
+> python scripts/iteration/render_min_gate_block.py {N}
+>
+> # 生成特定代理的门禁命令块
+> python scripts/iteration/render_min_gate_block.py {N} --profile docs-only
+> python scripts/iteration/render_min_gate_block.py {N} --profile ci-only
+> python scripts/iteration/render_min_gate_block.py {N} --profile gateway-only
+> python scripts/iteration/render_min_gate_block.py {N} --profile sql-only
+> ```
+>
+> 支持的 profile：
+> - `full`: 完整 CI 门禁（make ci）
+> - `docs-only`: 文档代理最小门禁
+> - `ci-only`: CI 代理最小门禁
+> - `gateway-only`: Gateway 代理最小门禁
+> - `sql-only`: SQL 代理最小门禁
+
+---
+
+## 验收证据
+
+| 项目 | 值 |
+|------|-----|
+| **证据文件** | [`iteration_{N}_evidence.json`](evidence/iteration_{N}_evidence.json) |
+| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **记录时间** | {YYYY-MM-DDTHH:MM:SSZ} |
+| **Commit SHA** | `{commit_sha}` |
+
+> **证据文件说明**：结构化验收证据存放于 `docs/acceptance/evidence/` 目录，符合 `schemas/iteration_evidence_v1.schema.json` 格式。
+>
+> **创建证据文件**：
+> 1. 复制模板 `docs/acceptance/_templates/iteration_evidence.template.json` 到 `docs/acceptance/evidence/iteration_{N}_evidence.json`
+> 2. 替换所有占位符（`iteration_number`、`recorded_at`、`commit_sha` 等）为实际值
+> 3. 运行校验确保格式正确
+>
+> **校验命令**:
+> ```bash
+> python -m jsonschema -i docs/acceptance/evidence/iteration_{N}_evidence.json schemas/iteration_evidence_v1.schema.json
+> ```
+>
+> **注意**：模板文件 `iteration_evidence.template.json` 中的占位值仅供参考，**不可直接提交**，必须替换为实际迭代数据。
+
 ---
 
 ## 相关文档
@@ -348,9 +395,11 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 - [ ] 执行 `pytest tests/acceptance/ -q` 并记录结果
 - [ ] 如有失败，填写失败修复建议和追踪表
 - [ ] 与上一迭代对比，填写变化分析
+- [ ] 创建证据文件 `docs/acceptance/evidence/iteration_{N}_evidence.json`（使用 [iteration_evidence.template.json](iteration_evidence.template.json)）
+- [ ] 填写"验收证据"段落，链接到证据文件
 - [ ] 在 [00_acceptance_matrix.md](../00_acceptance_matrix.md) 更新索引条目
 - [ ] 移除模板说明（本文件顶部的使用说明区块）
 
 ---
 
-_模板版本：v1.2 | 更新日期：2026-02-02（R6 格式规范与 CI 脚本统一：前 20 行内、后继编号一致性检查）_
+_模板版本：v1.4 | 更新日期：2026-02-02（统一证据文件路径与校验命令格式）_

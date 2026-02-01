@@ -1469,14 +1469,31 @@ python3 scripts/acceptance/render_acceptance_matrix.py \
 
 当需要持久化结构化证据时，应将证据文件存储在 `docs/acceptance/evidence/` 目录。
 
-**命名规范**：
+> **完整策略**：参见 [ADR: 迭代文档工作流 - 3.5 版本化证据文件](../architecture/adr_iteration_docs_workflow.md#35-版本化证据文件)
 
-| 格式 | 示例 | 适用场景 |
-|------|------|----------|
-| `iteration_<N>_evidence.json` | `iteration_13_evidence.json` | 单一迭代综合证据 |
-| `iteration_<N>_<ts>.json` | `iteration_13_20260202.json` | 多次验收的时间快照 |
+**命名规范（统一）**：
 
-**引用示例**：
+| 类型 | 格式 | 示例 | 说明 |
+|------|------|------|------|
+| **Canonical（规范）** | `iteration_<N>_evidence.json` | `iteration_13_evidence.json` | ✅ 推荐，单一迭代综合证据，每次更新覆盖 |
+| **Snapshot（快照）** | `iteration_<N>_<YYYYMMDD_HHMMSS>.json` | `iteration_13_20260202_143000.json` | 历史快照，需保留多次验收记录时手动创建 |
+| **Snapshot+SHA** | `iteration_<N>_<YYYYMMDD_HHMMSS>_<sha7>.json` | `iteration_13_20260202_143000_abc1234.json` | 带 commit SHA 的历史快照 |
+
+**生成命令**：
+
+```bash
+# 生成 canonical 证据文件（推荐）
+python scripts/iteration/record_iteration_evidence.py <N>
+
+# 指定 CI 运行 URL
+python scripts/iteration/record_iteration_evidence.py <N> \
+  --ci-run-url https://github.com/<org>/<repo>/actions/runs/<run_id>
+
+# 预览模式（不实际写入）
+python scripts/iteration/record_iteration_evidence.py <N> --dry-run
+```
+
+**回归文档引用示例**：
 
 ```markdown
 ## 验收证据
@@ -1488,6 +1505,8 @@ python3 scripts/acceptance/render_acceptance_matrix.py \
 - 测试覆盖：608 passed, 0 failed
 - CI Run: [GitHub Actions #1234](https://github.com/.../actions/runs/1234)
 ```
+
+**注意**：❌ 禁止手动创建包含占位符的草稿证据文件并提交，应使用脚本生成。
 
 ### 推荐引用方式优先级
 

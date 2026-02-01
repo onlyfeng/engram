@@ -245,21 +245,37 @@ def run_audit(project_root: Path) -> AuditResult:
         successor = entry.get_successor_number()
         if successor is None:
             inconsistencies.append(
-                ("SUPERSEDED_NO_SUCCESSOR", entry.iteration_number, "索引标记为 SUPERSEDED 但未声明后继")
+                (
+                    "SUPERSEDED_NO_SUCCESSOR",
+                    entry.iteration_number,
+                    "索引标记为 SUPERSEDED 但未声明后继",
+                )
             )
             continue
 
         # 检查 regression 文件是否有 superseded 声明
-        regression_files = [f for f in files if f.iteration_number == entry.iteration_number and f.file_type == "regression"]
+        regression_files = [
+            f
+            for f in files
+            if f.iteration_number == entry.iteration_number and f.file_type == "regression"
+        ]
         if regression_files:
             rf = regression_files[0]
             if not rf.has_superseded_header:
                 inconsistencies.append(
-                    ("SUPERSEDED_MISSING_HEADER", entry.iteration_number, f"regression 文件缺少 superseded 声明（期望后继: Iteration {successor}）")
+                    (
+                        "SUPERSEDED_MISSING_HEADER",
+                        entry.iteration_number,
+                        f"regression 文件缺少 superseded 声明（期望后继: Iteration {successor}）",
+                    )
                 )
             elif rf.superseded_successor != successor:
                 inconsistencies.append(
-                    ("SUPERSEDED_MISMATCH", entry.iteration_number, f"regression 文件声明后继 ({rf.superseded_successor}) 与索引 ({successor}) 不一致")
+                    (
+                        "SUPERSEDED_MISMATCH",
+                        entry.iteration_number,
+                        f"regression 文件声明后继 ({rf.superseded_successor}) 与索引 ({successor}) 不一致",
+                    )
                 )
 
     # 检查文件存在性
@@ -323,8 +339,14 @@ def generate_report(result: AuditResult, project_root: Path) -> str:
     # 按迭代号分组
     iter_nums = sorted(set(f.iteration_number for f in result.files))
     for iter_num in iter_nums:
-        plan_files = [f for f in result.files if f.iteration_number == iter_num and f.file_type == "plan"]
-        regression_files = [f for f in result.files if f.iteration_number == iter_num and f.file_type == "regression"]
+        plan_files = [
+            f for f in result.files if f.iteration_number == iter_num and f.file_type == "plan"
+        ]
+        regression_files = [
+            f
+            for f in result.files
+            if f.iteration_number == iter_num and f.file_type == "regression"
+        ]
 
         plan_status = f"✅ `{plan_files[0].path.name}`" if plan_files else "❌ 无"
         regression_status = f"✅ `{regression_files[0].path.name}`" if regression_files else "❌ 无"
@@ -335,7 +357,9 @@ def generate_report(result: AuditResult, project_root: Path) -> str:
         elif regression_files:
             superseded_status = "❌ 无"
 
-        lines.append(f"| Iteration {iter_num} | {plan_status} | {regression_status} | {superseded_status} |")
+        lines.append(
+            f"| Iteration {iter_num} | {plan_status} | {regression_status} | {superseded_status} |"
+        )
 
     plan_count = len([f for f in result.files if f.file_type == "plan"])
     regression_count = len([f for f in result.files if f.file_type == "regression"])
@@ -343,36 +367,46 @@ def generate_report(result: AuditResult, project_root: Path) -> str:
     lines.append(f"**共计**: {regression_count} 个 regression 文件，{plan_count} 个 plan 文件")
 
     # 索引与文件对照
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## 3. 索引与文件一致性对照",
-        "",
-        "### 3.1 迭代回归记录索引（来自 `00_acceptance_matrix.md`）",
-        "",
-        "| 迭代 | 日期 | 索引状态 | 索引说明 |",
-        "|------|------|----------|----------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 3. 索引与文件一致性对照",
+            "",
+            "### 3.1 迭代回归记录索引（来自 `00_acceptance_matrix.md`）",
+            "",
+            "| 迭代 | 日期 | 索引状态 | 索引说明 |",
+            "|------|------|----------|----------|",
+        ]
+    )
 
     for entry in result.index_entries:
-        lines.append(f"| Iteration {entry.iteration_number} | {entry.date} | {entry.status} | {entry.description} |")
+        lines.append(
+            f"| Iteration {entry.iteration_number} | {entry.date} | {entry.status} | {entry.description} |"
+        )
 
     # SUPERSEDED 检查结果
     superseded_entries = [e for e in result.index_entries if e.is_superseded]
     if superseded_entries:
-        lines.extend([
-            "",
-            "### 3.2 Superseded 声明检查结果",
-            "",
-            "| 迭代 | 索引状态 | 文件 Superseded 声明 | 一致性 | 备注 |",
-            "|------|----------|----------------------|--------|------|",
-        ])
+        lines.extend(
+            [
+                "",
+                "### 3.2 Superseded 声明检查结果",
+                "",
+                "| 迭代 | 索引状态 | 文件 Superseded 声明 | 一致性 | 备注 |",
+                "|------|----------|----------------------|--------|------|",
+            ]
+        )
 
         {e.iteration_number: e for e in result.index_entries}
         for entry in result.index_entries:
             successor = entry.get_successor_number()
-            regression_files = [f for f in result.files if f.iteration_number == entry.iteration_number and f.file_type == "regression"]
+            regression_files = [
+                f
+                for f in result.files
+                if f.iteration_number == entry.iteration_number and f.file_type == "regression"
+            ]
 
             if entry.is_superseded:
                 if regression_files:
@@ -396,18 +430,26 @@ def generate_report(result: AuditResult, project_root: Path) -> str:
             else:
                 consistency = "✅ 一致"
                 note = "非 SUPERSEDED 状态，无需声明"
-                file_status = "❌ 无声明" if regression_files and not regression_files[0].has_superseded_header else "-"
+                file_status = (
+                    "❌ 无声明"
+                    if regression_files and not regression_files[0].has_superseded_header
+                    else "-"
+                )
 
-            lines.append(f"| Iteration {entry.iteration_number} | {entry.status} | {file_status} | {consistency} | {note} |")
+            lines.append(
+                f"| Iteration {entry.iteration_number} | {entry.status} | {file_status} | {consistency} | {note} |"
+            )
 
     # 发现的问题
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## 4. 发现的问题",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 4. 发现的问题",
+            "",
+        ]
+    )
 
     if result.inconsistencies or result.missing_files or result.orphan_files:
         if result.inconsistencies:
@@ -437,25 +479,27 @@ def generate_report(result: AuditResult, project_root: Path) -> str:
         lines.append("")
 
     # 审计总结
-    lines.extend([
-        "---",
-        "",
-        "## 5. 审计总结",
-        "",
-        "| 指标 | 结果 |",
-        "|------|------|",
-        f"| 总迭代数（索引中） | {len(result.index_entries)} |",
-        f"| Regression 文件数 | {regression_count} |",
-        f"| Plan 文件数 | {plan_count} |",
-        f"| SUPERSEDED 状态迭代 | {len(superseded_entries)} |",
-        f"| **一致性问题数** | **{len(result.inconsistencies)}** |",
-        f"| 缺失文件数 | {len(result.missing_files)} |",
-        f"| 孤儿文件数 | {len(result.orphan_files)} |",
-        "",
-        "---",
-        "",
-        "*报告生成完成*",
-    ])
+    lines.extend(
+        [
+            "---",
+            "",
+            "## 5. 审计总结",
+            "",
+            "| 指标 | 结果 |",
+            "|------|------|",
+            f"| 总迭代数（索引中） | {len(result.index_entries)} |",
+            f"| Regression 文件数 | {regression_count} |",
+            f"| Plan 文件数 | {plan_count} |",
+            f"| SUPERSEDED 状态迭代 | {len(superseded_entries)} |",
+            f"| **一致性问题数** | **{len(result.inconsistencies)}** |",
+            f"| 缺失文件数 | {len(result.missing_files)} |",
+            f"| 孤儿文件数 | {len(result.orphan_files)} |",
+            "",
+            "---",
+            "",
+            "*报告生成完成*",
+        ]
+    )
 
     return "\n".join(lines)
 

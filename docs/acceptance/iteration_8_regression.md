@@ -4,6 +4,40 @@
 
 # Iteration 8 Regression Report
 
+## 门禁验证证据
+
+> **Evidence 文件**: [iteration_8_evidence.json](evidence/iteration_8_evidence.json)
+>
+> **执行时间**: 2026-02-01T20:35:41Z  
+> **Commit**: `11fb91d`  
+> **整体结果**: PARTIAL (10 PASS / 3 FAIL)
+
+### 门禁执行摘要
+
+| 门禁命令 | 结果 | 摘要 |
+|----------|------|------|
+| `make typecheck` | ❌ FAIL | 31 mypy errors in 10 files |
+| `make validate-workflows-strict` | ❌ FAIL | undeclared make target |
+| `make check-workflow-contract-docs-sync` | ✅ PASS | 21 jobs validated |
+| `make check-workflow-contract-version-policy` | ✅ PASS | 14 critical files changed |
+| `make lint` | ✅ PASS | All checks passed |
+| `make check-gateway-di-boundaries` | ✅ PASS | 0 violations |
+| `make check-gateway-public-api-surface` | ✅ PASS | 24 symbols verified |
+| `make check-gateway-public-api-docs-sync` | ✅ PASS | 24 symbols synced |
+| `make check-gateway-import-surface` | ✅ PASS | lazy loading verified |
+| `make check-gateway-correlation-id-single-source` | ✅ PASS | 43 files scanned |
+| `make check-mcp-error-contract` | ✅ PASS | 19 error reasons synced |
+| `make check-mcp-error-docs-sync` | ✅ PASS | all enums synced |
+| `pytest tests/ci/ -q` | ❌ FAIL | 786 passed, 2 failed, 3 skipped |
+
+### 待修复问题
+
+1. **mypy 类型错误** (31 errors): 需要修复 `src/engram/logbook/` 和 `src/engram/gateway/` 中的类型注解
+2. **workflow 合约缺失 target**: `check-workflow-contract-doc-anchors` 未在 `workflow_contract.v1.json` 中声明
+3. **CI 测试版本同步**: 合约版本 2.17.0 未同步到文档
+
+---
+
 ## Gateway DI 边界与废弃模块检查
 
 **执行时间**: 2026-02-01
@@ -349,3 +383,95 @@ make verify-permissions
 2. **单例重置**: 确保 `auto_reset_gateway_state` fixture 覆盖所有需要重置的单例
 3. **并行测试验证**: 使用 `pytest -x` 定位首个导致污染的测试
 4. **考虑 pytest-forked**: 对于修改全局状态的测试使用进程隔离
+
+---
+
+## 验收证据
+
+| 项目 | 值 |
+|------|-----|
+| **证据文件** | [`iteration_8_evidence.json`](evidence/iteration_8_evidence.json) |
+| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **记录时间** | 2026-02-01T20:35:41Z |
+| **Commit SHA** | `11fb91d` |
+| **整体结果** | PARTIAL (10 PASS / 3 FAIL) |
+
+### 门禁命令执行摘要
+
+| 命令 | 结果 | 摘要 |
+|------|------|------|
+| `make typecheck` | ❌ FAIL | 31 mypy errors in 10 files |
+| `make validate-workflows-strict` | ❌ FAIL | undeclared make target |
+| `make check-workflow-contract-docs-sync` | ✅ PASS | 21 jobs validated |
+| `make check-workflow-contract-version-policy` | ✅ PASS | 14 critical files changed |
+| `make lint` | ✅ PASS | All checks passed |
+| `make check-gateway-di-boundaries` | ✅ PASS | 0 violations |
+| `make check-gateway-public-api-surface` | ✅ PASS | 24 symbols verified |
+| `make check-gateway-public-api-docs-sync` | ✅ PASS | 24 symbols synced |
+| `make check-gateway-import-surface` | ✅ PASS | lazy loading verified |
+| `make check-gateway-correlation-id-single-source` | ✅ PASS | 43 files scanned |
+| `make check-mcp-error-contract` | ✅ PASS | 19 error reasons synced |
+| `make check-mcp-error-docs-sync` | ✅ PASS | all enums synced |
+| `pytest tests/ci/ -q` | ❌ FAIL | 786 passed, 2 failed, 3 skipped |
+
+> **证据校验命令**: `python -m jsonschema -i docs/acceptance/evidence/iteration_8_evidence.json schemas/iteration_evidence_v1.schema.json`
+
+---
+
+## 修复文件清单 (task-e3a45299)
+
+**执行时间**: 2026-02-02
+
+### 按域分组的文件与门禁结果
+
+#### 组 A: Workflow Contract/CI
+
+| 文件 | 状态 | 门禁 |
+|------|------|------|
+| `.github/workflows/ci.yml` | ✅ 修改 | validate-workflows-strict |
+| `scripts/ci/workflow_contract.v1.json` | ✅ 修改 | check-workflow-contract-docs-sync |
+| `scripts/ci/validate_workflows.py` | ✅ 修改 | check-workflow-contract-version-policy |
+
+**门禁结果**: ✅ 全部通过
+- `make validate-workflows-strict`: PASSED (ci, nightly)
+- `make check-workflow-contract-docs-sync`: PASSED (v2.17.1, 21 jobs)
+- `make check-workflow-contract-version-policy`: PASSED (14 critical files)
+
+#### 组 B: Iteration 工具
+
+| 文件 | 状态 | 门禁 |
+|------|------|------|
+| `scripts/iteration/record_iteration_evidence.py` | ✅ 修改 | check-iteration-docs |
+| `docs/acceptance/_templates/iteration_evidence.template.json` | ✅ 新增 | pytest tests/iteration/ |
+
+**门禁结果**: ✅ 全部通过
+- `make check-iteration-docs`: PASSED (16 标题警告，非阻断)
+- `pytest tests/iteration/ -q`: 264 passed
+
+#### 组 C: Tests
+
+| 文件 | 状态 | 门禁 |
+|------|------|------|
+| `tests/ci/test_suggest_workflow_contract_updates.py` | ✅ 新增 | pytest tests/ci/ |
+| `tests/iteration/test_render_min_gate_block.py` | ✅ 新增 | pytest tests/iteration/ |
+
+**门禁结果**: ✅ 全部通过
+- `pytest tests/ci/ -q`: 788 passed, 3 skipped
+- 修复: 格式化 3 个文件 (ruff format)
+
+#### 组 D: 协作指南
+
+| 文件 | 状态 | 门禁 |
+|------|------|------|
+| `AGENTS.md` | ✅ 修改 | lint, format-check |
+
+**门禁结果**: ✅ 全部通过
+- `make lint`: All checks passed
+- `make format-check`: 通过
+
+### 建议提交顺序
+
+1. **组 A (Workflow Contract/CI)**: 先提交，确保 CI 合约基础稳定
+2. **组 B (Iteration 工具)**: 次提交，依赖组 A 的合约定义
+3. **组 C (Tests)**: 再提交，验证组 A/B 的实现正确性
+4. **组 D (协作指南)**: 最后提交，文档变更独立

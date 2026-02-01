@@ -92,6 +92,7 @@
 | 产物 | 路径 | 说明 |
 |------|------|------|
 | **回归记录** | `docs/acceptance/iteration_{N}_regression.md` | 版本化的回归记录 |
+| **验收证据** | `docs/acceptance/evidence/iteration_{N}_evidence.json` | 结构化验收证据（符合 `iteration_evidence_v1.schema.json`） |
 | **本地迭代笔记** | `.iteration/` | 本地化，不纳入版本控制 |
 
 ---
@@ -174,9 +175,10 @@
 - [ ] 复制本模板到 `docs/acceptance/iteration_{N}_plan.md`
 - [ ] 填写所有必须字段（迭代编号、日期、状态、SSOT、目标、门禁）
 - [ ] 创建对应的 `iteration_{N}_regression.md`（使用 [iteration_regression.template.md](iteration_regression.template.md)）
+- [ ] 创建证据目录 `docs/acceptance/evidence/`（如不存在）
 - [ ] 在 [00_acceptance_matrix.md](../00_acceptance_matrix.md) 添加索引条目
 - [ ] 移除模板说明（本文件顶部的使用说明区块）
 
 ---
 
-_模板版本：v1.0 | 更新日期：2026-02-01_
+_模板版本：v1.1 | 更新日期：2026-02-02（添加证据文件引用）_

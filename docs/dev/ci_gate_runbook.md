@@ -15,6 +15,8 @@
   - [0.1 Makefile 门禁目标汇总](#01-makefile-门禁目标汇总)
   - [0.2 Makefile 与 CI Workflow 差异对照](#02-makefile-与-ci-workflow-差异对照)
   - [0.3 门禁详细参考表](#03-门禁详细参考表)
+  - [0.4 CI 测试隔离门禁详解](#04-ci-测试隔离门禁详解)
+  - [0.5 缓存清理排障流程](#05-缓存清理排障流程)
 - [1. 门禁变量总览](#1-门禁变量总览)
   - [1.1 mypy 门禁变量](#11-mypy-门禁变量)
   - [1.2 ruff 门禁变量](#12-ruff-门禁变量)
@@ -117,6 +119,7 @@ make validate-workflows-strict   # Workflow 合约校验（严格模式，CI 使
 # ============================================
 make check-gateway-di-boundaries # Gateway DI 边界检查
 make check-no-root-wrappers      # 根目录 wrapper 导入检查
+make check-ci-test-isolation     # CI 测试隔离检查
 make check-env-consistency       # 环境变量一致性
 make check-schemas               # JSON Schema 校验
 make check-cli-entrypoints       # CLI 入口点一致性
@@ -131,12 +134,15 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 |--------|-----------|--------------|------|
 | `lint` | Run ruff check (lint) | `make lint` | 代码风格检查 |
 | | Run ruff format check | `make format-check` | 格式检查 |
-| | mypy type check (baseline) | `make typecheck-gate` | mypy baseline 模式 |
-| | mypy strict-island check | `make typecheck-strict-island` | 核心模块零错误 |
+| | Count mypy baseline errors | - | 统计 baseline 错误数（优先 mypy_metrics 口径） |
+| | Resolve mypy gate | - | 根据 phase/分支/阈值解析 gate |
+| | Run mypy type check | `make typecheck-gate` | mypy 检查（使用解析后的 gate） |
+| | Run mypy strict-island check | `make typecheck-strict-island` | 核心模块零错误 |
 | | Check mypy baseline changes | `make check-mypy-baseline-policy` | 仅 PR 时运行 |
 | | Check type ignore policy | `make check-type-ignore-policy` | type: ignore 规范 |
 | | Check noqa policy | `make check-noqa-policy` | noqa 注释规范 |
 | | Check no_root_wrappers | `make check-no-root-wrappers` | 禁止根目录导入 |
+| | Check CI test isolation | `make check-ci-test-isolation` | CI 测试隔离 |
 | `env-var-consistency` | Check environment variable consistency | `make check-env-consistency` | 环境变量一致性 |
 | `schema-validate` | Run schema validation | `make check-schemas` | JSON Schema 校验 |
 | `logbook-consistency` | Check logbook configuration consistency | `make check-logbook-consistency` | Logbook 配置一致性 |
@@ -203,6 +209,7 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 | | `check-no-root-wrappers` | 根目录 wrapper 禁止导入检查（组合） | `lint` |
 | | `check-no-root-wrappers-allowlist` | allowlist 有效性检查 | `lint` |
 | | `check-no-root-wrappers-usage` | 根目录 wrapper 使用检查 | `lint` |
+| | `check-ci-test-isolation` | CI 测试隔离检查（禁止模块级 sys.path 污染） | `lint` |
 | **一致性检查** | `check-env-consistency` | 环境变量一致性检查 | `env-var-consistency` |
 | | `check-logbook-consistency` | Logbook 配置一致性检查 | `logbook-consistency` |
 | | `check-schemas` | JSON Schema 校验 | `schema-validate` |
@@ -227,8 +234,8 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 | **ruff metrics** | `ruff-metrics` | `lint` job: "Collect ruff metrics" | CI 设置 `continue-on-error: true` |
 | **ruff metrics thresholds** | `check-ruff-metrics-thresholds` | `lint` job: "Check ruff metrics thresholds" | **Phase 0 观测**：CI 默认 warn-only（`ENGRAM_RUFF_FAIL_ON_THRESHOLD=false`）；**Phase 1 启用**：设为 `true` 可启用 fail 模式；本地复现需先 `make ruff-metrics` |
 | **ruff lint-island** | `ruff-lint-island` | `lint` job: "Check ruff lint-island" | 一致；已纳入 `make ci` |
-| **mypy baseline** | `typecheck-gate` | `lint` job: "mypy type check (baseline)" | CI 先计算 baseline_count，再由 `resolve_mypy_gate.py` 动态解析 gate |
-| **mypy strict-island** | `typecheck-strict-island` | `lint` job: "mypy strict-island check" | 一致 |
+| **mypy baseline** | `typecheck-gate` | `lint` job: "Run mypy type check" | CI 先计算 baseline_count（优先 mypy_metrics 口径），再由 `resolve_mypy_gate.py` 动态解析 gate |
+| **mypy strict-island** | `typecheck-strict-island` | `lint` job: "Run mypy strict-island check" | 一致 |
 | **mypy baseline policy** | `check-mypy-baseline-policy` | `lint` job: "Check mypy baseline changes" | **仅 CI PR 时触发**；本地可用 `make check-mypy-baseline-policy BASE_SHA=origin/main` 复现 |
 | **type: ignore policy** | `check-type-ignore-policy` | `lint` job: "Check type ignore policy" | 一致 |
 | **noqa policy** | `check-noqa-policy` | `lint` job: "Check noqa policy" | **CI 与 ENGRAM_RUFF_PHASE 联动**：Phase >= 1 时使用 `--lint-island-strict`，否则使用默认模式 |
@@ -263,6 +270,7 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 | **noqa policy (island)** | `make check-noqa-island` | - | 同上 | - | lint-island 路径缺少原因说明 | 添加原因：`# noqa: E501  # 原因` |
 | **type: ignore policy** | `make check-type-ignore-policy` | `lint` | - | CI 中添加 `\|\| true` | strict-island 路径下缺少错误码或说明 | 补充：`# type: ignore[code] - reason` |
 | **no_root_wrappers** | `make check-no-root-wrappers` | `lint` | `scripts/ci/no_root_wrappers_allowlist.json` | 添加到 allowlist 或使用 inline marker | 从根目录导入 wrapper 模块 | 1) 改用 `engram.logbook.xxx` 导入 2) 添加到 allowlist 3) 使用 inline marker |
+| **ci test isolation** | `make check-ci-test-isolation` | `lint` | - | - | 模块级 sys.path 污染、顶层 CI 模块导入、双模式导入 | 1) 改用 `scripts.ci.*` 导入 2) 移除模块级 sys.path 修改 3) 参见 [CI 测试隔离规范](./ci_test_isolation.md) |
 | **env consistency** | `make check-env-consistency` | `env-var-consistency` | - | - | 环境变量文档/代码不一致 | 同步 `.env.example`, docs, 代码 |
 | **schema validation** | `make check-schemas` | `schema-validate` | - | - | JSON Schema 校验失败 | 修复 schema 或 fixture |
 | **migration sanity** | `make check-migration-sanity` | `migration-sanity` | - | - | SQL 文件命名/分类违规 | 参见 `docs/logbook/sql_file_inventory.md` |
@@ -271,6 +279,154 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 | **cli entrypoints** | `make check-cli-entrypoints` | `cli-entrypoints-consistency` | - | - | pyproject.toml 与代码/文档不一致 | 同步 CLI 入口点 |
 | **gateway di** | `make check-gateway-di-boundaries` | `gateway-di-boundaries` | `--phase removal --disallow-allow-markers` | 改用 `check-gateway-di-boundaries-compat` | DI 边界违规、残留 allow-markers | 参见 `docs/architecture/adr_gateway_di_and_entry_boundary.md` |
 | **strict-island admission** | `make check-strict-island-admission` | - | `configs/mypy_strict_island_candidates.json`、`CANDIDATE`、`CANDIDATES_FILE` | - | baseline 错误非 0 / 缺少 override / 配置错误 | 参见 `docs/dev/mypy_baseline.md` §5.3 |
+
+### 0.4 CI 测试隔离门禁详解
+
+> CI 测试隔离门禁检查 `tests/ci/` 和 `scripts/ci/` 目录下的导入规范，防止 `sys.path` 和 `sys.modules` 污染。
+
+**核心约束**：
+
+| 约束点 | 规则 | 说明 |
+|--------|------|------|
+| **唯一导入路径** | `scripts.ci.*` | 所有 CI 脚本必须通过此命名空间导入 |
+| **唯一执行方式** | `python -m scripts.ci.<module>` 或从项目根目录运行 | 确保 `sys.path` 包含项目根目录 |
+| **禁止顶层导入** | 不允许 `import validate_workflows` | 会污染 `sys.modules` |
+| **禁止 sys.path 修改** | 模块顶层禁止 `sys.path.insert/append` | 影响所有测试 |
+
+**本地复现命令**：
+
+```bash
+# Make 目标
+make check-ci-test-isolation
+
+# 直接调用脚本（带详细输出）
+python -m scripts.ci.check_ci_test_isolation --verbose
+```
+
+**失败样例与定位**：
+
+| 失败类型 | 错误输出示例 | 定位方式 | 修复方法 |
+|----------|--------------|----------|----------|
+| 顶层 CI 模块导入 | `tests/ci/test_xxx.py:5: from workflow_contract_common import ...` | `grep -rn "^from \w\+ import" tests/ci/*.py \| grep -v "scripts.ci"` | 改为 `from scripts.ci.workflow_contract_common import ...` |
+| 模块级 sys.path 修改 | `scripts/ci/xxx.py:3: sys.path.insert(0, ...)` | `grep -rn "sys.path.insert\|sys.path.append" scripts/ci/*.py` | 移至 `if __name__ == "__main__":` 块内 |
+| 双模式导入 | `scripts/ci/xxx.py:8: try: from .xxx ... except: from xxx` | `grep -A2 "^try:" scripts/ci/*.py \| grep "ImportError"` | 仅使用 `from scripts.ci.xxx import ...` |
+| 运行时 sys.modules 污染 | `Failed: Test '...' has forbidden top-level CI modules in sys.modules: ['validate_workflows']` | 检查测试文件顶层导入 | 同"顶层 CI 模块导入" |
+
+**典型错误输出与修复**：
+
+```bash
+# 错误示例 1: 静态检查失败
+$ make check-ci-test-isolation
+[ERROR] 发现违规导入:
+  tests/ci/test_workflow_contract.py:5: from workflow_contract_common import discover_workflow_keys
+  scripts/ci/check_xxx.py:8: import validate_workflows
+
+# 修复：
+# 将 `from workflow_contract_common import ...` 
+# 改为 `from scripts.ci.workflow_contract_common import ...`
+
+# 错误示例 2: pytest 运行时检测到污染
+$ pytest tests/ci/ -v
+FAILED tests/ci/test_xxx.py::test_foo
+  Failed: Test 'test_foo' has forbidden top-level CI modules in sys.modules:
+    ['check_workflow_contract_docs_sync', 'workflow_contract_common']
+
+# 修复步骤：
+# 1. 定位问题测试文件
+grep -l "workflow_contract_common" tests/ci/*.py
+
+# 2. 修改导入方式
+# 错误: from workflow_contract_common import discover_workflow_keys
+# 正确: from scripts.ci.workflow_contract_common import discover_workflow_keys
+
+# 3. 清除缓存并重新测试
+rm -rf tests/ci/__pycache__ scripts/ci/__pycache__
+pytest tests/ci/ -q
+```
+
+**配置要求**：
+
+`pyproject.toml` 必须配置 `pythonpath` 以确保 pytest 能正确解析 `scripts.ci.*` 导入：
+
+```toml
+[tool.pytest.ini_options]
+pythonpath = ["."]
+```
+
+**相关文档**：
+
+- [CI 测试隔离规范](./ci_test_isolation.md) - 完整规范与修复指南
+- `tests/ci/conftest.py` - 运行时隔离 fixture 实现
+- `scripts/ci/check_ci_test_isolation.py` - 静态检查脚本
+
+### 0.5 缓存清理排障流程
+
+> 当 CI 测试失败但本地无法复现时，缓存问题是常见原因。以下是标准排障流程。
+
+**CI 缓存防护措施**：
+
+CI 环境已配置 `PYTHONDONTWRITEBYTECODE=1`，从源头防止 .pyc 字节码缓存生成，减少缓存相关问题。
+
+**本地清缓存复现步骤**：
+
+```bash
+# ============================================
+# 步骤 1：清理 Python 字节码缓存
+# ============================================
+# 删除所有 __pycache__ 目录和 .pyc 文件
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+# ============================================
+# 步骤 2：清理 pytest 缓存
+# ============================================
+rm -rf .pytest_cache
+
+# ============================================
+# 步骤 3：清理 mypy 缓存
+# ============================================
+rm -rf .mypy_cache
+
+# ============================================
+# 步骤 4：使用 -B 标志运行 Python（可选）
+# ============================================
+# -B 标志等效于 PYTHONDONTWRITEBYTECODE=1
+python -B -m pytest tests/ci/ -v
+
+# ============================================
+# 步骤 5：设置环境变量后运行（推荐）
+# ============================================
+PYTHONDONTWRITEBYTECODE=1 make ci
+```
+
+**一键清理脚本**：
+
+```bash
+# 将以下内容保存为 scripts/clean_caches.sh（可选）
+#!/bin/bash
+set -e
+echo "清理 Python 字节码缓存..."
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name "*.pyc" -delete 2>/dev/null || true
+echo "清理 pytest 缓存..."
+rm -rf .pytest_cache
+echo "清理 mypy 缓存..."
+rm -rf .mypy_cache
+echo "缓存清理完成"
+```
+
+**常见缓存问题症状**：
+
+| 症状 | 可能原因 | 解决方案 |
+|------|----------|----------|
+| CI 失败但本地通过 | .pyc 缓存了旧代码 | 清理 `__pycache__`，使用 `PYTHONDONTWRITEBYTECODE=1` |
+| import 错误间歇性出现 | 残留的 .pyc 文件与源码不匹配 | 清理所有 .pyc 文件 |
+| mypy 报告与代码不一致 | mypy 缓存过期 | 清理 `.mypy_cache` |
+| pytest 收集测试失败 | pytest 缓存了旧的测试发现结果 | 清理 `.pytest_cache` |
+
+**子进程测试的缓存隔离**：
+
+`tests/ci/helpers/subprocess_env.py` 中的 `get_subprocess_env()` 函数已默认设置 `PYTHONDONTWRITEBYTECODE=1`，确保子进程测试不会生成缓存文件。
 
 ---
 
@@ -342,17 +498,17 @@ make check-mypy-baseline-policy
 make check-mypy-baseline-policy BASE_SHA=origin/main
 
 # 直接调用 Python 脚本
-python scripts/ci/check_mypy_baseline_policy.py \
+python -m scripts.ci.check_mypy_baseline_policy \
   --base-sha origin/main \
   --head-sha HEAD \
   --verbose
 
 # 测试模式：使用预生成的 diff 文件
-python scripts/ci/check_mypy_baseline_policy.py \
+python -m scripts.ci.check_mypy_baseline_policy \
   --diff-file tests/fixtures/mypy_baseline_policy/sample_diff.txt
 
 # 测试模式：模拟 PR body 和 labels
-python scripts/ci/check_mypy_baseline_policy.py \
+python -m scripts.ci.check_mypy_baseline_policy \
   --base-sha origin/main \
   --pr-body "### CI Baseline 变更检查\n关联 Issue: #123" \
   --pr-labels "tech-debt" \
@@ -411,19 +567,19 @@ python scripts/ci/check_mypy_baseline_policy.py \
 
 ```bash
 # 仅警告模式（默认）
-python scripts/ci/check_ruff_metrics_thresholds.py \
+python -m scripts.ci.check_ruff_metrics_thresholds \
     --metrics-file artifacts/ruff_metrics.json \
     --verbose
 
 # 指定阈值并启用失败模式
-python scripts/ci/check_ruff_metrics_thresholds.py \
+python -m scripts.ci.check_ruff_metrics_thresholds \
     --metrics-file artifacts/ruff_metrics.json \
     --total-threshold 200 \
     --fail-on-threshold true \
     --verbose
 
 # JSON 输出
-python scripts/ci/check_ruff_metrics_thresholds.py \
+python -m scripts.ci.check_ruff_metrics_thresholds \
     --metrics-file artifacts/ruff_metrics.json \
     --json
 ```
@@ -483,7 +639,7 @@ current_phase = 0
 
 ```bash
 # 场景 1：评估新规则影响（Phase 推进前）
-python scripts/ci/check_ruff_gate.py --gate future-baseline --verbose
+python -m scripts.ci.check_ruff_gate --gate future-baseline --verbose
 
 # 场景 2：为新规则生成 baseline 快照
 make ruff-baseline-update RULES=B,UP,SIM
@@ -545,6 +701,8 @@ ignore = ["E501"]
 
 Workflow Contract 校验 GitHub Actions workflow 文件是否符合 `workflow_contract.v1.json` 定义的合约。
 
+> **场景化操作指南**：常见 workflow 变更场景（新增 Job、修改冻结名称、新增 Make Target 等）的完整操作流程和辅助工具使用方法，请参见 **[maintenance.md 第 9 章"常见场景最小演练"](../ci_nightly_workflow_refactor/maintenance.md#9-常见场景最小演练)**。
+
 **本地复现命令**：
 
 ```bash
@@ -561,9 +719,9 @@ make check-workflow-contract-docs-sync
 make validate-workflows-json
 
 # 直接调用 Python 脚本
-python scripts/ci/validate_workflows.py
-python scripts/ci/validate_workflows.py --strict
-python scripts/ci/validate_workflows.py --json
+python -m scripts.ci.validate_workflows
+python -m scripts.ci.validate_workflows --strict
+python -m scripts.ci.validate_workflows --json
 ```
 
 **检查内容**：
@@ -585,12 +743,12 @@ python scripts/ci/validate_workflows.py --json
 # ============================================
 # 1. 变更前：生成 before 快照
 # ============================================
-python scripts/ci/generate_workflow_contract_snapshot.py \
+python -m scripts.ci.generate_workflow_contract_snapshot \
   --workflow ci \
   --output /tmp/before.json
 
 # Nightly workflow（如涉及）
-python scripts/ci/generate_workflow_contract_snapshot.py \
+python -m scripts.ci.generate_workflow_contract_snapshot \
   --workflow nightly \
   --output /tmp/before_nightly.json
 
@@ -602,7 +760,7 @@ python scripts/ci/generate_workflow_contract_snapshot.py \
 # ============================================
 # 3. 变更后：生成 after 快照并 diff
 # ============================================
-python scripts/ci/generate_workflow_contract_snapshot.py \
+python -m scripts.ci.generate_workflow_contract_snapshot \
   --workflow ci \
   --output /tmp/after.json
 
@@ -668,13 +826,13 @@ make check-noqa-policy
 make check-noqa-island
 
 # 直接调用 Python 脚本
-python scripts/ci/check_noqa_policy.py --verbose
+python -m scripts.ci.check_noqa_policy --verbose
 
 # lint-island 严格模式
-python scripts/ci/check_noqa_policy.py --lint-island-strict --verbose
+python -m scripts.ci.check_noqa_policy --lint-island-strict --verbose
 
 # 全部文件要求原因说明
-python scripts/ci/check_noqa_policy.py --require-reason --verbose
+python -m scripts.ci.check_noqa_policy --require-reason --verbose
 ```
 
 **检查规则**：
@@ -733,9 +891,9 @@ make check-no-root-wrappers-allowlist
 make check-no-root-wrappers-usage
 
 # 直接调用 Python 脚本
-python scripts/ci/check_no_root_wrappers_allowlist.py  # allowlist 有效性
-python scripts/ci/check_no_root_wrappers_usage.py --verbose  # 使用检查
-python scripts/ci/check_no_root_wrappers_usage.py --json    # JSON 输出
+python -m scripts.ci.check_no_root_wrappers_allowlist  # allowlist 有效性
+python -m scripts.ci.check_no_root_wrappers_usage --verbose  # 使用检查
+python -m scripts.ci.check_no_root_wrappers_usage --json    # JSON 输出
 ```
 
 **检查规则**：
@@ -921,13 +1079,13 @@ make check-gateway-di-boundaries
 make check-gateway-di-boundaries-compat
 
 # 直接调用 Python 脚本（严格模式）
-python scripts/ci/check_gateway_di_boundaries.py --phase removal --disallow-allow-markers --verbose
+python -m scripts.ci.check_gateway_di_boundaries --phase removal --disallow-allow-markers --verbose
 
 # JSON 输出（适合脚本处理）
-python scripts/ci/check_gateway_di_boundaries.py --phase removal --disallow-allow-markers --json
+python -m scripts.ci.check_gateway_di_boundaries --phase removal --disallow-allow-markers --json
 
 # compat 模式（迁移过渡期使用）
-python scripts/ci/check_gateway_di_boundaries.py --phase compat --verbose
+python -m scripts.ci.check_gateway_di_boundaries --phase compat --verbose
 ```
 
 **禁止的调用模式**：
@@ -1006,7 +1164,7 @@ conn = deps.db  # DEPS-DB-ALLOW: expires=2026-06-30
 
 ```bash
 # 示例：查看 JSON 输出
-python scripts/ci/check_gateway_di_boundaries.py --json
+python -m scripts.ci.check_gateway_di_boundaries --json
 
 # 示例输出字段结构
 {
@@ -1117,7 +1275,7 @@ ENGRAM_DEPS_DB_MAX_EXPIRY_DAYS: 365  # 临时放宽到 1 年
 
 ```bash
 # 使用 compat 模式，deps.db 违规仅警告
-python scripts/ci/check_gateway_di_boundaries.py --phase compat
+python -m scripts.ci.check_gateway_di_boundaries --phase compat
 ```
 
 > **重要**：使用方式 1、2 或 4 进行紧急回滚后，**必须**在下一个工作日内：
@@ -1199,7 +1357,7 @@ def test_dependency_missing(sys_modules_patcher):
 ```bash
 # 1. 确认当前状态
 # 推荐：使用 mypy_metrics.py 获取准确的错误数（排除 note 行）
-python scripts/ci/mypy_metrics.py --output /dev/stdout | jq '.summary.total_errors'
+python -m scripts.ci.mypy_metrics --output /dev/stdout | jq '.summary.total_errors'
 
 # 备选：使用 wc -l 统计行数（包含 note 行，会略高于实际错误数）
 wc -l scripts/ci/mypy_baseline.txt
@@ -1218,7 +1376,7 @@ git log --oneline -20 -- scripts/ci/mypy_baseline.txt  # 近期 baseline 变更
 
 | 口径 | 命令 | 说明 | 使用场景 |
 |------|------|------|----------|
-| **mypy_metrics**（主口径） | `python scripts/ci/mypy_metrics.py --output - \| jq '.summary.total_errors'` | 实际错误数（排除 note 行） | **CI 主口径**、Phase 阈值判断、`--check-threshold` |
+| **mypy_metrics**（主口径） | `python -m scripts.ci.mypy_metrics --output - \| jq '.summary.total_errors'` | 实际错误数（排除 note 行） | **CI 主口径**、Phase 阈值判断、`--check-threshold` |
 | **wc -l**（备选） | `wc -l < scripts/ci/mypy_baseline.txt` | 文件总行数（包含 note 行） | Fallback（当 mypy_metrics 不可用时） |
 
 > **Phase 阈值判断字段**：CI 使用 `mypy_metrics.py` 的 **`summary.total_errors`** 字段进行 Phase 阈值判断。
@@ -1327,7 +1485,7 @@ ENGRAM_RUFF_PHASE: 0
 # lint-island 检查步骤
 - name: Check ruff lint-island
   run: |
-    python scripts/ci/check_ruff_lint_island.py \
+    python -m scripts.ci.check_ruff_lint_island \
       --phase "${{ vars.ENGRAM_RUFF_PHASE || '0' }}" \
       --verbose
 ```
@@ -1361,10 +1519,10 @@ export ENGRAM_VERIFY_GATE=off
 
 ```yaml
 # 从严格模式
-python scripts/ci/validate_workflows.py --strict
+python -m scripts.ci.validate_workflows --strict
 
 # 改为非严格模式（仅 errors 失败，warnings 忽略）
-python scripts/ci/validate_workflows.py
+python -m scripts.ci.validate_workflows
 ```
 
 **方式 2：临时跳过检查**
@@ -1373,7 +1531,7 @@ python scripts/ci/validate_workflows.py
 # .github/workflows/ci.yml (临时)
 - name: Validate workflow contract
   run: |
-    python scripts/ci/validate_workflows.py --strict || true
+    python -m scripts.ci.validate_workflows --strict || true
 ```
 
 **方式 3：更新合约文件**
@@ -1426,7 +1584,7 @@ ENGRAM_RUFF_PHASE: 0
 # .github/workflows/ci.yml (临时)
 - name: Check noqa policy
   run: |
-    python scripts/ci/check_noqa_policy.py --verbose || true
+    python -m scripts.ci.check_noqa_policy --verbose || true
 ```
 
 **方式 3：修改 Makefile ci 目标**
@@ -1497,7 +1655,7 @@ ENGRAM_ALLOWLIST_FAIL_ON_MAX_EXPIRY: false
 }
 
 # 验证 allowlist
-python scripts/ci/check_no_root_wrappers_allowlist.py
+python -m scripts.ci.check_no_root_wrappers_allowlist
 ```
 
 **方式 2：临时跳过检查（CI 中）**
@@ -1575,7 +1733,7 @@ conn = deps.db
 # .github/workflows/ci.yml (临时)
 - name: Check gateway DI boundaries
   run: |
-    python scripts/ci/check_gateway_di_boundaries.py --verbose || true
+    python -m scripts.ci.check_gateway_di_boundaries --verbose || true
 ```
 
 **方式 3：修改 Makefile ci 目标**
@@ -1623,7 +1781,7 @@ async def handler_impl(..., deps: GatewayDeps):
 > make typecheck-strict-island           # 确认核心模块通过
 >
 > # 2. 执行 Phase 3 归档（可选，需团队讨论后执行）
-> python scripts/ci/check_mypy_gate.py --archive-baseline
+> python -m scripts.ci.check_mypy_gate --archive-baseline
 > # 然后更新 GitHub Repository Variable: ENGRAM_MYPY_MIGRATION_PHASE=3
 > ```
 
@@ -1635,7 +1793,7 @@ async def handler_impl(..., deps: GatewayDeps):
 
 | 口径 | 命令 | 含义 | 优先级 |
 |------|------|------|--------|
-| **mypy_metrics**（主口径） | `python scripts/ci/mypy_metrics.py --output - \| jq '.summary.total_errors'` | 实际错误数（排除 note 行） | **CI 主口径** |
+| **mypy_metrics**（主口径） | `python -m scripts.ci.mypy_metrics --output - \| jq '.summary.total_errors'` | 实际错误数（排除 note 行） | **CI 主口径** |
 | **wc -l**（备选） | `wc -l < scripts/ci/mypy_baseline.txt` | 文件总行数（含 note） | Fallback |
 
 > CI 使用 `mypy_metrics.py` 口径进行 Phase 阈值判断。两者差异约 10-20%（note 行比例）。
@@ -1707,7 +1865,7 @@ ENGRAM_MYPY_STRICT_THRESHOLD: 100  # 提高阈值
 
 | 条件 | 检查方法 | 通过标准 |
 |------|----------|----------|
-| 基线错误数 | `python scripts/ci/mypy_metrics.py --output - \| jq '.summary.total_errors'` | ≤ 20 |
+| 基线错误数 | `python -m scripts.ci.mypy_metrics --output - \| jq '.summary.total_errors'` | ≤ 20 |
 | 高风险模块 | `grep -E "di\.py\|container\.py\|migrate\.py" scripts/ci/mypy_baseline.txt` | 0 条 |
 | Strict Island 通过 | `make typecheck-strict-island` | 退出码 0 |
 | CI 稳定 | 最近 10 次 CI 运行 | 无 mypy 相关失败 |
@@ -1718,7 +1876,7 @@ ENGRAM_MYPY_STRICT_THRESHOLD: 100  # 提高阈值
 ```bash
 # 1. 验证条件
 # 推荐使用 mypy_metrics.py（CI 实际使用的口径）
-python scripts/ci/mypy_metrics.py --output /dev/stdout | jq '.summary.total_errors'
+python -m scripts.ci.mypy_metrics --output /dev/stdout | jq '.summary.total_errors'
 # 或使用 wc -l 快速估算
 wc -l < scripts/ci/mypy_baseline.txt
 make typecheck-strict-island
@@ -1765,7 +1923,7 @@ git log --since="14 days ago" --oneline -- scripts/ci/mypy_baseline.txt
 
 | 条件 | 检查方法 | 通过标准 |
 |------|----------|----------|
-| **Baseline 清零** | `python scripts/ci/mypy_metrics.py --output - \| jq '.summary.total_errors'` | **= 0** |
+| **Baseline 清零** | `python -m scripts.ci.mypy_metrics --output - \| jq '.summary.total_errors'` | **= 0** |
 | Phase 1 稳定期 | 查看变量设置时间、CI 历史 | ≥ 2 周无回滚 |
 | 近 30 天净增 | `git log --since="30 days ago" -p -- scripts/ci/mypy_baseline.txt \| grep "^+" \| grep -v "^+++" \| wc -l` | = 已删除行数 |
 | 无回滚记录 | 查看 `ENGRAM_MYPY_GATE_OVERRIDE` | 空或无设置 |
@@ -1775,7 +1933,7 @@ git log --since="14 days ago" --oneline -- scripts/ci/mypy_baseline.txt
 
 ```bash
 # 1. 验证 Baseline 清零（使用 CI 主口径）
-python scripts/ci/mypy_metrics.py --output /dev/stdout | jq '.summary.total_errors'  # 必须为 0
+python -m scripts.ci.mypy_metrics --output /dev/stdout | jq '.summary.total_errors'  # 必须为 0
 
 # 2. 验证 wc -l 口径（参考，可能包含 note 行）
 wc -l < scripts/ci/mypy_baseline.txt  # 应为 0 或仅含 note 行
@@ -1812,13 +1970,13 @@ make typecheck-strict-island
 | 条件 | 检查方法 | 通过标准 |
 |------|----------|----------|
 | Phase 2 稳定期 | 查看变量设置时间、CI 历史 | ≥ 2 周无回滚 |
-| **Baseline 仍为空** | `python scripts/ci/mypy_metrics.py --output - \| jq '.summary.total_errors'` | **= 0** |
+| **Baseline 仍为空** | `python -m scripts.ci.mypy_metrics --output - \| jq '.summary.total_errors'` | **= 0** |
 | 无 Gate Override | 查看 `ENGRAM_MYPY_GATE_OVERRIDE` | 空或未设置 |
 | Strict Island 通过 | `make typecheck-strict-island` | 退出码 0 |
 
 **归档操作步骤**：
 
-> **重要**：归档 baseline 文件**必须**使用 `python scripts/ci/check_mypy_gate.py --archive-baseline` 命令。
+> **重要**：归档 baseline 文件**必须**使用 `python -m scripts.ci.check_mypy_gate --archive-baseline` 命令。
 > 该命令会自动执行以下检查：
 > 1. 验证 baseline 文件存在
 > 2. 验证 baseline 错误数为 0
@@ -1831,7 +1989,7 @@ make typecheck-strict-island
 # ============================================
 
 # 1. 验证 baseline 清零（使用 CI 主口径）
-python scripts/ci/mypy_metrics.py --output /dev/stdout | jq '.summary.total_errors'
+python -m scripts.ci.mypy_metrics --output /dev/stdout | jq '.summary.total_errors'
 # 必须输出 0，否则不允许归档
 
 # 2. 验证 strict-island 通过
@@ -1839,10 +1997,10 @@ make typecheck-strict-island
 # 必须退出码 0
 
 # 3. 检查当前阈值状态（可选，查看详细报告）
-python scripts/ci/check_mypy_gate.py --check-threshold
+python -m scripts.ci.check_mypy_gate --check-threshold
 
 # 4. 执行归档（必须使用此命令）
-python scripts/ci/check_mypy_gate.py --archive-baseline
+python -m scripts.ci.check_mypy_gate --archive-baseline
 # 成功输出示例:
 # [OK] 基线文件已归档: scripts/ci/mypy_baseline.txt -> scripts/ci/archived/mypy_baseline.txt.archived
 
@@ -2297,7 +2455,7 @@ make check-mypy-metrics-thresholds
 make check-mypy-metrics-thresholds-fail
 
 # 自定义阈值
-python scripts/ci/check_mypy_metrics_thresholds.py \
+python -m scripts.ci.check_mypy_metrics_thresholds \
     --metrics-file artifacts/mypy_metrics.json \
     --total-error-threshold 30 \
     --fail-on-threshold true \
@@ -2313,7 +2471,7 @@ make check-ruff-metrics-thresholds
 make check-ruff-metrics-thresholds-fail
 
 # 自定义阈值
-python scripts/ci/check_ruff_metrics_thresholds.py \
+python -m scripts.ci.check_ruff_metrics_thresholds \
     --metrics-file artifacts/ruff_metrics.json \
     --total-threshold 200 \
     --fail-on-threshold true \
@@ -2332,8 +2490,8 @@ python scripts/ci/check_ruff_metrics_thresholds.py \
 
 ```bash
 # 1. 获取当前指标
-python scripts/ci/mypy_metrics.py --output artifacts/mypy_metrics.json
-python scripts/ci/ruff_metrics.py --output artifacts/ruff_metrics.json
+python -m scripts.ci.mypy_metrics --output artifacts/mypy_metrics.json
+python -m scripts.ci.ruff_metrics --output artifacts/ruff_metrics.json
 
 # 2. 查看当前值
 jq '.summary.total_errors' artifacts/mypy_metrics.json    # mypy 总错误数
@@ -2350,7 +2508,7 @@ jq '.summary.total_violations' artifacts/ruff_metrics.json # ruff 总违规数
 
 | 指标 | 计算方式 | 绿色 | 黄色 | 红色 |
 |------|----------|------|------|------|
-| Baseline 错误数 | `python scripts/ci/mypy_metrics.py --output - \| jq '.summary.total_errors'` | ≤ 50 | 51-100 | > 100 |
+| Baseline 错误数 | `python -m scripts.ci.mypy_metrics --output - \| jq '.summary.total_errors'` | ≤ 50 | 51-100 | > 100 |
 | Strict Island 覆盖率 | 已配置 strict 模块数 / 总模块数 | ≥ 80% | 50-79% | < 50% |
 | 近 30 天新增错误 | git diff 统计 | 0 | 1-5 | > 5 |
 | type: ignore 总数 | `grep -r "type: ignore" src/ \| wc -l` | ≤ 20 | 21-50 | > 50 |
@@ -2375,13 +2533,13 @@ jq '.summary.total_violations' artifacts/ruff_metrics.json # ruff 总违规数
 ```bash
 # mypy 指标
 # 推荐：使用 mypy_metrics.py 获取准确的错误数（CI 实际使用的口径）
-python scripts/ci/mypy_metrics.py --output /dev/stdout | jq '.summary.total_errors'
+python -m scripts.ci.mypy_metrics --output /dev/stdout | jq '.summary.total_errors'
 
 # 备选：使用 wc -l 快速估算（包含 note 行，数值略高）
 wc -l < scripts/ci/mypy_baseline.txt
 
 # 完整 mypy 指标报告
-python scripts/ci/mypy_metrics.py --output /dev/stdout --verbose
+python -m scripts.ci.mypy_metrics --output /dev/stdout --verbose
 
 # type: ignore 总数
 grep -r "type: ignore" src/ | wc -l
@@ -2409,6 +2567,7 @@ time make lint
 | [no_root_wrappers 迁移文档](../architecture/no_root_wrappers_migration_map.md) | 根目录 wrapper 迁移计划、Allowlist 用途 |
 | [no_root_wrappers 例外规范](../architecture/no_root_wrappers_exceptions.md) | 例外机制、Deprecated vs Preserved 治理差异 |
 | [Workflow Contract 维护指南](../ci_nightly_workflow_refactor/maintenance.md) | Workflow 合约维护 |
+| [CI 测试隔离规范](./ci_test_isolation.md) | CI 脚本导入规范、禁止写法、ImportError 修复 |
 
 ---
 
@@ -2447,18 +2606,20 @@ time make lint
 
 ### 8.4 修改 GitHub Actions Workflow 时
 
-> **重要**：任何 workflow 变更都必须遵循标准 SOP。详见 [1.4 Workflow Contract 门禁](#14-workflow-contract-门禁) 和 [维护指南](../ci_nightly_workflow_refactor/maintenance.md#5-workflow-变更标准-sop)。
+> **重要**：任何 workflow 变更都必须遵循标准 SOP。详见 [1.4 Workflow Contract 门禁](#14-workflow-contract-门禁) 和 [维护指南](../ci_nightly_workflow_refactor/maintenance.md#0-快速变更流程ssot-first)。
+>
+> **场景化最小演练**：按场景列出先改哪里（SSOT/workflow/docs）、运行哪些命令、辅助工具使用、常见失败与修复路径，请参见 **[maintenance.md 第 9 章"常见场景最小演练"](../ci_nightly_workflow_refactor/maintenance.md#9-常见场景最小演练)**。
 
 **标准变更流程**：
 
 ```bash
 # 1. 变更前：生成 before 快照
-python scripts/ci/generate_workflow_contract_snapshot.py --workflow ci --output /tmp/before.json
+python -m scripts.ci.generate_workflow_contract_snapshot --workflow ci --output /tmp/before.json
 
 # 2. 执行变更：修改 .github/workflows/*.yml
 
 # 3. 变更后：生成 after 快照并 diff
-python scripts/ci/generate_workflow_contract_snapshot.py --workflow ci --output /tmp/after.json
+python -m scripts.ci.generate_workflow_contract_snapshot --workflow ci --output /tmp/after.json
 diff <(jq -S . /tmp/before.json) <(jq -S . /tmp/after.json)
 
 # 4. 同步更新合约文件（根据 diff）
@@ -2522,4 +2683,4 @@ make check-env-consistency
 
 ---
 
-> 更新时间：2026-02-01
+> 更新时间：2026-02-02（添加 0.5 缓存清理排障流程，CI 启用 PYTHONDONTWRITEBYTECODE=1）

@@ -72,8 +72,13 @@ make typecheck-gate                     # mypy baseline 模式检查（用于增
 make check-cli-entrypoints              # CLI 入口点一致性检查
 make check-noqa-policy                  # noqa 注释策略检查
 make check-no-root-wrappers             # 根目录 wrapper 禁止导入检查
+make check-workflow-contract-doc-anchors  # Workflow 合约文档锚点检查
 pytest tests/ci/ -q                     # CI 脚本测试
 make test-iteration-tools               # 迭代工具脚本测试（无需数据库）
+
+# 建议工具（辅助开发，不阻断 CI）
+python scripts/ci/suggest_workflow_contract_updates.py --json  # 生成合约更新建议（JSON）
+python scripts/ci/suggest_workflow_contract_updates.py --markdown  # 生成合约更新建议（Markdown）
 ```
 
 > **迭代回归 Runbook**：详细的最小门禁命令块（含预期输出关键字和通过标准）请参阅当前活跃迭代的回归记录：
@@ -99,6 +104,8 @@ make test-iteration-tools               # 迭代工具脚本测试（无需数�
 | `scripts/ci/validate_workflows.py` | Workflow 合约校验 | `make validate-workflows-strict` |
 | `scripts/ci/check_workflow_contract_docs_sync.py` | Workflow 合约与文档同步 | `make check-workflow-contract-docs-sync` |
 | `scripts/ci/check_workflow_contract_version_policy.py` | Workflow 合约版本策略 | `make check-workflow-contract-version-policy` |
+| `scripts/ci/check_workflow_contract_doc_anchors.py` | Workflow 合约文档锚点 | `make check-workflow-contract-doc-anchors` |
+| `scripts/ci/suggest_workflow_contract_updates.py` | 合约更新建议（辅助工具） | 手动执行 |
 
 ---
 
@@ -384,6 +391,11 @@ make check-workflow-contract-version-policy  # Workflow 合约版本策略检查
 make typecheck-gate              # mypy baseline 模式检查（用于增量修复）
 make check-noqa-policy           # noqa 注释策略检查
 make check-no-root-wrappers      # 根目录 wrapper 禁止导入检查
+make check-workflow-contract-doc-anchors  # Workflow 合约文档锚点检查
+
+# 建议工具（辅助更新合约）
+python scripts/ci/suggest_workflow_contract_updates.py --json  # JSON 格式
+python scripts/ci/suggest_workflow_contract_updates.py --markdown  # Markdown 格式
 
 # baseline 更新时
 make mypy-baseline-update        # 更新 mypy 基线（需串行）
@@ -461,7 +473,7 @@ make ci                          # 完整 CI 检查（合并前）
 | 代理类型 | 必须运行 | 推荐运行 |
 |----------|----------|----------|
 | **SQL** | `check-migration-sanity`, `verify-permissions` | `migrate-plan`, `ci` |
-| **CI** | `typecheck`, `validate-workflows-strict`, `check-workflow-contract-docs-sync`, `check-workflow-contract-version-policy` | `typecheck-gate`, `check-noqa-policy`, `mypy-baseline-update`, `ci` |
+| **CI** | `typecheck`, `validate-workflows-strict`, `check-workflow-contract-docs-sync`, `check-workflow-contract-version-policy` | `typecheck-gate`, `check-noqa-policy`, `check-workflow-contract-doc-anchors`, `mypy-baseline-update`, `ci` |
 | **文档** | `check-env-consistency`, `check-iteration-docs` | `check-cli-entrypoints`, `check-schemas`, `ci` |
 | **Gateway** | `lint`, `format-check`, `typecheck`, `check-gateway-di-boundaries`, `check-gateway-public-api-surface`, `check-gateway-public-api-docs-sync`, `check-gateway-import-surface`, `check-gateway-correlation-id-single-source`, `check-mcp-error-contract`, `check-mcp-error-docs-sync`, `test-gateway` | `test-logbook`, `ci` |
 
@@ -682,6 +694,8 @@ python scripts/ci/check_mypy_gate.py --verbose  # 查看详细错误
 | Strict Island 配置 | `pyproject.toml [tool.engram.mypy]` |
 | 环境变量参考 | `docs/reference/environment_variables.md` |
 | CI 门禁 Runbook | `docs/dev/ci_gate_runbook.md` |
+| 迭代操作手册 | `docs/dev/iteration_runbook.md` |
+| 迭代本地草稿指南 | `docs/dev/iteration_local_drafts.md` |
 
 ### 外部参考文档
 
@@ -736,7 +750,7 @@ ruff format src/ tests/
 
 ---
 
-更新时间：2026-02-02
+更新时间：2026-02-02（添加 check-workflow-contract-doc-anchors 门禁、suggest_workflow_contract_updates 建议工具）
 
 ---
 

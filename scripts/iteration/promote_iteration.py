@@ -116,9 +116,117 @@ class SupersedeValidationError(Exception):
         super().__init__(f"--supersede {old_iteration} 前置校验失败: {reason}")
 
 
+class InvalidSourceError(Exception):
+    """当源目录路径不合法时抛出。
+
+    仅允许 .iteration/<N>/ 作为源目录，禁止:
+    - .iteration/_export/<N>/ (快照目录，防止"快照覆盖 SSOT"误用)
+    """
+
+    def __init__(self, path: Path, reason: str) -> None:
+        self.path = path
+        self.reason = reason
+        super().__init__(f"无效的源目录: {path}\n{reason}")
+
+
+class SnapshotPromoteError(Exception):
+    """当尝试将快照目录晋升到 SSOT 时抛出。
+
+    快照目录包含 DO_NOT_PROMOTE=true sentinel，不允许 promote。
+    """
+
+    def __init__(self, path: Path, iteration_number: int) -> None:
+        self.path = path
+        self.iteration_number = iteration_number
+        super().__init__(
+            f"目录 {path} 是 SSOT 快照，不能用于晋升。\n"
+            f"快照仅供只读参考，如需创建新迭代，请使用:\n"
+            f"  1. python scripts/iteration/init_local_iteration.py <next_N>\n"
+            f"  2. python scripts/iteration/promote_iteration.py <next_N>"
+        )
+
+
+# sentinel 标识符，用于标记快照目录不可 promote
+DO_NOT_PROMOTE_SENTINEL = "DO_NOT_PROMOTE=true"
+
+
 # ============================================================================
 # 辅助函数
 # ============================================================================
+
+
+def validate_source_directory(iteration_number: int) -> Path:
+    """校验并返回有效的源目录路径。
+
+    仅允许 .iteration/<N>/ 作为源目录，禁止:
+    - .iteration/_export/<N>/ (快照目录，防止"快照覆盖 SSOT"误用)
+
+    Args:
+        iteration_number: 迭代编号
+
+    Returns:
+        有效的源目录路径
+
+    Raises:
+        InvalidSourceError: 如果源目录路径不合法或位于禁止区域
+    """
+    # 正确的源目录
+    valid_src = ITERATION_DIR / str(iteration_number)
+
+    # 禁止的源目录模式
+    export_dir = ITERATION_DIR / "_export" / str(iteration_number)
+    if export_dir.exists():
+        raise InvalidSourceError(
+            export_dir,
+            reason=(
+                f".iteration/_export/{iteration_number}/ 是快照目录，不能作为晋升来源。\n"
+                "快照仅供只读参考，晋升操作必须从 .iteration/<N>/ 源目录执行。\n"
+                f"请使用: .iteration/{iteration_number}/"
+            ),
+        )
+
+    return valid_src
+
+
+def check_snapshot_sentinel(src_dir: Path, iteration_number: int) -> None:
+    """检查源目录或其父目录是否包含 DO_NOT_PROMOTE sentinel。
+
+    快照目录的 README.md 中包含 DO_NOT_PROMOTE=true 标记，
+    用于防止用户误将快照晋升到 SSOT。
+
+    Args:
+        src_dir: 源目录路径
+        iteration_number: 迭代编号
+
+    Raises:
+        SnapshotPromoteError: 如果检测到 sentinel 标记
+    """
+    if not src_dir.exists():
+        return
+
+    # 检查源目录及其父目录中的 README.md
+    dirs_to_check = [src_dir]
+
+    # 也检查父目录（例如 .iteration/_export/10 的父目录 .iteration/_export）
+    # 最多向上检查 3 级
+    current = src_dir
+    for _ in range(3):
+        parent = current.parent
+        if parent == current or parent == REPO_ROOT:
+            break
+        dirs_to_check.append(parent)
+        current = parent
+
+    for check_dir in dirs_to_check:
+        readme_path = check_dir / "README.md"
+        if readme_path.exists():
+            try:
+                content = readme_path.read_text(encoding="utf-8")
+                if DO_NOT_PROMOTE_SENTINEL in content:
+                    raise SnapshotPromoteError(src_dir, iteration_number)
+            except (OSError, UnicodeDecodeError):
+                # 读取失败时跳过检查
+                continue
 
 
 def validate_supersede_target(old_iteration: int) -> None:
@@ -571,6 +679,7 @@ def promote_iteration(
         SSOTConflictError: 如果迭代已在 SSOT 中存在
         SourceNotFoundError: 如果源文件不存在
         FileConflictError: 如果目标文件已存在且内容不同（未使用 --force）
+        InvalidSourceError: 如果源目录路径不合法
     """
     # 默认日期为今天
     if date is None:
@@ -584,8 +693,10 @@ def promote_iteration(
     index_updated = False
     superseded_updated = False
 
+    # 校验源目录（防止 _export 快照目录误用）
+    src_dir = validate_source_directory(iteration_number)
+
     # 源文件路径
-    src_dir = ITERATION_DIR / str(iteration_number)
     src_plan = src_dir / "plan.md"
     src_regression = src_dir / "regression.md"
 
@@ -596,6 +707,9 @@ def promote_iteration(
     # 检查源目录是否存在
     if not src_dir.exists():
         raise SourceNotFoundError(src_dir)
+
+    # 检查源目录是否为快照（包含 DO_NOT_PROMOTE sentinel）
+    check_snapshot_sentinel(src_dir, iteration_number)
 
     # 检查 SSOT 冲突（仅当目标文件不存在时）
     existing_ssot = get_ssot_iteration_numbers()
@@ -882,11 +996,33 @@ def main() -> int:
             print(f"   {line}", file=sys.stderr)
         print(file=sys.stderr)
         print("参考文档:", file=sys.stderr)
-        print("  - docs/acceptance/00_acceptance_matrix.md (SUPERSEDED 一致性规则)", file=sys.stderr)
+        print(
+            "  - docs/acceptance/00_acceptance_matrix.md (SUPERSEDED 一致性规则)", file=sys.stderr
+        )
         print(
             "  - scripts/ci/check_no_iteration_links_in_docs.py (R6/R7 规则)",
             file=sys.stderr,
         )
+        return 1
+
+    except InvalidSourceError as e:
+        print(f"❌ 错误: {e}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("源目录校验失败:", file=sys.stderr)
+        print(f"  {e.reason}", file=sys.stderr)
+        return 1
+
+    except SnapshotPromoteError as e:
+        print(f"❌ 错误: {e}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("检测到 DO_NOT_PROMOTE sentinel，此目录是 SSOT 快照。", file=sys.stderr)
+        print(file=sys.stderr)
+        print("💡 正确用法:", file=sys.stderr)
+        print("   快照仅供只读参考，如需创建新迭代，请使用:", file=sys.stderr)
+        print(file=sys.stderr)
+        next_num = get_next_available_number()
+        print(f"   1. python scripts/iteration/init_local_iteration.py {next_num}", file=sys.stderr)
+        print(f"   2. python scripts/iteration/promote_iteration.py {next_num}", file=sys.stderr)
         return 1
 
 

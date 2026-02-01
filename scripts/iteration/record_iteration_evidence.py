@@ -28,30 +28,35 @@
     2. 自动获取当前 git commit sha（可覆盖）
     3. 支持从 JSON 文件或参数读取命令执行结果
     4. 内置敏感信息脱敏（PASSWORD/DSN/TOKEN 等）
-    5. 输出到 docs/acceptance/evidence/iteration_<N>_<timestamp>.json
+    5. 输出到 docs/acceptance/evidence/iteration_<N>_evidence.json（固定文件名策略）
+    6. 输出格式符合 iteration_evidence_v1.schema.json
 
 安全特性:
     - 检测并拒绝写入常见敏感键（PASSWORD/DSN/TOKEN/SECRET/KEY/CREDENTIAL）
     - 敏感值会被替换为 "[REDACTED]" 占位符
+    - 输出文件包含 sensitive_data_declaration=true 声明
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import platform
 import re
 import subprocess
 import sys
-from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
+
+from scripts.iteration.iteration_evidence_naming import (
+    EVIDENCE_DIR,
+    canonical_evidence_path,
+)
 
 # 项目根目录
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
-# 证据输出目录
-EVIDENCE_DIR = REPO_ROOT / "docs" / "acceptance" / "evidence"
 
 # 敏感键模式（不区分大小写）
 SENSITIVE_KEY_PATTERNS = [
@@ -77,9 +82,24 @@ SAFE_KEY_NAMES = {
     "exit_code",
     "iteration_number",
     "timestamp",
+    "recorded_at",
     "command",
     "summary",
     "duration_seconds",
+    "name",
+    "result",
+    "os",
+    "python",
+    "arch",
+    "runner_label",
+    "hostname",
+    "ci_run_url",
+    "pr_url",
+    "artifact_url",
+    "regression_doc_url",
+    "notes",
+    "overall_result",
+    "sensitive_data_declaration",
 }
 
 # 敏感值模式（检测值本身是否像敏感信息）
@@ -101,6 +121,20 @@ SENSITIVE_VALUE_PATTERNS = [
 
 REDACTED_PLACEHOLDER = "[REDACTED]"
 
+# commit_sha 的 schema pattern
+COMMIT_SHA_PATTERN = re.compile(r"^[a-f0-9]{7,40}$")
+
+# 命令名称的 schema pattern
+COMMAND_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+
+# ============================================================================
+# 类型定义
+# ============================================================================
+
+CommandResultType = Literal["PASS", "FAIL", "SKIP", "ERROR"]
+OverallResultType = Literal["PASS", "PARTIAL", "FAIL"]
+
 
 # ============================================================================
 # 数据结构
@@ -116,25 +150,51 @@ class SensitiveKeyWarning:
 
 
 @dataclass
-class CommandResult:
-    """单个命令的执行结果。"""
+class CommandEntry:
+    """单个门禁命令的执行记录（符合 iteration_evidence_v1.schema.json）。"""
 
+    name: str
     command: str
-    exit_code: int
+    result: CommandResultType
     summary: Optional[str] = None
     duration_seconds: Optional[float] = None
+    exit_code: Optional[int] = None
+
+
+@dataclass
+class RunnerInfo:
+    """执行环境信息（符合 iteration_evidence_v1.schema.json）。"""
+
+    os: str
+    python: str
+    arch: str
+    hostname: Optional[str] = None
+    runner_label: Optional[str] = None
+
+
+@dataclass
+class Links:
+    """相关链接集合（符合 iteration_evidence_v1.schema.json）。"""
+
+    ci_run_url: Optional[str] = None
+    pr_url: Optional[str] = None
+    artifact_url: Optional[str] = None
+    regression_doc_url: Optional[str] = None
 
 
 @dataclass
 class EvidenceRecord:
-    """迭代验收证据记录。"""
+    """迭代验收证据记录（符合 iteration_evidence_v1.schema.json）。"""
 
     iteration_number: int
+    recorded_at: str
     commit_sha: str
-    timestamp: str
-    commands: List[CommandResult]
-    ci_run_url: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    runner: RunnerInfo
+    commands: List[CommandEntry]
+    links: Optional[Links] = None
+    notes: Optional[str] = None
+    overall_result: Optional[OverallResultType] = None
+    sensitive_data_declaration: bool = True
 
 
 @dataclass
@@ -155,6 +215,186 @@ class SensitiveDataError(Exception):
         self.warnings = warnings
         details = "\n".join(f"  - {w.key_path}: {w.reason}" for w in warnings)
         super().__init__(f"检测到敏感数据:\n{details}")
+
+
+class SchemaValidationError(Exception):
+    """当数据不符合 schema 要求时抛出。"""
+
+    def __init__(self, field: str, value: str, pattern: str, hint: str = "") -> None:
+        self.field = field
+        self.value = value
+        self.pattern = pattern
+        msg = f"字段 '{field}' 的值 '{value}' 不符合 schema pattern: {pattern}"
+        if hint:
+            msg += f"\n    提示: {hint}"
+        super().__init__(msg)
+
+
+# ============================================================================
+# 环境信息收集
+# ============================================================================
+
+
+def get_runner_info(runner_label: Optional[str] = None) -> RunnerInfo:
+    """获取当前执行环境信息。
+
+    Args:
+        runner_label: CI runner 标签（可选）
+
+    Returns:
+        RunnerInfo 对象
+    """
+    # 获取 OS 信息
+    system = platform.system().lower()
+    if system == "darwin":
+        os_info = f"darwin-{platform.release()}"
+    elif system == "linux":
+        # 尝试获取发行版信息
+        try:
+            import distro
+
+            os_info = f"{distro.id()}-{distro.version()}"
+        except ImportError:
+            os_info = f"linux-{platform.release()}"
+    elif system == "windows":
+        os_info = f"windows-{platform.release()}"
+    else:
+        os_info = f"{system}-{platform.release()}"
+
+    # 获取 Python 版本
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+    # 获取架构
+    machine = platform.machine().lower()
+    # 规范化架构名称以匹配 schema 的 enum
+    arch_map = {
+        "x86_64": "x86_64",
+        "amd64": "x86_64",
+        "arm64": "arm64",
+        "aarch64": "aarch64",
+        "i686": "i686",
+        "i386": "i386",
+    }
+    arch = arch_map.get(machine, machine)
+
+    return RunnerInfo(
+        os=os_info,
+        python=python_version,
+        arch=arch,
+        runner_label=runner_label,
+    )
+
+
+def exit_code_to_result(exit_code: int) -> CommandResultType:
+    """将退出码转换为结果状态。
+
+    Args:
+        exit_code: 命令退出码
+
+    Returns:
+        结果状态字符串
+    """
+    if exit_code == 0:
+        return "PASS"
+    return "FAIL"
+
+
+def compute_overall_result(commands: List[CommandEntry]) -> OverallResultType:
+    """根据命令执行结果计算整体结果。
+
+    Args:
+        commands: 命令执行记录列表
+
+    Returns:
+        整体结果状态
+    """
+    if not commands:
+        return "FAIL"
+
+    results = [cmd.result for cmd in commands]
+    if all(r == "PASS" for r in results):
+        return "PASS"
+    if all(r in ("FAIL", "ERROR") for r in results):
+        return "FAIL"
+    return "PARTIAL"
+
+
+def derive_command_name(command: str) -> str:
+    """从命令字符串推导命令名称。
+
+    生成的名称符合 iteration_evidence_v1.schema.json 的 pattern: ^[a-z][a-z0-9_-]*$
+
+    Args:
+        command: 完整命令字符串
+
+    Returns:
+        简短命令名称（小写，符合 schema pattern）
+    """
+    name = ""
+
+    # 处理常见的 make 目标
+    if command.startswith("make "):
+        target = command[5:].split()[0]
+        name = target
+
+    # 处理 pytest
+    elif "pytest" in command:
+        name = "test"
+
+    # 处理其他命令：取第一个词
+    elif command.split():
+        name = command.split()[0]
+
+    else:
+        name = "unknown"
+
+    # 规范化名称以符合 schema pattern: ^[a-z][a-z0-9_-]*$
+    name = normalize_command_name(name)
+    return name
+
+
+def normalize_command_name(name: str) -> str:
+    """规范化命令名称以符合 schema pattern。
+
+    Schema pattern: ^[a-z][a-z0-9_-]*$
+
+    Args:
+        name: 原始名称
+
+    Returns:
+        规范化后的名称
+    """
+    # 转小写
+    name = name.lower()
+
+    # 替换不允许的字符为下划线
+    result = []
+    for i, char in enumerate(name):
+        if char.isalnum() or char in "_-":
+            result.append(char)
+        elif char in ".":
+            result.append("_")
+        else:
+            result.append("_")
+
+    name = "".join(result)
+
+    # 去除连续的下划线
+    while "__" in name:
+        name = name.replace("__", "_")
+
+    # 去除首尾下划线/连字符
+    name = name.strip("_-")
+
+    # 确保以字母开头
+    if not name or not name[0].isalpha():
+        name = "cmd_" + name if name else "cmd"
+
+    # 限制长度（schema maxLength: 64）
+    if len(name) > 64:
+        name = name[:64].rstrip("_-")
+
+    return name
 
 
 # ============================================================================
@@ -193,6 +433,47 @@ def get_short_commit_sha(full_sha: str) -> str:
         7 位短格式 SHA
     """
     return full_sha[:7] if len(full_sha) >= 7 else full_sha
+
+
+def validate_commit_sha(commit_sha: str) -> None:
+    """验证 commit_sha 是否符合 schema pattern。
+
+    Schema pattern: ^[a-f0-9]{7,40}$
+
+    Args:
+        commit_sha: 待验证的 commit SHA
+
+    Raises:
+        SchemaValidationError: 如果不符合 pattern
+    """
+    if not COMMIT_SHA_PATTERN.match(commit_sha):
+        raise SchemaValidationError(
+            field="commit_sha",
+            value=commit_sha,
+            pattern="^[a-f0-9]{7,40}$",
+            hint="commit_sha 必须是 7-40 位的十六进制字符串（小写）。"
+            "如果提供的值被脱敏或格式不正确，请使用 --commit 参数提供有效的 git SHA。",
+        )
+
+
+def validate_command_name(name: str) -> None:
+    """验证命令名称是否符合 schema pattern。
+
+    Schema pattern: ^[a-z][a-z0-9_-]*$
+
+    Args:
+        name: 待验证的命令名称
+
+    Raises:
+        SchemaValidationError: 如果不符合 pattern
+    """
+    if not COMMAND_NAME_PATTERN.match(name):
+        raise SchemaValidationError(
+            field="command.name",
+            value=name,
+            pattern="^[a-z][a-z0-9_-]*$",
+            hint="命令名称必须以小写字母开头，只能包含小写字母、数字、下划线和连字符。",
+        )
 
 
 # ============================================================================
@@ -282,14 +563,14 @@ def redact_sensitive_data(
         return result, warnings, redacted_count
 
     elif isinstance(data, list):
-        result = []
+        result_list: List[Any] = []
         for i, item in enumerate(data):
             current_path = f"{path}[{i}]"
             redacted_item, sub_warnings, sub_count = redact_sensitive_data(item, current_path)
-            result.append(redacted_item)
+            result_list.append(redacted_item)
             warnings.extend(sub_warnings)
             redacted_count += sub_count
-        return result, warnings, redacted_count
+        return result_list, warnings, redacted_count
 
     elif isinstance(data, str) and is_sensitive_value(data):
         warnings.append(
@@ -308,57 +589,125 @@ def redact_sensitive_data(
 # ============================================================================
 
 
-def parse_commands_json(json_data: Dict[str, Any]) -> List[CommandResult]:
+def parse_commands_json(json_data: Dict[str, Any]) -> List[CommandEntry]:
     """解析命令结果 JSON。
 
-    支持两种格式:
+    支持多种格式:
     1. 简单格式: {"command": {"exit_code": 0, "summary": "..."}}
     2. 数组格式: [{"command": "...", "exit_code": 0, "summary": "..."}]
+    3. Schema 格式: [{"name": "...", "command": "...", "result": "PASS", ...}]
 
     Args:
         json_data: JSON 数据
 
     Returns:
-        CommandResult 列表
+        CommandEntry 列表
     """
-    results: List[CommandResult] = []
+    results: List[CommandEntry] = []
 
     if isinstance(json_data, list):
         # 数组格式
         for item in json_data:
-            if isinstance(item, dict) and "command" in item:
-                results.append(
-                    CommandResult(
-                        command=item["command"],
-                        exit_code=item.get("exit_code", 0),
-                        summary=item.get("summary"),
-                        duration_seconds=item.get("duration_seconds"),
+            if isinstance(item, dict):
+                # 检查是否为 schema 格式（已有 name 和 result）
+                if "name" in item and "result" in item:
+                    # 规范化命令名称以符合 schema
+                    results.append(
+                        CommandEntry(
+                            name=normalize_command_name(item["name"]),
+                            command=item.get("command", item["name"]),
+                            result=item["result"],
+                            summary=item.get("summary"),
+                            duration_seconds=item.get("duration_seconds"),
+                            exit_code=item.get("exit_code"),
+                        )
                     )
-                )
+                elif "command" in item:
+                    # 旧格式：需要转换
+                    exit_code = item.get("exit_code", 0)
+                    # 规范化命令名称以符合 schema
+                    raw_name = item.get("name", derive_command_name(item["command"]))
+                    results.append(
+                        CommandEntry(
+                            name=normalize_command_name(raw_name),
+                            command=item["command"],
+                            result=exit_code_to_result(exit_code),
+                            summary=item.get("summary"),
+                            duration_seconds=item.get("duration_seconds"),
+                            exit_code=exit_code,
+                        )
+                    )
     elif isinstance(json_data, dict):
-        # 检查是否为简单格式
+        # 简单格式: {"make ci": {"exit_code": 0, ...}}
         for key, value in json_data.items():
             if isinstance(value, dict):
+                exit_code = value.get("exit_code", 0)
+                # 规范化命令名称以符合 schema
                 results.append(
-                    CommandResult(
+                    CommandEntry(
+                        name=normalize_command_name(derive_command_name(key)),
                         command=key,
-                        exit_code=value.get("exit_code", 0),
+                        result=exit_code_to_result(exit_code),
                         summary=value.get("summary"),
                         duration_seconds=value.get("duration_seconds"),
+                        exit_code=exit_code,
                     )
                 )
 
     return results
 
 
-def extract_summary_from_acceptance_run(json_data: Dict[str, Any]) -> List[CommandResult]:
+def parse_add_command_arg(arg: str) -> Optional[CommandEntry]:
+    """解析 --add-command 参数的 NAME:COMMAND:RESULT 格式。
+
+    格式: NAME:COMMAND:RESULT
+    - NAME: 命令标识符（会自动规范化为符合 schema 的格式）
+    - COMMAND: 实际执行的命令
+    - RESULT: PASS/FAIL/SKIP/ERROR
+
+    Args:
+        arg: 命令行参数字符串
+
+    Returns:
+        CommandEntry 或 None（如果解析失败）
+    """
+    # 支持用冒号分隔，但 COMMAND 部分可能包含冒号（如 URL）
+    # 使用从右边分割的方式：最后一个部分是 RESULT，第一个部分是 NAME，中间是 COMMAND
+    parts = arg.split(":")
+
+    if len(parts) < 3:
+        return None
+
+    # 最后一个是 RESULT
+    result_str = parts[-1].strip().upper()
+    if result_str not in ("PASS", "FAIL", "SKIP", "ERROR"):
+        return None
+
+    # 第一个是 NAME
+    name = parts[0].strip()
+    if not name:
+        return None
+
+    # 中间的都是 COMMAND（用冒号重新连接）
+    command = ":".join(parts[1:-1]).strip()
+    if not command:
+        return None
+
+    return CommandEntry(
+        name=normalize_command_name(name),
+        command=command,
+        result=cast(CommandResultType, result_str),
+    )
+
+
+def extract_summary_from_acceptance_run(json_data: Dict[str, Any]) -> List[CommandEntry]:
     """从 .artifacts/acceptance-runs/*.json 格式提取摘要。
 
     Args:
         json_data: acceptance run JSON 数据
 
     Returns:
-        CommandResult 列表
+        CommandEntry 列表
     """
     # 尝试多种可能的格式
     if "results" in json_data:
@@ -381,9 +730,11 @@ def extract_summary_from_acceptance_run(json_data: Dict[str, Any]) -> List[Comma
 def record_evidence(
     iteration_number: int,
     commit_sha: str,
-    commands: List[CommandResult],
+    commands: List[CommandEntry],
     ci_run_url: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    notes: Optional[str] = None,
+    runner_label: Optional[str] = None,
+    regression_doc_url: Optional[str] = None,
     *,
     dry_run: bool = False,
 ) -> RecordResult:
@@ -394,41 +745,115 @@ def record_evidence(
         commit_sha: commit SHA
         commands: 命令执行结果列表
         ci_run_url: CI 运行 URL（可选）
-        metadata: 额外元数据（可选）
+        notes: 补充说明（可选）
+        runner_label: CI runner 标签（可选）
+        regression_doc_url: 回归文档 URL（可选）
         dry_run: 是否为预览模式
 
     Returns:
         RecordResult 操作结果
+
+    Raises:
+        SchemaValidationError: 如果 commit_sha 或 command.name 不符合 schema pattern
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 验证 commit_sha 符合 schema pattern（fail-fast）
+    validate_commit_sha(commit_sha)
+
+    # 验证所有命令名称符合 schema pattern
+    for cmd in commands:
+        validate_command_name(cmd.name)
+
+    # 获取 UTC 时间
+    recorded_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 获取 runner 信息
+    runner = get_runner_info(runner_label)
+
+    # 构建 links 对象
+    links: Optional[Links] = None
+    if ci_run_url or regression_doc_url:
+        links = Links(
+            ci_run_url=ci_run_url,
+            regression_doc_url=regression_doc_url
+            or f"docs/acceptance/iteration_{iteration_number}_regression.md",
+        )
+
+    # 计算整体结果
+    overall_result = compute_overall_result(commands)
 
     # 创建证据记录
     record = EvidenceRecord(
         iteration_number=iteration_number,
+        recorded_at=recorded_at,
         commit_sha=commit_sha,
-        timestamp=datetime.now().isoformat(),
+        runner=runner,
         commands=commands,
-        ci_run_url=ci_run_url,
-        metadata=metadata or {},
+        links=links,
+        notes=notes,
+        overall_result=overall_result,
+        sensitive_data_declaration=True,
     )
 
-    # 转换为字典
-    record_dict = {
+    # 转换为字典（符合 iteration_evidence_v1.schema.json）
+    record_dict: Dict[str, Any] = {
+        "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
         "iteration_number": record.iteration_number,
+        "recorded_at": record.recorded_at,
         "commit_sha": record.commit_sha,
-        "timestamp": record.timestamp,
-        "commands": [asdict(cmd) for cmd in record.commands],
-        "ci_run_url": record.ci_run_url,
-        "metadata": record.metadata,
+        "runner": {
+            "os": record.runner.os,
+            "python": record.runner.python,
+            "arch": record.runner.arch,
+        },
+        "commands": [],
+        "overall_result": record.overall_result,
+        "sensitive_data_declaration": record.sensitive_data_declaration,
     }
+
+    # 添加可选 runner 字段
+    if record.runner.runner_label:
+        record_dict["runner"]["runner_label"] = record.runner.runner_label
+    if record.runner.hostname:
+        record_dict["runner"]["hostname"] = record.runner.hostname
+
+    # 添加 commands
+    for cmd in record.commands:
+        cmd_dict: Dict[str, Any] = {
+            "name": cmd.name,
+            "command": cmd.command,
+            "result": cmd.result,
+        }
+        if cmd.summary:
+            cmd_dict["summary"] = cmd.summary
+        if cmd.duration_seconds is not None:
+            cmd_dict["duration_seconds"] = cmd.duration_seconds
+        if cmd.exit_code is not None:
+            cmd_dict["exit_code"] = cmd.exit_code
+        record_dict["commands"].append(cmd_dict)
+
+    # 添加 links（如果有）
+    if record.links:
+        links_dict: Dict[str, Any] = {}
+        if record.links.ci_run_url:
+            links_dict["ci_run_url"] = record.links.ci_run_url
+        if record.links.pr_url:
+            links_dict["pr_url"] = record.links.pr_url
+        if record.links.artifact_url:
+            links_dict["artifact_url"] = record.links.artifact_url
+        if record.links.regression_doc_url:
+            links_dict["regression_doc_url"] = record.links.regression_doc_url
+        if links_dict:
+            record_dict["links"] = links_dict
+
+    # 添加 notes（如果有）
+    if record.notes:
+        record_dict["notes"] = record.notes
 
     # 脱敏处理
     redacted_dict, warnings, redacted_count = redact_sensitive_data(record_dict)
 
-    # 生成输出文件名
-    short_sha = get_short_commit_sha(commit_sha)
-    output_filename = f"iteration_{iteration_number}_{timestamp}_{short_sha}.json"
-    output_path = EVIDENCE_DIR / output_filename
+    # 生成输出文件名（使用 iteration_evidence_naming helper）
+    output_path = canonical_evidence_path(iteration_number)
 
     if dry_run:
         return RecordResult(
@@ -482,9 +907,17 @@ def main() -> int:
     # 指定 CI 运行 URL
     python scripts/iteration/record_iteration_evidence.py 13 --ci-run-url https://github.com/org/repo/actions/runs/123
 
+    # 添加备注
+    python scripts/iteration/record_iteration_evidence.py 13 --notes "所有门禁通过，验收完成"
+
+输出格式:
+    输出文件为 docs/acceptance/evidence/iteration_<N>_evidence.json（固定文件名策略）
+    格式符合 iteration_evidence_v1.schema.json
+
 安全说明:
     脚本会自动检测并脱敏常见敏感信息（PASSWORD/DSN/TOKEN 等）。
     敏感值会被替换为 "[REDACTED]" 占位符。
+    输出文件包含 sensitive_data_declaration=true 声明。
         """,
     )
     parser.add_argument(
@@ -518,10 +951,44 @@ def main() -> int:
         help="CI 运行 URL",
     )
     parser.add_argument(
+        "--notes",
+        type=str,
+        default=None,
+        help="补充说明（可选）",
+    )
+    parser.add_argument(
+        "--runner-label",
+        type=str,
+        default=None,
+        help="CI runner 标签（如 'ubuntu-latest', 'self-hosted'）",
+    )
+    parser.add_argument(
         "--dry-run",
         "-n",
         action="store_true",
         help="预览模式，不实际写入文件",
+    )
+    parser.add_argument(
+        "--add-command",
+        "-a",
+        action="append",
+        default=[],
+        metavar="NAME:COMMAND:RESULT",
+        help=(
+            "添加单个命令记录，格式: NAME:COMMAND:RESULT（可多次使用）。"
+            "NAME 为命令标识符（小写字母开头），COMMAND 为实际命令，RESULT 为 PASS/FAIL/SKIP/ERROR。"
+            "示例: --add-command 'lint:make lint:PASS'"
+        ),
+    )
+    parser.add_argument(
+        "--add-command-json",
+        action="append",
+        default=[],
+        metavar="JSON",
+        help=(
+            "添加单个命令记录（JSON 格式，可多次使用）。"
+            '示例: --add-command-json \'{"name":"lint","command":"make lint","result":"PASS"}\''
+        ),
     )
 
     args = parser.parse_args()
@@ -541,7 +1008,7 @@ def main() -> int:
             return 1
 
     # 解析命令结果
-    commands: List[CommandResult] = []
+    commands: List[CommandEntry] = []
 
     if args.commands_json:
         # 从文件读取
@@ -566,13 +1033,52 @@ def main() -> int:
             print(f"❌ 错误: JSON 解析失败: {e}", file=sys.stderr)
             return 1
 
+    # 处理 --add-command 参数（NAME:COMMAND:RESULT 格式）
+    for add_cmd in args.add_command:
+        parsed_cmd = parse_add_command_arg(add_cmd)
+        if parsed_cmd is None:
+            print(f"❌ 错误: --add-command 格式错误: {add_cmd}", file=sys.stderr)
+            print("    期望格式: NAME:COMMAND:RESULT", file=sys.stderr)
+            print("    示例: lint:make lint:PASS", file=sys.stderr)
+            return 1
+        commands.append(parsed_cmd)
+
+    # 处理 --add-command-json 参数
+    for add_cmd_json in args.add_command_json:
+        try:
+            cmd_data = json.loads(add_cmd_json)
+            if not isinstance(cmd_data, dict):
+                raise ValueError("必须是 JSON 对象")
+            if "name" not in cmd_data or "command" not in cmd_data or "result" not in cmd_data:
+                raise ValueError("缺少必需字段: name, command, result")
+            # 验证 result 值
+            result_str = cmd_data["result"].upper()
+            if result_str not in ("PASS", "FAIL", "SKIP", "ERROR"):
+                raise ValueError(f"无效的 result 值: {result_str}")
+            commands.append(
+                CommandEntry(
+                    name=normalize_command_name(cmd_data["name"]),
+                    command=cmd_data["command"],
+                    result=cast(CommandResultType, result_str),
+                    summary=cmd_data.get("summary"),
+                    duration_seconds=cmd_data.get("duration_seconds"),
+                    exit_code=cmd_data.get("exit_code"),
+                )
+            )
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"❌ 错误: --add-command-json 解析失败: {e}", file=sys.stderr)
+            print(f"    输入: {add_cmd_json}", file=sys.stderr)
+            return 1
+
     # 如果没有提供命令结果，创建一个空的占位记录
     if not commands:
         commands = [
-            CommandResult(
+            CommandEntry(
+                name="manual_record",
                 command="(manual record)",
-                exit_code=0,
+                result="PASS",
                 summary="手动记录，无命令执行结果",
+                exit_code=0,
             )
         ]
 
@@ -583,8 +1089,13 @@ def main() -> int:
             commit_sha=commit_sha,
             commands=commands,
             ci_run_url=args.ci_run_url,
+            notes=args.notes,
+            runner_label=args.runner_label,
             dry_run=args.dry_run,
         )
+    except SchemaValidationError as e:
+        print(f"❌ Schema 验证失败: {e}", file=sys.stderr)
+        return 1
     except SensitiveDataError as e:
         print(f"❌ 错误: {e}", file=sys.stderr)
         return 1
