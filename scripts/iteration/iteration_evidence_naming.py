@@ -5,18 +5,24 @@
 
 命名规范:
     1. Canonical path (固定文件名): iteration_{N}_evidence.json
-       - 用于 record_iteration_evidence.py 输出
+       - 用于 record_iteration_evidence.py 输出（脚本生成，禁止手动创建占位符）
        - 用于文档引用（模板、回归记录）
        - 每个迭代只有一个权威证据文件
 
     2. Snapshot path (快照文件名): iteration_{N}_{timestamp}.json
-       - 用于 promote_iteration.py 的 --create-evidence-stub
+       - 仅用于手动保留历史快照（需保留多次验收记录时）
+       - 手动复制: cp iteration_{N}_evidence.json iteration_{N}_{timestamp}.json
        - timestamp 格式: YYYYMMDD_HHMMSS
        - 可选包含 commit SHA 后缀
 
 路径规范:
     - 证据目录: docs/acceptance/evidence/
     - 模板目录: docs/acceptance/_templates/
+
+注意:
+    - 证据文件必须由 record_iteration_evidence.py 脚本生成
+    - 禁止手动创建包含 {PLACEHOLDER} 的占位符文件并提交
+    - 详见 ADR: docs/architecture/adr_iteration_docs_workflow.md
 """
 
 from __future__ import annotations

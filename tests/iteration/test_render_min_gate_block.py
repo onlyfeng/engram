@@ -5,7 +5,7 @@ render_min_gate_block.py 单元测试
 覆盖功能:
 1. 各 profile 的命令表格渲染
 2. 一键 bash 块渲染
-3. 预期关键字渲染
+3. 通过标准渲染
 4. 完整输出快照测试（确保输出稳定）
 5. CLI 入口测试
 """
@@ -19,20 +19,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
 
 from render_min_gate_block import (  # noqa: E402
+    AUTO_GENERATED_MARKER,
     CI_GATE_COMMANDS,
     DOCS_GATE_COMMANDS,
     FULL_GATE_COMMANDS,
     GATEWAY_GATE_COMMANDS,
     PROFILE_COMMANDS,
     PROFILE_DESCRIPTIONS,
+    REGRESSION_GATE_COMMANDS,
     SQL_GATE_COMMANDS,
     SUPPORTED_PROFILES,
     GateCommand,
     get_commands_for_profile,
     render_bash_block,
     render_command_table,
-    render_expected_keywords,
     render_min_gate_block,
+    render_pass_criteria,
 )
 
 # ============================================================================
@@ -47,12 +49,12 @@ class TestGateCommand:
         """测试 GateCommand 创建"""
         cmd = GateCommand(
             command="make lint",
-            description="代码检查",
-            expected_keyword="passed",
+            check_item="代码风格检查",
+            pass_criterion="退出码 0",
         )
         assert cmd.command == "make lint"
-        assert cmd.description == "代码检查"
-        assert cmd.expected_keyword == "passed"
+        assert cmd.check_item == "代码风格检查"
+        assert cmd.pass_criterion == "退出码 0"
 
 
 class TestProfileDefinitions:
@@ -61,6 +63,7 @@ class TestProfileDefinitions:
     def test_supported_profiles(self):
         """测试支持的 profile 列表"""
         assert "full" in SUPPORTED_PROFILES
+        assert "regression" in SUPPORTED_PROFILES
         assert "docs-only" in SUPPORTED_PROFILES
         assert "ci-only" in SUPPORTED_PROFILES
         assert "gateway-only" in SUPPORTED_PROFILES
@@ -81,7 +84,7 @@ class TestProfileDefinitions:
     def test_full_profile_has_most_commands(self):
         """测试 full profile 包含最多命令"""
         full_count = len(FULL_GATE_COMMANDS)
-        for profile in ["docs-only", "ci-only", "gateway-only", "sql-only"]:
+        for profile in ["regression", "docs-only", "ci-only", "gateway-only", "sql-only"]:
             assert len(PROFILE_COMMANDS[profile]) <= full_count
 
 
@@ -92,6 +95,11 @@ class TestGetCommandsForProfile:
         """测试 full profile 返回正确命令"""
         commands = get_commands_for_profile("full")
         assert commands == FULL_GATE_COMMANDS
+
+    def test_returns_correct_commands_for_regression(self):
+        """测试 regression profile 返回正确命令"""
+        commands = get_commands_for_profile("regression")
+        assert commands == REGRESSION_GATE_COMMANDS
 
     def test_returns_correct_commands_for_docs_only(self):
         """测试 docs-only profile 返回正确命令"""
@@ -124,29 +132,29 @@ class TestRenderCommandTable:
 
     def test_renders_table_header(self):
         """测试渲染表格头部"""
-        commands = [GateCommand("make test", "测试", "passed")]
+        commands = [GateCommand("make test", "测试检查", "退出码 0")]
         result = render_command_table(commands)
 
-        assert "| 序号 | 命令 | 说明 | 预期关键字 |" in result
-        assert "|------|------|------|------------|" in result
+        assert "| 序号 | 检查项 | 命令 | 通过标准 |" in result
+        assert "|------|--------|------|----------|" in result
 
     def test_renders_command_rows(self):
         """测试渲染命令行"""
         commands = [
-            GateCommand("make lint", "代码检查", "passed"),
-            GateCommand("make test", "运行测试", "ok"),
+            GateCommand("make lint", "代码风格检查", "退出码 0"),
+            GateCommand("make test", "运行测试", "无 FAILED"),
         ]
         result = render_command_table(commands)
 
-        assert "| 1 | `make lint` | 代码检查 | `passed` |" in result
-        assert "| 2 | `make test` | 运行测试 | `ok` |" in result
+        assert "| 1 | 代码风格检查 | `make lint` | 退出码 0 |" in result
+        assert "| 2 | 运行测试 | `make test` | 无 FAILED |" in result
 
     def test_sequential_numbering(self):
         """测试序号递增"""
         commands = [
-            GateCommand("cmd1", "desc1", "kw1"),
-            GateCommand("cmd2", "desc2", "kw2"),
-            GateCommand("cmd3", "desc3", "kw3"),
+            GateCommand("cmd1", "检查1", "退出码 0"),
+            GateCommand("cmd2", "检查2", "退出码 0"),
+            GateCommand("cmd3", "检查3", "退出码 0"),
         ]
         result = render_command_table(commands)
 
@@ -160,7 +168,7 @@ class TestRenderBashBlock:
 
     def test_renders_bash_code_block(self):
         """测试渲染 bash 代码块"""
-        commands = [GateCommand("make lint", "检查", "passed")]
+        commands = [GateCommand("make lint", "代码风格检查", "退出码 0")]
         result = render_bash_block(commands)
 
         assert result.startswith("```bash")
@@ -168,7 +176,7 @@ class TestRenderBashBlock:
 
     def test_renders_comment(self):
         """测试渲染注释"""
-        commands = [GateCommand("make lint", "检查", "passed")]
+        commands = [GateCommand("make lint", "代码风格检查", "退出码 0")]
         result = render_bash_block(commands)
 
         assert "# 一键运行所有门禁" in result
@@ -176,8 +184,8 @@ class TestRenderBashBlock:
     def test_chains_multiple_commands(self):
         """测试多命令链接"""
         commands = [
-            GateCommand("make lint", "检查", "passed"),
-            GateCommand("make test", "测试", "ok"),
+            GateCommand("make lint", "代码风格检查", "退出码 0"),
+            GateCommand("make test", "运行测试", "退出码 0"),
         ]
         result = render_bash_block(commands)
 
@@ -186,7 +194,7 @@ class TestRenderBashBlock:
 
     def test_single_command_no_continuation(self):
         """测试单命令无续行符"""
-        commands = [GateCommand("make lint", "检查", "passed")]
+        commands = [GateCommand("make lint", "代码风格检查", "退出码 0")]
         result = render_bash_block(commands)
 
         # 单命令时不应有 && \\
@@ -195,26 +203,26 @@ class TestRenderBashBlock:
         assert "&& \\" not in cmd_line
 
 
-class TestRenderExpectedKeywords:
-    """render_expected_keywords 函数测试"""
+class TestRenderPassCriteria:
+    """render_pass_criteria 函数测试"""
 
     def test_renders_header(self):
         """测试渲染标题"""
-        commands = [GateCommand("make lint", "检查", "passed")]
-        result = render_expected_keywords(commands)
+        commands = [GateCommand("make lint", "代码风格检查", "退出码 0")]
+        result = render_pass_criteria(commands)
 
         assert "**通过标准**" in result
 
-    def test_renders_keyword_mappings(self):
-        """测试渲染关键字映射"""
+    def test_renders_criterion_mappings(self):
+        """测试渲染通过标准映射"""
         commands = [
-            GateCommand("make lint", "检查", "passed"),
-            GateCommand("make test", "测试", "ok"),
+            GateCommand("make lint", "代码风格检查", "退出码 0"),
+            GateCommand("make test", "运行测试", "无 FAILED"),
         ]
-        result = render_expected_keywords(commands)
+        result = render_pass_criteria(commands)
 
-        assert "- `make lint` → 输出包含 `passed`" in result
-        assert "- `make test` → 输出包含 `ok`" in result
+        assert "- `make lint` → 退出码 0" in result
+        assert "- `make test` → 无 FAILED" in result
 
 
 # ============================================================================
@@ -230,6 +238,11 @@ class TestRenderMinGateBlock:
         result = render_min_gate_block(13, "full")
         assert "## 最小门禁命令块" in result
 
+    def test_renders_auto_generated_marker(self):
+        """测试渲染自动生成标识行"""
+        result = render_min_gate_block(13, "full")
+        assert AUTO_GENERATED_MARKER in result
+
     def test_renders_iteration_number(self):
         """测试渲染迭代编号"""
         result = render_min_gate_block(13, "full")
@@ -239,6 +252,11 @@ class TestRenderMinGateBlock:
         """测试渲染 profile 描述"""
         result = render_min_gate_block(13, "docs-only")
         assert "文档代理最小门禁" in result
+
+    def test_renders_regression_profile_description(self):
+        """测试渲染 regression profile 描述"""
+        result = render_min_gate_block(13, "regression")
+        assert "回归最小集" in result
 
     def test_renders_script_generation_notice(self):
         """测试渲染脚本生成提示"""
@@ -250,7 +268,7 @@ class TestRenderMinGateBlock:
         """测试包含命令表格"""
         result = render_min_gate_block(13, "full")
         assert "### 命令表格" in result
-        assert "| 序号 | 命令 | 说明 | 预期关键字 |" in result
+        assert "| 序号 | 检查项 | 命令 | 通过标准 |" in result
 
     def test_includes_bash_block(self):
         """测试包含 bash 块"""
@@ -258,10 +276,10 @@ class TestRenderMinGateBlock:
         assert "### 一键执行" in result
         assert "```bash" in result
 
-    def test_includes_expected_keywords(self):
-        """测试包含预期关键字"""
+    def test_includes_pass_criteria(self):
+        """测试包含通过标准"""
         result = render_min_gate_block(13, "full")
-        assert "### 预期关键字" in result
+        assert "### 通过标准" in result
         assert "**通过标准**" in result
 
 
@@ -276,34 +294,36 @@ class TestOutputStability:
     # full profile 快照
     FULL_SNAPSHOT = """## 最小门禁命令块
 
+<!-- AUTO-GENERATED BY render_min_gate_block.py -->
+
 > **Iteration 13** - 完整 CI 门禁（make ci）
 >
 > 此段落由脚本自动生成：`python scripts/iteration/render_min_gate_block.py 13 --profile full`
 
 ### 命令表格
 
-| 序号 | 命令 | 说明 | 预期关键字 |
-|------|------|------|------------|
-| 1 | `make lint` | 代码风格检查（ruff check） | `All checks passed` |
-| 2 | `make format-check` | 格式检查（ruff format --check） | `already formatted` |
-| 3 | `make typecheck` | mypy 类型检查 | `Success` |
-| 4 | `make check-schemas` | JSON Schema 校验 | `Schema 校验通过` |
-| 5 | `make check-env-consistency` | 环境变量一致性检查 | `环境变量一致性检查通过` |
-| 6 | `make check-logbook-consistency` | Logbook 配置一致性检查 | `Logbook 配置一致性检查通过` |
-| 7 | `make check-migration-sanity` | SQL 迁移文件检查 | `SQL 迁移文件检查通过` |
-| 8 | `make check-scm-sync-consistency` | SCM Sync 一致性检查 | `SCM Sync 一致性检查通过` |
-| 9 | `make check-gateway-error-reason-usage` | Gateway ErrorReason 使用规范检查 | `Gateway ErrorReason 使用规范检查通过` |
-| 10 | `make check-gateway-public-api-surface` | Gateway Public API 导入表面检查 | `Gateway Public API 导入表面检查通过` |
-| 11 | `make check-gateway-public-api-docs-sync` | Gateway Public API 文档同步检查 | `Gateway Public API 文档同步检查通过` |
-| 12 | `make check-gateway-di-boundaries` | Gateway DI 边界检查 | `Gateway DI 边界检查通过` |
-| 13 | `make check-gateway-import-surface` | Gateway 懒加载策略检查 | `Gateway Import Surface 检查通过` |
-| 14 | `make check-gateway-correlation-id-single-source` | Gateway correlation_id 单一来源检查 | `Gateway correlation_id 单一来源检查通过` |
-| 15 | `make check-iteration-docs` | 迭代文档规范检查 | `迭代文档规范检查通过` |
-| 16 | `make validate-workflows-strict` | Workflow 合约校验（严格模式） | `Workflow 合约校验通过` |
-| 17 | `make check-workflow-contract-docs-sync` | Workflow 合约与文档同步检查 | `Workflow 合约与文档同步检查通过` |
-| 18 | `make check-workflow-contract-version-policy` | Workflow 合约版本策略检查 | `Workflow 合约版本策略检查通过` |
-| 19 | `make check-mcp-error-contract` | MCP 错误码合约检查 | `MCP JSON-RPC 错误码合约检查通过` |
-| 20 | `make check-mcp-error-docs-sync` | MCP 错误码文档同步检查 | `MCP JSON-RPC 错误码文档同步检查通过` |
+| 序号 | 检查项 | 命令 | 通过标准 |
+|------|--------|------|----------|
+| 1 | 代码风格检查 | `make lint` | 退出码 0 |
+| 2 | 格式检查 | `make format-check` | 退出码 0 |
+| 3 | mypy 类型检查 | `make typecheck` | 退出码 0 |
+| 4 | JSON Schema 校验 | `make check-schemas` | 退出码 0 |
+| 5 | 环境变量一致性检查 | `make check-env-consistency` | 退出码 0 |
+| 6 | Logbook 配置一致性检查 | `make check-logbook-consistency` | 退出码 0 |
+| 7 | SQL 迁移文件检查 | `make check-migration-sanity` | 退出码 0 |
+| 8 | SCM Sync 一致性检查 | `make check-scm-sync-consistency` | 退出码 0 |
+| 9 | Gateway ErrorReason 使用规范检查 | `make check-gateway-error-reason-usage` | 退出码 0 |
+| 10 | Gateway Public API 导入表面检查 | `make check-gateway-public-api-surface` | 退出码 0 |
+| 11 | Gateway Public API 文档同步检查 | `make check-gateway-public-api-docs-sync` | 退出码 0 |
+| 12 | Gateway DI 边界检查 | `make check-gateway-di-boundaries` | 退出码 0 |
+| 13 | Gateway 懒加载策略检查 | `make check-gateway-import-surface` | 退出码 0 |
+| 14 | Gateway correlation_id 单一来源检查 | `make check-gateway-correlation-id-single-source` | 退出码 0 |
+| 15 | 迭代文档规范检查 | `make check-iteration-docs` | 退出码 0 |
+| 16 | Workflow 合约校验 | `make validate-workflows-strict` | 退出码 0 |
+| 17 | Workflow 合约文档同步检查 | `make check-workflow-contract-docs-sync` | 退出码 0 |
+| 18 | Workflow 合约版本策略检查 | `make check-workflow-contract-version-policy` | 退出码 0 |
+| 19 | MCP 错误码合约检查 | `make check-mcp-error-contract` | 退出码 0 |
+| 20 | MCP 错误码文档同步检查 | `make check-mcp-error-docs-sync` | 退出码 0 |
 
 ### 一键执行
 
@@ -331,34 +351,80 @@ make lint && \\
   make check-mcp-error-docs-sync
 ```
 
-### 预期关键字
+### 通过标准
 
-**通过标准**：每个命令的输出应包含对应的预期关键字。
+**通过标准**：每个命令需满足对应的通过条件。
 
-- `make lint` → 输出包含 `All checks passed`
-- `make format-check` → 输出包含 `already formatted`
-- `make typecheck` → 输出包含 `Success`
-- `make check-schemas` → 输出包含 `Schema 校验通过`
-- `make check-env-consistency` → 输出包含 `环境变量一致性检查通过`
-- `make check-logbook-consistency` → 输出包含 `Logbook 配置一致性检查通过`
-- `make check-migration-sanity` → 输出包含 `SQL 迁移文件检查通过`
-- `make check-scm-sync-consistency` → 输出包含 `SCM Sync 一致性检查通过`
-- `make check-gateway-error-reason-usage` → 输出包含 `Gateway ErrorReason 使用规范检查通过`
-- `make check-gateway-public-api-surface` → 输出包含 `Gateway Public API 导入表面检查通过`
-- `make check-gateway-public-api-docs-sync` → 输出包含 `Gateway Public API 文档同步检查通过`
-- `make check-gateway-di-boundaries` → 输出包含 `Gateway DI 边界检查通过`
-- `make check-gateway-import-surface` → 输出包含 `Gateway Import Surface 检查通过`
-- `make check-gateway-correlation-id-single-source` → 输出包含 `Gateway correlation_id 单一来源检查通过`
-- `make check-iteration-docs` → 输出包含 `迭代文档规范检查通过`
-- `make validate-workflows-strict` → 输出包含 `Workflow 合约校验通过`
-- `make check-workflow-contract-docs-sync` → 输出包含 `Workflow 合约与文档同步检查通过`
-- `make check-workflow-contract-version-policy` → 输出包含 `Workflow 合约版本策略检查通过`
-- `make check-mcp-error-contract` → 输出包含 `MCP JSON-RPC 错误码合约检查通过`
-- `make check-mcp-error-docs-sync` → 输出包含 `MCP JSON-RPC 错误码文档同步检查通过`
+- `make lint` → 退出码 0
+- `make format-check` → 退出码 0
+- `make typecheck` → 退出码 0
+- `make check-schemas` → 退出码 0
+- `make check-env-consistency` → 退出码 0
+- `make check-logbook-consistency` → 退出码 0
+- `make check-migration-sanity` → 退出码 0
+- `make check-scm-sync-consistency` → 退出码 0
+- `make check-gateway-error-reason-usage` → 退出码 0
+- `make check-gateway-public-api-surface` → 退出码 0
+- `make check-gateway-public-api-docs-sync` → 退出码 0
+- `make check-gateway-di-boundaries` → 退出码 0
+- `make check-gateway-import-surface` → 退出码 0
+- `make check-gateway-correlation-id-single-source` → 退出码 0
+- `make check-iteration-docs` → 退出码 0
+- `make validate-workflows-strict` → 退出码 0
+- `make check-workflow-contract-docs-sync` → 退出码 0
+- `make check-workflow-contract-version-policy` → 退出码 0
+- `make check-mcp-error-contract` → 退出码 0
+- `make check-mcp-error-docs-sync` → 退出码 0
+"""
+
+    # regression profile 快照
+    REGRESSION_SNAPSHOT = """## 最小门禁命令块
+
+<!-- AUTO-GENERATED BY render_min_gate_block.py -->
+
+> **Iteration 13** - 回归最小集
+>
+> 此段落由脚本自动生成：`python scripts/iteration/render_min_gate_block.py 13 --profile regression`
+
+### 命令表格
+
+| 序号 | 检查项 | 命令 | 通过标准 |
+|------|--------|------|----------|
+| 1 | Workflow 合约校验 | `make validate-workflows-strict` | 退出码 0 |
+| 2 | Workflow 合约文档同步检查 | `make check-workflow-contract-docs-sync` | 退出码 0 |
+| 3 | Gateway Public API 导入表面检查 | `make check-gateway-public-api-surface` | 退出码 0 |
+| 4 | Gateway Public API 文档同步检查 | `make check-gateway-public-api-docs-sync` | 退出码 0 |
+| 5 | 迭代文档规范检查 | `make check-iteration-docs` | 退出码 0 |
+| 6 | CI 脚本测试 | `pytest tests/ci/ -q` | 无 FAILED，退出码 0 |
+
+### 一键执行
+
+```bash
+# 一键运行所有门禁（需全部通过）
+make validate-workflows-strict && \\
+  make check-workflow-contract-docs-sync && \\
+  make check-gateway-public-api-surface && \\
+  make check-gateway-public-api-docs-sync && \\
+  make check-iteration-docs && \\
+  pytest tests/ci/ -q
+```
+
+### 通过标准
+
+**通过标准**：每个命令需满足对应的通过条件。
+
+- `make validate-workflows-strict` → 退出码 0
+- `make check-workflow-contract-docs-sync` → 退出码 0
+- `make check-gateway-public-api-surface` → 退出码 0
+- `make check-gateway-public-api-docs-sync` → 退出码 0
+- `make check-iteration-docs` → 退出码 0
+- `pytest tests/ci/ -q` → 无 FAILED，退出码 0
 """
 
     # docs-only profile 快照
     DOCS_ONLY_SNAPSHOT = """## 最小门禁命令块
+
+<!-- AUTO-GENERATED BY render_min_gate_block.py -->
 
 > **Iteration 13** - 文档代理最小门禁
 >
@@ -366,10 +432,10 @@ make lint && \\
 
 ### 命令表格
 
-| 序号 | 命令 | 说明 | 预期关键字 |
-|------|------|------|------------|
-| 1 | `make check-env-consistency` | 环境变量一致性检查 | `环境变量一致性检查通过` |
-| 2 | `make check-iteration-docs` | 迭代文档规范检查 | `迭代文档规范检查通过` |
+| 序号 | 检查项 | 命令 | 通过标准 |
+|------|--------|------|----------|
+| 1 | 环境变量一致性检查 | `make check-env-consistency` | 退出码 0 |
+| 2 | 迭代文档规范检查 | `make check-iteration-docs` | 退出码 0 |
 
 ### 一键执行
 
@@ -379,16 +445,18 @@ make check-env-consistency && \\
   make check-iteration-docs
 ```
 
-### 预期关键字
+### 通过标准
 
-**通过标准**：每个命令的输出应包含对应的预期关键字。
+**通过标准**：每个命令需满足对应的通过条件。
 
-- `make check-env-consistency` → 输出包含 `环境变量一致性检查通过`
-- `make check-iteration-docs` → 输出包含 `迭代文档规范检查通过`
+- `make check-env-consistency` → 退出码 0
+- `make check-iteration-docs` → 退出码 0
 """
 
     # ci-only profile 快照
     CI_ONLY_SNAPSHOT = """## 最小门禁命令块
+
+<!-- AUTO-GENERATED BY render_min_gate_block.py -->
 
 > **Iteration 13** - CI 代理最小门禁
 >
@@ -396,12 +464,13 @@ make check-env-consistency && \\
 
 ### 命令表格
 
-| 序号 | 命令 | 说明 | 预期关键字 |
-|------|------|------|------------|
-| 1 | `make typecheck` | mypy 类型检查 | `Success` |
-| 2 | `make validate-workflows-strict` | Workflow 合约校验（严格模式） | `Workflow 合约校验通过` |
-| 3 | `make check-workflow-contract-docs-sync` | Workflow 合约与文档同步检查 | `Workflow 合约与文档同步检查通过` |
-| 4 | `make check-workflow-contract-version-policy` | Workflow 合约版本策略检查 | `Workflow 合约版本策略检查通过` |
+| 序号 | 检查项 | 命令 | 通过标准 |
+|------|--------|------|----------|
+| 1 | mypy 类型检查 | `make typecheck` | 退出码 0 |
+| 2 | Workflow 合约校验 | `make validate-workflows-strict` | 退出码 0 |
+| 3 | Workflow 合约文档同步检查 | `make check-workflow-contract-docs-sync` | 退出码 0 |
+| 4 | Workflow 合约版本策略检查 | `make check-workflow-contract-version-policy` | 退出码 0 |
+| 5 | Workflow 合约文档锚点检查 | `make check-workflow-contract-doc-anchors` | 退出码 0 |
 
 ### 一键执行
 
@@ -410,21 +479,25 @@ make check-env-consistency && \\
 make typecheck && \\
   make validate-workflows-strict && \\
   make check-workflow-contract-docs-sync && \\
-  make check-workflow-contract-version-policy
+  make check-workflow-contract-version-policy && \\
+  make check-workflow-contract-doc-anchors
 ```
 
-### 预期关键字
+### 通过标准
 
-**通过标准**：每个命令的输出应包含对应的预期关键字。
+**通过标准**：每个命令需满足对应的通过条件。
 
-- `make typecheck` → 输出包含 `Success`
-- `make validate-workflows-strict` → 输出包含 `Workflow 合约校验通过`
-- `make check-workflow-contract-docs-sync` → 输出包含 `Workflow 合约与文档同步检查通过`
-- `make check-workflow-contract-version-policy` → 输出包含 `Workflow 合约版本策略检查通过`
+- `make typecheck` → 退出码 0
+- `make validate-workflows-strict` → 退出码 0
+- `make check-workflow-contract-docs-sync` → 退出码 0
+- `make check-workflow-contract-version-policy` → 退出码 0
+- `make check-workflow-contract-doc-anchors` → 退出码 0
 """
 
     # sql-only profile 快照
     SQL_ONLY_SNAPSHOT = """## 最小门禁命令块
+
+<!-- AUTO-GENERATED BY render_min_gate_block.py -->
 
 > **Iteration 13** - SQL 代理最小门禁
 >
@@ -432,10 +505,10 @@ make typecheck && \\
 
 ### 命令表格
 
-| 序号 | 命令 | 说明 | 预期关键字 |
-|------|------|------|------------|
-| 1 | `make check-migration-sanity` | SQL 迁移文件检查 | `SQL 迁移文件检查通过` |
-| 2 | `make verify-permissions` | 数据库权限验证 | `权限验证完成` |
+| 序号 | 检查项 | 命令 | 通过标准 |
+|------|--------|------|----------|
+| 1 | SQL 迁移文件检查 | `make check-migration-sanity` | 退出码 0 |
+| 2 | 数据库权限验证 | `make verify-permissions` | 退出码 0 |
 
 ### 一键执行
 
@@ -445,16 +518,18 @@ make check-migration-sanity && \\
   make verify-permissions
 ```
 
-### 预期关键字
+### 通过标准
 
-**通过标准**：每个命令的输出应包含对应的预期关键字。
+**通过标准**：每个命令需满足对应的通过条件。
 
-- `make check-migration-sanity` → 输出包含 `SQL 迁移文件检查通过`
-- `make verify-permissions` → 输出包含 `权限验证完成`
+- `make check-migration-sanity` → 退出码 0
+- `make verify-permissions` → 退出码 0
 """
 
     # gateway-only profile 快照
     GATEWAY_ONLY_SNAPSHOT = """## 最小门禁命令块
+
+<!-- AUTO-GENERATED BY render_min_gate_block.py -->
 
 > **Iteration 13** - Gateway 代理最小门禁
 >
@@ -462,16 +537,16 @@ make check-migration-sanity && \\
 
 ### 命令表格
 
-| 序号 | 命令 | 说明 | 预期关键字 |
-|------|------|------|------------|
-| 1 | `make lint` | 代码风格检查（ruff check） | `All checks passed` |
-| 2 | `make check-gateway-di-boundaries` | Gateway DI 边界检查 | `Gateway DI 边界检查通过` |
-| 3 | `make check-gateway-public-api-surface` | Gateway Public API 导入表面检查 | `Gateway Public API 导入表面检查通过` |
-| 4 | `make check-gateway-public-api-docs-sync` | Gateway Public API 文档同步检查 | `Gateway Public API 文档同步检查通过` |
-| 5 | `make check-gateway-import-surface` | Gateway 懒加载策略检查 | `Gateway Import Surface 检查通过` |
-| 6 | `make check-gateway-correlation-id-single-source` | Gateway correlation_id 单一来源检查 | `Gateway correlation_id 单一来源检查通过` |
-| 7 | `make check-mcp-error-contract` | MCP 错误码合约检查 | `MCP JSON-RPC 错误码合约检查通过` |
-| 8 | `make check-mcp-error-docs-sync` | MCP 错误码文档同步检查 | `MCP JSON-RPC 错误码文档同步检查通过` |
+| 序号 | 检查项 | 命令 | 通过标准 |
+|------|--------|------|----------|
+| 1 | 代码风格检查 | `make lint` | 退出码 0 |
+| 2 | Gateway DI 边界检查 | `make check-gateway-di-boundaries` | 退出码 0 |
+| 3 | Gateway Public API 导入表面检查 | `make check-gateway-public-api-surface` | 退出码 0 |
+| 4 | Gateway Public API 文档同步检查 | `make check-gateway-public-api-docs-sync` | 退出码 0 |
+| 5 | Gateway 懒加载策略检查 | `make check-gateway-import-surface` | 退出码 0 |
+| 6 | Gateway correlation_id 单一来源检查 | `make check-gateway-correlation-id-single-source` | 退出码 0 |
+| 7 | MCP 错误码合约检查 | `make check-mcp-error-contract` | 退出码 0 |
+| 8 | MCP 错误码文档同步检查 | `make check-mcp-error-docs-sync` | 退出码 0 |
 
 ### 一键执行
 
@@ -487,18 +562,18 @@ make lint && \\
   make check-mcp-error-docs-sync
 ```
 
-### 预期关键字
+### 通过标准
 
-**通过标准**：每个命令的输出应包含对应的预期关键字。
+**通过标准**：每个命令需满足对应的通过条件。
 
-- `make lint` → 输出包含 `All checks passed`
-- `make check-gateway-di-boundaries` → 输出包含 `Gateway DI 边界检查通过`
-- `make check-gateway-public-api-surface` → 输出包含 `Gateway Public API 导入表面检查通过`
-- `make check-gateway-public-api-docs-sync` → 输出包含 `Gateway Public API 文档同步检查通过`
-- `make check-gateway-import-surface` → 输出包含 `Gateway Import Surface 检查通过`
-- `make check-gateway-correlation-id-single-source` → 输出包含 `Gateway correlation_id 单一来源检查通过`
-- `make check-mcp-error-contract` → 输出包含 `MCP JSON-RPC 错误码合约检查通过`
-- `make check-mcp-error-docs-sync` → 输出包含 `MCP JSON-RPC 错误码文档同步检查通过`
+- `make lint` → 退出码 0
+- `make check-gateway-di-boundaries` → 退出码 0
+- `make check-gateway-public-api-surface` → 退出码 0
+- `make check-gateway-public-api-docs-sync` → 退出码 0
+- `make check-gateway-import-surface` → 退出码 0
+- `make check-gateway-correlation-id-single-source` → 退出码 0
+- `make check-mcp-error-contract` → 退出码 0
+- `make check-mcp-error-docs-sync` → 退出码 0
 """
 
     def test_full_snapshot(self):
@@ -506,6 +581,15 @@ make lint && \\
         result = render_min_gate_block(13, "full")
         assert result == self.FULL_SNAPSHOT, (
             f"full profile 输出与快照不一致\n实际输出:\n{result}\n期望输出:\n{self.FULL_SNAPSHOT}"
+        )
+
+    def test_regression_snapshot(self):
+        """测试 regression profile 输出稳定性"""
+        result = render_min_gate_block(13, "regression")
+        assert result == self.REGRESSION_SNAPSHOT, (
+            f"regression profile 输出与快照不一致\n"
+            f"实际输出:\n{result}\n"
+            f"期望输出:\n{self.REGRESSION_SNAPSHOT}"
         )
 
     def test_docs_only_snapshot(self):
@@ -586,6 +670,7 @@ class TestCommandContent:
         assert "make validate-workflows-strict" in command_names
         assert "make check-workflow-contract-docs-sync" in command_names
         assert "make check-workflow-contract-version-policy" in command_names
+        assert "make check-workflow-contract-doc-anchors" in command_names
 
     def test_gateway_only_commands_match_agents_md(self):
         """测试 gateway-only 命令与 AGENTS.md 一致"""
@@ -616,6 +701,17 @@ class TestCommandContent:
         assert "make typecheck" in command_names
         assert "make check-schemas" in command_names
 
+    def test_regression_profile_matches_iteration_regression(self):
+        """测试 regression profile 与 iteration_N_regression.md 对齐"""
+        # regression profile 应包含迭代回归验证的核心检查项
+        command_names = [cmd.command for cmd in REGRESSION_GATE_COMMANDS]
+        assert "make validate-workflows-strict" in command_names
+        assert "make check-workflow-contract-docs-sync" in command_names
+        assert "make check-gateway-public-api-surface" in command_names
+        assert "make check-gateway-public-api-docs-sync" in command_names
+        assert "make check-iteration-docs" in command_names
+        assert "pytest tests/ci/ -q" in command_names
+
 
 # ============================================================================
 # 边界情况测试
@@ -642,7 +738,7 @@ class TestEdgeCases:
             assert "## 最小门禁命令块" in result
             assert "### 命令表格" in result
             assert "### 一键执行" in result
-            assert "### 预期关键字" in result
+            assert "### 通过标准" in result
 
 
 # ============================================================================
@@ -674,7 +770,7 @@ class TestOutputFormat:
 
     def test_no_trailing_whitespace_in_table(self):
         """测试表格无尾随空格"""
-        commands = [GateCommand("make lint", "检查", "passed")]
+        commands = [GateCommand("make lint", "代码风格检查", "退出码 0")]
         result = render_command_table(commands)
 
         for line in result.split("\n"):
@@ -688,3 +784,10 @@ class TestOutputFormat:
 
         # 应该包含完整的命令示例
         assert "python scripts/iteration/render_min_gate_block.py 13 --profile docs-only" in result
+
+    def test_auto_generated_marker_is_machine_readable(self):
+        """测试自动生成标识行是机器可识别的"""
+        result = render_min_gate_block(13, "full")
+
+        # 标识行应该是 HTML 注释格式，便于机器解析
+        assert "<!-- AUTO-GENERATED BY render_min_gate_block.py -->" in result

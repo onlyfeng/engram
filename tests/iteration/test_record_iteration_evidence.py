@@ -307,6 +307,162 @@ class TestRecordEvidence:
             finally:
                 record_iteration_evidence.EVIDENCE_DIR = original_dir
 
+    def test_regression_doc_url_mapped_to_links(self) -> None:
+        """测试 regression_doc_url 正确映射到 links.regression_doc_url。"""
+        schema = load_evidence_schema()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import record_iteration_evidence
+
+            original_dir = record_iteration_evidence.EVIDENCE_DIR
+            record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+
+            try:
+                commands = [CommandEntry(name="ci", command="make ci", result="PASS")]
+                result = record_evidence(
+                    iteration_number=13,
+                    commit_sha="abc1234567890",
+                    commands=commands,
+                    regression_doc_url="docs/acceptance/iteration_13_regression.md",
+                )
+
+                with open(result.output_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # 验证 regression_doc_url 存在
+                assert "links" in data
+                assert (
+                    data["links"]["regression_doc_url"]
+                    == "docs/acceptance/iteration_13_regression.md"
+                )
+
+                # 验证通过 schema 校验
+                jsonschema.validate(instance=data, schema=schema)
+
+            finally:
+                record_iteration_evidence.EVIDENCE_DIR = original_dir
+
+    def test_pr_url_mapped_to_links(self) -> None:
+        """测试 pr_url 正确映射到 links.pr_url。"""
+        schema = load_evidence_schema()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import record_iteration_evidence
+
+            original_dir = record_iteration_evidence.EVIDENCE_DIR
+            record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+
+            try:
+                commands = [CommandEntry(name="ci", command="make ci", result="PASS")]
+                result = record_evidence(
+                    iteration_number=13,
+                    commit_sha="abc1234567890",
+                    commands=commands,
+                    pr_url="https://github.com/org/repo/pull/123",
+                )
+
+                with open(result.output_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # 验证 pr_url 存在
+                assert "links" in data
+                assert data["links"]["pr_url"] == "https://github.com/org/repo/pull/123"
+
+                # 验证通过 schema 校验
+                jsonschema.validate(
+                    instance=data,
+                    schema=schema,
+                    format_checker=jsonschema.FormatChecker(),
+                )
+
+            finally:
+                record_iteration_evidence.EVIDENCE_DIR = original_dir
+
+    def test_artifact_url_mapped_to_links(self) -> None:
+        """测试 artifact_url 正确映射到 links.artifact_url。"""
+        schema = load_evidence_schema()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import record_iteration_evidence
+
+            original_dir = record_iteration_evidence.EVIDENCE_DIR
+            record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+
+            try:
+                commands = [CommandEntry(name="ci", command="make ci", result="PASS")]
+                result = record_evidence(
+                    iteration_number=13,
+                    commit_sha="abc1234567890",
+                    commands=commands,
+                    artifact_url="https://github.com/org/repo/actions/runs/123/artifacts/456",
+                )
+
+                with open(result.output_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # 验证 artifact_url 存在
+                assert "links" in data
+                assert (
+                    data["links"]["artifact_url"]
+                    == "https://github.com/org/repo/actions/runs/123/artifacts/456"
+                )
+
+                # 验证通过 schema 校验
+                jsonschema.validate(
+                    instance=data,
+                    schema=schema,
+                    format_checker=jsonschema.FormatChecker(),
+                )
+
+            finally:
+                record_iteration_evidence.EVIDENCE_DIR = original_dir
+
+    def test_all_links_fields_mapped(self) -> None:
+        """测试所有 links 字段都能正确映射。"""
+        schema = load_evidence_schema()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import record_iteration_evidence
+
+            original_dir = record_iteration_evidence.EVIDENCE_DIR
+            record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+
+            try:
+                commands = [CommandEntry(name="ci", command="make ci", result="PASS")]
+                result = record_evidence(
+                    iteration_number=13,
+                    commit_sha="abc1234567890",
+                    commands=commands,
+                    ci_run_url="https://github.com/org/repo/actions/runs/123",
+                    regression_doc_url="docs/acceptance/iteration_13_regression.md",
+                    pr_url="https://github.com/org/repo/pull/456",
+                    artifact_url="https://github.com/org/repo/actions/runs/123/artifacts/789",
+                )
+
+                with open(result.output_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # 验证所有 links 字段
+                assert "links" in data
+                links = data["links"]
+                assert links["ci_run_url"] == "https://github.com/org/repo/actions/runs/123"
+                assert links["regression_doc_url"] == "docs/acceptance/iteration_13_regression.md"
+                assert links["pr_url"] == "https://github.com/org/repo/pull/456"
+                assert (
+                    links["artifact_url"]
+                    == "https://github.com/org/repo/actions/runs/123/artifacts/789"
+                )
+
+                # 验证通过 schema 校验
+                jsonschema.validate(
+                    instance=data,
+                    schema=schema,
+                    format_checker=jsonschema.FormatChecker(),
+                )
+
+            finally:
+                record_iteration_evidence.EVIDENCE_DIR = original_dir
+
     def test_notes_field(self) -> None:
         """测试 notes 字段。"""
         with tempfile.TemporaryDirectory() as tmpdir:

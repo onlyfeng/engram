@@ -127,14 +127,16 @@ class TestGetSSOTIterationNumbers:
 
     def test_returns_empty_for_empty_dir(self, temp_project: Path, monkeypatch):
         """测试空目录返回空集合"""
-        monkeypatch.setattr("promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance")
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance"
+        )
         result = get_ssot_iteration_numbers()
         assert result == set()
 
     def test_finds_iteration_files(self, temp_project: Path, monkeypatch):
         """测试能找到迭代文件"""
         ssot_dir = temp_project / "docs" / "acceptance"
-        monkeypatch.setattr("promote_iteration.SSOT_DIR", ssot_dir)
+        monkeypatch.setattr("scripts.iteration.promote_iteration.SSOT_DIR", ssot_dir)
 
         # 创建一些迭代文件
         (ssot_dir / "iteration_5_plan.md").write_text("# Plan 5", encoding="utf-8")
@@ -150,14 +152,16 @@ class TestGetNextAvailableNumber:
 
     def test_returns_1_for_empty(self, temp_project: Path, monkeypatch):
         """测试空目录返回 1"""
-        monkeypatch.setattr("promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance")
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance"
+        )
         result = get_next_available_number()
         assert result == 1
 
     def test_returns_max_plus_1(self, temp_project: Path, monkeypatch):
         """测试返回最大编号 + 1"""
         ssot_dir = temp_project / "docs" / "acceptance"
-        monkeypatch.setattr("promote_iteration.SSOT_DIR", ssot_dir)
+        monkeypatch.setattr("scripts.iteration.promote_iteration.SSOT_DIR", ssot_dir)
 
         (ssot_dir / "iteration_5_regression.md").write_text("# 5", encoding="utf-8")
         (ssot_dir / "iteration_10_regression.md").write_text("# 10", encoding="utf-8")
@@ -171,14 +175,16 @@ class TestCheckSSOTConflict:
 
     def test_no_conflict_for_new_number(self, temp_project: Path, monkeypatch):
         """测试新编号无冲突"""
-        monkeypatch.setattr("promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance")
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance"
+        )
         # 不应该抛出异常
         check_ssot_conflict(1)
 
     def test_raises_for_existing_number(self, temp_project: Path, monkeypatch):
         """测试已存在编号抛出异常"""
         ssot_dir = temp_project / "docs" / "acceptance"
-        monkeypatch.setattr("promote_iteration.SSOT_DIR", ssot_dir)
+        monkeypatch.setattr("scripts.iteration.promote_iteration.SSOT_DIR", ssot_dir)
 
         (ssot_dir / "iteration_5_regression.md").write_text("# 5", encoding="utf-8")
 
@@ -194,8 +200,12 @@ class TestValidateSupersedeTarget:
 
     def test_raises_when_matrix_not_exists(self, temp_project: Path, monkeypatch):
         """测试索引表不存在时抛出错误"""
-        monkeypatch.setattr("promote_iteration.MATRIX_FILE", temp_project / "nonexistent.md")
-        monkeypatch.setattr("promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance")
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.MATRIX_FILE", temp_project / "nonexistent.md"
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance"
+        )
 
         with pytest.raises(SupersedeValidationError) as exc_info:
             validate_supersede_target(10)
@@ -206,13 +216,15 @@ class TestValidateSupersedeTarget:
 
     def test_raises_when_iteration_not_in_index(self, temp_project_with_matrix: Path, monkeypatch):
         """测试迭代不在索引表中时抛出错误"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -226,13 +238,15 @@ class TestValidateSupersedeTarget:
 
     def test_raises_when_regression_file_missing(self, temp_project_with_matrix: Path, monkeypatch):
         """测试 regression 文件不存在时抛出错误（R7 对齐）"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -251,13 +265,15 @@ class TestValidateSupersedeTarget:
 
     def test_passes_when_all_conditions_met(self, temp_project_with_matrix: Path, monkeypatch):
         """测试所有条件满足时不抛出错误"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -266,13 +282,15 @@ class TestValidateSupersedeTarget:
 
     def test_error_message_includes_r7_hint(self, temp_project_with_matrix: Path, monkeypatch):
         """测试错误信息包含 R7 相关提示"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -534,17 +552,19 @@ class TestPromoteIterationNormal:
 
     def test_promotes_new_iteration(self, temp_project_with_iteration: Path, monkeypatch):
         """测试正常晋升新迭代"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -561,17 +581,19 @@ class TestPromoteIterationNormal:
 
     def test_index_entry_inserted_at_top(self, temp_project_with_iteration: Path, monkeypatch):
         """测试索引条目插入到顶部"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -603,17 +625,19 @@ class TestPromoteIterationSSOTConflict:
         self, temp_project_with_matrix: Path, monkeypatch
     ):
         """测试已存在迭代时抛出冲突错误"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_matrix / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -631,17 +655,19 @@ class TestPromoteIterationSSOTConflict:
 
     def test_suggests_next_available_number(self, temp_project_with_matrix: Path, monkeypatch):
         """测试冲突时建议下一个可用编号"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_matrix / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -663,17 +689,19 @@ class TestPromoteIterationSupersede:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试 --supersede 目标不在索引中时报错（非 dry-run）"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -688,17 +716,19 @@ class TestPromoteIterationSupersede:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试 --supersede 目标的 regression 文件不存在时报错（R7 对齐）"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -718,17 +748,19 @@ class TestPromoteIterationSupersede:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试 --dry-run 模式下跳过前置校验"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -744,17 +776,19 @@ class TestPromoteIterationSupersede:
 
     def test_supersede_updates_old_regression(self, temp_project_with_iteration: Path, monkeypatch):
         """测试 --supersede 更新旧 regression 文件头部"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -771,17 +805,19 @@ class TestPromoteIterationSupersede:
 
     def test_supersede_updates_index_status(self, temp_project_with_iteration: Path, monkeypatch):
         """测试 --supersede 更新索引表中旧迭代的状态"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -807,17 +843,19 @@ class TestPromoteIterationIdempotent:
 
     def test_skips_identical_files(self, temp_project_with_iteration: Path, monkeypatch):
         """测试相同内容的文件被跳过"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -835,17 +873,19 @@ class TestPromoteIterationIdempotent:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试内容不同时不使用 --force 会报错"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -864,17 +904,19 @@ class TestPromoteIterationIdempotent:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试 --force 可以覆盖不同内容"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -898,17 +940,19 @@ class TestPromoteIterationIdempotent:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试已索引的迭代不重复更新索引"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -926,17 +970,19 @@ class TestPromoteIterationDryRun:
 
     def test_dry_run_does_not_modify_files(self, temp_project_with_iteration: Path, monkeypatch):
         """测试 --dry-run 不修改任何文件"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -965,17 +1011,19 @@ class TestPromoteIterationSourceNotFound:
 
     def test_raises_for_missing_source_dir(self, temp_project_with_matrix: Path, monkeypatch):
         """测试源目录不存在时抛出错误"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_matrix / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -995,17 +1043,19 @@ class TestConsistencyWithCheckScript:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试晋升后的迭代能通过索引完整性检查"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1027,17 +1077,19 @@ class TestConsistencyWithCheckScript:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试 --supersede 后通过 SUPERSEDED 一致性检查"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1057,17 +1109,19 @@ class TestConsistencyWithCheckScript:
 
     def test_index_order_is_descending(self, temp_project_with_iteration: Path, monkeypatch):
         """测试索引表保持降序排列"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1090,17 +1144,19 @@ class TestConsistencyWithCheckScript:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试晋升的迭代出现在解析结果中"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1129,17 +1185,19 @@ class TestSupersedeR1ToR9Compliance:
 
     def test_supersede_passes_all_rules(self, temp_project_with_iteration: Path, monkeypatch):
         """测试 --supersede 后 R1-R9 规则全通过"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1164,17 +1222,19 @@ class TestSupersedeR1ToR9Compliance:
 
     def test_r1_successor_declaration_present(self, temp_project_with_iteration: Path, monkeypatch):
         """R1: 后继链接必须存在 - 测试说明字段包含后继声明"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1196,17 +1256,19 @@ class TestSupersedeR1ToR9Compliance:
 
     def test_r3_successor_ordering(self, temp_project_with_iteration: Path, monkeypatch):
         """R3: 后继排序在上方 - 测试后继迭代在被取代迭代上方"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1236,17 +1298,19 @@ class TestSupersedeR1ToR9Compliance:
 
     def test_r6_regression_superseded_header(self, temp_project_with_iteration: Path, monkeypatch):
         """R6: regression 声明必须存在 - 测试 regression 文件顶部有 superseded 声明"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1267,17 +1331,19 @@ class TestSupersedeR1ToR9Compliance:
 
     def test_r9_descending_order(self, temp_project_with_iteration: Path, monkeypatch):
         """R9: 索引降序排列 - 测试迭代编号按降序排列"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1303,17 +1369,19 @@ class TestSupersedeValidationR6R7Alignment:
         self, temp_project_with_matrix: Path, monkeypatch
     ):
         """R7 对齐: 索引中有链接但文件不存在时，supersede 应报错"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_matrix / ".iteration",
         )
 
@@ -1344,17 +1412,19 @@ class TestSupersedeValidationR6R7Alignment:
         self, temp_project_with_iteration: Path, monkeypatch
     ):
         """测试 supersede 前置校验与 R6/R7 检查行为一致"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
-            "promote_iteration.ITERATION_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_iteration
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.ITERATION_DIR",
             temp_project_with_iteration / ".iteration",
         )
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_iteration / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1377,13 +1447,15 @@ class TestSupersedeValidationR6R7Alignment:
         self, temp_project_with_matrix: Path, monkeypatch
     ):
         """测试 SupersedeValidationError 包含有用的修复建议"""
-        monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_matrix)
         monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR",
+            "scripts.iteration.promote_iteration.REPO_ROOT", temp_project_with_matrix
+        )
+        monkeypatch.setattr(
+            "scripts.iteration.promote_iteration.SSOT_DIR",
             temp_project_with_matrix / "docs" / "acceptance",
         )
         monkeypatch.setattr(
-            "promote_iteration.MATRIX_FILE",
+            "scripts.iteration.promote_iteration.MATRIX_FILE",
             temp_project_with_matrix / "docs" / "acceptance" / "00_acceptance_matrix.md",
         )
 
@@ -1393,7 +1465,7 @@ class TestSupersedeValidationR6R7Alignment:
 
         # 建议应该包含如何添加到索引的提示
         assert (
-            "promote_iteration.py" in exc_info.value.suggestion
+            "scripts.iteration.promote_iteration.py" in exc_info.value.suggestion
             or "添加" in exc_info.value.suggestion
         )
 

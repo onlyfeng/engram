@@ -735,6 +735,8 @@ def record_evidence(
     notes: Optional[str] = None,
     runner_label: Optional[str] = None,
     regression_doc_url: Optional[str] = None,
+    pr_url: Optional[str] = None,
+    artifact_url: Optional[str] = None,
     *,
     dry_run: bool = False,
 ) -> RecordResult:
@@ -748,6 +750,8 @@ def record_evidence(
         notes: 补充说明（可选）
         runner_label: CI runner 标签（可选）
         regression_doc_url: 回归文档 URL（可选）
+        pr_url: Pull Request URL（可选）
+        artifact_url: CI Artifacts 下载 URL（可选）
         dry_run: 是否为预览模式
 
     Returns:
@@ -771,11 +775,13 @@ def record_evidence(
 
     # 构建 links 对象
     links: Optional[Links] = None
-    if ci_run_url or regression_doc_url:
+    if ci_run_url or regression_doc_url or pr_url or artifact_url:
         links = Links(
             ci_run_url=ci_run_url,
             regression_doc_url=regression_doc_url
             or f"docs/acceptance/iteration_{iteration_number}_regression.md",
+            pr_url=pr_url,
+            artifact_url=artifact_url,
         )
 
     # 计算整体结果
@@ -963,6 +969,24 @@ def main() -> int:
         help="CI runner 标签（如 'ubuntu-latest', 'self-hosted'）",
     )
     parser.add_argument(
+        "--regression-doc-url",
+        type=str,
+        default=None,
+        help="回归文档 URL 或相对路径（如 'docs/acceptance/iteration_13_regression.md'）",
+    )
+    parser.add_argument(
+        "--pr-url",
+        type=str,
+        default=None,
+        help="关联的 Pull Request URL",
+    )
+    parser.add_argument(
+        "--artifact-url",
+        type=str,
+        default=None,
+        help="CI Artifacts 下载 URL（注意：有时效性，通常 90 天）",
+    )
+    parser.add_argument(
         "--dry-run",
         "-n",
         action="store_true",
@@ -1091,6 +1115,9 @@ def main() -> int:
             ci_run_url=args.ci_run_url,
             notes=args.notes,
             runner_label=args.runner_label,
+            regression_doc_url=args.regression_doc_url,
+            pr_url=args.pr_url,
+            artifact_url=args.artifact_url,
             dry_run=args.dry_run,
         )
     except SchemaValidationError as e:

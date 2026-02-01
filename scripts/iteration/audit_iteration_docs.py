@@ -399,7 +399,6 @@ def generate_report(result: AuditResult, project_root: Path) -> str:
             ]
         )
 
-        {e.iteration_number: e for e in result.index_entries}
         for entry in result.index_entries:
             successor = entry.get_successor_number()
             regression_files = [
