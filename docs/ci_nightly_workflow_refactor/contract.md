@@ -1,7 +1,9 @@
-# CI/Nightly/Release Workflow Contract
+# CI/Nightly Workflow Contract
 
 > 本文档固化 workflow 的关键标识符、环境变量、标签语义等，作为"禁止回归"的基准。
 > 任何修改需经过 review 并更新本文档。
+
+> **Phase 1 范围说明**: 当前合约版本 (v2.0.0) 仅覆盖 CI 和 Nightly workflow。Release workflow (`release.yml`) 将在 Phase 2 引入。
 
 ---
 
@@ -35,32 +37,32 @@
 
 ### 2.1 CI Workflow (`ci.yml`)
 
-| Job ID | Job Name | 层级 | 触发条件 |
-|--------|----------|------|----------|
-| `detect-changes` | Detect Changes | - | 始终执行 |
-| `precheck-static` | [Fast] Precheck & Static Build Verify | Fast | 始终执行 |
-| `workflow-contract-check` | [Fast] Workflow Contract Check | Fast | contract_changed |
-| `schema-validate` | [Fast] Schema Validation | Fast | schemas/logbook/gateway 任一变更 |
-| `docs-check` | [Fast] Docs Link Check | Fast | docs_changed 或 scripts_changed |
-| `python-logbook-unit` | [Fast] Logbook Unit Tests | Fast | logbook_changed |
-| `python-gateway-unit` | [Fast] Gateway Unit Tests | Fast | gateway_changed |
-| `openmemory-governance-check` | [Fast] OpenMemory Governance Check | Fast | openmemory_governance_changed |
-| `unified-standard` | [Standard] Unified Stack Integration Test | Standard | stack/logbook/gateway/openmemory_governance/upstream_ref 任一变更 |
-| `openmemory-sdk` | [Fast] OpenMemory SDK Tests | Fast | openmemory_sdk_changed |
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `test` | Test (Python ${{ matrix.python-version }}) | 单元测试和验收测试（矩阵：3.10, 3.11, 3.12） |
+| `lint` | Lint | 代码风格检查（ruff check, ruff format, mypy） |
+| `no-iteration-tracked` | No .iteration/ Tracked Files | 检查 .iteration/ 目录未被 git 跟踪 |
+| `env-var-consistency` | Environment Variable Consistency | 环境变量一致性检查 |
+| `schema-validate` | Schema Validation | JSON Schema 和 fixtures 校验 |
+| `logbook-consistency` | Logbook Consistency Check | Logbook 配置一致性检查 |
+| `migration-sanity` | Migration Sanity Check | SQL 迁移文件存在性和基本语法检查 |
+| `sql-safety` | SQL Migration Safety Check | SQL 迁移安全性检查（高危语句检测） |
+| `gateway-di-boundaries` | Gateway DI Boundaries Check | Gateway DI 边界检查 |
+| `scm-sync-consistency` | SCM Sync Consistency Check | SCM Sync 一致性检查 |
+| `gateway-error-reason-usage` | Gateway ErrorReason Usage Check | Gateway ErrorReason 使用规范检查 |
+| `iteration-docs-check` | Iteration Docs Check | 迭代文档检查（.iteration/ 链接 + SUPERSEDED 一致性） |
+| `workflow-contract` | Workflow Contract Validation | Workflow 合约校验和文档同步检查 |
 
 ### 2.2 Nightly Workflow (`nightly.yml`)
 
 | Job ID | Job Name | 说明 |
 |--------|----------|------|
-| `nightly-full` | Nightly Full Test Suite | Full 层完整测试套件 |
+| `unified-stack-full` | Unified Stack Full Verification | 完整统一栈验证（Docker Compose + Gate Contract + 集成测试） |
+| `notify-results` | Notify Results | Nightly 汇总通知 |
 
-### 2.3 Release Workflow (`release.yml`)
+### 2.3 Release Workflow (`release.yml`) - Phase 2 预留
 
-| Job ID | Job Name | 说明 |
-|--------|----------|------|
-| `gate` | Release Gate Check | 发布门禁检查 |
-| `build` | Build & Push Images | 构建并推送镜像 |
-| `summary` | Release Summary | 发布摘要 |
+> **注意**: Release workflow 将在 Phase 2 引入，当前合约版本不包含此部分。
 
 ---
 
@@ -107,14 +109,9 @@ env:
   SKIP_DEGRADATION_TEST: "0"     # 显式设置为 0（执行降级测试）
 ```
 
-### 4.3 Release Gate
+### 4.3 Release Gate - Phase 2 预留
 
-```yaml
-env:
-  VERIFY_FULL: "1"
-  RUN_INTEGRATION_TESTS: "1"
-  HTTP_ONLY_MODE: "1"
-```
+> **注意**: Release Gate 环境变量将在 Phase 2 Release workflow 引入时定义。
 
 ### 4.4 Acceptance 目标环境变量绑定
 
@@ -132,16 +129,30 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ## 5. "禁止回归"的 Step 文本范围
 
-### 5.1 Job Name 层级
+### 5.1 Frozen Job Names
 
-以下 Job Name 格式为"禁止回归"基准：
+以下 Job Name 为"禁止回归"基准，在 `workflow_contract.v1.json` 的 `frozen_job_names.allowlist` 中定义：
 
-| 前缀 | 含义 | 示例 |
-|------|------|------|
-| `[Fast]` | Fast 层 job，PR 必跑或条件跑 | `[Fast] Precheck & Static Build Verify` |
-| `[Standard]` | Standard 层 job，PR 条件跑（需变更检测） | `[Standard] Unified Stack Integration Test` |
+**CI Workflow:**
+- `Test (Python ${{ matrix.python-version }})`
+- `Lint`
+- `No .iteration/ Tracked Files`
+- `Environment Variable Consistency`
+- `Schema Validation`
+- `Logbook Consistency Check`
+- `Migration Sanity Check`
+- `SQL Migration Safety Check`
+- `Gateway DI Boundaries Check`
+- `SCM Sync Consistency Check`
+- `Gateway ErrorReason Usage Check`
+- `Iteration Docs Check`
+- `Workflow Contract Validation`
 
-### 5.2 关键 Step Name
+**Nightly Workflow:**
+- `Unified Stack Full Verification`
+- `Notify Results`
+
+### 5.2 Frozen Step Names
 
 以下 Step Name 为"禁止回归"基准（不允许随意修改）。这些 step name 在 `workflow_contract.v1.json` 的 `frozen_step_text.allowlist` 中定义。
 
@@ -151,32 +162,60 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 - 非冻结的 step name 改名只会报告 **WARNING** (`step_name_changed`)
 - 错误信息会提示："此 step 属于冻结文案，不能改名；如确需改名需同步更新 contract+docs"
 
-**CI Workflow:**
-- `Run CI precheck`
-- `Verify build static (Dockerfile/compose config check)`
-- `Check legacy step naming`
-- `Check deprecated env var usage`
-- `Verify OpenMemory vendor structure`
-- `Verify OpenMemory.upstream.lock.json format`
-- `Check OpenMemory freeze status`
-- `Generate OpenMemory patch bundle (strict mode)`
-- `Run OpenMemory sync check`
-- `Run OpenMemory sync verify`
-- `Run lock consistency check (hard gate when upstream_ref changed)`
-- `Verify upstream_ref change requirements`
+**通用 Step（CI 和 Nightly 共享）:**
+- `Checkout repository`
+- `Set up Python`
+- `Cache pip dependencies`
+- `Install dependencies`
 
-**Nightly Workflow:**
-- `Deploy unified stack`
-- `Verify unified stack`
-- `Run OpenMemory release preflight (optional aggregated check)`
-- `Run OpenMemory upstream drift check`
-- `Run Artifact Audit`
-- `Generate Summary`
+**CI Workflow - test job:**
+- `Run database migrations`
+- `Verify database migrations (strict mode)`
+- `Run unit and integration tests`
+- `Run acceptance tests`
+- `Upload test results`
+- `Upload migration logs`
 
-**Release Workflow:**
-- `Extract version from tag`
-- `Run release gate checks` (封装 verify-build + deploy + verify-unified FULL + gateway tests)
-- `Generate Release Summary`
+**CI Workflow - lint job:**
+- `Run ruff check (lint)`
+- `Run ruff format check`
+- `Run mypy (type check)`
+
+**CI Workflow - no-iteration-tracked job:**
+- `Check no .iteration files tracked`
+
+**CI Workflow - 检查类 jobs:**
+- `Check environment variable consistency`
+- `Run schema validation`
+- `Upload validation results`
+- `Check logbook configuration consistency`
+- `Check SQL migration files exist`
+- `Check SQL syntax (basic validation)`
+- `Run SQL safety check`
+- `Check Gateway DI boundaries`
+- `Check SCM Sync consistency`
+- `Check Gateway ErrorReason usage`
+- `Check iteration docs consistency`
+- `Validate workflow contract`
+- `Generate validation report (JSON)`
+- `Upload validation report`
+
+**Nightly Workflow - unified-stack-full job:**
+- `Detect environment capabilities`
+- `Validate gate contract (full profile)`
+- `Start unified stack with Docker Compose`
+- `Wait for services to be healthy`
+- `Run Gateway integration tests (full profile)`
+- `Run unified stack verification (full)`
+- `Run make verify-unified (full mode)`
+- `Record acceptance run`
+
+**Nightly Workflow - notify-results job:**
+- `Check job results`
+
+**Release Workflow (Phase 2 预留):**
+
+> Release workflow 的 frozen step names 将在 Phase 2 定义。
 
 ### 5.3 Summary 标题/关键提示语
 
@@ -185,7 +224,6 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 | Summary 标题 | 出现场景 |
 |--------------|----------|
 | `## Nightly Build Summary` | nightly.yml Generate Summary step |
-| `## 🚀 Release Summary` | release.yml Generate Release Summary step |
 | `## :no_entry: OpenMemory Freeze Check Failed` | 冻结检查失败 |
 | `## :no_entry: Override Reason 校验失败` | Override Reason 校验失败 |
 | `## :warning: OpenMemory Freeze Override Active` | 使用 override 绕过冻结 |
@@ -242,25 +280,39 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ## 7. Make Target 清单
 
-### 7.1 CI/Nightly/Release 聚合目标
+### 7.1 CI 核心目标（workflow 必需）
 
-| Make Target | 用途 | 封装内容 |
-|-------------|------|----------|
-| `ci-precheck` | CI 预检 | 数据库配置验证 |
-| `ci-unified-standard` | CI Standard 层聚合 | deploy + verify-unified + openmemory-audit + test-gateway-integration |
-| `nightly-full-suite` | Nightly Full 层聚合 | vendor-check + lock-format + deploy + verify-full + 全部测试 |
-| `release-gate` | Release Gate 聚合 | verify-build-static + verify-build + deploy + verify-unified FULL + test-gateway-integration |
+以下 Make targets 在 `workflow_contract.v1.json` 的 `make.targets_required` 中定义，CI 校验会验证这些目标的存在：
 
-### 7.2 Release 相关 Make Targets
+| Make Target | 用途 | 对应 CI Job |
+|-------------|------|-------------|
+| `ci` | CI 聚合目标 | 本地开发验证 |
+| `lint` | 代码风格检查（ruff check） | lint |
+| `format` | 代码格式化 | - |
+| `format-check` | 代码格式检查（不修改） | lint |
+| `typecheck` | 类型检查（mypy） | lint |
+| `check-env-consistency` | 环境变量一致性检查 | env-var-consistency |
+| `check-logbook-consistency` | Logbook 配置一致性检查 | logbook-consistency |
+| `check-schemas` | JSON Schema 和 fixtures 校验 | schema-validate |
+| `check-migration-sanity` | SQL 迁移文件存在性检查 | migration-sanity |
+| `check-scm-sync-consistency` | SCM Sync 一致性检查 | scm-sync-consistency |
+| `check-gateway-error-reason-usage` | Gateway ErrorReason 使用规范检查 | gateway-error-reason-usage |
 
-| Make Target | 说明 |
+### 7.2 数据库相关目标
+
+| Make Target | 用途 |
 |-------------|------|
-| `release-gate` | Release 门禁检查聚合目标 |
-| `verify-build-static` | Docker 构建静态检查（Dockerfile/compose 配置校验） |
-| `verify-build` | Docker 实际构建验证 |
-| `deploy` | 完整部署（预检 + 启动所有服务） |
 | `verify-unified` | 统一栈验证（支持 VERIFY_FULL=1 模式） |
-| `test-gateway-integration` | Gateway 集成测试 |
+| `verify-permissions` | 数据库权限验证 |
+| `verify-permissions-strict` | 数据库权限验证（严格模式） |
+| `migrate-ddl` | 执行 DDL 迁移 |
+| `migrate-plan` | 查看迁移计划 |
+| `apply-roles` | 应用 Logbook 角色和权限 |
+| `apply-openmemory-grants` | 应用 OpenMemory 权限 |
+
+### 7.3 Release 相关 Make Targets - Phase 2 预留
+
+> **注意**: Release 专用 Make targets 将在 Phase 2 Release workflow 引入时定义。
 
 ---
 
@@ -268,13 +320,13 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ### 8.1 概述
 
-`artifact_archive` 合约定义了 workflow 中必须上传的 artifact 路径，确保关键验收测试结果和验证报告被正确上传到 CI artifacts。
+`artifact_archive` 合约定义了 workflow 中必须上传的 artifact 路径，确保关键测试结果和验证报告被正确上传到 CI artifacts。
 
 ### 8.2 合约字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `required_artifact_paths` | `string[]` | 必需上传的 artifact 路径列表（支持目录和文件路径） |
+| `required_artifact_paths` | `string[]` | 必需上传的 artifact 路径列表（支持通配符和目录路径） |
 | `artifact_step_names` | `string[]` | 可选：限制校验范围到指定名称的步骤 |
 
 ### 8.3 CI Workflow Artifact 要求
@@ -282,31 +334,51 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 ```json
 "artifact_archive": {
   "required_artifact_paths": [
-    ".artifacts/acceptance-runs/",
-    ".artifacts/verify-results.json"
+    "test-results-*.xml",
+    "acceptance-results-*.xml",
+    "migration-output-*.log",
+    "verify-output-*.log",
+    "schema-validation-results.json",
+    "artifacts/workflow_contract_validation.json"
   ],
   "artifact_step_names": [
-    "Upload verification results",
-    "Upload acceptance run records"
+    "Upload test results",
+    "Upload migration logs",
+    "Upload validation results",
+    "Upload validation report"
   ]
 }
 ```
+
+**Artifact 上传步骤说明：**
+
+| Step Name | 上传内容 | Job |
+|-----------|----------|-----|
+| `Upload test results` | `test-results-*.xml`, `acceptance-results-*.xml` | test |
+| `Upload migration logs` | `migration-output-*.log`, `verify-output-*.log` | test |
+| `Upload validation results` | `schema-validation-results.json` | schema-validate |
+| `Upload validation report` | `artifacts/workflow_contract_validation.json` | workflow-contract |
 
 ### 8.4 Nightly Workflow Artifact 要求
 
 ```json
 "artifact_archive": {
-  "required_artifact_paths": [
-    ".artifacts/acceptance-unified-full/",
-    ".artifacts/acceptance-runs/",
-    ".artifacts/verify-results.json"
-  ],
+  "required_artifact_paths": [],
   "artifact_step_names": [
-    "Upload acceptance-unified-full results",
-    "Upload verification results"
+    "Upload test results"
   ]
 }
 ```
+
+**Nightly Artifact 说明：**
+
+Nightly workflow 的 `Upload test results` 步骤上传以下内容：
+- `test-unified-stack-results.xml` - 集成测试结果
+- `.artifacts/verify-results.json` - 验证结果
+- `.artifacts/acceptance-runs/*` - Acceptance 运行记录
+- `.artifacts/acceptance-matrix.md` / `.json` - Acceptance 矩阵
+- `caps.json`, `validate.json` - Gate Contract 校验结果
+- `compose-logs.txt` - Docker Compose 日志
 
 ### 8.5 验证规则
 
@@ -321,8 +393,8 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ```
 [missing_artifact_path] ci:.github/workflows/ci.yml
-  Key: .artifacts/acceptance-runs/
-  Message: Required artifact path '.artifacts/acceptance-runs/' is not uploaded in workflow. 
+  Key: test-results-*.xml
+  Message: Required artifact path 'test-results-*.xml' is not uploaded in workflow. 
            Please ensure an upload-artifact step includes this path in its 'with.path' configuration.
   Location: artifact_archive.required_artifact_paths
 ```
@@ -418,11 +490,57 @@ Nightly 工作流直接调用 `make acceptance-unified-full`：
 
 ---
 
-## 10. 版本控制
+## 10. SemVer Policy / 版本策略
+
+本节定义 workflow contract 文件（`workflow_contract.v1.json`）、workflow 文件（`.github/workflows/*.yml`）及相关文档的版本变更规则。
+
+### 10.1 版本变更分类
+
+| 变更类型 | 版本位 | 示例 |
+|----------|--------|------|
+| **Breaking Change**（不兼容变更） | Major (X.0.0) | 删除必需的 job/step、修改 output key 名称、修改 artifact 路径 |
+| **Feature Addition**（功能新增） | Minor (0.X.0) | 新增 job、新增 output key、新增 frozen step |
+| **Fix / Docs Only**（修复/仅文档） | Patch (0.0.X) | 修复错误、文档完善、注释更新 |
+
+### 10.2 版本策略规则
+
+1. **Workflow 文件变更**
+   - 删除或重命名已有 job/step：**Major** 升级
+   - 新增 job/step：**Minor** 升级
+   - 修改 step 内部实现（name 不变）：**Patch** 升级
+
+2. **Contract 字段变更**
+   - 删除或重命名必需字段（如 `job_ids`、`required_steps`）：**Major** 升级
+   - 新增字段、新增校验规则：**Minor** 升级
+   - 修正字段值错误、调整描述：**Patch** 升级
+
+3. **仅文档变更**
+   - 不涉及 contract JSON 或 workflow 文件的纯文档更新：**Patch** 升级
+   - 文档结构重组但内容不变：**Patch** 升级
+
+### 10.3 版本更新流程
+
+```bash
+# 1. 更新 workflow_contract.v1.json 中的 version 字段
+# 2. 更新 contract.md 第 11 章版本控制表
+# 3. 运行 make validate-workflows 验证一致性
+# 4. 运行 make check-workflow-contract-docs-sync 验证文档同步
+```
+
+### 10.4 向后兼容性承诺
+
+- **Frozen Step Names**：在 `frozen_step_text.allowlist` 中的 step name 不得随意变更
+- **Required Artifact Paths**：`artifact_archive.required_artifact_paths` 中的路径不得随意删除
+- **Output Keys**：`detect_changes.outputs` 中的 key 不得随意删除或重命名
+
+---
+
+## 11. 版本控制
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
-| v2.0 | 2026-01-31 | 移除 SeekDB 组件：删除 SeekDB 环境变量、命名迁移验收矩阵、相关 Job/Step 定义 |
+| v2.2.0 | 2026-02-02 | 新增 iteration-docs-check job：检查 .iteration/ 链接和 SUPERSEDED 一致性 |
+| v2.0.0 | 2026-02-02 | Phase 1 范围收敛：移除 release workflow 合约（Phase 2 预留）；统一版本号到 semver 格式；移除 SeekDB 组件 |
 | v1.12 | 2026-01-30 | 新增 Acceptance 验收测试合约：定义 CI 组合式覆盖 vs Nightly 直接执行的合约、产物要求、record_acceptance_run.py 调用规范 |
 | v1.11 | 2026-01-30 | 新增 Artifact Archive 合约：定义 ci/nightly 必需的 artifact paths；validate_workflows.py 新增 upload-artifact 步骤扫描验证 |
 | v1.10 | 2026-01-30 | 新增 Labels 一致性校验：`validate_workflows.py` 自动校验 `ci.labels` 与 `gh_pr_labels_to_outputs.py` 中 `LABEL_*` 常量的一致性 |

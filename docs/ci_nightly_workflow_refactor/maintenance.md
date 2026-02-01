@@ -92,7 +92,7 @@ Job Name 命名规范：
 - [ ] **workflow_contract.v1.json**: 在 `ci.labels` 数组中添加新 label
 - [ ] **contract.md**: 在 "3. PR Label 列表与语义" 表格中添加新条目
 - [ ] **README.md**: 在 "PR Label 说明" 表格中添加新条目
-- [ ] 运行 `make validate-workflows` 验证 label 一致性
+- [ ] 运行 `python scripts/ci/validate_workflows.py` 验证 label 一致性
 
 **Labels 一致性自动校验：**
 
@@ -115,8 +115,8 @@ Job Name 命名规范：
 当新增或修改 step name 时：
 
 - [ ] **workflow_contract.v1.json**: 在 `frozen_step_text.allowlist` 中添加新 step name
-- [ ] **contract.md**: 在 "6. 禁止回归的 Step 文本范围" 中更新
-- [ ] 运行 `python scripts/ci/validate_workflows.py` 验证 - 脚本会通过 fuzzy matching 检测 step name 变化并输出 WARNING
+- [ ] **contract.md**: 在 "5. 禁止回归的 Step 文本范围" 中更新
+- [ ] 运行 `python scripts/ci/validate_workflows.py` 验证 - 脚本会检测 step name 变化并输出 ERROR（冻结 step）或 WARNING（非冻结 step）
 
 ### 1.7 新增/修改 Artifact Upload 路径
 
@@ -125,8 +125,8 @@ Job Name 命名规范：
 - [ ] **ci.yml/nightly.yml**: 添加 `uses: actions/upload-artifact@v4` 步骤，确保 `with.path` 包含必需路径
 - [ ] **workflow_contract.v1.json**: 在对应 workflow 的 `artifact_archive.required_artifact_paths` 中添加新路径
 - [ ] **workflow_contract.v1.json**: 可选：在 `artifact_archive.artifact_step_names` 中添加步骤名称（用于限定检查范围）
-- [ ] **contract.md**: 在 "10. Artifact Archive 合约" 中更新说明
-- [ ] 运行 `make validate-workflows` 验证 artifact 路径覆盖
+- [ ] **contract.md**: 在 "8. Artifact Archive 合约" 中更新说明
+- [ ] 运行 `python scripts/ci/validate_workflows.py` 验证 artifact 路径覆盖
 
 ### 1.8 修改 Acceptance 验收测试
 
@@ -150,7 +150,7 @@ Job Name 命名规范：
 - [ ] 更新 `workflow_contract.v1.json` 的 `artifact_archive.required_artifact_paths`
 - [ ] 更新 `coupling_map.md` 第 5 章的产物归档路径表
 - [ ] 更新 `docs/acceptance/00_acceptance_matrix.md` 的产物记录与追溯表
-- [ ] 运行 `make validate-workflows` 验证 artifact 路径覆盖
+- [ ] 运行 `python scripts/ci/validate_workflows.py` 验证 artifact 路径覆盖
 
 **artifact_archive 配置示例：**
 
@@ -212,19 +212,25 @@ Job Name 命名规范：
 
 ```bash
 # 1. 安装依赖
-pip install pyyaml jsonschema
+pip install pyyaml jsonschema pytest
 
 # 2. 运行合约校验（普通模式：frozen steps 违规报 ERROR，其他警告不阻止）
-make validate-workflows
+python scripts/ci/validate_workflows.py
 
-# 3. 运行合约校验（严格模式：所有警告都视为 ERROR）
-make validate-workflows-strict
+# 3. 运行文档同步检查
+python scripts/ci/check_workflow_contract_docs_sync.py
 
 # 4. JSON 输出格式（用于脚本处理）
-make validate-workflows-json
+python scripts/ci/validate_workflows.py --json
+python scripts/ci/check_workflow_contract_docs_sync.py --json
 
-# 5. 检查输出，确保无 ERROR
+# 5. 运行 CI 脚本测试（确保校验脚本本身正常）
+pytest tests/ci/ -q
+
+# 6. 检查输出，确保无 ERROR
 ```
+
+> **注意**: CI workflow 中直接调用 Python 脚本而非 Makefile 目标。本地验证时也推荐使用相同方式。
 
 **校验输出说明：**
 
@@ -255,25 +261,38 @@ make validate-workflows-json
 
 ### 3.2 CI 自动验证
 
-workflow 变更会触发 `[Fast] Workflow Contract Check` job，自动执行合约校验。
+workflow 变更会触发 `Workflow Contract Validation` job，自动执行合约校验。
 
-- **执行命令**: `make validate-workflows-strict`（严格模式）
-- **触发条件**: `.github/workflows/**`、`scripts/ci/workflow_contract*.json` 或 `scripts/ci/validate_workflows.py` 变更
-- **依赖安装**: `pip install pyyaml jsonschema`
+- **Job ID**: `workflow-contract`
+- **Job Name**: `Workflow Contract Validation`
+- **触发条件**: 始终执行（所有 push/pull_request）
+- **依赖安装**: `pip install pyyaml jsonschema pytest`
 
-**严格模式行为：**
-- frozen step/job name 改名: 始终报 ERROR（无论是否 strict 模式）
-- 非 frozen 的 step name 改名: strict 模式下报 ERROR，非 strict 模式仅 WARNING
-- make target 缺失: 始终报 ERROR
+**校验步骤：**
+1. 运行 CI 脚本测试 (`pytest tests/ci/ -q`)
+2. 运行 workflow 合约校验 (`python scripts/ci/validate_workflows.py`)
+3. 运行文档同步检查 (`python scripts/ci/check_workflow_contract_docs_sync.py`)
+4. 生成 JSON 格式报告（用于 artifact 上传）
+
+**校验行为：**
+- frozen step/job name 改名: 报 ERROR
+- make target 缺失: 报 ERROR
+- 文档与合约不同步: 报 ERROR
 
 **CI 配置参考：**
 ```yaml
-# .github/workflows/ci.yml - workflow-contract-check job
-- name: Install minimal dependencies
-  run: pip install pyyaml jsonschema
+# .github/workflows/ci.yml - workflow-contract job
+- name: Install dependencies
+  run: pip install pyyaml jsonschema pytest
 
-- name: Run workflow contract validation (strict)
-  run: make validate-workflows-strict
+- name: Run CI script tests
+  run: pytest tests/ci/ -q --ignore=...
+
+- name: Validate workflow contract
+  run: python scripts/ci/validate_workflows.py
+
+- name: Check workflow contract docs sync
+  run: python scripts/ci/check_workflow_contract_docs_sync.py
 ```
 
 ---
@@ -347,7 +366,7 @@ workflow 变更会触发 `[Fast] Workflow Contract Check` job，自动执行合�
 **产物路径变更**:
 1. 修改 `workflow_contract.v1.json` 的 `artifact_archive.required_artifact_paths`
 2. 更新 `coupling_map.md` 第 5 章
-3. 运行 `make validate-workflows` 验证 artifact 路径覆盖
+3. 运行 `python scripts/ci/validate_workflows.py` 验证 artifact 路径覆盖
 
 ### Q: CI 的 acceptance-unified-min 是 "组合式覆盖" 还是 "真实执行 make 目标"？
 
@@ -443,10 +462,11 @@ git checkout -b ci/rename-frozen-step-xxx
 **步骤 4: 本地验证**
 ```bash
 # 必须通过才能提交
-make validate-workflows
+python scripts/ci/validate_workflows.py
+python scripts/ci/check_workflow_contract_docs_sync.py
 
-# 严格模式验证（CI 使用此模式）
-make validate-workflows-strict
+# 完整验证（推荐）
+make ci
 ```
 
 **步骤 5: PR 说明要求**
@@ -469,14 +489,15 @@ PR 描述中必须包含：
 
 ### 6.4 紧急绕过（不推荐）
 
-如遇紧急情况需要绕过冻结检查，可临时使用非严格模式：
+如遇紧急情况需要绕过冻结检查：
 
 ```bash
-# 非严格模式：冻结 step 仍报 ERROR，但其他警告不阻止
-make validate-workflows
+# 冻结 step/job 改名始终报 ERROR，无法绕过
+# 如需紧急修改，必须同步更新合约文件
+python scripts/ci/validate_workflows.py
 ```
 
-> **注意**: CI 始终使用 `make validate-workflows-strict`（严格模式），冻结 step 改名在任何模式下都是 ERROR，无法绕过。如需紧急修改，必须同步更新合约文件。
+> **注意**: CI 始终执行合约校验，冻结 step 改名在任何情况下都是 ERROR，无法绕过。如需紧急修改，必须同步更新 `workflow_contract.v1.json` 和相关文档。
 
 ---
 
@@ -588,7 +609,50 @@ jd /tmp/before.json /tmp/after.json
 
 ---
 
-## 6. 版本控制
+## 6. 变更 SOP 快速检查表
+
+在修改 workflow 或 contract 文件前，请参照此检查表确认版本策略和同步要求。
+
+> **详细版本策略**：参见 [contract.md 第 10 章 SemVer Policy / 版本策略](contract.md#10-semver-policy--版本策略)
+
+### 6.1 版本升级快速判断
+
+| 变更场景 | 版本位 | 说明 |
+|----------|--------|------|
+| 删除/重命名 job、step、output key | **Major** | Breaking change，需评审 |
+| 新增 job、step、frozen step、output key | **Minor** | 功能新增 |
+| 修复错误、完善文档、调整描述 | **Patch** | 仅文档或修复 |
+
+### 6.2 变更前检查项
+
+- [ ] 确认变更类型（Breaking/Feature/Fix）
+- [ ] 按版本策略确定版本升级位
+- [ ] 检查是否涉及 frozen step name（参见 contract.md 第 5 章）
+- [ ] 检查是否涉及 required artifact paths
+
+### 6.3 变更后验证项
+
+```bash
+# 必须通过的验证
+python scripts/ci/validate_workflows.py              # 合约校验
+python scripts/ci/check_workflow_contract_docs_sync.py  # 文档同步校验
+pytest tests/ci/ -q                                   # CI 脚本测试
+
+# 完整 CI 检查（推荐）
+make ci
+```
+
+### 6.4 版本更新清单
+
+变更完成后需同步更新：
+
+1. `scripts/ci/workflow_contract.v1.json` 的 `version` 字段
+2. `docs/ci_nightly_workflow_refactor/contract.md` 第 11 章版本控制表
+3. 相关 changelog 或 PR 描述
+
+---
+
+## 7. 版本控制
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|

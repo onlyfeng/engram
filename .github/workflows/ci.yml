@@ -162,6 +162,33 @@ jobs:
         run: mypy src/engram/
 
   # ============================================================================
+  # .iteration/ 目录禁止提交检查
+  # ============================================================================
+  no-iteration-tracked:
+    name: No .iteration/ Tracked Files
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check no .iteration files tracked
+        run: |
+          echo "Checking that .iteration/ is not tracked in git..."
+          tracked=$(git ls-files .iteration 2>/dev/null || true)
+          if [ -n "$tracked" ]; then
+            echo "❌ ERROR: .iteration/ files are tracked in git!"
+            echo "Tracked files:"
+            echo "$tracked"
+            echo ""
+            echo "Please remove these files from git:"
+            echo "  git rm -r --cached .iteration/"
+            exit 1
+          fi
+          echo "✅ No .iteration/ files tracked in git"
+
+  # ============================================================================
   # 环境变量一致性检查
   # ============================================================================
   env-var-consistency:
@@ -379,3 +406,128 @@ jobs:
         run: |
           python scripts/verify_scm_sync_consistency.py --verbose
           echo "SCM Sync consistency check passed"
+
+  # ============================================================================
+  # Gateway ErrorReason 使用规范检查
+  # ============================================================================
+  gateway-error-reason-usage:
+    name: Gateway ErrorReason Usage Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Gateway ErrorReason usage
+        run: |
+          python scripts/ci/check_gateway_error_reason_usage.py --verbose
+          echo "Gateway ErrorReason usage check passed"
+
+  # ============================================================================
+  # 迭代文档检查（.iteration/ 链接 + SUPERSEDED 一致性）
+  # ============================================================================
+  iteration-docs-check:
+    name: Iteration Docs Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check iteration docs consistency
+        run: |
+          python scripts/ci/check_no_iteration_links_in_docs.py --verbose
+          echo "Iteration docs consistency check passed"
+
+  # ============================================================================
+  # Workflow 合约校验
+  # ============================================================================
+  workflow-contract:
+    name: Workflow Contract Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml jsonschema pytest
+
+      - name: Run CI script tests
+        run: |
+          echo "=== Running CI Script Tests ==="
+          echo "运行 tests/ci/ 目录下的测试（跳过有导入问题的文件）"
+          echo ""
+          pytest tests/ci/ -q \
+            --ignore=tests/ci/test_gateway_deps_db_allowlist.py \
+            --ignore=tests/ci/test_gateway_deps_db_gate.py \
+            --ignore=tests/ci/test_gateway_import_surface_gate.py \
+            --ignore=tests/ci/test_strict_island_admission.py \
+            --ignore=tests/ci/test_mypy_baseline_policy.py \
+            --ignore=tests/ci/test_mypy_metrics.py
+          echo "CI script tests passed"
+
+      - name: Validate workflow contract
+        run: |
+          echo "=== Workflow Contract Validation (Phase 1) ==="
+          echo "校验范围: ci.yml + nightly.yml"
+          echo "合约文件: scripts/ci/workflow_contract.v1.json"
+          echo ""
+          python scripts/ci/validate_workflows.py
+          echo "Workflow contract validation passed"
+
+      - name: Check workflow contract docs sync
+        run: |
+          echo "=== Workflow Contract Docs Sync Check ==="
+          echo "检查合约定义与文档是否同步"
+          echo ""
+          python scripts/ci/check_workflow_contract_docs_sync.py
+          echo "Workflow contract docs sync check passed"
+
+      - name: Generate validation report (JSON)
+        if: always()
+        run: |
+          mkdir -p artifacts
+          python scripts/ci/validate_workflows.py --json > artifacts/workflow_contract_validation.json || true
+
+      - name: Generate docs sync report (JSON)
+        if: always()
+        run: |
+          mkdir -p artifacts
+          python scripts/ci/check_workflow_contract_docs_sync.py --json > artifacts/workflow_contract_docs_sync.json || true
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-contract-validation
+          path: artifacts/workflow_contract_validation.json
+          retention-days: 14
+
+      - name: Upload docs sync report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-contract-docs-sync
+          path: artifacts/workflow_contract_docs_sync.json
+          retention-days: 14

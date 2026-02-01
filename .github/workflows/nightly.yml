@@ -1,0 +1,371 @@
+# Engram Nightly Workflow - Unified Stack 完整验证
+#
+# 功能:
+#   1. 使用 docker compose 启动完整统一栈
+#   2. 运行 FULL profile 集成测试（含降级测试）
+#   3. 运行 verify-unified 完整验证
+#   4. 门禁能力校验：缺失能力必须 fail（不能静默跳过）
+#
+# 触发条件:
+#   - schedule: 每天 UTC 02:00（北京时间 10:00）
+#   - workflow_dispatch: 手动触发
+#
+# 环境要求:
+#   - Docker 和 Docker Compose 可用
+#   - 4 个服务账号密码（使用 CI 固定值）
+
+name: Nightly
+
+on:
+  schedule:
+    # 每天 UTC 02:00 运行（北京时间 10:00）
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_degradation:
+        description: '跳过降级测试（调试用）'
+        type: boolean
+        default: false
+      profile:
+        description: '验证 Profile'
+        type: choice
+        options:
+          - full
+          - standard
+          - http_only
+        default: full
+
+env:
+  # 统一栈服务账号密码（CI 固定值）
+  LOGBOOK_MIGRATOR_PASSWORD: ci_migrator_pwd_123
+  LOGBOOK_SVC_PASSWORD: ci_svc_pwd_123
+  OPENMEMORY_MIGRATOR_PASSWORD: ci_om_migrator_pwd_123
+  OPENMEMORY_SVC_PASSWORD: ci_om_svc_pwd_123
+  # PostgreSQL 配置
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: engram
+  # Gateway 配置
+  GATEWAY_PORT: 8787
+  OM_PORT: 8080
+
+jobs:
+  # ============================================================================
+  # Unified Stack 完整验证
+  # ============================================================================
+  unified-stack-full:
+    name: Unified Stack Full Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[full,dev]"
+
+      # ----------------------------------------------------------------
+      # Gate Contract 能力检测
+      # 在启动服务前，先检测当前环境的能力
+      # ----------------------------------------------------------------
+      - name: Detect environment capabilities
+        id: detect-caps
+        run: |
+          echo "=== 环境能力检测 ==="
+          python scripts/unified_stack_gate_contract.py detect-capabilities --json > caps.json
+          cat caps.json
+          echo ""
+          echo "capabilities_json<<EOF" >> $GITHUB_OUTPUT
+          cat caps.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # ----------------------------------------------------------------
+      # Gate Contract Profile 校验（FULL profile）
+      # 检查 FULL profile 是否可执行，缺失能力必须在此处 fail
+      # ----------------------------------------------------------------
+      - name: Validate gate contract (full profile)
+        id: validate-profile
+        env:
+          GATE_PROFILE: full
+          POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram
+          OPENMEMORY_BASE_URL: http://localhost:8080
+          SKIP_DEGRADATION_TEST: ${{ inputs.skip_degradation && '1' || '0' }}
+        run: |
+          echo "=== Gate Contract 校验（FULL profile）==="
+          echo ""
+          echo "校验策略："
+          echo "  - FULL 模式下，必需能力缺失会导致 CI fail"
+          echo "  - 包括：docker_available, docker_daemon_ok, can_stop_openmemory"
+          echo "  - 包括：db_access_available, postgres_dsn_present"
+          echo ""
+          
+          # 确定 profile
+          PROFILE="${{ inputs.profile || 'full' }}"
+          echo "使用 Profile: $PROFILE"
+          
+          # 运行校验
+          if python scripts/unified_stack_gate_contract.py validate-profile "$PROFILE" --json > validate.json 2>&1; then
+            echo "profile_valid=true" >> $GITHUB_OUTPUT
+            cat validate.json
+          else
+            echo "profile_valid=false" >> $GITHUB_OUTPUT
+            cat validate.json
+            echo ""
+            echo "=========================================="
+            echo "[FAIL] Gate Contract 校验失败"
+            echo "=========================================="
+            echo ""
+            echo "FULL profile 要求的能力未满足。"
+            echo "请检查 CI 环境配置或降级到 standard/http_only profile。"
+            echo ""
+            # FULL profile 校验失败必须阻断
+            if [ "$PROFILE" = "full" ]; then
+              exit 1
+            fi
+          fi
+
+      # ----------------------------------------------------------------
+      # 启动 Docker Compose 统一栈
+      # ----------------------------------------------------------------
+      - name: Start unified stack with Docker Compose
+        run: |
+          echo "=== 启动 Unified Stack ==="
+          echo ""
+          echo "使用 docker-compose.unified.yml 配置"
+          echo "服务账号密码已通过环境变量设置"
+          echo ""
+          
+          # 启动服务
+          docker compose -f docker-compose.unified.yml up -d
+          
+          # 等待服务就绪
+          echo ""
+          echo "等待服务就绪..."
+          sleep 10
+          
+          # 显示服务状态
+          docker compose -f docker-compose.unified.yml ps
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "=== 等待服务健康 ==="
+          
+          # 等待 PostgreSQL
+          echo "等待 PostgreSQL..."
+          for i in {1..30}; do
+            if docker compose -f docker-compose.unified.yml exec -T postgres pg_isready -U postgres; then
+              echo "PostgreSQL 就绪"
+              break
+            fi
+            echo "等待中... ($i/30)"
+            sleep 2
+          done
+          
+          # 等待 Gateway
+          echo ""
+          echo "等待 Gateway..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:${{ env.GATEWAY_PORT }}/health > /dev/null 2>&1; then
+              echo "Gateway 就绪"
+              break
+            fi
+            echo "等待中... ($i/30)"
+            sleep 2
+          done
+          
+          # 等待 OpenMemory
+          echo ""
+          echo "等待 OpenMemory..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:${{ env.OM_PORT }}/health > /dev/null 2>&1; then
+              echo "OpenMemory 就绪"
+              break
+            fi
+            echo "等待中... ($i/30)"
+            sleep 2
+          done
+          
+          echo ""
+          echo "所有服务就绪"
+
+      # ----------------------------------------------------------------
+      # 运行 Gateway 集成测试（FULL profile）
+      # ----------------------------------------------------------------
+      - name: Run Gateway integration tests (full profile)
+        env:
+          POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram
+          TEST_PG_DSN: postgresql://postgres:postgres@localhost:5432/engram
+          TEST_PG_ADMIN_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+          PROJECT_KEY: test
+          GATEWAY_URL: http://localhost:${{ env.GATEWAY_PORT }}
+          OPENMEMORY_BASE_URL: http://localhost:${{ env.OM_PORT }}
+          GATE_PROFILE: ${{ inputs.profile || 'full' }}
+          RUN_INTEGRATION_TESTS: "1"
+          SKIP_DEGRADATION_TEST: ${{ inputs.skip_degradation && '1' || '0' }}
+        run: |
+          echo "=== Gateway 集成测试（FULL profile）==="
+          echo ""
+          echo "环境变量："
+          echo "  GATE_PROFILE=$GATE_PROFILE"
+          echo "  RUN_INTEGRATION_TESTS=$RUN_INTEGRATION_TESTS"
+          echo "  SKIP_DEGRADATION_TEST=$SKIP_DEGRADATION_TEST"
+          echo ""
+          
+          # 运行 unified stack 集成测试
+          pytest tests/gateway/test_unified_stack_integration.py -v \
+            --gate-profile "$GATE_PROFILE" \
+            --junitxml=test-unified-stack-results.xml
+
+      # ----------------------------------------------------------------
+      # 运行 Unified Stack 完整验证
+      # ----------------------------------------------------------------
+      - name: Run unified stack verification (full)
+        env:
+          GATEWAY_URL: http://localhost:${{ env.GATEWAY_PORT }}
+          OPENMEMORY_BASE_URL: http://localhost:${{ env.OM_PORT }}
+          POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram
+          GATE_PROFILE: ${{ inputs.profile || 'full' }}
+          VERIFY_FULL: "1"
+          SKIP_DEGRADATION_TEST: ${{ inputs.skip_degradation && '1' || '0' }}
+        run: |
+          echo "=== Unified Stack 完整验证 ==="
+          echo ""
+          
+          # 创建输出目录
+          mkdir -p .artifacts
+          
+          # 运行验证
+          python scripts/verify_unified_stack.py \
+            --profile "$GATE_PROFILE" \
+            --json-out .artifacts/verify-results.json \
+            --self-check \
+            --verbose
+          
+          # 显示结果
+          echo ""
+          echo "=== 验证结果 ==="
+          cat .artifacts/verify-results.json
+
+      # ----------------------------------------------------------------
+      # 运行 make verify-unified（完整模式）
+      # ----------------------------------------------------------------
+      - name: Run make verify-unified (full mode)
+        env:
+          GATEWAY_URL: http://localhost:${{ env.GATEWAY_PORT }}
+          OPENMEMORY_URL: http://localhost:${{ env.OM_PORT }}
+          POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/engram
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: engram
+          VERIFY_FULL: "1"
+        run: |
+          echo "=== make verify-unified（完整模式）==="
+          make verify-unified
+
+      # ----------------------------------------------------------------
+      # 清理
+      # ----------------------------------------------------------------
+      - name: Stop unified stack
+        if: always()
+        run: |
+          echo "=== 停止 Unified Stack ==="
+          docker compose -f docker-compose.unified.yml down -v || true
+          docker compose -f docker-compose.unified.yml logs > compose-logs.txt 2>&1 || true
+
+      # ----------------------------------------------------------------
+      # 记录 Acceptance Run（用于审计和可复现性）
+      # ----------------------------------------------------------------
+      - name: Record acceptance run
+        if: always()
+        env:
+          GATE_PROFILE: ${{ inputs.profile || 'full' }}
+        run: |
+          echo "=== 记录 Acceptance Run ==="
+          
+          # 确定 result
+          if [ "${{ job.status }}" = "success" ]; then
+            RESULT="PASS"
+          else
+            RESULT="FAIL"
+          fi
+          
+          # 确定 triggered_by
+          TRIGGERED_BY="${{ github.event_name }}"
+          
+          # 记录 acceptance run
+          python scripts/acceptance/record_acceptance_run.py \
+            --name nightly-unified-stack-full \
+            --artifacts-dir .artifacts \
+            --result "$RESULT" \
+            --commit "${{ github.sha }}" \
+            --command "nightly.yml unified-stack-full" \
+            --metadata-kv workflow=nightly \
+            --metadata-kv profile="$GATE_PROFILE" \
+            --metadata-kv triggered_by="$TRIGGERED_BY" \
+            --metadata-kv run_id="${{ github.run_id }}" \
+            --metadata-kv sha="${{ github.sha }}"
+
+      - name: Render acceptance matrix
+        if: always()
+        run: |
+          echo "=== 渲染 Acceptance Matrix ==="
+          python scripts/acceptance/render_acceptance_matrix.py \
+            --output-dir .artifacts \
+            --runs-dir .artifacts/acceptance-runs
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-unified-stack-results
+          path: |
+            test-unified-stack-results.xml
+            .artifacts/verify-results.json
+            .artifacts/acceptance-runs/*
+            .artifacts/acceptance-matrix.md
+            .artifacts/acceptance-matrix.json
+            caps.json
+            validate.json
+            compose-logs.txt
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ============================================================================
+  # Nightly 汇总通知
+  # ============================================================================
+  notify-results:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [unified-stack-full]
+    if: always()
+
+    steps:
+      - name: Check job results
+        run: |
+          echo "=== Nightly 运行结果 ==="
+          echo ""
+          echo "unified-stack-full: ${{ needs.unified-stack-full.result }}"
+          echo ""
+          
+          if [ "${{ needs.unified-stack-full.result }}" = "success" ]; then
+            echo "=========================================="
+            echo "[PASS] Nightly 验证全部通过"
+            echo "=========================================="
+          else
+            echo "=========================================="
+            echo "[FAIL] Nightly 验证失败"
+            echo "=========================================="
+            echo ""
+            echo "请检查 unified-stack-full job 的日志"
+            exit 1
+          fi

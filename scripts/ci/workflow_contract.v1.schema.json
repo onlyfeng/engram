@@ -4,7 +4,7 @@
   "title": "Workflow Contract Schema",
   "description": "JSON Schema for Engram CI/CD workflow contract validation",
   "type": "object",
-  "required": ["version"],
+  "required": ["version", "ci", "nightly", "make", "frozen_step_text", "frozen_job_names"],
   "properties": {
     "$schema": {
       "type": "string",
@@ -43,6 +43,10 @@
     "frozen_step_text": {
       "$ref": "#/definitions/frozen_step_text_definition",
       "description": "Frozen step names that must match exactly"
+    },
+    "frozen_job_names": {
+      "$ref": "#/definitions/frozen_job_names_definition",
+      "description": "Frozen job names that must match exactly"
     }
   },
   "additionalProperties": {
@@ -158,6 +162,21 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Step names that are frozen and must match exactly"
+        }
+      },
+      "additionalProperties": {
+        "description": "Comment fields starting with underscore",
+        "type": "string"
+      }
+    },
+    "frozen_job_names_definition": {
+      "type": "object",
+      "required": ["allowlist"],
+      "properties": {
+        "allowlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Job names that are frozen and must match exactly"
         }
       },
       "additionalProperties": {

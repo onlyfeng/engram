@@ -18,6 +18,7 @@ Workflow Contract Validator
 
 import argparse
 import ast
+import fnmatch
 import json
 import re
 import sys
@@ -30,7 +31,9 @@ import yaml
 # Optional jsonschema support
 try:
     import jsonschema
-    from jsonschema import Draft7Validator, ValidationError as JsonSchemaValidationError
+    from jsonschema import Draft7Validator
+    from jsonschema import ValidationError as JsonSchemaValidationError
+
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
@@ -41,9 +44,11 @@ except ImportError:
 # Data Classes
 # ============================================================================
 
+
 @dataclass
 class ValidationError:
     """验证错误"""
+
     workflow: str
     file: str
     error_type: str  # missing_job, missing_step, missing_output, missing_env_var, step_name_changed, schema_error
@@ -57,6 +62,7 @@ class ValidationError:
 @dataclass
 class ValidationWarning:
     """验证警告（如 step name 变化）"""
+
     workflow: str
     file: str
     warning_type: str
@@ -70,6 +76,7 @@ class ValidationWarning:
 @dataclass
 class ValidationResult:
     """验证结果"""
+
     success: bool
     errors: list[ValidationError] = field(default_factory=list)
     warnings: list[ValidationWarning] = field(default_factory=list)
@@ -93,70 +100,70 @@ MAKE_TARGET_IGNORE_LIST = {
 def parse_makefile_targets(makefile_path: Path) -> set[str]:
     """
     Parse a Makefile to extract all defined target names.
-    
+
     Handles:
     - Regular targets: target: dependencies
     - .PHONY declarations: .PHONY: target1 target2 ...
     - Targets with pattern rules (%)
     - Continuation lines (\\)
-    
+
     Args:
         makefile_path: Path to the Makefile
-        
+
     Returns:
         Set of target names defined in the Makefile
     """
     if not makefile_path.exists():
         return set()
-    
+
     targets = set()
-    
-    with open(makefile_path, 'r', encoding='utf-8') as f:
+
+    with open(makefile_path, "r", encoding="utf-8") as f:
         content = f.read()
-    
+
     # Handle line continuations first
-    content = re.sub(r'\\\n\s*', ' ', content)
-    
-    for line in content.split('\n'):
+    content = re.sub(r"\\\n\s*", " ", content)
+
+    for line in content.split("\n"):
         line = line.strip()
-        
+
         # Skip comments and empty lines
-        if not line or line.startswith('#'):
+        if not line or line.startswith("#"):
             continue
-        
+
         # Match .PHONY declarations
         # .PHONY: target1 target2 target3 ...
-        phony_match = re.match(r'^\.PHONY:\s*(.+)$', line)
+        phony_match = re.match(r"^\.PHONY:\s*(.+)$", line)
         if phony_match:
             phony_targets = phony_match.group(1).split()
             for t in phony_targets:
                 # Skip continuation marker
-                if t != '\\':
+                if t != "\\":
                     targets.add(t)
             continue
-        
+
         # Match regular target definitions
         # target: [dependencies]
         # target:: [dependencies]
-        target_match = re.match(r'^([a-zA-Z0-9_][a-zA-Z0-9_.-]*)::?\s*', line)
+        target_match = re.match(r"^([a-zA-Z0-9_][a-zA-Z0-9_.-]*)::?\s*", line)
         if target_match:
             target_name = target_match.group(1)
             # Skip internal targets (starting with _)
             # But include them in the set for completeness
             targets.add(target_name)
-    
+
     return targets
 
 
 def extract_workflow_make_calls(workflow_path: Path) -> list[dict[str, Any]]:
     """
     Extract make target calls from a GitHub Actions workflow file.
-    
+
     Scans all `run:` commands for `make <target>` patterns.
-    
+
     Args:
         workflow_path: Path to the workflow YAML file
-        
+
     Returns:
         List of dicts with keys:
         - target: The make target name
@@ -167,59 +174,61 @@ def extract_workflow_make_calls(workflow_path: Path) -> list[dict[str, Any]]:
     """
     if not workflow_path.exists():
         return []
-    
-    with open(workflow_path, 'r', encoding='utf-8') as f:
+
+    with open(workflow_path, "r", encoding="utf-8") as f:
         try:
             workflow = yaml.safe_load(f)
         except yaml.YAMLError:
             return []
-    
-    if not workflow or 'jobs' not in workflow:
+
+    if not workflow or "jobs" not in workflow:
         return []
-    
+
     results = []
-    
+
     # Pattern to match make calls:
     # - make target
     # - make target1 target2
     # - make -C dir target (will extract target)
     # - Does NOT match make with variables like make $TARGET
     make_pattern = re.compile(
-        r'\bmake\s+'
-        r'(?:-[a-zA-Z]\s+[^\s]+\s+)*'  # Optional flags like -C dir
-        r'([a-zA-Z][a-zA-Z0-9_-]*)'     # Target name (must start with letter)
+        r"\bmake\s+"
+        r"(?:-[a-zA-Z]\s+[^\s]+\s+)*"  # Optional flags like -C dir
+        r"([a-zA-Z][a-zA-Z0-9_-]*)"  # Target name (must start with letter)
     )
-    
-    for job_id, job_data in workflow.get('jobs', {}).items():
+
+    for job_id, job_data in workflow.get("jobs", {}).items():
         if not isinstance(job_data, dict):
             continue
-        
-        for step in job_data.get('steps', []):
+
+        for step in job_data.get("steps", []):
             if not isinstance(step, dict):
                 continue
-            
-            run_content = step.get('run', '')
+
+            run_content = step.get("run", "")
             if not run_content:
                 continue
-            
-            step_name = step.get('name', '')
-            
+
+            step_name = step.get("name", "")
+
             # Find all make calls in the run content
             for match in make_pattern.finditer(run_content):
                 target = match.group(1)
-                
+
                 # Skip variable expansions
-                if '$' in target or target.startswith('$'):
+                if "$" in target or target.startswith("$"):
                     continue
-                
-                results.append({
-                    'target': target,
-                    'file': str(workflow_path),
-                    'job': job_id,
-                    'step': step_name,
-                    'line_content': match.group(0),
-                })
-    
+
+                results.append(
+                    {
+                        "target": target,
+                        "file": str(workflow_path),
+                        "job": job_id,
+                        "step": step_name,
+                        "line_content": match.group(0),
+                    }
+                )
+
     return results
 
 
@@ -227,13 +236,14 @@ def extract_workflow_make_calls(workflow_path: Path) -> list[dict[str, Any]]:
 # Artifact Path Extraction Utilities
 # ============================================================================
 
+
 def extract_upload_artifact_paths(workflow_data: dict[str, Any]) -> list[dict[str, Any]]:
     """
     从 workflow 中提取所有 actions/upload-artifact 步骤的 path 配置。
-    
+
     Args:
         workflow_data: 解析后的 workflow YAML 数据
-        
+
     Returns:
         List of dicts with keys:
         - job_id: Job ID
@@ -242,118 +252,159 @@ def extract_upload_artifact_paths(workflow_data: dict[str, Any]) -> list[dict[st
         - paths: List of extracted paths (split from multiline)
         - raw_path: Original path value
     """
-    if not workflow_data or 'jobs' not in workflow_data:
+    if not workflow_data or "jobs" not in workflow_data:
         return []
-    
+
     results = []
-    
-    for job_id, job_data in workflow_data.get('jobs', {}).items():
+
+    for job_id, job_data in workflow_data.get("jobs", {}).items():
         if not isinstance(job_data, dict):
             continue
-        
-        for step_index, step in enumerate(job_data.get('steps', [])):
+
+        for step_index, step in enumerate(job_data.get("steps", [])):
             if not isinstance(step, dict):
                 continue
-            
-            uses = step.get('uses', '')
+
+            uses = step.get("uses", "")
             # Match actions/upload-artifact@v* (any version)
-            if not re.match(r'actions/upload-artifact@v\d+', uses):
+            if not re.match(r"actions/upload-artifact@v\d+", uses):
                 continue
-            
-            with_block = step.get('with', {})
+
+            with_block = step.get("with", {})
             if not isinstance(with_block, dict):
                 continue
-            
-            path_value = with_block.get('path', '')
+
+            path_value = with_block.get("path", "")
             if not path_value:
                 continue
-            
+
             # Parse multiline path values (YAML literal or folded)
             # Split by newlines and filter empty lines
             if isinstance(path_value, str):
-                paths = [p.strip() for p in path_value.strip().split('\n') if p.strip()]
+                paths = [p.strip() for p in path_value.strip().split("\n") if p.strip()]
             else:
                 paths = [str(path_value)]
-            
-            results.append({
-                'job_id': job_id,
-                'step_name': step.get('name', ''),
-                'step_index': step_index,
-                'paths': paths,
-                'raw_path': path_value,
-            })
-    
+
+            results.append(
+                {
+                    "job_id": job_id,
+                    "step_name": step.get("name", ""),
+                    "step_index": step_index,
+                    "paths": paths,
+                    "raw_path": path_value,
+                }
+            )
+
     return results
+
+
+def _is_glob_pattern(path: str) -> bool:
+    """
+    检查路径是否包含 glob 模式字符。
+
+    Args:
+        path: 要检查的路径
+
+    Returns:
+        如果路径包含 glob 模式字符 (*?[]) 返回 True
+    """
+    return any(c in path for c in "*?[]")
+
+
+def _path_matches(uploaded: str, required_path: str) -> bool:
+    """
+    检查上传路径是否匹配 required_path。
+
+    匹配规则：
+    1. 如果 required_path 含有 glob 字符 (*?[])，使用 fnmatch.fnmatch
+    2. 如果 required_path 以 '/' 结尾，视为目录匹配：
+       - uploaded 在该目录下（startswith）
+       - 或者 uploaded + '/' == required_path（目录本身）
+    3. 否则做精确匹配
+
+    Args:
+        uploaded: 实际上传的路径
+        required_path: 必需的路径（可能是 glob 模式、目录或文件）
+
+    Returns:
+        如果匹配返回 True
+    """
+    # 规则 1: glob 模式匹配
+    if _is_glob_pattern(required_path):
+        return fnmatch.fnmatch(uploaded, required_path)
+
+    # 规则 2: 目录匹配（以 '/' 结尾）
+    if required_path.endswith("/"):
+        # uploaded 在该目录下
+        if uploaded.startswith(required_path):
+            return True
+        # uploaded + '/' 等于 required_path（目录本身）
+        if uploaded.rstrip("/") + "/" == required_path:
+            return True
+        return False
+
+    # 规则 3: 精确匹配
+    return uploaded == required_path
 
 
 def check_artifact_path_coverage(
     upload_steps: list[dict[str, Any]],
     required_paths: list[str],
-    step_name_filter: Optional[list[str]] = None
+    step_name_filter: Optional[list[str]] = None,
 ) -> tuple[list[str], list[str]]:
     """
     检查 required_paths 是否被 upload steps 覆盖。
-    
+
+    匹配规则：
+    1. 如果 required_path 含有 glob 字符 (*?[])，使用 fnmatch.fnmatch
+    2. 如果 required_path 以 '/' 结尾，视为目录匹配
+    3. 否则做精确匹配
+
     Args:
         upload_steps: extract_upload_artifact_paths 的返回结果
         required_paths: 必需的 artifact 路径列表
         step_name_filter: 可选的 step name 过滤器（仅检查这些 step）
-        
+
     Returns:
         Tuple of (covered_paths, missing_paths)
     """
     # 收集所有上传的路径
     all_uploaded_paths: set[str] = set()
-    
+
     for step in upload_steps:
         # 如果有 step name 过滤器，只检查匹配的 step
         if step_name_filter:
-            step_name = step.get('step_name', '')
+            step_name = step.get("step_name", "")
             if not any(
-                filter_name.lower() in step_name.lower() 
-                for filter_name in step_name_filter
+                filter_name.lower() in step_name.lower() for filter_name in step_name_filter
             ):
                 continue
-        
-        for path in step.get('paths', []):
+
+        for path in step.get("paths", []):
             all_uploaded_paths.add(path)
-    
+
     covered = []
     missing = []
-    
+
     for required_path in required_paths:
-        # 检查是否有完全匹配或前缀匹配
-        # 例如 .artifacts/acceptance-runs/ 可以匹配 .artifacts/acceptance-runs/
-        # 或者 .artifacts/verify-results.json 可以匹配 .artifacts/verify-results.json
         found = False
         for uploaded in all_uploaded_paths:
-            # 精确匹配
-            if uploaded == required_path:
+            if _path_matches(uploaded, required_path):
                 found = True
                 break
-            # 前缀匹配（路径包含）
-            if required_path.endswith('/'):
-                # 目录路径：检查上传路径是否以此开头或等于
-                if uploaded.startswith(required_path) or uploaded.rstrip('/') + '/' == required_path:
-                    found = True
-                    break
-            else:
-                # 文件路径：检查上传路径是否包含此文件
-                if uploaded.endswith(required_path) or required_path in uploaded:
-                    found = True
-                    break
-        
+
         if found:
             covered.append(required_path)
         else:
             missing.append(required_path)
-    
+
     return covered, missing
 
 
 # ============================================================================
 # Workflow Validator
 # ============================================================================
+
 
 class WorkflowContractValidator:
     """Workflow 合约验证器"""
@@ -369,112 +420,128 @@ class WorkflowContractValidator:
     def load_contract(self) -> bool:
         """加载合约文件"""
         if not self.contract_path.exists():
-            self.result.errors.append(ValidationError(
-                workflow="",
-                file=str(self.contract_path),
-                error_type="contract_not_found",
-                key="",
-                message=f"Contract file not found: {self.contract_path}"
-            ))
+            self.result.errors.append(
+                ValidationError(
+                    workflow="",
+                    file=str(self.contract_path),
+                    error_type="contract_not_found",
+                    key="",
+                    message=f"Contract file not found: {self.contract_path}",
+                )
+            )
             self.result.success = False
             return False
 
         try:
-            with open(self.contract_path, 'r', encoding='utf-8') as f:
+            with open(self.contract_path, "r", encoding="utf-8") as f:
                 self.contract = json.load(f)
-            
+
             # 加载 frozen_step_text.allowlist
             frozen_step_text = self.contract.get("frozen_step_text", {})
             self.frozen_steps = set(frozen_step_text.get("allowlist", []))
-            
+
             # 加载 frozen_job_names.allowlist（如果存在）
             frozen_job_names_config = self.contract.get("frozen_job_names", {})
             self.frozen_job_names = set(frozen_job_names_config.get("allowlist", []))
-            
+
             return True
         except json.JSONDecodeError as e:
-            self.result.errors.append(ValidationError(
-                workflow="",
-                file=str(self.contract_path),
-                error_type="contract_parse_error",
-                key="",
-                message=f"Failed to parse contract JSON: {e}"
-            ))
+            self.result.errors.append(
+                ValidationError(
+                    workflow="",
+                    file=str(self.contract_path),
+                    error_type="contract_parse_error",
+                    key="",
+                    message=f"Failed to parse contract JSON: {e}",
+                )
+            )
             self.result.success = False
             return False
 
     def validate_schema(self) -> bool:
         """
         使用 JSON Schema 校验合约文件结构。
-        
+
         如果存在 schema 文件且已安装 jsonschema 库，则执行校验。
         校验失败会添加详细错误信息（字段路径/期望/实际）。
-        
+
         Returns:
             bool: 校验通过返回 True，失败返回 False
         """
         # 查找 schema 文件（与 contract 同目录）
         schema_path = self.contract_path.parent / "workflow_contract.v1.schema.json"
-        
+
         if not schema_path.exists():
             # schema 文件不存在，跳过校验
             return True
-        
+
         if not HAS_JSONSCHEMA:
             # jsonschema 库未安装，添加警告但不阻止
-            self.result.warnings.append(ValidationWarning(
-                workflow="",
-                file=str(schema_path),
-                warning_type="schema_skip",
-                key="jsonschema",
-                message="jsonschema library not installed, skipping schema validation"
-            ))
+            self.result.warnings.append(
+                ValidationWarning(
+                    workflow="",
+                    file=str(schema_path),
+                    warning_type="schema_skip",
+                    key="jsonschema",
+                    message="jsonschema library not installed, skipping schema validation",
+                )
+            )
             return True
-        
+
         # 加载 schema
         try:
-            with open(schema_path, 'r', encoding='utf-8') as f:
+            with open(schema_path, "r", encoding="utf-8") as f:
                 schema = json.load(f)
         except json.JSONDecodeError as e:
-            self.result.errors.append(ValidationError(
-                workflow="",
-                file=str(schema_path),
-                error_type="schema_parse_error",
-                key="",
-                message=f"Failed to parse schema JSON: {e}"
-            ))
+            self.result.errors.append(
+                ValidationError(
+                    workflow="",
+                    file=str(schema_path),
+                    error_type="schema_parse_error",
+                    key="",
+                    message=f"Failed to parse schema JSON: {e}",
+                )
+            )
             self.result.success = False
             return False
-        
+
         # 执行 schema 校验
         validator = Draft7Validator(schema)
         errors = list(validator.iter_errors(self.contract))
-        
+
         if errors:
             for error in errors:
                 # 构建字段路径
-                path = ".".join(str(p) for p in error.absolute_path) if error.absolute_path else "(root)"
-                
+                path = (
+                    ".".join(str(p) for p in error.absolute_path)
+                    if error.absolute_path
+                    else "(root)"
+                )
+
                 # 获取期望和实际值
                 expected = self._format_schema_expected(error)
-                actual = self._format_value(error.instance) if error.instance is not None else "null"
-                
-                self.result.errors.append(ValidationError(
-                    workflow="",
-                    file=str(self.contract_path),
-                    error_type="schema_error",
-                    key=path,
-                    message=error.message,
-                    expected=expected,
-                    actual=actual,
-                    location=f"$.{path}" if path != "(root)" else "$"
-                ))
-            
+                actual = (
+                    self._format_value(error.instance) if error.instance is not None else "null"
+                )
+
+                self.result.errors.append(
+                    ValidationError(
+                        workflow="",
+                        file=str(self.contract_path),
+                        error_type="schema_error",
+                        key=path,
+                        message=error.message,
+                        expected=expected,
+                        actual=actual,
+                        location=f"$.{path}" if path != "(root)" else "$",
+                    )
+                )
+
             self.result.success = False
             return False
-        
+
         return True
-    
+
     def _format_schema_expected(self, error: "JsonSchemaValidationError") -> str:
         """格式化 schema 校验的期望值描述"""
         if error.validator == "type":
@@ -489,7 +556,7 @@ class WorkflowContractValidator:
             return "no additional properties allowed"
         else:
             return str(error.validator_value) if error.validator_value else "(see schema)"
-    
+
     def _format_value(self, value: Any) -> str:
         """格式化值用于显示"""
         if isinstance(value, str):
@@ -505,16 +572,18 @@ class WorkflowContractValidator:
             return None
 
         try:
-            with open(workflow_file, 'r', encoding='utf-8') as f:
+            with open(workflow_file, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f)
         except yaml.YAMLError as e:
-            self.result.errors.append(ValidationError(
-                workflow="",
-                file=str(workflow_file),
-                error_type="workflow_parse_error",
-                key="",
-                message=f"Failed to parse workflow YAML: {e}"
-            ))
+            self.result.errors.append(
+                ValidationError(
+                    workflow="",
+                    file=str(workflow_file),
+                    error_type="workflow_parse_error",
+                    key="",
+                    message=f"Failed to parse workflow YAML: {e}",
+                )
+            )
             return None
 
     def validate_job(
@@ -522,7 +591,7 @@ class WorkflowContractValidator:
         workflow_name: str,
         workflow_file: str,
         workflow_data: dict[str, Any],
-        job_contract: dict[str, Any]
+        job_contract: dict[str, Any],
     ) -> bool:
         """验证单个 job"""
         job_id = job_contract["id"]
@@ -534,15 +603,17 @@ class WorkflowContractValidator:
 
         # 检查 job 是否存在
         if job_id not in jobs:
-            self.result.errors.append(ValidationError(
-                workflow=workflow_name,
-                file=workflow_file,
-                error_type="missing_job",
-                key=job_id,
-                message=f"Required job '{job_id}' not found in workflow",
-                expected=job_name,
-                location=f"jobs.{job_id}"
-            ))
+            self.result.errors.append(
+                ValidationError(
+                    workflow=workflow_name,
+                    file=workflow_file,
+                    error_type="missing_job",
+                    key=job_id,
+                    message=f"Required job '{job_id}' not found in workflow",
+                    expected=job_name,
+                    location=f"jobs.{job_id}",
+                )
+            )
             self.result.success = False
             return False
 
@@ -551,16 +622,18 @@ class WorkflowContractValidator:
 
         # 检查 job name 是否匹配（警告级别）
         if job_name and actual_job_name != job_name:
-            self.result.warnings.append(ValidationWarning(
-                workflow=workflow_name,
-                file=workflow_file,
-                warning_type="job_name_changed",
-                key=job_id,
-                message=f"Job name changed for '{job_id}'",
-                old_value=job_name,
-                new_value=actual_job_name,
-                location=f"jobs.{job_id}.name"
-            ))
+            self.result.warnings.append(
+                ValidationWarning(
+                    workflow=workflow_name,
+                    file=workflow_file,
+                    warning_type="job_name_changed",
+                    key=job_id,
+                    message=f"Job name changed for '{job_id}'",
+                    old_value=job_name,
+                    new_value=actual_job_name,
+                    location=f"jobs.{job_id}.name",
+                )
+            )
 
         # 获取实际 step names
         actual_steps = job_data.get("steps", [])
@@ -571,71 +644,79 @@ class WorkflowContractValidator:
             if required_step not in actual_step_names:
                 # 尝试模糊匹配（部分匹配）
                 fuzzy_match = self._find_fuzzy_match(required_step, actual_step_names)
-                
+
                 # 检查是否属于冻结的 step name
                 is_frozen = required_step in self.frozen_steps
-                
+
                 if fuzzy_match:
                     if is_frozen:
                         # 冻结的 step name 改名：报告为 ERROR
-                        self.result.errors.append(ValidationError(
-                            workflow=workflow_name,
-                            file=workflow_file,
-                            error_type="frozen_step_name_changed",
-                            key=required_step,
-                            message=(
-                                f"Frozen step '{required_step}' was renamed to '{fuzzy_match}' in job '{job_id}'. "
-                                f"此 step 属于冻结文案，不能改名。如确需改名，请执行以下步骤:\n"
-                                f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
-                                f"     - frozen_step_text.allowlist: 添加新名称，移除旧名称\n"
-                                f"     - required_jobs[].required_steps: 如有引用，同步更新\n"
-                                f"  2. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
-                                f"     - 第 6 章 '禁止回归的 Step 文本范围'\n"
-                                f"  3. 运行 make validate-workflows 验证\n"
-                                f"  4. 详见 docs/ci_nightly_workflow_refactor/maintenance.md"
-                            ),
-                            expected=required_step,
-                            actual=fuzzy_match,
-                            location=f"jobs.{job_id}.steps"
-                        ))
+                        self.result.errors.append(
+                            ValidationError(
+                                workflow=workflow_name,
+                                file=workflow_file,
+                                error_type="frozen_step_name_changed",
+                                key=required_step,
+                                message=(
+                                    f"Frozen step '{required_step}' was renamed to '{fuzzy_match}' in job '{job_id}'. "
+                                    f"此 step 属于冻结文案，不能改名。如确需改名，请执行以下步骤:\n"
+                                    f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
+                                    f"     - frozen_step_text.allowlist: 添加新名称，移除旧名称\n"
+                                    f"     - required_jobs[].required_steps: 如有引用，同步更新\n"
+                                    f"  2. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
+                                    f"     - 第 6 章 '禁止回归的 Step 文本范围'\n"
+                                    f"  3. 运行 make validate-workflows 验证\n"
+                                    f"  4. 详见 docs/ci_nightly_workflow_refactor/maintenance.md"
+                                ),
+                                expected=required_step,
+                                actual=fuzzy_match,
+                                location=f"jobs.{job_id}.steps",
+                            )
+                        )
                         self.result.success = False
                     else:
                         # 非冻结的 step name 改名：仅 WARNING
-                        self.result.warnings.append(ValidationWarning(
+                        self.result.warnings.append(
+                            ValidationWarning(
+                                workflow=workflow_name,
+                                file=workflow_file,
+                                warning_type="step_name_changed",
+                                key=required_step,
+                                message=f"Step name changed in job '{job_id}'",
+                                old_value=required_step,
+                                new_value=fuzzy_match,
+                                location=f"jobs.{job_id}.steps",
+                            )
+                        )
+                else:
+                    self.result.errors.append(
+                        ValidationError(
                             workflow=workflow_name,
                             file=workflow_file,
-                            warning_type="step_name_changed",
+                            error_type="missing_step",
                             key=required_step,
-                            message=f"Step name changed in job '{job_id}'",
-                            old_value=required_step,
-                            new_value=fuzzy_match,
-                            location=f"jobs.{job_id}.steps"
-                        ))
-                else:
-                    self.result.errors.append(ValidationError(
-                        workflow=workflow_name,
-                        file=workflow_file,
-                        error_type="missing_step",
-                        key=required_step,
-                        message=f"Required step '{required_step}' not found in job '{job_id}'",
-                        expected=required_step,
-                        location=f"jobs.{job_id}.steps"
-                    ))
+                            message=f"Required step '{required_step}' not found in job '{job_id}'",
+                            expected=required_step,
+                            location=f"jobs.{job_id}.steps",
+                        )
+                    )
                     self.result.success = False
 
         # 检查 required outputs
         job_outputs = job_data.get("outputs", {})
         for required_output in required_outputs:
             if required_output not in job_outputs:
-                self.result.errors.append(ValidationError(
-                    workflow=workflow_name,
-                    file=workflow_file,
-                    error_type="missing_output",
-                    key=required_output,
-                    message=f"Required output '{required_output}' not found in job '{job_id}'",
-                    expected=required_output,
-                    location=f"jobs.{job_id}.outputs.{required_output}"
-                ))
+                self.result.errors.append(
+                    ValidationError(
+                        workflow=workflow_name,
+                        file=workflow_file,
+                        error_type="missing_output",
+                        key=required_output,
+                        message=f"Required output '{required_output}' not found in job '{job_id}'",
+                        expected=required_output,
+                        location=f"jobs.{job_id}.outputs.{required_output}",
+                    )
+                )
                 self.result.success = False
 
         return True
@@ -645,22 +726,24 @@ class WorkflowContractValidator:
         workflow_name: str,
         workflow_file: str,
         workflow_data: dict[str, Any],
-        required_env_vars: list[str]
+        required_env_vars: list[str],
     ) -> bool:
         """验证全局环境变量"""
         env = workflow_data.get("env", {})
 
         for required_var in required_env_vars:
             if required_var not in env:
-                self.result.errors.append(ValidationError(
-                    workflow=workflow_name,
-                    file=workflow_file,
-                    error_type="missing_env_var",
-                    key=required_var,
-                    message=f"Required environment variable '{required_var}' not found",
-                    expected=required_var,
-                    location="env"
-                ))
+                self.result.errors.append(
+                    ValidationError(
+                        workflow=workflow_name,
+                        file=workflow_file,
+                        error_type="missing_env_var",
+                        key=required_var,
+                        message=f"Required environment variable '{required_var}' not found",
+                        expected=required_var,
+                        location="env",
+                    )
+                )
                 self.result.success = False
 
         return True
@@ -670,102 +753,108 @@ class WorkflowContractValidator:
         workflow_name: str,
         workflow_file: str,
         workflow_data: dict[str, Any],
-        workflow_contract: dict[str, Any]
+        workflow_contract: dict[str, Any],
     ) -> bool:
         """
         验证 job_ids 和 job_names 的一致性。
-        
+
         - 校验 contract.job_ids 中的每个 id 都存在于 workflow 的 jobs 中
         - 校验 contract.job_names 与实际 jobs.<id>.name 的映射一致
         - job name 改动的容忍策略与 frozen 规则一致
-        
+
         Args:
             workflow_name: workflow 名称
             workflow_file: workflow 文件路径
             workflow_data: 解析后的 workflow 数据
             workflow_contract: workflow 合约定义
-            
+
         Returns:
             bool: 校验通过返回 True
         """
         job_ids = workflow_contract.get("job_ids", [])
         job_names = workflow_contract.get("job_names", [])
-        
+
         if not job_ids:
             return True
-        
+
         jobs = workflow_data.get("jobs", {})
         all_valid = True
-        
+
         # 建立 job_id -> expected_job_name 的映射
         # job_ids 和 job_names 是位置对应的
         job_id_to_name: dict[str, str] = {}
         for i, job_id in enumerate(job_ids):
             if i < len(job_names):
                 job_id_to_name[job_id] = job_names[i]
-        
+
         # 校验每个 job_id 是否存在
         for job_id in job_ids:
             if job_id not in jobs:
-                self.result.errors.append(ValidationError(
-                    workflow=workflow_name,
-                    file=workflow_file,
-                    error_type="missing_job_id",
-                    key=job_id,
-                    message=f"Required job id '{job_id}' not found in workflow jobs",
-                    expected=job_id,
-                    location=f"jobs.{job_id}"
-                ))
+                self.result.errors.append(
+                    ValidationError(
+                        workflow=workflow_name,
+                        file=workflow_file,
+                        error_type="missing_job_id",
+                        key=job_id,
+                        message=f"Required job id '{job_id}' not found in workflow jobs",
+                        expected=job_id,
+                        location=f"jobs.{job_id}",
+                    )
+                )
                 self.result.success = False
                 all_valid = False
                 continue
-            
+
             # 校验 job name 一致性
             expected_name = job_id_to_name.get(job_id)
             if expected_name:
                 actual_name = jobs[job_id].get("name", "")
-                
+
                 if actual_name != expected_name:
                     # 检查是否属于冻结的 job name
                     is_frozen = expected_name in self.frozen_job_names
-                    
+
                     if is_frozen:
                         # 冻结的 job name 改名：报告为 ERROR
-                        self.result.errors.append(ValidationError(
-                            workflow=workflow_name,
-                            file=workflow_file,
-                            error_type="frozen_job_name_changed",
-                            key=job_id,
-                            message=(
-                                f"Frozen job name '{expected_name}' was changed to '{actual_name}' "
-                                f"for job '{job_id}'. 此 job name 属于冻结文案，不能改名。如确需改名，请执行以下步骤:\n"
-                                f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
-                                f"     - frozen_job_names.allowlist: 添加新名称，移除旧名称\n"
-                                f"     - job_names[]: 同步更新对应位置\n"
-                                f"  2. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
-                                f"     - 第 2 章 'Job ID 与 Job Name 对照表'\n"
-                                f"  3. 运行 make validate-workflows 验证\n"
-                                f"  4. 详见 docs/ci_nightly_workflow_refactor/maintenance.md"
-                            ),
-                            expected=expected_name,
-                            actual=actual_name,
-                            location=f"jobs.{job_id}.name"
-                        ))
+                        self.result.errors.append(
+                            ValidationError(
+                                workflow=workflow_name,
+                                file=workflow_file,
+                                error_type="frozen_job_name_changed",
+                                key=job_id,
+                                message=(
+                                    f"Frozen job name '{expected_name}' was changed to '{actual_name}' "
+                                    f"for job '{job_id}'. 此 job name 属于冻结文案，不能改名。如确需改名，请执行以下步骤:\n"
+                                    f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
+                                    f"     - frozen_job_names.allowlist: 添加新名称，移除旧名称\n"
+                                    f"     - job_names[]: 同步更新对应位置\n"
+                                    f"  2. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
+                                    f"     - 第 2 章 'Job ID 与 Job Name 对照表'\n"
+                                    f"  3. 运行 make validate-workflows 验证\n"
+                                    f"  4. 详见 docs/ci_nightly_workflow_refactor/maintenance.md"
+                                ),
+                                expected=expected_name,
+                                actual=actual_name,
+                                location=f"jobs.{job_id}.name",
+                            )
+                        )
                         self.result.success = False
                         all_valid = False
                     else:
                         # 非冻结的 job name 改名：仅 WARNING
-                        self.result.warnings.append(ValidationWarning(
-                            workflow=workflow_name,
-                            file=workflow_file,
-                            warning_type="job_name_mismatch",
-                            key=job_id,
-                            message=f"Job name mismatch for '{job_id}' (from job_ids/job_names contract)",
-                            old_value=expected_name,
-                            new_value=actual_name,
-                            location=f"jobs.{job_id}.name"
-                        ))
-        
+                        self.result.warnings.append(
+                            ValidationWarning(
+                                workflow=workflow_name,
+                                file=workflow_file,
+                                warning_type="job_name_mismatch",
+                                key=job_id,
+                                message=f"Job name mismatch for '{job_id}' (from job_ids/job_names contract)",
+                                old_value=expected_name,
+                                new_value=actual_name,
+                                location=f"jobs.{job_id}.name",
+                            )
+                        )
+
         return all_valid
 
     def validate_artifact_archive(
@@ -773,69 +862,69 @@ class WorkflowContractValidator:
         workflow_name: str,
         workflow_file: str,
         workflow_data: dict[str, Any],
-        artifact_contract: dict[str, Any]
+        artifact_contract: dict[str, Any],
     ) -> bool:
         """
         验证 artifact archive 合约。
-        
+
         检查 workflow 中的 actions/upload-artifact 步骤是否覆盖了
         required_artifact_paths 中定义的路径。
-        
+
         Args:
             workflow_name: workflow 名称
             workflow_file: workflow 文件路径
             workflow_data: 解析后的 workflow 数据
             artifact_contract: artifact_archive 合约定义
-            
+
         Returns:
             bool: 校验通过返回 True
         """
         required_paths = artifact_contract.get("required_artifact_paths", [])
         if not required_paths:
             return True
-        
+
         step_name_filter = artifact_contract.get("artifact_step_names")
-        
+
         # 提取所有 upload-artifact 步骤的路径
         upload_steps = extract_upload_artifact_paths(workflow_data)
-        
+
         # 检查覆盖情况
         covered, missing = check_artifact_path_coverage(
-            upload_steps, 
-            required_paths, 
-            step_name_filter
+            upload_steps, required_paths, step_name_filter
         )
-        
+
         if missing:
             # 构建详细的错误信息
             step_filter_info = ""
             if step_name_filter:
                 step_filter_info = f" (仅检查步骤: {', '.join(step_name_filter)})"
-            
+
             # 收集实际上传的路径用于诊断
             actual_paths = set()
             for step in upload_steps:
-                for path in step.get('paths', []):
+                for path in step.get("paths", []):
                     actual_paths.add(path)
-            
+
             for missing_path in missing:
-                self.result.errors.append(ValidationError(
-                    workflow=workflow_name,
-                    file=workflow_file,
-                    error_type="missing_artifact_path",
-                    key=missing_path,
-                    message=(
-                        f"Required artifact path '{missing_path}' is not uploaded in workflow{step_filter_info}. "
-                        f"Please ensure an upload-artifact step includes this path in its 'with.path' configuration."
-                    ),
-                    expected=missing_path,
-                    actual=f"Uploaded paths: {', '.join(sorted(actual_paths)) or '(none)'}",
-                    location="artifact_archive.required_artifact_paths"
-                ))
-            
+                self.result.errors.append(
+                    ValidationError(
+                        workflow=workflow_name,
+                        file=workflow_file,
+                        error_type="missing_artifact_path",
+                        key=missing_path,
+                        message=(
+                            f"Required artifact path '{missing_path}' is not uploaded in workflow{step_filter_info}. "
+                            f"Please ensure an upload-artifact step includes this path in its 'with.path' configuration."
+                        ),
+                        expected=missing_path,
+                        actual=f"Uploaded paths: {', '.join(sorted(actual_paths)) or '(none)'}",
+                        location="artifact_archive.required_artifact_paths",
+                    )
+                )
+
             self.result.success = False
             return False
-        
+
         return True
 
     def validate_workflow(self, workflow_name: str, workflow_contract: dict[str, Any]) -> bool:
@@ -844,13 +933,15 @@ class WorkflowContractValidator:
         workflow_path = self.workspace_root / workflow_file
 
         if not workflow_path.exists():
-            self.result.errors.append(ValidationError(
-                workflow=workflow_name,
-                file=workflow_file,
-                error_type="workflow_not_found",
-                key="",
-                message=f"Workflow file not found: {workflow_file}"
-            ))
+            self.result.errors.append(
+                ValidationError(
+                    workflow=workflow_name,
+                    file=workflow_file,
+                    error_type="workflow_not_found",
+                    key="",
+                    message=f"Workflow file not found: {workflow_file}",
+                )
+            )
             self.result.success = False
             self.result.skipped_workflows.append(workflow_name)
             return False
@@ -863,7 +954,9 @@ class WorkflowContractValidator:
         self.result.validated_workflows.append(workflow_name)
 
         # 验证 job_ids 和 job_names（如果存在）
-        self.validate_job_ids_and_names(workflow_name, workflow_file, workflow_data, workflow_contract)
+        self.validate_job_ids_and_names(
+            workflow_name, workflow_file, workflow_data, workflow_contract
+        )
 
         # 验证 required jobs
         for job_contract in workflow_contract.get("required_jobs", []):
@@ -877,7 +970,9 @@ class WorkflowContractValidator:
         # 验证 artifact archive（如果定义）
         artifact_contract = workflow_contract.get("artifact_archive")
         if artifact_contract:
-            self.validate_artifact_archive(workflow_name, workflow_file, workflow_data, artifact_contract)
+            self.validate_artifact_archive(
+                workflow_name, workflow_file, workflow_data, artifact_contract
+            )
 
         return True
 
@@ -895,13 +990,21 @@ class WorkflowContractValidator:
         # 1. v1.0: {"workflows": {"ci": {...}, "nightly": {...}}}
         # 2. v1.1+: {"ci": {...}, "nightly": {...}} (无 workflows 包装)
         workflows = self.contract.get("workflows", {})
-        
+
         if not workflows:
             # v1.1+ 格式：直接从顶层获取 workflow 定义
             # 排除元数据字段
-            meta_keys = {"$schema", "version", "description", "last_updated", 
-                        "make", "frozen_step_text", "step_name_aliases",
-                        "_changelog_v1.3.0", "_changelog_v1.4.0"}
+            meta_keys = {
+                "$schema",
+                "version",
+                "description",
+                "last_updated",
+                "make",
+                "frozen_step_text",
+                "step_name_aliases",
+                "_changelog_v1.3.0",
+                "_changelog_v1.4.0",
+            }
             for key, value in self.contract.items():
                 if key not in meta_keys and isinstance(value, dict) and "file" in value:
                     workflows[key] = value
@@ -914,7 +1017,7 @@ class WorkflowContractValidator:
         # 检查 make.targets_required 中的 targets 是否都在 Makefile 中定义
         # =======================================================================
         self.validate_makefile_targets()
-        
+
         # =======================================================================
         # 校验 B: workflow -> contract
         # 检查 workflow 中的 make 调用是否都在 make.targets_required 中声明
@@ -957,236 +1060,248 @@ class WorkflowContractValidator:
     def validate_makefile_targets(self) -> bool:
         """
         验证 contract 中定义的 make.targets_required 是否都在 Makefile 中定义。
-        
+
         校验类型 A: contract -> Makefile
-        
+
         Returns:
             bool: 所有 targets 都存在返回 True
         """
         make_config = self.contract.get("make", {})
         targets_required = make_config.get("targets_required", [])
-        
+
         if not targets_required:
             return True
-        
+
         # 解析 Makefile
         makefile_path = self.workspace_root / "Makefile"
         makefile_targets = parse_makefile_targets(makefile_path)
-        
+
         if not makefile_targets:
-            self.result.errors.append(ValidationError(
-                workflow="",
-                file="Makefile",
-                error_type="makefile_not_found",
-                key="",
-                message="Makefile not found or empty"
-            ))
+            self.result.errors.append(
+                ValidationError(
+                    workflow="",
+                    file="Makefile",
+                    error_type="makefile_not_found",
+                    key="",
+                    message="Makefile not found or empty",
+                )
+            )
             self.result.success = False
             return False
-        
+
         all_found = True
         for target in targets_required:
             if target not in makefile_targets:
-                self.result.errors.append(ValidationError(
-                    workflow="",
-                    file="Makefile",
-                    error_type="missing_makefile_target",
-                    key=target,
-                    message=(
-                        f"ERROR: Required make target '{target}' not found in Makefile. "
-                        f"If you removed this target, please update workflow_contract.v1.json "
-                        f"to remove it from make.targets_required."
-                    ),
-                    expected=target,
-                    location="make.targets_required"
-                ))
+                self.result.errors.append(
+                    ValidationError(
+                        workflow="",
+                        file="Makefile",
+                        error_type="missing_makefile_target",
+                        key=target,
+                        message=(
+                            f"ERROR: Required make target '{target}' not found in Makefile. "
+                            f"If you removed this target, please update workflow_contract.v1.json "
+                            f"to remove it from make.targets_required."
+                        ),
+                        expected=target,
+                        location="make.targets_required",
+                    )
+                )
                 self.result.success = False
                 all_found = False
-        
+
         return all_found
 
     def validate_workflow_make_calls(
-        self,
-        workflow_files: Optional[list[str]] = None,
-        ignore_list: Optional[set[str]] = None
+        self, workflow_files: Optional[list[str]] = None, ignore_list: Optional[set[str]] = None
     ) -> bool:
         """
         验证 workflow 文件中的 make 调用是否都在 contract 的 make.targets_required 中。
-        
+
         校验类型 B: workflow -> contract
-        
+
         Args:
             workflow_files: 要扫描的 workflow 文件列表（相对路径），默认为 ci/nightly/release
             ignore_list: 要忽略的 target 列表（用于 make -C 或变量展开场景）
-            
+
         Returns:
             bool: 所有调用的 targets 都在 contract 中返回 True
         """
         make_config = self.contract.get("make", {})
         targets_required = set(make_config.get("targets_required", []))
-        
+
         if workflow_files is None:
             workflow_files = [
                 ".github/workflows/ci.yml",
                 ".github/workflows/nightly.yml",
                 ".github/workflows/release.yml",
             ]
-        
+
         if ignore_list is None:
             ignore_list = MAKE_TARGET_IGNORE_LIST
-        
+
         all_valid = True
-        
+
         for workflow_file in workflow_files:
             workflow_path = self.workspace_root / workflow_file
             make_calls = extract_workflow_make_calls(workflow_path)
-            
+
             for call in make_calls:
-                target = call['target']
-                
+                target = call["target"]
+
                 # 跳过 ignore list 中的 targets
                 if target in ignore_list:
                     continue
-                
+
                 # 检查 target 是否在 contract 的 targets_required 中
                 if target not in targets_required:
-                    self.result.errors.append(ValidationError(
-                        workflow=workflow_file,
-                        file=call['file'],
-                        error_type="undeclared_make_target",
-                        key=target,
-                        message=(
-                            f"ERROR: make target '{target}' called in workflow but not declared "
-                            f"in workflow_contract.v1.json make.targets_required. "
-                            f"Job: {call['job']}, Step: {call['step'] or '(unnamed)'}. "
-                            f"Please add '{target}' to make.targets_required or add it to the ignore list."
-                        ),
-                        expected=f"Target in make.targets_required",
-                        actual=target,
-                        location=f"jobs.{call['job']}.steps"
-                    ))
+                    self.result.errors.append(
+                        ValidationError(
+                            workflow=workflow_file,
+                            file=call["file"],
+                            error_type="undeclared_make_target",
+                            key=target,
+                            message=(
+                                f"ERROR: make target '{target}' called in workflow but not declared "
+                                f"in workflow_contract.v1.json make.targets_required. "
+                                f"Job: {call['job']}, Step: {call['step'] or '(unnamed)'}. "
+                                f"Please add '{target}' to make.targets_required or add it to the ignore list."
+                            ),
+                            expected="Target in make.targets_required",
+                            actual=target,
+                            location=f"jobs.{call['job']}.steps",
+                        )
+                    )
                     self.result.success = False
                     all_valid = False
-        
+
         return all_valid
 
     def validate_ci_labels(self) -> bool:
         """
         验证 contract.ci.labels 与 gh_pr_labels_to_outputs.py 中 LABEL_* 常量的一致性。
-        
+
         校验类型 C: contract <-> script LABEL_* constants
-        
+
         确保 PR label 定义在 contract 和解析脚本中保持同步。
-        
+
         Returns:
             bool: 标签集合一致返回 True，不一致返回 False
         """
         # 获取 contract 中的 labels
         ci_config = self.contract.get("ci", {})
         contract_labels = set(ci_config.get("labels", []))
-        
+
         if not contract_labels:
             # contract 中没有定义 labels，跳过检查
             return True
-        
+
         # 解析 gh_pr_labels_to_outputs.py 中的 LABEL_* 常量
         script_path = self.workspace_root / "scripts" / "ci" / "gh_pr_labels_to_outputs.py"
         script_labels = self._parse_label_constants_from_script(script_path)
-        
+
         if script_labels is None:
             # 脚本不存在或解析失败，报告警告但不阻止
-            self.result.warnings.append(ValidationWarning(
-                workflow="ci",
-                file=str(script_path),
-                warning_type="label_script_parse_warning",
-                key="LABEL_*",
-                message=f"Could not parse LABEL_* constants from {script_path.name}. "
-                        f"Skipping CI labels validation."
-            ))
+            self.result.warnings.append(
+                ValidationWarning(
+                    workflow="ci",
+                    file=str(script_path),
+                    warning_type="label_script_parse_warning",
+                    key="LABEL_*",
+                    message=f"Could not parse LABEL_* constants from {script_path.name}. "
+                    f"Skipping CI labels validation.",
+                )
+            )
             return True
-        
+
         # 比较两个集合
         all_valid = True
-        
+
         # 检查 contract 中有但脚本中没有的 labels
         missing_in_script = contract_labels - script_labels
         if missing_in_script:
             for label in sorted(missing_in_script):
-                self.result.errors.append(ValidationError(
-                    workflow="ci",
-                    file="scripts/ci/gh_pr_labels_to_outputs.py",
-                    error_type="label_missing_in_script",
-                    key=label,
-                    message=(
-                        f"ERROR: Label '{label}' is defined in contract.ci.labels but not found "
-                        f"as a LABEL_* constant in gh_pr_labels_to_outputs.py. "
-                        f"Please add a corresponding LABEL_* constant to the script, or remove "
-                        f"the label from workflow_contract.v1.json ci.labels."
-                    ),
-                    expected=f"LABEL_* constant for '{label}'",
-                    actual="(not found)",
-                    location="ci.labels"
-                ))
+                self.result.errors.append(
+                    ValidationError(
+                        workflow="ci",
+                        file="scripts/ci/gh_pr_labels_to_outputs.py",
+                        error_type="label_missing_in_script",
+                        key=label,
+                        message=(
+                            f"ERROR: Label '{label}' is defined in contract.ci.labels but not found "
+                            f"as a LABEL_* constant in gh_pr_labels_to_outputs.py. "
+                            f"Please add a corresponding LABEL_* constant to the script, or remove "
+                            f"the label from workflow_contract.v1.json ci.labels."
+                        ),
+                        expected=f"LABEL_* constant for '{label}'",
+                        actual="(not found)",
+                        location="ci.labels",
+                    )
+                )
                 self.result.success = False
                 all_valid = False
-        
+
         # 检查脚本中有但 contract 中没有的 labels
         missing_in_contract = script_labels - contract_labels
         if missing_in_contract:
             for label in sorted(missing_in_contract):
-                self.result.errors.append(ValidationError(
-                    workflow="ci",
-                    file="scripts/ci/workflow_contract.v1.json",
-                    error_type="label_missing_in_contract",
-                    key=label,
-                    message=(
-                        f"ERROR: Label '{label}' is defined as LABEL_* constant in "
-                        f"gh_pr_labels_to_outputs.py but not found in contract.ci.labels. "
-                        f"Please add the label to workflow_contract.v1.json ci.labels, or remove "
-                        f"the LABEL_* constant from the script."
-                    ),
-                    expected=f"Label '{label}' in ci.labels",
-                    actual="(not found)",
-                    location="scripts/ci/gh_pr_labels_to_outputs.py"
-                ))
+                self.result.errors.append(
+                    ValidationError(
+                        workflow="ci",
+                        file="scripts/ci/workflow_contract.v1.json",
+                        error_type="label_missing_in_contract",
+                        key=label,
+                        message=(
+                            f"ERROR: Label '{label}' is defined as LABEL_* constant in "
+                            f"gh_pr_labels_to_outputs.py but not found in contract.ci.labels. "
+                            f"Please add the label to workflow_contract.v1.json ci.labels, or remove "
+                            f"the LABEL_* constant from the script."
+                        ),
+                        expected=f"Label '{label}' in ci.labels",
+                        actual="(not found)",
+                        location="scripts/ci/gh_pr_labels_to_outputs.py",
+                    )
+                )
                 self.result.success = False
                 all_valid = False
-        
+
         return all_valid
 
     def _parse_label_constants_from_script(self, script_path: Path) -> Optional[set[str]]:
         """
         解析 Python 脚本中的 LABEL_* 常量值。
-        
+
         使用 AST 解析而非 import，避免执行脚本代码。
-        
+
         Args:
             script_path: 脚本文件路径
-            
+
         Returns:
             LABEL_* 常量值的集合，解析失败返回 None
         """
         if not script_path.exists():
             return None
-        
+
         try:
-            with open(script_path, 'r', encoding='utf-8') as f:
+            with open(script_path, "r", encoding="utf-8") as f:
                 source = f.read()
-            
+
             tree = ast.parse(source)
             labels = set()
-            
+
             for node in ast.walk(tree):
                 # 查找形如 LABEL_XXX = "value" 的赋值语句
                 if isinstance(node, ast.Assign):
                     for target in node.targets:
                         if isinstance(target, ast.Name) and target.id.startswith("LABEL_"):
                             # 获取赋值的值
-                            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                            if isinstance(node.value, ast.Constant) and isinstance(
+                                node.value.value, str
+                            ):
                                 labels.add(node.value.value)
-            
+
             return labels if labels else None
-            
+
         except (SyntaxError, OSError):
             return None
 
@@ -1194,6 +1309,7 @@ class WorkflowContractValidator:
 # ============================================================================
 # Output Formatters
 # ============================================================================
+
 
 def format_text_output(result: ValidationResult) -> str:
     """格式化文本输出"""
@@ -1220,7 +1336,7 @@ def format_text_output(result: ValidationResult) -> str:
         lines.append("ERRORS")
         lines.append("-" * 60)
         for error in result.errors:
-            lines.append(f"")
+            lines.append("")
             lines.append(f"  [{error.error_type}] {error.workflow}:{error.file}")
             lines.append(f"  Key: {error.key}")
             lines.append(f"  Message: {error.message}")
@@ -1238,7 +1354,7 @@ def format_text_output(result: ValidationResult) -> str:
         lines.append("WARNINGS (Step Name Changes)")
         lines.append("-" * 60)
         for warning in result.warnings:
-            lines.append(f"")
+            lines.append("")
             lines.append(f"  [{warning.warning_type}] {warning.workflow}:{warning.file}")
             lines.append(f"  Key: {warning.key}")
             lines.append(f"  Message: {warning.message}")
@@ -1294,6 +1410,7 @@ def format_json_output(result: ValidationResult) -> str:
 # Main
 # ============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Validate GitHub Actions workflows against contract"
@@ -1302,24 +1419,16 @@ def main():
         "--contract",
         type=Path,
         default=Path("scripts/ci/workflow_contract.v1.json"),
-        help="Path to contract JSON file (default: scripts/ci/workflow_contract.v1.json)"
+        help="Path to contract JSON file (default: scripts/ci/workflow_contract.v1.json)",
     )
     parser.add_argument(
         "--workspace",
         type=Path,
         default=Path.cwd(),
-        help="Workspace root directory (default: current directory)"
+        help="Workspace root directory (default: current directory)",
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output in JSON format"
-    )
-    parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="Treat warnings as errors"
-    )
+    parser.add_argument("--json", action="store_true", help="Output in JSON format")
+    parser.add_argument("--strict", action="store_true", help="Treat warnings as errors")
 
     args = parser.parse_args()
 
