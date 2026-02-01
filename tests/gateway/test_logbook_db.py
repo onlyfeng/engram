@@ -405,8 +405,9 @@ class TestLogbookDBCheck:
                     # 验证错误消息
                     assert "不完整" in str(exc_info.value.message)
                     # 验证修复指令包含 CLI 入口点
-                    assert "engram-migrate" in str(exc_info.value.message) or \
-                           "python -m engram.logbook.cli.db_migrate" in str(exc_info.value.message)
+                    assert "engram-migrate" in str(
+                        exc_info.value.message
+                    ) or "python -m engram.logbook.cli.db_migrate" in str(exc_info.value.message)
                     assert "AUTO_MIGRATE_ON_STARTUP" in str(exc_info.value.message)
 
                     # 验证错误码
@@ -727,8 +728,10 @@ class TestLogbookDBErrorCode:
                     # 验证错误消息包含修复提示
                     error_msg = exc_info.value.message
                     # 验证修复指令包含 CLI 入口点
-                    assert "engram-migrate" in error_msg or \
-                           "python -m engram.logbook.cli.db_migrate" in error_msg
+                    assert (
+                        "engram-migrate" in error_msg
+                        or "python -m engram.logbook.cli.db_migrate" in error_msg
+                    )
                     assert "AUTO_MIGRATE_ON_STARTUP" in error_msg
 
     def test_run_migration_returns_correct_error_code_when_unavailable(self):

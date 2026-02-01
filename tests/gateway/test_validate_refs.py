@@ -1755,9 +1755,7 @@ class TestCompatModeLegacyEvidenceRefsMapping:
         result = validate_evidence_for_strict_mode(legacy_evidence)
 
         # 契约断言：不应阻断
-        assert result.is_valid is True, (
-            "legacy 来源缺少 sha256 不应触发阻断（is_valid 应为 True）"
-        )
+        assert result.is_valid is True, "legacy 来源缺少 sha256 不应触发阻断（is_valid 应为 True）"
 
         # 契约断言：error_codes 应为空
         assert result.error_codes == [], (

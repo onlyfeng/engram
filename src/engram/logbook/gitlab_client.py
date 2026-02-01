@@ -1073,6 +1073,7 @@ if TYPE_CHECKING:
 _scm_auth_available = False
 try:
     from .scm_auth import StaticTokenProvider, TokenProvider, mask_token, redact, redact_headers
+
     _scm_auth_available = True
 except ImportError:
     pass

@@ -324,9 +324,7 @@ class TestGatePolicyBehavior:
         # 这是关键的回归测试：确保默认行为是 fail_only
         # 如果 SQL 被修改为默认 fail_and_warn，此测试会失败，提醒开发者注意行为变化
         # 检查默认值设置
-        assert "'fail_only'" in self.verify_sql, (
-            "Default gate policy should be 'fail_only'"
-        )
+        assert "'fail_only'" in self.verify_sql, "Default gate policy should be 'fail_only'"
 
     def test_fail_only_does_not_check_warn(self):
         """验证 fail_only 策略不检查 WARN（仅检查 FAIL）"""

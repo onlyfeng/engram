@@ -3132,14 +3132,10 @@ class TestCorrelationIdConsistencyAllErrorPaths:
 
         # 验证 error.data 存在且包含 correlation_id
         assert "error" in result, f"{scenario_name}: 响应应包含 error 字段"
-        assert "data" in result["error"], (
-            f"{scenario_name}: error 应包含 data 字段（契约要求）"
-        )
+        assert "data" in result["error"], f"{scenario_name}: error 应包含 data 字段（契约要求）"
         error_data = result["error"]["data"]
         error_corr_id = error_data.get("correlation_id")
-        assert error_corr_id is not None, (
-            f"{scenario_name}: error.data 中必须包含 correlation_id"
-        )
+        assert error_corr_id is not None, f"{scenario_name}: error.data 中必须包含 correlation_id"
 
         # 核心断言：header 与 error.data 中的 correlation_id 必须一致
         assert header_corr_id == error_corr_id, (
@@ -3296,6 +3292,7 @@ class TestCorrelationIdConsistencyAllErrorPaths:
 
         注意：需要在 mcp_rpc 模块层面 mock 工具执行器，确保异常能正确传播。
         """
+
         # 模拟工具执行器抛出异常
         async def mock_executor(tool_name, tool_args, correlation_id):
             raise RuntimeError("模拟工具执行异常")

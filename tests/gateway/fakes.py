@@ -753,7 +753,9 @@ class FakeLogbookAdapter:
             self._audit_records[correlation_id]["status"] = status
             if reason_suffix:
                 old_reason = self._audit_records[correlation_id].get("reason", "") or ""
-                self._audit_records[correlation_id]["reason"] = f"{old_reason} {reason_suffix}".strip()
+                self._audit_records[correlation_id]["reason"] = (
+                    f"{old_reason} {reason_suffix}".strip()
+                )
             if evidence_refs_json_patch:
                 old_refs = self._audit_records[correlation_id].get("evidence_refs_json", {})
                 self._audit_records[correlation_id]["evidence_refs_json"] = {

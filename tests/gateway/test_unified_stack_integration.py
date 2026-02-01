@@ -1239,7 +1239,9 @@ class TestMockDegradationFlow:
 
         # 生成唯一测试内容
         unique_id = uuid.uuid4().hex[:12]
-        test_content = f"# Outbox ID 契约测试 {unique_id}\n\n验证 audit 记录的 outbox_id 和 correlation_id。"
+        test_content = (
+            f"# Outbox ID 契约测试 {unique_id}\n\n验证 audit 记录的 outbox_id 和 correlation_id。"
+        )
         test_space = f"team:outbox_id_contract_{unique_id[:6]}"
         test_actor = f"contract_tester_{unique_id[:6]}"
         test_payload_sha = hashlib.sha256(test_content.encode("utf-8")).hexdigest()
@@ -1289,9 +1291,7 @@ class TestMockDegradationFlow:
 
             # 验证返回结果
             assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
-            assert result.action == "deferred", (
-                f"应返回 action=deferred，实际: {result.action}"
-            )
+            assert result.action == "deferred", f"应返回 action=deferred，实际: {result.action}"
             assert result.outbox_id is not None, f"deferred 响应必须包含 outbox_id: {result}"
             outbox_id = result.outbox_id
 
@@ -1361,12 +1361,14 @@ class TestMockDegradationFlow:
                 audit_id, action, reason, evidence_json = row
                 if isinstance(evidence_json, str):
                     evidence_json = json.loads(evidence_json)
-                audits.append({
-                    "audit_id": audit_id,
-                    "action": action,
-                    "reason": reason,
-                    "evidence_refs_json": evidence_json,
-                })
+                audits.append(
+                    {
+                        "audit_id": audit_id,
+                        "action": action,
+                        "reason": reason,
+                        "evidence_refs_json": evidence_json,
+                    }
+                )
 
             # 找到 gateway 和 outbox_worker 的 audit 记录
             gateway_audit = None

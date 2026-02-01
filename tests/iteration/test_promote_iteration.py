@@ -130,9 +130,7 @@ class TestGetSSOTIterationNumbers:
 
     def test_returns_empty_for_empty_dir(self, temp_project: Path, monkeypatch):
         """测试空目录返回空集合"""
-        monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance"
-        )
+        monkeypatch.setattr("promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance")
         result = get_ssot_iteration_numbers()
         assert result == set()
 
@@ -155,9 +153,7 @@ class TestGetNextAvailableNumber:
 
     def test_returns_1_for_empty(self, temp_project: Path, monkeypatch):
         """测试空目录返回 1"""
-        monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance"
-        )
+        monkeypatch.setattr("promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance")
         result = get_next_available_number()
         assert result == 1
 
@@ -178,9 +174,7 @@ class TestCheckSSOTConflict:
 
     def test_no_conflict_for_new_number(self, temp_project: Path, monkeypatch):
         """测试新编号无冲突"""
-        monkeypatch.setattr(
-            "promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance"
-        )
+        monkeypatch.setattr("promote_iteration.SSOT_DIR", temp_project / "docs" / "acceptance")
         # 不应该抛出异常
         check_ssot_conflict(1)
 
@@ -404,7 +398,9 @@ class TestPromoteIterationNormal:
         promote_iteration(11)
 
         # 读取更新后的索引表
-        matrix_file = temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md"
+        matrix_file = (
+            temp_project_with_iteration / "docs" / "acceptance" / "00_acceptance_matrix.md"
+        )
         content = matrix_file.read_text(encoding="utf-8")
         lines = content.splitlines()
 
@@ -483,9 +479,7 @@ class TestPromoteIterationSSOTConflict:
 class TestPromoteIterationSupersede:
     """--supersede 参数测试"""
 
-    def test_supersede_updates_old_regression(
-        self, temp_project_with_iteration: Path, monkeypatch
-    ):
+    def test_supersede_updates_old_regression(self, temp_project_with_iteration: Path, monkeypatch):
         """测试 --supersede 更新旧 regression 文件头部"""
         monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
@@ -512,9 +506,7 @@ class TestPromoteIterationSupersede:
         content = old_regression.read_text(encoding="utf-8")
         assert "Superseded by Iteration 11" in content
 
-    def test_supersede_updates_index_status(
-        self, temp_project_with_iteration: Path, monkeypatch
-    ):
+    def test_supersede_updates_index_status(self, temp_project_with_iteration: Path, monkeypatch):
         """测试 --supersede 更新索引表中旧迭代的状态"""
         monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
@@ -636,9 +628,7 @@ class TestPromoteIterationIdempotent:
         assert result.success is True
 
         # 验证目标文件已更新
-        dst_plan = (
-            temp_project_with_iteration / "docs" / "acceptance" / "iteration_11_plan.md"
-        )
+        dst_plan = temp_project_with_iteration / "docs" / "acceptance" / "iteration_11_plan.md"
         assert dst_plan.read_text(encoding="utf-8") == new_content
 
     def test_skips_index_update_if_already_indexed(
@@ -671,9 +661,7 @@ class TestPromoteIterationIdempotent:
 class TestPromoteIterationDryRun:
     """--dry-run 参数测试"""
 
-    def test_dry_run_does_not_modify_files(
-        self, temp_project_with_iteration: Path, monkeypatch
-    ):
+    def test_dry_run_does_not_modify_files(self, temp_project_with_iteration: Path, monkeypatch):
         """测试 --dry-run 不修改任何文件"""
         monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(
@@ -804,9 +792,7 @@ class TestConsistencyWithCheckScript:
         r6_violations = [v for v in superseded_result.violations if v.rule_id == "R6"]
         assert len(r6_violations) == 0, f"R6 violations: {r6_violations}"
 
-    def test_index_order_is_descending(
-        self, temp_project_with_iteration: Path, monkeypatch
-    ):
+    def test_index_order_is_descending(self, temp_project_with_iteration: Path, monkeypatch):
         """测试索引表保持降序排列"""
         monkeypatch.setattr("promote_iteration.REPO_ROOT", temp_project_with_iteration)
         monkeypatch.setattr(

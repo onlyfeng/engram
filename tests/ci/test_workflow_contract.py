@@ -1135,9 +1135,6 @@ class TestContractInternalConsistency:
             },
         }
 
-    @pytest.mark.skip(
-        reason="WorkflowContractValidator 未实现 contract_frozen_step_missing 检查 (Phase 2 预留)"
-    )
     def test_contract_frozen_step_missing_error(
         self, temp_workspace, contract_with_missing_frozen_step
     ):
@@ -1177,9 +1174,6 @@ jobs:
         assert "frozen_step_text.allowlist" in step_errors[0].message
         assert "test-job" in step_errors[0].message
 
-    @pytest.mark.skip(
-        reason="WorkflowContractValidator 未实现 contract_frozen_job_missing 检查 (Phase 2 预留)"
-    )
     def test_contract_frozen_job_missing_error(
         self, temp_workspace, contract_with_missing_frozen_job
     ):
@@ -4417,9 +4411,9 @@ jobs:
 
         # 不应该有 label 相关的错误
         label_errors = [e for e in result.errors if e.error_type.startswith("label_")]
-        assert (
-            len(label_errors) == 0
-        ), f"Expected no label errors, got: {[e.message for e in label_errors]}"
+        assert len(label_errors) == 0, (
+            f"Expected no label errors, got: {[e.message for e in label_errors]}"
+        )
 
     def test_labels_missing_in_script(
         self, temp_workspace, contract_with_labels, mismatched_label_script_missing
@@ -4456,9 +4450,7 @@ jobs:
         result = validator.validate()
 
         # 应该有 label_missing_in_script 错误
-        label_errors = [
-            e for e in result.errors if e.error_type == "label_missing_in_script"
-        ]
+        label_errors = [e for e in result.errors if e.error_type == "label_missing_in_script"]
         assert len(label_errors) == 1
         assert label_errors[0].key == "ci:test-label-2"
         assert "not found as a LABEL_* constant" in label_errors[0].message
@@ -4498,9 +4490,7 @@ jobs:
         result = validator.validate()
 
         # 应该有 label_missing_in_contract 错误
-        label_errors = [
-            e for e in result.errors if e.error_type == "label_missing_in_contract"
-        ]
+        label_errors = [e for e in result.errors if e.error_type == "label_missing_in_contract"]
         assert len(label_errors) == 1
         assert label_errors[0].key == "ci:extra-label"
         assert "not found in contract.ci.labels" in label_errors[0].message
@@ -4577,9 +4567,7 @@ jobs:
 
         # 不应该有 label 相关的错误或警告
         label_errors = [e for e in result.errors if e.error_type.startswith("label_")]
-        label_warnings = [
-            w for w in result.warnings if w.warning_type.startswith("label_")
-        ]
+        label_warnings = [w for w in result.warnings if w.warning_type.startswith("label_")]
         assert len(label_errors) == 0
         assert len(label_warnings) == 0
 
@@ -4627,12 +4615,8 @@ class TestCILabelsRealFileValidation:
 
         error_msgs = []
         if missing_in_script:
-            error_msgs.append(
-                f"Labels in contract but not in script: {missing_in_script}"
-            )
+            error_msgs.append(f"Labels in contract but not in script: {missing_in_script}")
         if missing_in_contract:
-            error_msgs.append(
-                f"Labels in script but not in contract: {missing_in_contract}"
-            )
+            error_msgs.append(f"Labels in script but not in contract: {missing_in_contract}")
 
         assert len(error_msgs) == 0, "\n".join(error_msgs)

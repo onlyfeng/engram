@@ -3559,9 +3559,7 @@ class TestStrictModeAuditFieldsContract:
         )
 
         # 构造缺少 sha256 的 evidence
-        invalid_evidence = [
-            {"uri": "memory://attachments/123/placeholder"}
-        ]
+        invalid_evidence = [{"uri": "memory://attachments/123/placeholder"}]
         evidence_validation = validate_evidence_for_strict_mode(invalid_evidence)
 
         # 构建审计事件
@@ -3596,15 +3594,11 @@ class TestStrictModeAuditFieldsContract:
         assert validation["validate_refs_reason"] == "strict_enforced", (
             "strict 模式 validate_refs_reason 应为 strict_enforced"
         )
-        assert "evidence_validation" in validation, (
-            "validation 必须包含 evidence_validation"
-        )
+        assert "evidence_validation" in validation, "validation 必须包含 evidence_validation"
 
         # 契约断言：evidence_validation 包含错误详情
         ev_val = validation["evidence_validation"]
-        assert ev_val["is_valid"] is False, (
-            "校验失败时 is_valid 必须为 False"
-        )
+        assert ev_val["is_valid"] is False, "校验失败时 is_valid 必须为 False"
         assert any("EVIDENCE_MISSING_SHA256" in code for code in ev_val["error_codes"]), (
             f"error_codes 必须包含 EVIDENCE_MISSING_SHA256，实际: {ev_val['error_codes']}"
         )
@@ -3691,9 +3685,7 @@ class TestCompatModeAuditFieldsContract:
         )
 
         # 契约断言：external 包含映射的 legacy refs
-        assert "external" in evidence_refs_json, (
-            "legacy refs 映射后应出现在 external 字段中"
-        )
+        assert "external" in evidence_refs_json, "legacy refs 映射后应出现在 external 字段中"
         assert len(evidence_refs_json["external"]) == 2, (
             f"external 应包含 2 个映射项，实际: {len(evidence_refs_json['external'])}"
         )
@@ -3737,9 +3729,7 @@ class TestCompatModeAuditFieldsContract:
         )
 
         # 契约断言：应有 compat_warnings
-        assert len(result.compat_warnings) > 0, (
-            "legacy refs 缺少 sha256 应产生 compat_warnings"
-        )
+        assert len(result.compat_warnings) > 0, "legacy refs 缺少 sha256 应产生 compat_warnings"
         assert all("EVIDENCE_LEGACY_NO_SHA256" in warn for warn in result.compat_warnings), (
             f"所有 compat_warnings 应包含 EVIDENCE_LEGACY_NO_SHA256，实际: {result.compat_warnings}"
         )
@@ -3779,12 +3769,8 @@ class TestCompatModeAuditFieldsContract:
         assert "evidence_validation" in validation
 
         ev_val = validation["evidence_validation"]
-        assert "compat_warnings" in ev_val, (
-            "evidence_validation 必须包含 compat_warnings 字段"
-        )
-        assert len(ev_val["compat_warnings"]) > 0, (
-            "legacy refs 应产生 compat_warnings"
-        )
+        assert "compat_warnings" in ev_val, "evidence_validation 必须包含 compat_warnings 字段"
+        assert len(ev_val["compat_warnings"]) > 0, "legacy refs 应产生 compat_warnings"
 
 
 class TestStrictCompatModeIntegrationContract:
@@ -4013,7 +3999,9 @@ class TestSchemaVersionGuardrail:
         )
 
         # 验证 pointer 子结构存在
-        assert "pointer" in event, "pointer 子结构必须存在当 is_pointerized=True 且提供 pointer 信息时"
+        assert "pointer" in event, (
+            "pointer 子结构必须存在当 is_pointerized=True 且提供 pointer 信息时"
+        )
         assert event["pointer"]["from_space"] == "personal"
         assert event["pointer"]["to_space"] == "team:fallback"
         assert event["pointer"]["reason"] == "team_write_disabled"
@@ -4157,8 +4145,7 @@ class TestCorrelationIdNormalizationContract:
             # 验证归一化后的 correlation_id 符合合规格式
             normalized_id = event["correlation_id"]
             assert CORRELATION_ID_PATTERN.match(normalized_id), (
-                f"非合规输入 '{non_compliant_id}' 应被归一化，"
-                f"实际结果 '{normalized_id}' 不符合格式"
+                f"非合规输入 '{non_compliant_id}' 应被归一化，实际结果 '{normalized_id}' 不符合格式"
             )
 
             # 验证通过 schema 校验
@@ -4220,8 +4207,7 @@ class TestCorrelationIdNormalizationContract:
 
             # 验证合规的 correlation_id 被保留
             assert event["correlation_id"] == compliant_id, (
-                f"合规输入 '{compliant_id}' 应被保留，"
-                f"实际结果 '{event['correlation_id']}'"
+                f"合规输入 '{compliant_id}' 应被保留，实际结果 '{event['correlation_id']}'"
             )
 
             # 验证通过 schema 校验
@@ -4248,9 +4234,7 @@ class TestCorrelationIdNormalizationContract:
         non_compliant = "invalid-correlation-id"
         normalized = normalize_correlation_id(non_compliant)
         assert normalized != non_compliant, "非合规输入应被重新生成"
-        assert CORRELATION_ID_PATTERN.match(normalized), (
-            f"归一化结果 '{normalized}' 不符合格式"
-        )
+        assert CORRELATION_ID_PATTERN.match(normalized), f"归一化结果 '{normalized}' 不符合格式"
 
         # 3. None 输入被生成
         generated = normalize_correlation_id(None)

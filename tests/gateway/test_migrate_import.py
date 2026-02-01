@@ -123,9 +123,10 @@ class TestDbMigrateCliBackwardCompatibility:
     """
 
     def test_db_migrate_imports_from_migrate_module(self):
-        """测试根目录 db_migrate.py 从 engram.logbook.migrate 导入
+        """测试根目录 db_migrate.py 从 engram.logbook.cli.db_migrate 导入
 
         通过源码分析验证，避免 sys.path 注入。
+        db_migrate.py 是薄包装器，转发到权威入口。
         """
         repo_root = _get_repo_root()
         db_migrate_path = repo_root / "db_migrate.py"
@@ -135,13 +136,12 @@ class TestDbMigrateCliBackwardCompatibility:
         # 读取源代码
         source = db_migrate_path.read_text()
 
-        # 验证导入语句指向 engram.logbook.migrate
-        assert "from engram.logbook.migrate import" in source, (
-            "db_migrate.py 应从 engram.logbook.migrate 导入"
+        # 验证导入语句指向 engram.logbook.cli.db_migrate（权威入口）
+        assert "from engram.logbook.cli.db_migrate import" in source, (
+            "db_migrate.py 应从 engram.logbook.cli.db_migrate 导入"
         )
-        assert "run_migrate" in source
-        assert "run_all_checks" in source
-        assert "run_precheck" in source
+        # 薄包装器只转发 main
+        assert "main" in source
 
     def test_db_migrate_exports_backward_compatible_names(self):
         """测试 engram.logbook.migrate 导出向后兼容的名称

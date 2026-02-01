@@ -146,7 +146,9 @@ def upsert_repo(
         return int(row[0])
 
 
-def get_repo_by_url(conn: psycopg.Connection[Any], repo_type: str, url: str) -> Optional[Dict[str, Any]]:
+def get_repo_by_url(
+    conn: psycopg.Connection[Any], repo_type: str, url: str
+) -> Optional[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
             "SELECT repo_id, repo_type, url, project_key, default_branch, created_at FROM scm.repos WHERE repo_type=%s AND url=%s",
@@ -391,7 +393,9 @@ def upsert_patch_blob(
         return int(existing_row[0])
 
 
-def get_patch_blob(conn: psycopg.Connection[Any], source_type: str, source_id: str, sha256: str) -> Optional[Dict[str, Any]]:
+def get_patch_blob(
+    conn: psycopg.Connection[Any], source_type: str, source_id: str, sha256: str
+) -> Optional[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
             """
@@ -644,7 +648,11 @@ def get_latest_sync_run(
 
 
 def list_sync_runs(
-    conn: psycopg.Connection[Any], *, repo_id: Optional[int] = None, status: Optional[str] = None, limit: int = 100
+    conn: psycopg.Connection[Any],
+    *,
+    repo_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
 ) -> List[Dict[str, Any]]:
     query = """
         SELECT run_id, repo_id, job_type, mode, status,
@@ -744,7 +752,11 @@ def list_sync_locks(
 
 
 def list_kv_cursors(
-    conn: psycopg.Connection[Any], *, namespace: str = "scm.sync", key_prefix: Optional[str] = None, limit: int = 200
+    conn: psycopg.Connection[Any],
+    *,
+    namespace: str = "scm.sync",
+    key_prefix: Optional[str] = None,
+    limit: int = 200,
 ) -> List[Dict[str, Any]]:
     query = """
         SELECT namespace, key, value_json, updated_at
@@ -762,7 +774,9 @@ def list_kv_cursors(
         return [dict(row) for row in cur.fetchall()]
 
 
-def list_repos(conn: psycopg.Connection[Any], *, repo_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+def list_repos(
+    conn: psycopg.Connection[Any], *, repo_type: Optional[str] = None, limit: int = 100
+) -> List[Dict[str, Any]]:
     query = """
         SELECT repo_id, repo_type, url, project_key, default_branch, created_at
         FROM scm.repos
@@ -871,7 +885,9 @@ def list_expired_running_runs(
         return [dict(row) for row in cur.fetchall()]
 
 
-def list_expired_locks(conn: psycopg.Connection[Any], *, grace_seconds: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
+def list_expired_locks(
+    conn: psycopg.Connection[Any], *, grace_seconds: int = 0, limit: int = 100
+) -> List[Dict[str, Any]]:
     with _dict_cursor(conn) as cur:
         cur.execute(
             """
@@ -2032,7 +2048,9 @@ def count_gitlab_jobs_missing_dimensions(conn: psycopg.Connection[Any]) -> int:
         return int(row[0]) if row else 0
 
 
-def list_gitlab_jobs_missing_dimensions(conn: psycopg.Connection[Any], *, limit: int = 100) -> List[Dict[str, Any]]:
+def list_gitlab_jobs_missing_dimensions(
+    conn: psycopg.Connection[Any], *, limit: int = 100
+) -> List[Dict[str, Any]]:
     """
     列出缺失维度列的 gitlab jobs 详情
 

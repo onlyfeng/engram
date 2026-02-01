@@ -269,16 +269,12 @@ def verify_public_mcp_error_reasons() -> tuple[bool, str]:
     only_in_tuple = public_set - class_set
     only_in_class = class_set - public_set
 
-    message_parts = [
-        "PUBLIC_MCP_ERROR_REASONS 与 McpErrorReason 公开常量不一致。"
-    ]
+    message_parts = ["PUBLIC_MCP_ERROR_REASONS 与 McpErrorReason 公开常量不一致。"]
     if only_in_tuple:
         message_parts.append(f"仅在 PUBLIC_MCP_ERROR_REASONS 中: {sorted(only_in_tuple)}")
     if only_in_class:
         message_parts.append(f"仅在 McpErrorReason 中: {sorted(only_in_class)}")
-    message_parts.append(
-        "修复方法：确保 PUBLIC_MCP_ERROR_REASONS 包含所有 McpErrorReason 公开常量"
-    )
+    message_parts.append("修复方法：确保 PUBLIC_MCP_ERROR_REASONS 包含所有 McpErrorReason 公开常量")
 
     return False, "\n".join(message_parts)
 

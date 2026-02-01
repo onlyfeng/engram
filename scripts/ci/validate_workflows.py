@@ -976,6 +976,124 @@ class WorkflowContractValidator:
 
         return True
 
+    def validate_contract_frozen_consistency(self) -> bool:
+        """
+        验证 contract 内部的 frozen allowlist 一致性。
+
+        检查：
+        1. 所有 workflows.*.required_jobs[*].required_steps 是否都在 frozen_step_text.allowlist 中
+        2. 所有 workflows.*.job_names 或 required_jobs[*].name 是否都在 frozen_job_names.allowlist 中
+
+        如果发现不一致，报告 contract_frozen_step_missing 或 contract_frozen_job_missing 错误。
+
+        Returns:
+            bool: 一致性检查通过返回 True
+        """
+        all_consistent = True
+
+        # 获取所有 workflow 定义
+        # 支持两种合约格式：
+        # 1. v1.0: {"workflows": {"ci": {...}, "nightly": {...}}}
+        # 2. v1.1+: {"ci": {...}, "nightly": {...}} (无 workflows 包装)
+        workflows = self.contract.get("workflows", {})
+        if not workflows:
+            meta_keys = {
+                "$schema",
+                "version",
+                "description",
+                "last_updated",
+                "make",
+                "frozen_step_text",
+                "frozen_job_names",
+                "step_name_aliases",
+                "_changelog_v1.3.0",
+                "_changelog_v1.4.0",
+                "_changelog_v2.0.0",
+                "_changelog_v2.1.0",
+                "_changelog_v2.2.0",
+                "_changelog_v2.3.0",
+            }
+            for key, value in self.contract.items():
+                if key not in meta_keys and isinstance(value, dict) and "file" in value:
+                    workflows[key] = value
+
+        # 检查 1: required_steps 是否都在 frozen_step_text.allowlist 中
+        for workflow_name, workflow_def in workflows.items():
+            for job in workflow_def.get("required_jobs", []):
+                job_id = job.get("id", "")
+                for step in job.get("required_steps", []):
+                    if step not in self.frozen_steps:
+                        self.result.errors.append(
+                            ValidationError(
+                                workflow=workflow_name,
+                                file=str(self.contract_path),
+                                error_type="contract_frozen_step_missing",
+                                key=step,
+                                message=(
+                                    f"Required step '{step}' in job '{job_id}' (workflow '{workflow_name}') "
+                                    f"is not in frozen_step_text.allowlist. 修复方法:\n"
+                                    f"  1. 如果此 step 需要冻结保护，请将其添加到 scripts/ci/workflow_contract.v1.json 的 frozen_step_text.allowlist\n"
+                                    f"  2. 同步更新 docs/ci_nightly_workflow_refactor/contract.md 第 5.2 节 'Frozen Step Names'\n"
+                                    f"  3. 运行 make validate-workflows 验证"
+                                ),
+                                location=f"{workflow_name}.required_jobs[{job_id}].required_steps",
+                            )
+                        )
+                        self.result.success = False
+                        all_consistent = False
+
+        # 检查 2: job_names（或 required_jobs[*].name）是否都在 frozen_job_names.allowlist 中
+        for workflow_name, workflow_def in workflows.items():
+            # 方式 1: 检查 job_names 数组
+            for job_name in workflow_def.get("job_names", []):
+                if job_name not in self.frozen_job_names:
+                    self.result.errors.append(
+                        ValidationError(
+                            workflow=workflow_name,
+                            file=str(self.contract_path),
+                            error_type="contract_frozen_job_missing",
+                            key=job_name,
+                            message=(
+                                f"Job name '{job_name}' in workflow '{workflow_name}' job_names "
+                                f"is not in frozen_job_names.allowlist. 修复方法:\n"
+                                f"  1. 如果此 job name 需要冻结保护，请将其添加到 scripts/ci/workflow_contract.v1.json 的 frozen_job_names.allowlist\n"
+                                f"  2. 同步更新 docs/ci_nightly_workflow_refactor/contract.md 第 5.1 节 'Frozen Job Names'\n"
+                                f"  3. 运行 make validate-workflows 验证"
+                            ),
+                            location=f"{workflow_name}.job_names",
+                        )
+                    )
+                    self.result.success = False
+                    all_consistent = False
+
+            # 方式 2: 检查 required_jobs[*].name
+            for job in workflow_def.get("required_jobs", []):
+                job_id = job.get("id", "")
+                job_name = job.get("name", "")
+                if job_name and job_name not in self.frozen_job_names:
+                    # 避免重复报告（如果 job_names 数组中已报告过）
+                    if job_name not in workflow_def.get("job_names", []):
+                        self.result.errors.append(
+                            ValidationError(
+                                workflow=workflow_name,
+                                file=str(self.contract_path),
+                                error_type="contract_frozen_job_missing",
+                                key=job_name,
+                                message=(
+                                    f"Job name '{job_name}' in required_jobs[{job_id}] (workflow '{workflow_name}') "
+                                    f"is not in frozen_job_names.allowlist. 修复方法:\n"
+                                    f"  1. 如果此 job name 需要冻结保护，请将其添加到 scripts/ci/workflow_contract.v1.json 的 frozen_job_names.allowlist\n"
+                                    f"  2. 同步更新 docs/ci_nightly_workflow_refactor/contract.md 第 5.1 节 'Frozen Job Names'\n"
+                                    f"  3. 运行 make validate-workflows 验证"
+                                ),
+                                location=f"{workflow_name}.required_jobs[{job_id}].name",
+                            )
+                        )
+                        self.result.success = False
+                        all_consistent = False
+
+        return all_consistent
+
     def validate(self) -> ValidationResult:
         """执行全部验证"""
         if not self.load_contract():
@@ -985,6 +1103,12 @@ class WorkflowContractValidator:
         if not self.validate_schema():
             # Schema 校验失败，但继续执行其他验证以收集更多错误
             pass
+
+        # =======================================================================
+        # 校验 D: contract 内部 frozen allowlist 一致性
+        # 检查 required_steps/job_names 是否都在对应的 frozen allowlist 中
+        # =======================================================================
+        self.validate_contract_frozen_consistency()
 
         # 支持两种合约格式：
         # 1. v1.0: {"workflows": {"ci": {...}, "nightly": {...}}}

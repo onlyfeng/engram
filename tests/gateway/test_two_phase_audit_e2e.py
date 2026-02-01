@@ -1291,9 +1291,7 @@ class TestTwoPhaseAuditSmokeTestFull:
         assert result.correlation_id == test_correlation_id, "correlation_id 应一致"
 
         # 验证审计状态流转
-        audit = assert_two_phase_finalized(
-            conn, test_correlation_id, "success", governance_schema
-        )
+        audit = assert_two_phase_finalized(conn, test_correlation_id, "success", governance_schema)
 
         # 验证 evidence_refs_json 包含 memory_id
         evidence = audit["evidence_refs_json"]
