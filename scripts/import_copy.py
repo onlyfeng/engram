@@ -413,7 +413,7 @@ def main() -> int:
         return 2
 
     manifest_version = manifest.get("manifest_version", "unknown")
-    manifest_title = manifest.get("title", "Unknown Manifest")
+    manifest.get("title", "Unknown Manifest")
 
     # 打印标题
     print("=" * 60)

@@ -45,12 +45,12 @@ from check_no_step_flow_numbers import (
 def _make_step_flow(num: int, case: str = "title", sep: str = " ") -> str:
     """
     运行时构造带空格的流程编号 token
-    
+
     Args:
         num: 阶段编号 (1, 2, 3)
         case: "lower", "title", "upper"
         sep: 分隔符（默认单个空格）
-    
+
     Returns:
         构造的 token，如 "Step 1", "step 2", "STEP 3"
     """
@@ -65,11 +65,11 @@ def _make_step_flow(num: int, case: str = "title", sep: str = " ") -> str:
 def _make_alias(num: int, case: str = "lower") -> str:
     """
     运行时构造无空格别名 token（不应被本脚本命中）
-    
+
     Args:
         num: 阶段编号 (1, 2, 3)
         case: "lower", "title", "upper"
-    
+
     Returns:
         构造的 token，如 "step1", "Step2", "STEP3"
     """

@@ -59,7 +59,7 @@ def load_acceptance_runs(runs_dir: Path) -> list[dict[str, Any]]:
 def get_group_key(record: dict[str, Any]) -> tuple[str, str, str]:
     """
     Extract grouping key from record.
-    
+
     Returns: (name, profile, workflow)
     """
     name = record.get("name", "unknown")
@@ -75,7 +75,7 @@ def group_records(
 ) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
     """
     Group records by (name, profile, workflow) and keep last N per group.
-    
+
     Records are sorted by timestamp descending within each group.
     """
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)

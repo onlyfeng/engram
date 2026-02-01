@@ -294,7 +294,7 @@ def extract_refs_from_content(
 
     for line_num, line in enumerate(lines, 1):
         # 跳过注释行中的某些模式
-        stripped = line.strip()
+        line.strip()
 
         # 1. 检查普通路径引用
         for match in DOCS_PATH_PATTERN.finditer(line):

@@ -44,11 +44,11 @@ from check_no_legacy_stage_aliases import (
 def _make_alias(num: int, case: str = "lower") -> str:
     """
     运行时构造旧别名 token
-    
+
     Args:
         num: 阶段编号 (1, 2, 3)
         case: "lower", "title", "upper"
-    
+
     Returns:
         构造的 token，如 "stepN", "StepN", "STEPN"（N 为传入的 num）
     """
@@ -63,11 +63,11 @@ def _make_alias(num: int, case: str = "lower") -> str:
 def _make_flow_num(num: int, case: str = "title") -> str:
     """
     运行时构造流程编号写法（带空格）
-    
+
     Args:
         num: 编号 (1, 2, 3, ...)
         case: "lower", "title", "upper"
-    
+
     Returns:
         构造的 token，如 "Step 1", "step 2", "STEP 3"
     """

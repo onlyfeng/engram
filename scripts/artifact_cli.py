@@ -8,7 +8,7 @@ artifact_cli - 弃用兼容入口（薄包装器）
     engram-artifacts [command] [options]
     engram-logbook artifacts [command] [options]
     python -m engram.logbook.cli.artifacts [command] [options]
-    
+
 入口策略说明:
     - pyproject.toml [project.scripts] 定义的 engram-artifacts 为权威入口
     - engram-logbook artifacts 子命令也是权威入口

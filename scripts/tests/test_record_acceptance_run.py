@@ -721,12 +721,12 @@ class TestEdgeCases:
 class TestMakefileAcceptanceConstraints:
     """
     验证 Makefile acceptance targets 的静态约束。
-    
+
     使用 make -n (dry-run) 解析输出，验证：
     1. 会创建 steps.log
     2. 会创建 summary.json
     3. 会调用 record_acceptance_run.py 脚本
-    
+
     注意：不实际执行 Docker，仅验证 Makefile 逻辑结构。
     """
 
@@ -751,7 +751,7 @@ class TestMakefileAcceptanceConstraints:
         import subprocess
 
         # 使用 make -n 获取 dry-run 输出
-        result = subprocess.run(
+        subprocess.run(
             ["make", "-n", target],
             cwd=workspace_root,
             capture_output=True,

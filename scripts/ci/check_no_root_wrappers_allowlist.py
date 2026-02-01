@@ -722,13 +722,11 @@ def main() -> int:
         print("-" * 70)
         if result.has_errors():
             print("[FAIL] Allowlist 校验失败")
-            return_code = 1
         else:
             if result.has_warnings():
                 print("[OK] Allowlist 校验通过（有警告）")
             else:
                 print("[OK] Allowlist 校验通过")
-            return_code = 0
 
     return 1 if result.has_errors() else 0
 

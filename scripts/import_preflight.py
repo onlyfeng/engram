@@ -115,7 +115,6 @@ def parse_yaml_simple(content: str) -> dict[str, Any]:
     current_section = None
     in_build = False
     in_volumes = False
-    indent_level = 0
 
     lines = content.split("\n")
     for line in lines:

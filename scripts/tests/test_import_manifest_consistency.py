@@ -72,7 +72,7 @@ def extract_manifest_paths(manifest: dict[str, Any]) -> set[str]:
 def parse_compose_paths(compose_content: str) -> dict[str, set[str]]:
     """
     Parse docker-compose.unified.yml to extract path dependencies.
-    
+
     Returns dict with keys:
     - 'volumes': volume mount source paths (local paths)
     - 'build_contexts': build context paths
@@ -114,7 +114,7 @@ def parse_compose_paths(compose_content: str) -> dict[str, set[str]]:
 def parse_dockerfile_copy_paths(dockerfile_content: str) -> set[str]:
     """
     Parse Dockerfile to extract COPY source paths.
-    
+
     Only extracts the source (first argument) of COPY instructions.
     """
     paths: set[str] = set()
@@ -171,7 +171,7 @@ def is_path_covered_by_manifest(
 ) -> bool:
     """
     Check if a path is covered by the manifest.
-    
+
     A path is covered if:
     1. It's explicitly listed in the manifest
     2. It's a subdirectory of a listed directory

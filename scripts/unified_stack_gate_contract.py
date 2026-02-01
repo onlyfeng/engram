@@ -671,7 +671,7 @@ def main():
     )
 
     # dump-rules
-    dump_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "dump-rules",
         help="导出完整规则表",
     )
@@ -688,7 +688,7 @@ def main():
     )
 
     # get-profile
-    profile_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "get-profile",
         help="从环境变量推断当前 profile",
     )

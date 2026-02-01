@@ -190,7 +190,7 @@ class TestDegradationStatus:
 
     def test_degradation_skipped_allowed_via_env_skip_degradation_test(self):
         """degradation=skipped 通过 SKIP_DEGRADATION_TEST=1 环境变量允许（直接测试 validate_step_statuses）
-        
+
         注意：validate_required_steps 不考虑环境变量，只看 JSON 中的 reason。
         所以这里直接测试 validate_step_statuses 来验证环境变量生效。
         """

@@ -106,7 +106,7 @@ NC = "\033[0m"  # No Color
 def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> CheckResult:
     """
     检查 A: compose/logbook.yml 的 initdb 是否会在缺省 .env 下致命失败
-    
+
     验证策略：
     1. 检查所有环境变量是否有合理的默认值（使用 ${VAR:-default} 语法）
     2. 检查服务账号策略：不设置 *_PASSWORD 时应进入 SKIP 模式
@@ -247,7 +247,7 @@ def check_b_acceptance_logbook_compose_dependency(
 ) -> CheckResult:
     """
     检查 B: Makefile 是否提供 Logbook-only 验收相关目标
-    
+
     验证策略：
     1. 检查是否存在 setup-db-logbook-only 目标（现代化命名）
     2. 检查是否存在必要的迁移和验证目标
@@ -319,7 +319,7 @@ def check_c_docs_makefile_consistency(
 ) -> CheckResult:
     """
     检查 C: docs/logbook/03_deploy_verify_troubleshoot.md 中的验收命令与 Makefile 一致
-    
+
     验证策略：
     1. 检查文档中描述的 Makefile 目标是否存在
     2. 验证核心部署命令的描述与实现一致
@@ -412,7 +412,7 @@ def check_d_readme_logbook_only_stepwise_commands(
 ) -> CheckResult:
     """
     检查 D: README.md 数据库初始化命令是否正确记录
-    
+
     验证策略：
     1. 检查 README.md 中是否包含核心数据库初始化命令
     2. 验证命令与 Makefile 实现一致
@@ -497,7 +497,7 @@ def check_f_acceptance_criteria_logbook_only_alignment(
 ) -> CheckResult:
     """
     检查 F: docs/logbook/04_acceptance_criteria.md Logbook-only 章节命令与 Makefile 对齐
-    
+
     验证策略：
     1. 定位 04_acceptance_criteria.md 中的 Logbook-only 验收相关章节
     2. 验证包含 migrate-ddl 命令（现代化命名）

@@ -151,13 +151,13 @@ def load_summary_duration(artifacts_dir: Path) -> Optional[int]:
 def parse_metadata_kv(kv_pairs: Optional[list[str]]) -> dict[str, str]:
     """
     Parse key=value pairs into a dictionary.
-    
+
     Args:
         kv_pairs: List of "key=value" strings
-        
+
     Returns:
         Dictionary of parsed key-value pairs
-        
+
     Raises:
         ValueError: If a pair is malformed (missing '=')
     """
@@ -181,16 +181,16 @@ def merge_metadata(
 ) -> Optional[dict[str, Any]]:
     """
     Merge metadata from JSON string and key=value pairs.
-    
+
     Key=value pairs take precedence over JSON values for the same key.
-    
+
     Args:
         metadata_json: JSON string with metadata
         metadata_kv: List of "key=value" strings
-        
+
     Returns:
         Merged metadata dictionary, or None if no metadata provided
-        
+
     Raises:
         ValueError: If JSON is invalid or kv format is malformed
     """
@@ -223,7 +223,7 @@ def record_acceptance_run(
 ) -> str:
     """
     Record an acceptance test run.
-    
+
     Args:
         name: Acceptance command name (e.g., "acceptance-logbook-only")
         artifacts_dir: Path to artifacts directory
@@ -231,7 +231,7 @@ def record_acceptance_run(
         commit: Git commit SHA (auto-detected if not provided)
         command: Custom command (default: "make {name}")
         metadata: Optional metadata dictionary (workflow, profile, github_run_id, etc.)
-    
+
     Returns:
         Path to the created record file.
     """

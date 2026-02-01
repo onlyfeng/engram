@@ -79,7 +79,7 @@ __all__ = [
 def scan_expired_jobs(conn, *, grace_seconds: int = DEFAULT_GRACE_SECONDS):
     """
     扫描过期的 running jobs（兼容旧接口）
-    
+
     新代码应直接使用 db.list_expired_running_jobs()
     """
     from engram.logbook import scm_db as db_api

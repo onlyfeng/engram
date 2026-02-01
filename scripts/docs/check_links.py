@@ -251,12 +251,12 @@ def should_ignore_url(path: str) -> bool:
 def resolve_link_path(source_file: Path, target_path: str, project_root: Path) -> Path:
     """
     解析链接路径
-    
+
     Args:
         source_file: 源文件路径
         target_path: 目标路径（可能是相对路径或绝对路径）
         project_root: 项目根目录
-    
+
     Returns:
         解析后的完整路径
     """
@@ -280,7 +280,7 @@ def resolve_link_path(source_file: Path, target_path: str, project_root: Path) -
 def extract_markdown_links(content: str) -> List[tuple]:
     """
     提取 Markdown 链接
-    
+
     Returns:
         List of (line_number, link_text, target_path)
     """
@@ -296,7 +296,7 @@ def extract_markdown_links(content: str) -> List[tuple]:
 def extract_text_references(content: str) -> List[tuple]:
     """
     提取纯文本路径引用
-    
+
     Returns:
         List of (line_number, target_path)
     """
@@ -317,7 +317,7 @@ def extract_text_references(content: str) -> List[tuple]:
 def is_entrypoint_file(file_path: Path, project_root: Path) -> bool:
     """
     判断文件是否为入口文件（entrypoint）
-    
+
     入口文件包括：
     - 项目根目录的 README.md
     - docs/README.md
@@ -363,13 +363,13 @@ def check_file_links(
 ) -> tuple:
     """
     检查单个文件中的链接
-    
+
     Args:
         file_path: 文件路径
         project_root: 项目根目录
         ignore_patterns: 忽略的模式集合
         source_type: 来源类型，如果为 None 则自动检测
-    
+
     Returns:
         (checked_count, broken_links)
     """
@@ -453,13 +453,13 @@ def scan_directory(
 ) -> tuple:
     """
     扫描目录中的所有 Markdown 文件
-    
+
     Args:
         scan_dir: 扫描目录
         project_root: 项目根目录
         ignore_patterns: 忽略的模式集合
         source_type: 来源类型，如果为 None 则自动检测每个文件
-    
+
     Returns:
         (files_count, total_checked, all_broken_links, entrypoint_count, docs_count)
     """
@@ -514,13 +514,13 @@ def scan_file(
 ) -> tuple:
     """
     扫描单个文件
-    
+
     Args:
         file_path: 文件路径
         project_root: 项目根目录
         ignore_patterns: 忽略的模式集合
         source_type: 来源类型，如果为 None 则自动检测
-    
+
     Returns:
         (checked_count, broken_links, detected_source_type)
     """
@@ -543,7 +543,7 @@ def scan_file(
 def discover_apps_docs_dirs(project_root: Path) -> List[str]:
     """
     自动发现 apps/*/docs/ 目录
-    
+
     Returns:
         apps 下存在的 docs 目录相对路径列表
     """
@@ -564,9 +564,9 @@ def discover_apps_docs_dirs(project_root: Path) -> List[str]:
 def discover_entrypoint_files(project_root: Path) -> List[Path]:
     """
     自动发现入口文件（README.md 系列）
-    
+
     使用 ENTRYPOINT_GLOB_PATTERNS 中定义的 glob 模式
-    
+
     Returns:
         入口文件路径列表
     """
@@ -595,7 +595,7 @@ def main():
   python check_links.py --ignore-patterns "example" "template"
 
 来源类型：
-  entrypoint - 入口文件（README.md, docs/README.md, docs/*/README.md, 
+  entrypoint - 入口文件（README.md, docs/README.md, docs/*/README.md,
                apps/*/README.md, apps/*/docs/README.md）
   docs       - 文档目录中的其他 Markdown 文件
 

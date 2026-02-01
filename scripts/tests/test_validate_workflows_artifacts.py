@@ -575,7 +575,7 @@ jobs:
     steps:
       - name: Run acceptance-unified-full
         run: make acceptance-unified-full
-        
+
       - name: Upload acceptance-unified-full results
         if: always()
         uses: actions/upload-artifact@v4
@@ -586,7 +586,7 @@ jobs:
             .artifacts/acceptance-runs/
           retention-days: 30
           if-no-files-found: ignore
-          
+
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4

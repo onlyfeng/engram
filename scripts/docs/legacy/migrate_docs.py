@@ -9,7 +9,7 @@
       迁移工作已完成，本文件保留用于：
       1. 审计追溯 - 了解文档迁移的历史过程
       2. 参考实现 - 如需类似迁移可参考本实现
-      
+
       请勿再次运行本脚本执行迁移操作。
 ================================================================================
 
@@ -63,7 +63,7 @@ def load_migration_map(repo_root: Path) -> dict:
 def build_path_mapping(migration_map: dict) -> Dict[str, str]:
     """
     构建路径映射字典
-    
+
     返回: {source_path: target_path}
     """
     mapping = {}
@@ -77,11 +77,11 @@ def build_path_mapping(migration_map: dict) -> Dict[str, str]:
 def compute_relative_path(from_file: str, to_file: str) -> str:
     """
     计算从一个文件到另一个文件的相对路径
-    
+
     Args:
         from_file: 源文件路径（相对于仓库根）
         to_file: 目标文件路径（相对于仓库根）
-    
+
     Returns:
         相对路径字符串
     """
@@ -107,14 +107,14 @@ def rewrite_md_link(
 ) -> Tuple[str, bool]:
     """
     重写单个 Markdown 链接
-    
+
     Args:
         link_target: 原始链接目标
         current_file_old_path: 当前文件的原路径（相对于仓库根）
         current_file_new_path: 当前文件的新路径（相对于仓库根）
         path_mapping: 文件迁移映射 {old: new}
         repo_root: 仓库根目录
-    
+
     Returns:
         (新链接目标, 是否被修改)
     """
@@ -173,7 +173,7 @@ def rewrite_file_content(
 ) -> Tuple[str, List[Tuple[str, str]]]:
     """
     重写文件内容中的所有链接
-    
+
     Returns:
         (新内容, [(原链接, 新链接), ...])
     """
@@ -181,7 +181,7 @@ def rewrite_file_content(
 
     def replace_link(match):
         prefix = match.group(1)  # [text](
-        link_text = match.group(2)  # text
+        match.group(2)  # text
         link_target = match.group(3)  # path
         suffix = match.group(4)  # )
 
@@ -205,7 +205,7 @@ def rewrite_reference_in_code(
 ) -> Tuple[str, List[Tuple[str, str]]]:
     """
     根据重写规则处理代码/配置文件中的文档引用
-    
+
     Returns:
         (新内容, [(原引用, 新引用), ...])
     """
@@ -249,7 +249,7 @@ def find_all_md_files(repo_root: Path, exclude_dirs: Set[str] = None) -> List[Pa
 def run_link_check(repo_root: Path, migration_map: dict) -> bool:
     """
     运行链接检查脚本
-    
+
     Returns:
         True 如果检查通过
     """

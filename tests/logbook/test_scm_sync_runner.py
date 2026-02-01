@@ -1018,7 +1018,7 @@ class TestDeprecatedFunctions:
         # 运行时不应产生 DeprecationWarning
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            result = runner.run_incremental()
+            runner.run_incremental()
 
             # 过滤出 DeprecationWarning
             deprecation_warnings = [

@@ -7,12 +7,12 @@ db_bootstrap - 数据库 bootstrap 预检与角色创建（薄包装器）
 权威入口:
     engram-bootstrap-roles
     python -m engram.logbook.cli.db_bootstrap
-    
+
 迁移指引:
     旧命令: python scripts/db_bootstrap.py [args]
     新命令: engram-bootstrap-roles [args]
             python -m engram.logbook.cli.db_bootstrap [args]
-    
+
     参数与错误码保持完全一致，无需修改调用方式。
 """
 

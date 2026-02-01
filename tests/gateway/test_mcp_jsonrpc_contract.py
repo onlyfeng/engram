@@ -3188,7 +3188,7 @@ class TestCorrelationIdConsistencyAllErrorPaths:
         )
         # 可能返回 400（格式错误）或 200（方法不存在）
         # 取决于 Pydantic 是否校验空字符串
-        result = response.json()
+        response.json()
 
         # 无论哪种情况，header 和 error.data 中的 correlation_id 应一致
         self._assert_header_matches_error_data(response, "INVALID_REQUEST (empty method)")

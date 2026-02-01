@@ -7,7 +7,7 @@
 
 用法:
     python scripts/check_env_var_drift.py [--fail] [--fail-on-new] [--strict]
-    
+
 选项:
     --fail         发现问题时返回非零退出码（默认 warning 模式仅输出警告）
     --fail-on-new  仅对新增违规（相对基线）fail，已知基线违规仅警告
@@ -328,7 +328,7 @@ def classify_violations(
 ) -> Dict[str, List[Violation]]:
     """
     对违规进行分类
-    
+
     返回:
         {
             "new": 新增违规（相对基线）,

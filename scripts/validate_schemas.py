@@ -231,7 +231,7 @@ def log_error(msg: str):
 def validate_json_syntax(file_path: Path) -> tuple[bool, Optional[dict], Optional[str]]:
     """
     校验 JSON 文件语法
-    
+
     Returns:
         (is_valid, parsed_data, error_message)
     """
@@ -250,7 +250,7 @@ def validate_json_syntax(file_path: Path) -> tuple[bool, Optional[dict], Optiona
 def validate_schema_definition(schema: dict) -> tuple[bool, Optional[str]]:
     """
     校验 schema 定义是否符合 JSON Schema Draft-2020-12 规范
-    
+
     Returns:
         (is_valid, error_message)
     """
@@ -269,7 +269,7 @@ def validate_schema_definition(schema: dict) -> tuple[bool, Optional[str]]:
 def validate_schema_examples(schema: dict) -> tuple[bool, list[dict]]:
     """
     校验 schema 中的 examples 是否符合 schema 定义
-    
+
     Returns:
         (all_valid, list of errors)
     """
@@ -303,12 +303,12 @@ def validate_fixture_against_schema(
 ) -> FixtureValidationResult:
     """
     校验单个 fixture 文件是否符合 schema
-    
+
     Args:
         fixture_path: fixture 文件路径
         schema: 已加载的 schema dict
         schema_file_name: schema 文件名（用于日志）
-    
+
     Returns:
         FixtureValidationResult
     """
@@ -351,11 +351,11 @@ def discover_fixtures_for_schema(
 ) -> list[Path]:
     """
     发现指定 schema 对应的 fixture 文件
-    
+
     Args:
         schemas_dir: schemas 目录路径
         schema_file_name: schema 文件名
-    
+
     Returns:
         fixture 文件路径列表
     """
@@ -377,12 +377,12 @@ def validate_single_schema(
 ) -> SchemaValidationResult:
     """
     校验单个 schema 文件
-    
+
     Args:
         file_path: schema 文件路径
         validate_fixtures: 是否校验关联的 fixtures
         schemas_dir: schemas 目录路径（用于发现 fixtures）
-    
+
     Returns:
         SchemaValidationResult
     """
@@ -437,13 +437,13 @@ def validate_all_schemas(
 ) -> ValidationReport:
     """
     校验所有 schema 文件
-    
+
     Args:
         schemas_dir: schemas 目录路径
         schema_files: 要校验的文件列表（为 None 则使用默认列表）
         verbose: 是否输出详细信息
         validate_fixtures: 是否同时校验 fixtures 目录
-    
+
     Returns:
         ValidationReport
     """
