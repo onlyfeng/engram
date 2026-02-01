@@ -19,12 +19,10 @@ from engram.logbook.artifact_store import (
     ArtifactNotFoundError,
     ArtifactReadError,
     FileUriStore,
-    LocalArtifactsStore,
     ObjectStore,
     get_artifact_store_from_config,
 )
 from engram.logbook.config import get_app_config
-from engram.logbook.hashing import sha256 as compute_sha256
 
 
 @dataclass

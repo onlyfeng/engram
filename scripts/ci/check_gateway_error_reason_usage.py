@@ -533,7 +533,7 @@ def run_check(
 
     if verbose:
         print()
-        print(f"[INFO] 统计:")
+        print("[INFO] 统计:")
         print(f"       总使用数: {total_usage}")
         print(f"       正确使用: {correct_usage}")
         print(f"       白名单:   {whitelisted_usage}")

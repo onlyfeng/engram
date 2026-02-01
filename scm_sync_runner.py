@@ -24,52 +24,51 @@ import warnings
 
 # 导出核心模块的所有公共 API（向后兼容）
 from engram.logbook.scm_sync_runner import (
-    # 常量
-    REPO_TYPE_GITLAB,
-    REPO_TYPE_SVN,
-    VALID_REPO_TYPES,
+    DEFAULT_LOOP_INTERVAL_SECONDS,
+    DEFAULT_REPAIR_WINDOW_HOURS,
+    DEFAULT_WINDOW_CHUNK_HOURS,
+    DEFAULT_WINDOW_CHUNK_REVS,
+    EXIT_FAILED,
+    EXIT_PARTIAL,
+    EXIT_SUCCESS,
     JOB_TYPE_COMMITS,
     JOB_TYPE_MRS,
     JOB_TYPE_REVIEWS,
+    # 常量
+    REPO_TYPE_GITLAB,
+    REPO_TYPE_SVN,
     VALID_JOB_TYPES,
-    DEFAULT_REPAIR_WINDOW_HOURS,
-    DEFAULT_LOOP_INTERVAL_SECONDS,
-    DEFAULT_WINDOW_CHUNK_HOURS,
-    DEFAULT_WINDOW_CHUNK_REVS,
-    EXIT_SUCCESS,
-    EXIT_PARTIAL,
-    EXIT_FAILED,
-    # 枚举
-    RunnerStatus,
-    RunnerPhase,
-    # 异常
-    WatermarkConstraintError,
-    # 数据类
-    RepoSpec,
-    JobSpec,
+    VALID_REPO_TYPES,
+    AggregatedResult,
     BackfillConfig,
     IncrementalConfig,
-    RunnerContext,
-    SyncResult,
-    TimeWindowChunk,
+    JobSpec,
+    # 数据类
+    RepoSpec,
     RevisionWindowChunk,
-    AggregatedResult,
-    # 函数
-    split_time_window,
-    split_revision_window,
-    calculate_backfill_window,
-    validate_watermark_constraint,
-    get_script_path,
-    build_sync_command,
-    get_connection,
-    refresh_vfacts,
-    get_exit_code,
-    create_parser,
-    parse_args,
+    RunnerContext,
+    RunnerPhase,
+    # 枚举
+    RunnerStatus,
+    SyncResult,
     # 类
     SyncRunner,
+    TimeWindowChunk,
+    # 异常
+    WatermarkConstraintError,
+    build_sync_command,
+    calculate_backfill_window,
+    create_parser,
+    get_connection,
+    get_exit_code,
+    get_script_path,
+    parse_args,
+    refresh_vfacts,
+    split_revision_window,
+    # 函数
+    split_time_window,
+    validate_watermark_constraint,
 )
-
 
 __all__ = [
     # 常量

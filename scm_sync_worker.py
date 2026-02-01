@@ -24,25 +24,27 @@ import warnings
 
 # 导出核心模块的所有公共 API（向后兼容）
 from engram.logbook.scm_sync_worker_core import (
-    # 类型
-    SyncExecutorType,
     # 数据类
     HeartbeatManager,
-    # 函数
-    get_db_connection,
-    generate_run_id,
-    read_cursor_before,
-    insert_sync_run_start,
-    insert_sync_run_finish,
-    mark_dead,
-    fail_retry,
-    get_worker_config_from_module,
-    get_transient_error_backoff_wrapper as _get_transient_error_backoff,
-    set_executor,
-    get_executor,
+    # 类型
+    SyncExecutorType,
     default_sync_handler,
     execute_sync_job,
+    fail_retry,
+    generate_run_id,
+    # 函数
+    get_db_connection,
+    get_executor,
+    get_worker_config_from_module,
+    insert_sync_run_finish,
+    insert_sync_run_start,
+    mark_dead,
     process_one_job,
+    read_cursor_before,
+    set_executor,
+)
+from engram.logbook.scm_sync_worker_core import (
+    get_transient_error_backoff_wrapper as _get_transient_error_backoff,
 )
 
 # 额外导出（兼容旧代码）

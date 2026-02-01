@@ -19,12 +19,11 @@ Options:
 
 import argparse
 import json
-import os
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 def parse_timestamp(ts: str) -> datetime:
@@ -41,10 +40,10 @@ def parse_timestamp(ts: str) -> datetime:
 def load_acceptance_runs(runs_dir: Path) -> list[dict[str, Any]]:
     """Load all acceptance run records from directory."""
     records = []
-    
+
     if not runs_dir.exists():
         return records
-    
+
     for path in sorted(runs_dir.glob("*.json")):
         try:
             with open(path) as f:
@@ -53,7 +52,7 @@ def load_acceptance_runs(runs_dir: Path) -> list[dict[str, Any]]:
                 records.append(data)
         except (json.JSONDecodeError, OSError) as e:
             print(f"[WARN] Failed to load {path}: {e}", file=sys.stderr)
-    
+
     return records
 
 
@@ -80,11 +79,11 @@ def group_records(
     Records are sorted by timestamp descending within each group.
     """
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
-    
+
     for record in records:
         key = get_group_key(record)
         groups[key].append(record)
-    
+
     # Sort each group by timestamp descending, keep last N
     for key in groups:
         groups[key] = sorted(
@@ -92,7 +91,7 @@ def group_records(
             key=lambda r: r.get("timestamp", ""),
             reverse=True,
         )[:limit]
-    
+
     return dict(groups)
 
 
@@ -100,16 +99,16 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute summary statistics for a group of records."""
     if not records:
         return {"count": 0}
-    
+
     pass_count = sum(1 for r in records if r.get("result") == "PASS")
     fail_count = sum(1 for r in records if r.get("result") == "FAIL")
     partial_count = sum(1 for r in records if r.get("result") == "PARTIAL")
-    
+
     durations = [r["duration_seconds"] for r in records if "duration_seconds" in r]
     avg_duration = sum(durations) / len(durations) if durations else None
-    
+
     latest = records[0] if records else None
-    
+
     return {
         "count": len(records),
         "pass_count": pass_count,
@@ -140,15 +139,15 @@ def render_markdown(
         "| Name | Profile | Workflow | Pass Rate | Latest | Commit | Avg Duration |",
         "|------|---------|----------|-----------|--------|--------|--------------|",
     ]
-    
+
     # Sort groups by name, then workflow, then profile
     sorted_keys = sorted(groups.keys(), key=lambda k: (k[0], k[2], k[1]))
-    
+
     for key in sorted_keys:
         name, profile, workflow = key
         records = groups[key]
         stats = compute_stats(records)
-        
+
         # Format pass rate with emoji
         pass_rate = stats["pass_rate"]
         if pass_rate == 1.0:
@@ -159,7 +158,7 @@ def render_markdown(
             rate_str = f"🔴 {int(pass_rate * 100)}%"
         else:
             rate_str = "⚫ N/A"
-        
+
         # Format latest result
         latest_result = stats.get("latest_result", "N/A")
         if latest_result == "PASS":
@@ -170,36 +169,36 @@ def render_markdown(
             result_str = "🟡 PARTIAL"
         else:
             result_str = latest_result
-        
+
         # Format duration
         avg_dur = stats.get("avg_duration_seconds")
         dur_str = f"{avg_dur}s" if avg_dur else "-"
-        
+
         # Format commit
         commit_str = f"`{stats.get('latest_commit', '-')}`" if stats.get('latest_commit') else "-"
-        
+
         lines.append(
             f"| {name} | {profile} | {workflow} | {rate_str} | {result_str} | {commit_str} | {dur_str} |"
         )
-    
+
     lines.extend([
         "",
         "## 详细记录",
         "",
     ])
-    
+
     # Detailed records per group
     for key in sorted_keys:
         name, profile, workflow = key
         records = groups[key]
-        
+
         lines.extend([
             f"### {name} ({profile} / {workflow})",
             "",
             "| Timestamp | Result | Commit | Duration | Artifacts |",
             "|-----------|--------|--------|----------|-----------|",
         ])
-        
+
         for record in records:
             ts = record.get("timestamp", "N/A")
             # Shorten timestamp for display
@@ -211,16 +210,16 @@ def render_markdown(
                     ts_short = ts[:16]
             else:
                 ts_short = ts
-            
+
             result = record.get("result", "N/A")
             commit = record.get("commit", "")[:8] if record.get("commit") else "-"
             duration = record.get("duration_seconds")
             dur_str = f"{duration}s" if duration else "-"
-            
+
             artifacts_dir = record.get("artifacts_dir", "-")
             artifacts_count = len(record.get("artifacts", []))
             artifacts_str = f"`{artifacts_dir}` ({artifacts_count} files)" if artifacts_dir != "-" else "-"
-            
+
             # Result with emoji
             if result == "PASS":
                 result_str = "✅ PASS"
@@ -230,13 +229,13 @@ def render_markdown(
                 result_str = "🟡 PARTIAL"
             else:
                 result_str = result
-            
+
             lines.append(
                 f"| {ts_short} | {result_str} | `{commit}` | {dur_str} | {artifacts_str} |"
             )
-        
+
         lines.append("")
-    
+
     lines.extend([
         "---",
         "",
@@ -244,12 +243,12 @@ def render_markdown(
         "",
         "查看使用说明: [docs/acceptance/00_acceptance_matrix.md](../../docs/acceptance/00_acceptance_matrix.md#自动汇总产物)",
     ])
-    
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         f.write("\n".join(lines))
         f.write("\n")
-    
+
     print(f"[OK] Markdown matrix written to: {output_path}")
 
 
@@ -264,15 +263,15 @@ def render_json(
         "limit_per_group": limit,
         "groups": [],
     }
-    
+
     # Sort groups by name, then workflow, then profile
     sorted_keys = sorted(groups.keys(), key=lambda k: (k[0], k[2], k[1]))
-    
+
     for key in sorted_keys:
         name, profile, workflow = key
         records = groups[key]
         stats = compute_stats(records)
-        
+
         group_entry = {
             "name": name,
             "profile": profile,
@@ -293,7 +292,7 @@ def render_json(
             ],
         }
         output["groups"].append(group_entry)
-    
+
     # Summary stats
     all_records = [r for records in groups.values() for r in records]
     output["summary"] = {
@@ -304,12 +303,12 @@ def render_json(
             if all_records else 0
         ),
     }
-    
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    
+
     print(f"[OK] JSON matrix written to: {output_path}")
 
 
@@ -343,39 +342,39 @@ def main() -> int:
         action="store_true",
         help="Only output Markdown, skip JSON",
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.json_only and args.md_only:
         print("Error: --json-only and --md-only are mutually exclusive", file=sys.stderr)
         return 1
-    
+
     runs_dir = Path(args.runs_dir)
     output_dir = Path(args.output_dir)
-    
+
     # Load records
     records = load_acceptance_runs(runs_dir)
-    
+
     if not records:
         print(f"[INFO] No acceptance run records found in {runs_dir}")
         print("[INFO] Generating empty matrix files...")
-        
+
         # Still generate empty files for CI artifact consistency
         groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     else:
         print(f"[INFO] Loaded {len(records)} acceptance run records")
         groups = group_records(records, limit=args.limit)
         print(f"[INFO] Grouped into {len(groups)} groups")
-    
+
     # Render outputs
     if not args.json_only:
         md_path = output_dir / "acceptance-matrix.md"
         render_markdown(groups, md_path, args.limit)
-    
+
     if not args.md_only:
         json_path = output_dir / "acceptance-matrix.json"
         render_json(groups, json_path, args.limit)
-    
+
     return 0
 
 

@@ -53,6 +53,17 @@
 
 > 如未修改上述文件，可跳过此节。
 
+### 迭代文档变更（如修改以下文件则必填）
+
+> 涉及 `.iteration/**`、`docs/acceptance/iteration_*_*.md`、`docs/acceptance/00_acceptance_matrix.md` 时，请勾选并说明：
+
+- [ ] **已阅读** [迭代文档本地草稿工作流](docs/dev/iteration_local_drafts.md)
+- [ ] **已运行** `make check-iteration-docs` 本地验证通过（或确认 CI 会自动检查）
+- [ ] **未引入 .iteration/ 链接**（禁止在文档中链接到 .iteration/ 目录）
+- [ ] **SUPERSEDED 声明一致**（如标记迭代为已取代，regression 文件顶部有正确声明）
+
+> 如未修改上述文件，可跳过此节。便捷命令：`make iteration-init N=<编号>` 初始化 / `make iteration-promote N=<编号>` 晋升
+
 ### 提交前检查
 
 提交前运行以下命令验证无旧阶段别名/历史命名：

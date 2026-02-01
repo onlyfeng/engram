@@ -20,12 +20,11 @@
 import argparse
 import glob as glob_module
 import json
-import os
 import re
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Set, Dict, Optional, Literal
+from typing import List, Literal, Optional, Set
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -164,15 +163,15 @@ def build_text_path_pattern() -> re.Pattern:
     """构建纯文本路径检测的正则表达式"""
     # 前缀匹配：templates/xxx, gateway/xxx 等
     prefix_patterns = [re.escape(p) + r'[a-zA-Z0-9_\-./]+' for p in PATH_PREFIXES]
-    
+
     # 扩展名匹配：仅匹配包含路径分隔符的引用（如 path/to/file.py）
     # 这样可以避免将 "artifact_gc.py" 这类仅文件名的引用误判
     ext_patterns = [r'[a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-./]+' + re.escape(ext) for ext in COMMON_EXTENSIONS]
-    
+
     # 合并所有模式
     all_patterns = prefix_patterns + ext_patterns
     combined = r'(?:' + '|'.join(all_patterns) + r')'
-    
+
     # 确保路径不是 URL 的一部分，使用单词边界或特定分隔符
     # 匹配 ` ` (反引号包围)、空格后、或行首的路径
     return re.compile(r'(?:^|[\s`"\'\(])(' + combined + r')(?:[\s`"\'\)]|$)', re.MULTILINE)
@@ -213,7 +212,7 @@ class LinkReport:
     docs_files_scanned: int = 0
     entrypoint_broken_count: int = 0
     docs_broken_count: int = 0
-    
+
     def to_dict(self) -> dict:
         """转换为字典"""
         return {
@@ -263,17 +262,17 @@ def resolve_link_path(source_file: Path, target_path: str, project_root: Path) -
     """
     # 移除锚点
     clean_path = target_path.split("#")[0] if "#" in target_path else target_path
-    
+
     # 移除查询字符串
     clean_path = clean_path.split("?")[0] if "?" in clean_path else clean_path
-    
+
     if not clean_path:
         return source_file  # 纯锚点链接，返回源文件
-    
+
     # 如果是绝对路径（相对于项目根目录）
     if clean_path.startswith("/"):
         return project_root / clean_path.lstrip("/")
-    
+
     # 相对路径，相对于源文件所在目录
     return (source_file.parent / clean_path).resolve()
 
@@ -330,27 +329,27 @@ def is_entrypoint_file(file_path: Path, project_root: Path) -> bool:
         rel_path = file_path.relative_to(project_root)
         rel_str = str(rel_path)
         parts = rel_path.parts
-        
+
         # 项目根目录的 README.md
         if rel_str == "README.md":
             return True
-        
+
         # docs/README.md
         if rel_str == "docs/README.md":
             return True
-        
+
         # docs/*/README.md 模式（如 docs/logbook/README.md）
         if len(parts) == 3 and parts[0] == "docs" and parts[2] == "README.md":
             return True
-        
+
         # apps/*/README.md 模式
         if len(parts) == 3 and parts[0] == "apps" and parts[2] == "README.md":
             return True
-        
+
         # apps/*/docs/README.md 模式
         if len(parts) == 4 and parts[0] == "apps" and parts[2] == "docs" and parts[3] == "README.md":
             return True
-        
+
         return False
     except ValueError:
         return False
@@ -376,33 +375,33 @@ def check_file_links(
     """
     broken_links = []
     checked_count = 0
-    
+
     try:
         content = file_path.read_text(encoding="utf-8")
     except Exception as e:
         print(f"警告: 无法读取文件 {file_path}: {e}", file=sys.stderr)
         return 0, []
-    
+
     relative_source = file_path.relative_to(project_root)
-    
+
     # 自动检测来源类型
     if source_type is None:
         source_type = "entrypoint" if is_entrypoint_file(file_path, project_root) else "docs"
-    
+
     # 检查 Markdown 链接
     md_links = extract_markdown_links(content)
     for line_num, link_text, target_path in md_links:
         # 跳过忽略的模式
         if any(pattern in target_path for pattern in ignore_patterns):
             continue
-        
+
         # 跳过外部 URL 和纯锚点
         if should_ignore_url(target_path) or is_anchor_only(target_path):
             continue
-        
+
         checked_count += 1
         resolved = resolve_link_path(file_path, target_path, project_root)
-        
+
         if not resolved.exists():
             broken_links.append(BrokenLink(
                 source_file=str(relative_source),
@@ -413,25 +412,25 @@ def check_file_links(
                 reason="文件不存在",
                 source_type=source_type
             ))
-    
+
     # 检查纯文本路径引用
     text_refs = extract_text_references(content)
     for line_num, target_path in text_refs:
         # 跳过忽略的模式
         if any(pattern in target_path for pattern in ignore_patterns):
             continue
-        
+
         checked_count += 1
-        
+
         # 纯文本引用通常是相对于项目根目录
         resolved = project_root / target_path
-        
+
         # 也尝试相对于源文件目录
         if not resolved.exists():
             alt_resolved = (file_path.parent / target_path).resolve()
             if alt_resolved.exists():
                 resolved = alt_resolved
-        
+
         if not resolved.exists():
             broken_links.append(BrokenLink(
                 source_file=str(relative_source),
@@ -442,7 +441,7 @@ def check_file_links(
                 reason="文件不存在",
                 source_type=source_type
             ))
-    
+
     return checked_count, broken_links
 
 
@@ -469,11 +468,11 @@ def scan_directory(
     all_broken = []
     entrypoint_count = 0
     docs_count = 0
-    
+
     if not scan_dir.exists():
         print(f"警告: 目录不存在 {scan_dir}", file=sys.stderr)
         return 0, 0, [], 0, 0
-    
+
     for md_file in scan_dir.rglob("*.md"):
         # 检查是否在排除目录中
         try:
@@ -487,23 +486,23 @@ def scan_directory(
                 continue
         except ValueError:
             pass
-        
+
         files_count += 1
-        
+
         # 确定来源类型
         file_source_type = source_type
         if file_source_type is None:
             file_source_type = "entrypoint" if is_entrypoint_file(md_file, project_root) else "docs"
-        
+
         if file_source_type == "entrypoint":
             entrypoint_count += 1
         else:
             docs_count += 1
-        
+
         checked, broken = check_file_links(md_file, project_root, ignore_patterns, file_source_type)
         total_checked += checked
         all_broken.extend(broken)
-    
+
     return files_count, total_checked, all_broken, entrypoint_count, docs_count
 
 
@@ -528,15 +527,15 @@ def scan_file(
     if not file_path.exists():
         print(f"警告: 文件不存在 {file_path}", file=sys.stderr)
         return 0, [], None
-    
+
     if not file_path.suffix.lower() == ".md":
         print(f"警告: 非 Markdown 文件 {file_path}", file=sys.stderr)
         return 0, [], None
-    
+
     # 确定来源类型
     if source_type is None:
         source_type = "entrypoint" if is_entrypoint_file(file_path, project_root) else "docs"
-    
+
     checked, broken = check_file_links(file_path, project_root, ignore_patterns, source_type)
     return checked, broken, source_type
 
@@ -642,22 +641,22 @@ def main():
         action="store_true",
         help="在扫描目录时也包含默认入口文件"
     )
-    
+
     args = parser.parse_args()
-    
+
     project_root = Path(args.project_root).resolve()
     # 合并命令行忽略模式和内置忽略模式
     ignore_patterns = set(args.ignore_patterns) | set(BUILTIN_IGNORE_PATTERNS)
-    
+
     # 确定扫描目标
     scan_dirs: List[str] = []
     scan_files: List[str] = []
-    
+
     if args.entrypoints:
         # 仅扫描入口文件
         entrypoint_paths = discover_entrypoint_files(project_root)
         scan_files = [str(p.relative_to(project_root)) for p in entrypoint_paths]
-        print(f"模式: 仅扫描入口文件（entrypoints）")
+        print("模式: 仅扫描入口文件（entrypoints）")
     elif args.paths:
         # 区分目录和文件
         for path in args.paths:
@@ -671,16 +670,16 @@ def main():
     else:
         # 默认扫描 docs 目录 + 自动发现的 apps/*/docs/
         scan_dirs = DEFAULT_SCAN_DIRS.copy()
-        
+
         # 自动发现 apps/*/docs/ 目录
         apps_docs_dirs = discover_apps_docs_dirs(project_root)
         for apps_dir in apps_docs_dirs:
             if apps_dir not in scan_dirs:
                 scan_dirs.append(apps_dir)
-        
+
         # 添加默认扫描文件
         scan_files = DEFAULT_SCAN_FILES.copy()
-    
+
     # 如果指定了 --include-entrypoints，添加默认入口文件
     if args.include_entrypoints and not args.entrypoints:
         entrypoint_paths = discover_entrypoint_files(project_root)
@@ -688,7 +687,7 @@ def main():
             rel_path = str(ep.relative_to(project_root))
             if rel_path not in scan_files:
                 scan_files.append(rel_path)
-    
+
     print(f"项目根目录: {project_root}")
     if scan_dirs:
         print(f"扫描目录: {scan_dirs}")
@@ -697,71 +696,71 @@ def main():
     if args.verbose and ignore_patterns:
         print(f"忽略模式: {ignore_patterns}")
     print()
-    
+
     # 初始化报告
     report = LinkReport(
         scan_dirs=scan_dirs,
         scan_files=scan_files,
         ignored_patterns=list(ignore_patterns)
     )
-    
+
     # 扫描所有目录
     for rel_dir in scan_dirs:
         scan_path = project_root / rel_dir
         print(f"扫描目录: {rel_dir}...")
-        
+
         files_count, checked_count, broken, ep_count, docs_count = scan_directory(
             scan_path, project_root, ignore_patterns
         )
-        
+
         report.files_scanned += files_count
         report.total_links_checked += checked_count
         report.broken_links.extend(broken)
         report.entrypoint_files_scanned += ep_count
         report.docs_files_scanned += docs_count
-        
+
         if args.verbose:
             print(f"  - 文件数: {files_count} (entrypoint: {ep_count}, docs: {docs_count})")
             print(f"  - 链接数: {checked_count}")
             print(f"  - 失效数: {len(broken)}")
-    
+
     # 扫描所有单独的文件
     for rel_file in scan_files:
         file_path = project_root / rel_file
         print(f"扫描文件: {rel_file}...")
-        
+
         checked_count, broken, source_type = scan_file(
             file_path, project_root, ignore_patterns
         )
-        
+
         if source_type is not None:
             report.files_scanned += 1
             report.total_links_checked += checked_count
             report.broken_links.extend(broken)
-            
+
             if source_type == "entrypoint":
                 report.entrypoint_files_scanned += 1
             else:
                 report.docs_files_scanned += 1
-            
+
             if args.verbose:
                 print(f"  - 类型: {source_type}")
                 print(f"  - 链接数: {checked_count}")
                 print(f"  - 失效数: {len(broken)}")
-    
+
     # 统计各类型的失效链接数
     report.entrypoint_broken_count = sum(1 for link in report.broken_links if link.source_type == "entrypoint")
     report.docs_broken_count = sum(1 for link in report.broken_links if link.source_type == "docs")
-    
+
     # 确保输出目录存在
     output_dir = project_root / args.output
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 写入报告
     report_path = output_dir / "docs_link_report.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
-    
+
     # 输出摘要
     print()
     print("=" * 60)
@@ -775,16 +774,16 @@ def main():
     print(f"  - entrypoint: {report.entrypoint_broken_count}")
     print(f"  - docs: {report.docs_broken_count}")
     print(f"报告路径: {report_path}")
-    
+
     if report.broken_links:
         print()
         print("失效链接列表:")
         print("-" * 60)
-        
+
         # 按来源类型分组显示
         entrypoint_broken = [link for link in report.broken_links if link.source_type == "entrypoint"]
         docs_broken = [link for link in report.broken_links if link.source_type == "docs"]
-        
+
         if entrypoint_broken:
             print()
             print("[ENTRYPOINT] 入口文件中的失效链接:")
@@ -792,7 +791,7 @@ def main():
                 print(f"  [{link.link_type}] {link.source_file}:{link.line_number}")
                 print(f"    目标: {link.target_path}")
                 print(f"    原因: {link.reason}")
-        
+
         if docs_broken:
             print()
             print("[DOCS] 文档文件中的失效链接:")
@@ -800,7 +799,7 @@ def main():
                 print(f"  [{link.link_type}] {link.source_file}:{link.line_number}")
                 print(f"    目标: {link.target_path}")
                 print(f"    原因: {link.reason}")
-        
+
         # 返回非零退出码表示有失效链接
         sys.exit(1)
     else:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
 from typing_extensions import TypedDict
 
 from .artifact_store import get_default_store

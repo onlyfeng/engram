@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import yaml
 import psycopg
+import yaml
 
 from engram.logbook.errors import ValidationError
 

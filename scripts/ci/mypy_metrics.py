@@ -369,32 +369,32 @@ def generate_metrics_report(
     }
 
     if verbose:
-        print(f"=== mypy 指标报告 ===")
+        print("=== mypy 指标报告 ===")
         print(f"生成时间: {report['generated_at']}")
         print(f"Baseline 文件: {baseline_path}")
         print()
-        print(f"[Summary]")
+        print("[Summary]")
         print(f"  总错误数: {baseline_data['total_errors']}")
         print(f"  总 note 数: {baseline_data['total_notes']}")
         print(f"  总行数: {baseline_data['total_lines']}")
         print()
-        print(f"[按目录分布]")
+        print("[按目录分布]")
         for dir_prefix, stats in by_directory.items():
             print(f"  {dir_prefix}: {stats['errors']} errors, {stats['notes']} notes")
         print()
         if baseline_data["error_codes"]:
-            print(f"[按 error-code 分布（top 10）]")
+            print("[按 error-code 分布（top 10）]")
             for code, count in sorted(
                 baseline_data["error_codes"].items(), key=lambda x: x[1], reverse=True
             )[:10]:
                 print(f"  [{code}]: {count}")
             print()
         if top_files:
-            print(f"[按文件分布（top 10）]")
+            print("[按文件分布（top 10）]")
             for item in top_files[:10]:
                 print(f"  {item['file']}: {item['errors']} errors")
             print()
-        print(f"[Strict Island 配置]")
+        print("[Strict Island 配置]")
         print(f"  路径数: {strict_island['count']}")
         for i, path in enumerate(strict_island["paths"]):
             module = strict_island["modules"][i] if i < len(strict_island["modules"]) else ""

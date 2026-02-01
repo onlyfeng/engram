@@ -23,17 +23,17 @@ from pathlib import Path
 
 # 导入主检查模块
 sys.path.insert(0, str(Path(__file__).parent))
+import argparse
+import json
+
 from check_links import (
-    PROJECT_ROOT,
-    DEFAULT_OUTPUT_DIR,
     BUILTIN_IGNORE_PATTERNS,
+    DEFAULT_OUTPUT_DIR,
+    PROJECT_ROOT,
     LinkReport,
     discover_entrypoint_files,
     scan_file,
 )
-
-import argparse
-import json
 
 
 def main():
@@ -73,59 +73,59 @@ def main():
         default=[],
         help="要忽略的路径模式列表"
     )
-    
+
     args = parser.parse_args()
-    
+
     project_root = Path(args.project_root).resolve()
     ignore_patterns = set(args.ignore_patterns) | set(BUILTIN_IGNORE_PATTERNS)
-    
+
     # 发现入口文件
     entrypoint_paths = discover_entrypoint_files(project_root)
     scan_files = [str(p.relative_to(project_root)) for p in entrypoint_paths]
-    
+
     print(f"项目根目录: {project_root}")
     print(f"入口文件数: {len(scan_files)}")
     for f in scan_files:
         print(f"  - {f}")
     print()
-    
+
     # 初始化报告
     report = LinkReport(
         scan_files=scan_files,
         ignored_patterns=list(ignore_patterns)
     )
-    
+
     # 扫描所有入口文件
     for rel_file in scan_files:
         file_path = project_root / rel_file
         print(f"扫描: {rel_file}...")
-        
+
         checked_count, broken, source_type = scan_file(
             file_path, project_root, ignore_patterns, source_type="entrypoint"
         )
-        
+
         if source_type is not None:
             report.files_scanned += 1
             report.total_links_checked += checked_count
             report.broken_links.extend(broken)
             report.entrypoint_files_scanned += 1
-            
+
             if args.verbose:
                 print(f"  - 链接数: {checked_count}")
                 print(f"  - 失效数: {len(broken)}")
-    
+
     # 统计失效链接
     report.entrypoint_broken_count = len(report.broken_links)
-    
+
     # 确保输出目录存在
     output_dir = project_root / args.output
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 写入报告
     report_path = output_dir / "entrypoints_link_report.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
-    
+
     # 输出摘要
     print()
     print("=" * 50)
@@ -135,7 +135,7 @@ def main():
     print(f"检查链接数: {report.total_links_checked}")
     print(f"失效链接数: {report.entrypoint_broken_count}")
     print(f"报告路径: {report_path}")
-    
+
     if report.broken_links:
         print()
         print("失效链接列表:")
@@ -144,7 +144,7 @@ def main():
             print(f"  [{link.link_type}] {link.source_file}:{link.line_number}")
             print(f"    目标: {link.target_path}")
             print(f"    原因: {link.reason}")
-        
+
         sys.exit(1)
     else:
         print()

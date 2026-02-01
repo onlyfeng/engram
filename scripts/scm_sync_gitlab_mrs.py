@@ -27,23 +27,22 @@ warnings.warn(
 )
 
 # 从包内模块重新导出所有 API
+from engram.logbook.gitlab_client import GitLabClient
 from engram.logbook.scm_sync_tasks.gitlab_mrs import (
     # 数据类
     GitLabMergeRequest,
-    # 解析函数
-    parse_merge_request,
-    # 辅助函数
-    map_gitlab_state_to_status,
+    # 同步主函数
+    backfill_gitlab_mrs,
     build_mr_id,
     ensure_repo,
     # 数据库操作
     insert_merge_requests,
-    # 同步主函数
-    backfill_gitlab_mrs,
+    # 辅助函数
+    map_gitlab_state_to_status,
+    # 解析函数
+    parse_merge_request,
     sync_gitlab_mrs_incremental,
 )
-from engram.logbook.gitlab_client import GitLabClient
-
 
 __all__ = [
     "GitLabClient",

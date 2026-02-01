@@ -5,6 +5,15 @@
 > - [根 README 快速开始](../../README.md#mcp-配置cursoride-集成) — 部署与健康检查
 > - [根 README §统一栈验证入口](../../README.md#统一栈验证入口) — 验证命令与脚本
 > - [失败降级文档](05_failure_degradation.md) — 降级机制与 Outbox 详解
+>
+> **外部参考**：
+> - [MCP 协议规范][mcp-spec] — Model Context Protocol 官方规范
+> - [MCP JSON-RPC 传输规范][mcp-transport] — HTTP 传输层协议细节
+> - [Cursor MCP 配置指南][cursor-mcp] — Cursor IDE 官方 MCP 集成文档
+
+[mcp-spec]: https://modelcontextprotocol.io/specification "MCP Protocol Specification"
+[mcp-transport]: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports "MCP Transports - Streamable HTTP"
+[cursor-mcp]: https://docs.cursor.com/context/model-context-protocol "Cursor MCP Documentation"
 
 ## 方案 A（推荐）：Cursor -> Memory Gateway -> OpenMemory
 优点：
@@ -435,3 +444,40 @@ Gateway `/mcp` 端点支持两种协议格式，通过请求体字段自动识�
 - `GET/PUT/DELETE /mcp`：返回 405，错误码 `-32600`
 
 详细错误码映射见 `README.md`。
+
+---
+
+## 外部参考
+
+本章节汇总与 MCP 集成相关的外部文档，便于追踪协议变更与最佳实践。
+
+### MCP 协议规范
+
+| 资源 | 说明 |
+|------|------|
+| [MCP 协议规范][mcp-spec] | Model Context Protocol 核心规范，定义 JSON-RPC 消息格式、工具调用接口 |
+| [MCP 传输层规范][mcp-transport] | HTTP Streamable 传输协议，包含 CORS、Session 管理等细节 |
+| [MCP 工具定义规范][mcp-tools] | `tools/list` 与 `tools/call` 的请求/响应格式 |
+
+### Cursor 集成
+
+| 资源 | 说明 |
+|------|------|
+| [Cursor MCP 文档][cursor-mcp] | Cursor IDE 官方 MCP 配置与使用指南 |
+| [Cursor Agent 模式][cursor-agent] | Agent 模式下的 MCP 工具调用行为 |
+
+### 相关 ADR
+
+| ADR | 说明 |
+|-----|------|
+| [MCP JSON-RPC 错误码契约](../contracts/mcp_jsonrpc_error_v1.md) | 本项目 MCP 错误码映射规范 |
+
+---
+
+> **版本追踪**：本文档基于 MCP 规范 2025-03-26 版本编写。当上游规范更新时，请同步检查兼容性。
+
+[mcp-spec]: https://modelcontextprotocol.io/specification "MCP Protocol Specification"
+[mcp-transport]: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports "MCP Transports"
+[mcp-tools]: https://modelcontextprotocol.io/specification/2025-03-26/server/tools "MCP Tools"
+[cursor-mcp]: https://docs.cursor.com/context/model-context-protocol "Cursor MCP Documentation"
+[cursor-agent]: https://docs.cursor.com/chat/agent "Cursor Agent Mode"

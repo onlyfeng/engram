@@ -26,7 +26,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Protocol, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, cast
 from urllib.parse import quote
 
 import requests

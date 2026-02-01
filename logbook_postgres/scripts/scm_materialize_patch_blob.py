@@ -5,6 +5,5 @@
 
 from scm_materialize_patch_blob import main
 
-
 if __name__ == "__main__":
     main()

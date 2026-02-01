@@ -37,7 +37,7 @@ from typing import Any, Optional
 # 尝试导入 jsonschema
 try:
     import jsonschema
-    from jsonschema import Draft202012Validator, ValidationError, SchemaError
+    from jsonschema import Draft202012Validator, SchemaError, ValidationError
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
@@ -89,11 +89,11 @@ class FixtureValidationResult:
     is_valid_against_schema: bool = True
     json_error: Optional[str] = None
     schema_error: Optional[str] = None
-    
+
     @property
     def overall_valid(self) -> bool:
         return self.is_valid_json and self.is_valid_against_schema
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "fixture_file": self.fixture_file,
@@ -119,17 +119,17 @@ class SchemaValidationResult:
     example_errors: list[dict] = field(default_factory=list)
     # 关联的 fixtures 校验结果
     fixture_results: list[FixtureValidationResult] = field(default_factory=list)
-    
+
     @property
     def fixtures_valid(self) -> bool:
         if not self.fixture_results:
             return True
         return all(f.overall_valid for f in self.fixture_results)
-    
+
     @property
     def overall_valid(self) -> bool:
         return self.is_valid_json and self.is_valid_schema and self.examples_valid and self.fixtures_valid
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "file_name": self.file_name,
@@ -160,13 +160,13 @@ class ValidationReport:
     fixtures_validated: bool = False
     results: list[SchemaValidationResult] = field(default_factory=list)
     has_jsonschema: bool = HAS_JSONSCHEMA
-    
+
     @property
     def overall_valid(self) -> bool:
         schemas_ok = self.failed_schemas == 0 and self.has_jsonschema
         fixtures_ok = not self.fixtures_validated or self.failed_fixtures == 0
         return schemas_ok and fixtures_ok
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schemas_dir": self.schemas_dir,
@@ -256,7 +256,7 @@ def validate_schema_definition(schema: dict) -> tuple[bool, Optional[str]]:
     """
     if not HAS_JSONSCHEMA:
         return True, None  # 无法校验，跳过
-    
+
     try:
         Draft202012Validator.check_schema(schema)
         return True, None
@@ -275,14 +275,14 @@ def validate_schema_examples(schema: dict) -> tuple[bool, list[dict]]:
     """
     if not HAS_JSONSCHEMA:
         return True, []  # 无法校验，跳过
-    
+
     examples = schema.get("examples", [])
     if not examples:
         return True, []
-    
+
     errors = []
     validator = Draft202012Validator(schema)
-    
+
     for i, example in enumerate(examples):
         try:
             validator.validate(example)
@@ -292,7 +292,7 @@ def validate_schema_examples(schema: dict) -> tuple[bool, list[dict]]:
                 "error_path": ".".join(str(p) for p in e.absolute_path),
                 "error_message": e.message,
             })
-    
+
     return len(errors) == 0, errors
 
 
@@ -316,20 +316,20 @@ def validate_fixture_against_schema(
         fixture_file=str(fixture_path),
         schema_file=schema_file_name,
     )
-    
+
     # 1. 加载 fixture JSON
     is_valid_json, fixture_data, json_error = validate_json_syntax(fixture_path)
     result.is_valid_json = is_valid_json
     result.json_error = json_error
-    
+
     if not is_valid_json:
         result.is_valid_against_schema = False
         return result
-    
+
     # 2. 使用 schema 校验 fixture
     if not HAS_JSONSCHEMA:
         return result  # 无法校验，跳过
-    
+
     try:
         validator = Draft202012Validator(schema)
         validator.validate(fixture_data)
@@ -341,7 +341,7 @@ def validate_fixture_against_schema(
     except Exception as e:
         result.is_valid_against_schema = False
         result.schema_error = str(e)
-    
+
     return result
 
 
@@ -362,11 +362,11 @@ def discover_fixtures_for_schema(
     fixtures_dir_name = SCHEMA_FIXTURE_MAPPING.get(schema_file_name)
     if not fixtures_dir_name:
         return []
-    
+
     fixtures_dir = schemas_dir / DEFAULT_FIXTURES_DIR / fixtures_dir_name
     if not fixtures_dir.exists():
         return []
-    
+
     return sorted(fixtures_dir.glob("*.json"))
 
 
@@ -390,31 +390,31 @@ def validate_single_schema(
         file_name=file_path.name,
         file_path=str(file_path),
     )
-    
+
     # 1. 校验 JSON 语法
     is_valid_json, schema, json_error = validate_json_syntax(file_path)
     result.is_valid_json = is_valid_json
     result.json_error = json_error
-    
+
     if not is_valid_json:
         result.is_valid_schema = False
         result.examples_valid = False
         return result
-    
+
     # 2. 校验 schema 定义
     is_valid_schema, schema_error = validate_schema_definition(schema)
     result.is_valid_schema = is_valid_schema
     result.schema_error = schema_error
-    
+
     if not is_valid_schema:
         result.examples_valid = False
         return result
-    
+
     # 3. 校验 examples
     examples_valid, example_errors = validate_schema_examples(schema)
     result.examples_valid = examples_valid
     result.example_errors = example_errors
-    
+
     # 4. 校验 fixtures（可选）
     if validate_fixtures and schemas_dir:
         fixture_files = discover_fixtures_for_schema(schemas_dir, file_path.name)
@@ -425,7 +425,7 @@ def validate_single_schema(
                 schema_file_name=file_path.name,
             )
             result.fixture_results.append(fixture_result)
-    
+
     return result
 
 
@@ -449,10 +449,10 @@ def validate_all_schemas(
     """
     report = ValidationReport(schemas_dir=str(schemas_dir))
     report.fixtures_validated = validate_fixtures
-    
+
     if schema_files is None:
         schema_files = SCHEMA_FILES
-    
+
     # 过滤存在的文件
     existing_files = []
     for file_name in schema_files:
@@ -461,22 +461,22 @@ def validate_all_schemas(
             existing_files.append(file_name)
         elif verbose:
             log_warn(f"跳过不存在的文件: {file_name}")
-    
+
     report.total_schemas = len(existing_files)
-    
+
     for file_name in existing_files:
         file_path = schemas_dir / file_name
-        
+
         if verbose:
             log_info(f"校验 {file_name}...")
-        
+
         result = validate_single_schema(
             file_path,
             validate_fixtures=validate_fixtures,
             schemas_dir=schemas_dir,
         )
         report.results.append(result)
-        
+
         # 统计 fixtures
         if validate_fixtures and result.fixture_results:
             for fixture_result in result.fixture_results:
@@ -485,7 +485,7 @@ def validate_all_schemas(
                     report.passed_fixtures += 1
                 else:
                     report.failed_fixtures += 1
-        
+
         # 判断 schema 是否通过（需要考虑 fixtures 校验结果）
         if result.overall_valid:
             report.passed_schemas += 1
@@ -518,7 +518,7 @@ def validate_all_schemas(
                             print(f"      JSON 错误: {fr.json_error}")
                         if fr.schema_error:
                             print(f"      Schema 错误: {fr.schema_error}")
-    
+
     return report
 
 
@@ -531,83 +531,83 @@ def main():
         description="统一 Schema 校验入口",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    
+
     parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
         help="JSON 格式输出结果",
     )
-    
+
     parser.add_argument(
         "--schema",
         type=str,
         default=None,
         help="仅校验指定的 schema 文件（相对于 schemas/ 目录）",
     )
-    
+
     parser.add_argument(
         "--schemas-dir",
         type=Path,
         default=None,
         help="schemas 目录路径（默认 schemas/）",
     )
-    
+
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="详细输出",
     )
-    
+
     parser.add_argument(
         "--output", "-o",
         type=Path,
         default=None,
         help="输出结果到文件",
     )
-    
+
     parser.add_argument(
         "--validate-fixtures",
         action="store_true",
         dest="validate_fixtures",
         help="同时校验 schemas/fixtures/ 目录下的样例数据",
     )
-    
+
     args = parser.parse_args()
-    
+
     # 确定 schemas 目录
     schemas_dir = args.schemas_dir
     if schemas_dir is None:
         schemas_dir = Path(os.environ.get("SCHEMAS_DIR", DEFAULT_SCHEMAS_DIR))
-    
+
     if not schemas_dir.exists():
         log_error(f"schemas 目录不存在: {schemas_dir}")
         sys.exit(2)
-    
+
     # 检查 jsonschema 依赖
     if not HAS_JSONSCHEMA:
         log_warn("jsonschema 未安装，仅执行 JSON 语法校验")
         if not args.json_output:
             log_info("安装 jsonschema: pip install jsonschema")
-    
+
     # 确定要校验的文件
     schema_files = None
     if args.schema:
         schema_files = [args.schema]
-    
+
     # 执行校验
     if not args.json_output and not args.verbose:
         log_info(f"开始校验 schemas 目录: {schemas_dir}")
         if args.validate_fixtures:
             log_info("启用 fixtures 校验")
-    
+
     report = validate_all_schemas(
         schemas_dir=schemas_dir,
         schema_files=schema_files,
         verbose=args.verbose and not args.json_output,
         validate_fixtures=args.validate_fixtures,
     )
-    
+
     # 输出结果
     if args.json_output:
         output_data = report.to_dict()
@@ -626,7 +626,7 @@ def main():
         print(f"  总计:     {report.total_schemas}")
         print(f"  通过:     {report.passed_schemas}")
         print(f"  失败:     {report.failed_schemas}")
-        
+
         # Fixtures 统计
         if report.fixtures_validated:
             print("")
@@ -635,7 +635,7 @@ def main():
             print(f"  通过:     {report.passed_fixtures}")
             print(f"  失败:     {report.failed_fixtures}")
         print("")
-        
+
         # 输出失败详情
         if report.failed_schemas > 0:
             print("失败的 schema:")
@@ -658,7 +658,7 @@ def main():
                             if fr.schema_error:
                                 print(f"        Schema 错误: {fr.schema_error}")
             print("")
-        
+
         # 输出通过列表
         if args.verbose and report.passed_schemas > 0:
             print("通过的 schema:")
@@ -671,18 +671,18 @@ def main():
                             fixture_name = Path(fr.fixture_file).name
                             print(f"      [✓] {fixture_name}")
             print("")
-        
+
         if report.overall_valid:
             log_success("所有 schema 校验通过！")
         else:
             log_error("存在 schema 校验失败！")
-        
+
         # 写入文件
         if args.output:
             with open(args.output, 'w', encoding='utf-8') as f:
                 json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
             log_info(f"结果已写入: {args.output}")
-    
+
     sys.exit(0 if report.overall_valid else 1)
 
 

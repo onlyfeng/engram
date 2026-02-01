@@ -59,6 +59,24 @@
 
 ---
 
+## 外部参考
+
+Gateway 实现遵循 MCP (Model Context Protocol) 规范，以下为关键外部文档：
+
+| 资源 | 说明 |
+|------|------|
+| [MCP 协议规范][mcp-spec] | 核心协议定义，JSON-RPC 消息格式 |
+| [MCP 传输层规范][mcp-transport] | HTTP 传输、CORS、Session 管理 |
+| [Cursor MCP 文档][cursor-mcp] | IDE 集成配置指南 |
+
+> **注意**：外部链接可能随上游更新而变化。如发现失效链接，请参考 [modelcontextprotocol.io](https://modelcontextprotocol.io) 获取最新规范。
+
+[mcp-spec]: https://modelcontextprotocol.io/specification "MCP Protocol Specification"
+[mcp-transport]: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports "MCP Transports"
+[cursor-mcp]: https://docs.cursor.com/context/model-context-protocol "Cursor MCP Documentation"
+
+---
+
 ## 验证入口
 
 **推荐**：通过 Makefile 执行统一栈验证：

@@ -30,7 +30,6 @@ import_preflight.py - Engram 项目导入预检工具
 
 import argparse
 import json
-import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -468,7 +467,7 @@ def check_dockerignore(project_root: Path, verbose: bool = False) -> CheckResult
 
     if dockerignore.exists():
         content = dockerignore.read_text()
-        details.append(f"根目录 .dockerignore 存在")
+        details.append("根目录 .dockerignore 存在")
 
         for pattern in critical_patterns:
             if pattern not in content:

@@ -18,8 +18,6 @@ db_bootstrap - 数据库 bootstrap 预检与角色创建（薄包装器）
 
 from __future__ import annotations
 
-import sys
-
 
 def main() -> None:
     """调用包内 CLI 入口"""

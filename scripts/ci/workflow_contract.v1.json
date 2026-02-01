@@ -1,8 +1,9 @@
 {
   "$schema": "workflow_contract.v1.schema.json",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
   "last_updated": "2026-02-02",
+  "_changelog_v2.3.0": "重构冻结范围：frozen_job_names 精简为 4 个核心 job（Required Checks 引用）；frozen_step_text 精简为 12 个核心 step（artifact/验证流程）；非冻结项改名仅产生 WARNING",
   "_changelog_v2.2.0": "新增 iteration-docs-check job：检查 .iteration/ 链接和 SUPERSEDED 一致性",
   "_changelog_v2.1.0": "CI 合约完善：补全所有 job 的 required_steps（含 cache、verify、artifact 上传步骤）；添加 required_artifact_paths 覆盖 ci.yml 中的 artifact 上传路径",
   "_changelog_v2.0.0": "Phase 1 范围收敛：移除 release workflow 合约（Phase 2 预留）；统一版本号到 semver 格式；移除 SeekDB 组件",
@@ -281,65 +282,31 @@
     ]
   },
   "frozen_job_names": {
-    "_comment": "Job names that are frozen and must match exactly (used for CI contract validation)",
+    "_comment": "仅冻结被 GitHub Required Checks 引用或外部系统依赖的核心 Job Names。非核心 job 改名只产生 WARNING",
+    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 job_names[]；3) 更新 docs/ci_nightly_workflow_refactor/contract.md 第 5.1 节；4) 运行 make validate-workflows",
     "allowlist": [
       "Test (Python ${{ matrix.python-version }})",
       "Lint",
-      "No .iteration/ Tracked Files",
-      "Environment Variable Consistency",
-      "Schema Validation",
-      "Logbook Consistency Check",
-      "Migration Sanity Check",
-      "SQL Migration Safety Check",
-      "Gateway DI Boundaries Check",
-      "SCM Sync Consistency Check",
-      "Gateway ErrorReason Usage Check",
-      "Iteration Docs Check",
       "Workflow Contract Validation",
-      "Unified Stack Full Verification",
-      "Notify Results"
+      "Unified Stack Full Verification"
     ]
   },
   "frozen_step_text": {
-    "_comment": "Step names that are frozen and must match exactly (used for CI contract validation)",
+    "_comment": "仅冻结被外部系统引用（如 artifact 名称、日志搜索）或核心验证流程的 Step Names。非核心 step 改名只产生 WARNING",
+    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 required_jobs[].required_steps（如有引用）；3) 更新 docs/ci_nightly_workflow_refactor/contract.md 第 5.2 节；4) 运行 make validate-workflows",
     "allowlist": [
       "Checkout repository",
       "Set up Python",
-      "Cache pip dependencies",
       "Install dependencies",
-      "Run database migrations",
-      "Verify database migrations (strict mode)",
       "Run unit and integration tests",
       "Run acceptance tests",
       "Upload test results",
       "Upload migration logs",
-      "Run ruff check (lint)",
-      "Run ruff format check",
-      "Run mypy (type check)",
-      "Check no .iteration files tracked",
-      "Check environment variable consistency",
-      "Run schema validation",
       "Upload validation results",
-      "Check logbook configuration consistency",
-      "Check SQL migration files exist",
-      "Check SQL syntax (basic validation)",
-      "Run SQL safety check",
-      "Check Gateway DI boundaries",
-      "Check SCM Sync consistency",
-      "Check Gateway ErrorReason usage",
-      "Check iteration docs consistency",
-      "Validate workflow contract",
-      "Generate validation report (JSON)",
       "Upload validation report",
-      "Detect environment capabilities",
-      "Validate gate contract (full profile)",
+      "Validate workflow contract",
       "Start unified stack with Docker Compose",
-      "Wait for services to be healthy",
-      "Run Gateway integration tests (full profile)",
-      "Run unified stack verification (full)",
-      "Run make verify-unified (full mode)",
-      "Record acceptance run",
-      "Check job results"
+      "Run unified stack verification (full)"
     ]
   }
 }

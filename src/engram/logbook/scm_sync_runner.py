@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import time
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -479,9 +480,6 @@ def validate_watermark_constraint(
 # 迁移指南：
 # - 旧方式: subprocess.run(build_sync_command(ctx, phase, ...))
 # - 新方式: SyncRunner(ctx).run_incremental() 或 .run_backfill(...)
-
-
-import warnings
 
 
 def get_script_path(repo_type: str, job_type: str) -> str:

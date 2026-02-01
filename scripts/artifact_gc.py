@@ -7,14 +7,13 @@ artifact_gc - 制品垃圾回收（测试兼容实现）
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # 确保根目录在 sys.path 中，以支持导入根目录模块
 _ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -26,8 +25,8 @@ from engram.logbook.artifact_ops_audit import (
     write_gc_summary_audit_event,
 )
 from engram.logbook.artifact_store import FileUriStore, LocalArtifactsStore
-from engram.logbook.uri import PhysicalRef, parse_physical_uri
 from engram.logbook.config import get_gc_require_ops_default, get_gc_require_trash_default
+from engram.logbook.uri import PhysicalRef, parse_physical_uri
 
 
 class GCError(Exception):
@@ -276,6 +275,7 @@ def get_referenced_uris(
     if not dsn:
         raise GCDatabaseError("未配置 POSTGRES_DSN")
     from engram_logbook.db import get_connection
+
     from engram.logbook.errors import DbConnectionError
 
     search_path = search_path or ["scm", "logbook", "public"]

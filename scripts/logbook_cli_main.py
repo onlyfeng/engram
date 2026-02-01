@@ -38,9 +38,6 @@ from engram.logbook.cli.artifacts import app as artifacts_app
 # 向后兼容：导出 make_ok_result, make_err_result 等辅助函数
 from engram.logbook.cli.artifacts import (
     make_ok_result,
-    make_err_result,
-    _emit_json,
-    _resolve_uri,
 )
 
 # 创建主 app
@@ -55,6 +52,7 @@ def scm_refresh_vfacts(
 ):
     """刷新 vfacts 视图"""
     import json
+
     import scm_sync_runner
 
     result = scm_sync_runner.refresh_vfacts(dry_run=dry_run, concurrently=concurrently)

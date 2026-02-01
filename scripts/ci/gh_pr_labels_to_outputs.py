@@ -20,7 +20,6 @@ Outputs (to GITHUB_OUTPUT):
 import os
 import sys
 
-
 # Label constants
 LABEL_MIGRATE_DRY_RUN = "ci:seek-migrate-dry-run"
 LABEL_DUAL_READ = "ci:dual-read"
@@ -48,41 +47,41 @@ def write_output(name: str, value: str) -> None:
 def main() -> int:
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     labels_str = os.environ.get("PR_LABELS", "")
-    
+
     # Default values
     has_migrate_label = "false"
     has_dual_read_label = "false"
     has_freeze_override_label = "false"
     has_compat_strict_label = "false"
-    
+
     if event_name == "pull_request":
         labels = parse_labels(labels_str)
         print(f"PR Labels: {labels_str}")
-        
+
         if LABEL_MIGRATE_DRY_RUN in labels:
             has_migrate_label = "true"
             print(f"Found label: {LABEL_MIGRATE_DRY_RUN}")
-        
+
         if LABEL_DUAL_READ in labels:
             has_dual_read_label = "true"
             print(f"Found label: {LABEL_DUAL_READ}")
-        
+
         if LABEL_FREEZE_OVERRIDE in labels:
             has_freeze_override_label = "true"
             print(f"Found label: {LABEL_FREEZE_OVERRIDE}")
-        
+
         if LABEL_COMPAT_STRICT in labels:
             has_compat_strict_label = "true"
             print(f"Found label: {LABEL_COMPAT_STRICT}")
     else:
         print(f"Event type: {event_name} (not pull_request, skipping label check)")
-    
+
     # Write outputs
     write_output("has_migrate_dry_run_label", has_migrate_label)
     write_output("has_dual_read_label", has_dual_read_label)
     write_output("has_freeze_override_label", has_freeze_override_label)
     write_output("has_compat_strict_label", has_compat_strict_label)
-    
+
     return 0
 
 

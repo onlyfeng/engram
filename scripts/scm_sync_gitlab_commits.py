@@ -30,45 +30,6 @@ warnings.warn(
 )
 
 # 从包内模块重新导出所有 API
-from engram.logbook.scm_sync_tasks.gitlab_commits import (
-    # 异常类
-    PatchFetchError,
-    PatchFetchTimeoutError,
-    PatchFetchHttpError,
-    PatchFetchContentTooLargeError,
-    PatchFetchParseError,
-    # 数据类
-    FetchDiffResult,
-    GitCommit,
-    DiffMode,
-    SyncConfig,
-    FetchWindow,
-    AdaptiveWindowState,
-    # 解析函数
-    parse_commit,
-    # 辅助函数
-    format_diff_content,
-    generate_ministat_from_stats,
-    generate_diffstat,
-    compute_commit_fetch_window,
-    select_next_batch,
-    compute_batch_cursor_target,
-    is_unrecoverable_api_error,
-    # 数据库操作
-    ensure_repo,
-    insert_git_commits,
-    update_sync_cursor,
-    # 同步主函数
-    backfill_gitlab_commits,
-    sync_gitlab_commits_incremental,
-    build_mr_id,
-    # 内部辅助函数（测试兼容）
-    _deduplicate_commits,
-    _get_commit_sort_key,
-    _get_commit_timestamp,
-    _parse_iso_datetime,
-)
-from engram.logbook.gitlab_client import GitLabClient
 
 
 def parse_args(argv: Optional[List[str]] = None):

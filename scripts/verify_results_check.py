@@ -48,15 +48,15 @@ except ImportError:
 # 导入门禁配置模块
 try:
     from unified_stack_gate_contract import (
-        ProfileType,
-        StepName,
-        ReasonCode,
         PROFILE_CONFIGS,
-        get_required_steps_for_profile,
-        get_profile_from_env,
-        validate_profile,
-        detect_capabilities,
         CapabilityReport,
+        ProfileType,
+        ReasonCode,
+        StepName,
+        detect_capabilities,
+        get_profile_from_env,
+        get_required_steps_for_profile,
+        validate_profile,
     )
     HAS_GATE_CONTRACT = True
 except ImportError:

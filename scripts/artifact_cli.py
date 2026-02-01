@@ -35,7 +35,8 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 # 直接导入以支持 `from artifact_cli import app, artifacts_app` 兼容导入
-from engram.logbook.cli.artifacts import app, main as artifacts_main
+from engram.logbook.cli.artifacts import app
+from engram.logbook.cli.artifacts import main as artifacts_main
 
 # 兼容别名
 artifacts_app = app

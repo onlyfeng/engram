@@ -40,7 +40,6 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-
 # Environment variables to capture (sanitized)
 CAPTURE_ENV_VARS = [
     "SKIP_DEPLOY",
@@ -123,7 +122,7 @@ def list_artifacts(artifacts_dir: Path) -> list[str]:
     """List all artifact files in the directory."""
     if not artifacts_dir.exists():
         return []
-    
+
     artifacts = []
     for path in sorted(artifacts_dir.rglob("*")):
         if path.is_file():
@@ -164,7 +163,7 @@ def parse_metadata_kv(kv_pairs: Optional[list[str]]) -> dict[str, str]:
     """
     if not kv_pairs:
         return {}
-    
+
     result = {}
     for pair in kv_pairs:
         if "=" not in pair:
@@ -196,7 +195,7 @@ def merge_metadata(
         ValueError: If JSON is invalid or kv format is malformed
     """
     result: dict[str, Any] = {}
-    
+
     # Parse JSON metadata first
     if metadata_json:
         try:
@@ -206,11 +205,11 @@ def merge_metadata(
             result.update(parsed)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in --metadata-json: {e}")
-    
+
     # Parse and merge key=value pairs (these override JSON values)
     kv_dict = parse_metadata_kv(metadata_kv)
     result.update(kv_dict)
-    
+
     return result if result else None
 
 
@@ -239,16 +238,16 @@ def record_acceptance_run(
     timestamp = datetime.datetime.now(datetime.timezone.utc)
     timestamp_str = timestamp.strftime("%Y%m%dT%H%M%SZ")
     timestamp_iso = timestamp.isoformat()
-    
+
     # Auto-detect commit if not provided
     if not commit:
         commit = get_git_commit()
-    
+
     # Use custom command or default to make {name}
     effective_command = command if command is not None else f"make {name}"
-    
+
     artifacts_path = Path(artifacts_dir)
-    
+
     # Build record
     record: dict[str, Any] = {
         "name": name,
@@ -262,26 +261,26 @@ def record_acceptance_run(
         "artifacts_dir": artifacts_dir,
         "artifacts": list_artifacts(artifacts_path),
     }
-    
+
     # Add duration if available
     duration = load_summary_duration(artifacts_path)
     if duration is not None:
         record["duration_seconds"] = duration
-    
+
     # Add metadata if provided
     if metadata:
         record["metadata"] = metadata
-    
+
     # Create output directory
     output_dir = Path(".artifacts/acceptance-runs")
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Write record file
     output_file = output_dir / f"{timestamp_str}_{name}.json"
     with open(output_file, "w") as f:
         json.dump(record, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    
+
     return str(output_file)
 
 
@@ -323,13 +322,13 @@ def main() -> int:
         metavar="KEY=VALUE",
         help="Key=value metadata pairs (can be used multiple times, e.g., --metadata-kv workflow=ci --metadata-kv profile=http_only)",
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         # Merge metadata from JSON and key=value pairs
         metadata = merge_metadata(args.metadata_json, args.metadata_kv)
-        
+
         output_path = record_acceptance_run(
             name=args.name,
             artifacts_dir=args.artifacts_dir,

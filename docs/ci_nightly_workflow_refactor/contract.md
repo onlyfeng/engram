@@ -129,95 +129,82 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ## 5. "禁止回归"的 Step 文本范围
 
+> **设计原则**: 冻结范围应最小化，只冻结真正需要稳定的名称：
+> - 被 GitHub Required Checks 引用的 Job Names
+> - 被外部系统依赖的 Step Names（如 artifact 上传、日志搜索关键词）
+> - 核心验证流程步骤
+
 ### 5.1 Frozen Job Names
 
-以下 Job Name 为"禁止回归"基准，在 `workflow_contract.v1.json` 的 `frozen_job_names.allowlist` 中定义：
+以下 Job Name 为"禁止回归"基准，在 `workflow_contract.v1.json` 的 `frozen_job_names.allowlist` 中定义。
 
-**CI Workflow:**
-- `Test (Python ${{ matrix.python-version }})`
-- `Lint`
-- `No .iteration/ Tracked Files`
-- `Environment Variable Consistency`
-- `Schema Validation`
-- `Logbook Consistency Check`
-- `Migration Sanity Check`
-- `SQL Migration Safety Check`
-- `Gateway DI Boundaries Check`
-- `SCM Sync Consistency Check`
-- `Gateway ErrorReason Usage Check`
-- `Iteration Docs Check`
-- `Workflow Contract Validation`
+**仅冻结被 GitHub Required Checks 引用的核心 Jobs（共 4 个）：**
 
-**Nightly Workflow:**
-- `Unified Stack Full Verification`
-- `Notify Results`
+| Job Name | 原因 |
+|----------|------|
+| `Test (Python ${{ matrix.python-version }})` | Required Check，单元测试门禁 |
+| `Lint` | Required Check，代码质量门禁 |
+| `Workflow Contract Validation` | Required Check，合约校验门禁 |
+| `Unified Stack Full Verification` | Nightly 核心验证 |
+
+**非冻结 Jobs（改名仅产生 WARNING）：**
+- 辅助检查 jobs（如 `Schema Validation`、`Migration Sanity Check` 等）
+- 通知类 jobs（如 `Notify Results`）
 
 ### 5.2 Frozen Step Names
 
-以下 Step Name 为"禁止回归"基准（不允许随意修改）。这些 step name 在 `workflow_contract.v1.json` 的 `frozen_step_text.allowlist` 中定义。
+以下 Step Name 为"禁止回归"基准，在 `workflow_contract.v1.json` 的 `frozen_step_text.allowlist` 中定义。
 
 **冻结 step 验证规则：**
 - `validate_workflows.py` 会检查所有 `required_steps` 中的 step name
-- 如果冻结的 step name 被改名（即使是微小变化），会报告 **ERROR** (`frozen_step_name_changed`)
+- 如果冻结的 step name 被改名，会报告 **ERROR** (`frozen_step_name_changed`)
 - 非冻结的 step name 改名只会报告 **WARNING** (`step_name_changed`)
-- 错误信息会提示："此 step 属于冻结文案，不能改名；如确需改名需同步更新 contract+docs"
+- 错误信息会提示改名流程
 
-**通用 Step（CI 和 Nightly 共享）:**
-- `Checkout repository`
-- `Set up Python`
-- `Cache pip dependencies`
-- `Install dependencies`
+**仅冻结核心步骤（共 12 个）：**
 
-**CI Workflow - test job:**
-- `Run database migrations`
-- `Verify database migrations (strict mode)`
-- `Run unit and integration tests`
-- `Run acceptance tests`
-- `Upload test results`
-- `Upload migration logs`
+| Step Name | 冻结原因 |
+|-----------|----------|
+| `Checkout repository` | 基础步骤，所有 job 依赖 |
+| `Set up Python` | 基础步骤，所有 job 依赖 |
+| `Install dependencies` | 基础步骤，所有 job 依赖 |
+| `Run unit and integration tests` | 核心测试步骤 |
+| `Run acceptance tests` | 核心验收步骤 |
+| `Upload test results` | Artifact 上传，被 CI 系统引用 |
+| `Upload migration logs` | Artifact 上传，被 CI 系统引用 |
+| `Upload validation results` | Artifact 上传，被 CI 系统引用 |
+| `Upload validation report` | Artifact 上传，被 CI 系统引用 |
+| `Validate workflow contract` | 核心合约校验步骤 |
+| `Start unified stack with Docker Compose` | Nightly 核心部署步骤 |
+| `Run unified stack verification (full)` | Nightly 核心验证步骤 |
 
-**CI Workflow - lint job:**
-- `Run ruff check (lint)`
-- `Run ruff format check`
-- `Run mypy (type check)`
+**非冻结 Steps（改名仅产生 WARNING）：**
+- 辅助检查步骤（如 `Check SQL migration files exist`、`Run ruff check (lint)` 等）
+- 中间处理步骤（如 `Cache pip dependencies`、`Generate validation report (JSON)` 等）
 
-**CI Workflow - no-iteration-tracked job:**
-- `Check no .iteration files tracked`
+### 5.3 Rename 流程
 
-**CI Workflow - 检查类 jobs:**
-- `Check environment variable consistency`
-- `Run schema validation`
-- `Upload validation results`
-- `Check logbook configuration consistency`
-- `Check SQL migration files exist`
-- `Check SQL syntax (basic validation)`
-- `Run SQL safety check`
-- `Check Gateway DI boundaries`
-- `Check SCM Sync consistency`
-- `Check Gateway ErrorReason usage`
-- `Check iteration docs consistency`
-- `Validate workflow contract`
-- `Generate validation report (JSON)`
-- `Upload validation report`
+当确需改名冻结的 Job/Step Name 时，按以下步骤操作：
 
-**Nightly Workflow - unified-stack-full job:**
-- `Detect environment capabilities`
-- `Validate gate contract (full profile)`
-- `Start unified stack with Docker Compose`
-- `Wait for services to be healthy`
-- `Run Gateway integration tests (full profile)`
-- `Run unified stack verification (full)`
-- `Run make verify-unified (full mode)`
-- `Record acceptance run`
+**Job Name 改名流程：**
+1. 更新 `.github/workflows/*.yml` 中的 job name
+2. 更新 `scripts/ci/workflow_contract.v1.json`:
+   - `frozen_job_names.allowlist`: 添加新名称，移除旧名称
+   - `job_names[]`: 同步更新对应位置
+   - `required_jobs[].name`: 同步更新
+3. 更新本文档第 2 章和第 5.1 节
+4. 如有 GitHub Required Checks 引用，同步更新 repo settings
+5. 运行 `make validate-workflows` 验证
 
-**Nightly Workflow - notify-results job:**
-- `Check job results`
+**Step Name 改名流程：**
+1. 更新 `.github/workflows/*.yml` 中的 step name
+2. 更新 `scripts/ci/workflow_contract.v1.json`:
+   - `frozen_step_text.allowlist`: 添加新名称，移除旧名称
+   - `required_jobs[].required_steps`: 如有引用，同步更新
+3. 更新本文档第 5.2 节
+4. 运行 `make validate-workflows` 验证
 
-**Release Workflow (Phase 2 预留):**
-
-> Release workflow 的 frozen step names 将在 Phase 2 定义。
-
-### 5.3 Summary 标题/关键提示语
+### 5.4 Summary 标题/关键提示语
 
 以下 Summary 标题为"禁止回归"基准：
 
@@ -539,6 +526,7 @@ Nightly 工作流直接调用 `make acceptance-unified-full`：
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.3.0 | 2026-02-02 | 重构冻结范围：frozen_job_names 精简为 4 个核心 job；frozen_step_text 精简为 12 个核心 step；新增 Rename 流程文档（5.3 节） |
 | v2.2.0 | 2026-02-02 | 新增 iteration-docs-check job：检查 .iteration/ 链接和 SUPERSEDED 一致性 |
 | v2.0.0 | 2026-02-02 | Phase 1 范围收敛：移除 release workflow 合约（Phase 2 预留）；统一版本号到 semver 格式；移除 SeekDB 组件 |
 | v1.12 | 2026-01-30 | 新增 Acceptance 验收测试合约：定义 CI 组合式覆盖 vs Nightly 直接执行的合约、产物要求、record_acceptance_run.py 调用规范 |

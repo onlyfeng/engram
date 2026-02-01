@@ -310,7 +310,7 @@ def write_artifacts(current_errors: Set[str], new_errors: Set[str]) -> None:
     new_content = "\n".join(stable_sort(new_errors)) + "\n" if new_errors else ""
     ARTIFACT_NEW_ERRORS_FILE.write_text(new_content, encoding="utf-8")
 
-    print(f"[INFO] Artifact 文件已写入:")
+    print("[INFO] Artifact 文件已写入:")
     print(f"       - {ARTIFACT_CURRENT_FILE} ({len(current_errors)} 条错误)")
     print(f"       - {ARTIFACT_NEW_ERRORS_FILE} ({len(new_errors)} 条新增错误)")
 

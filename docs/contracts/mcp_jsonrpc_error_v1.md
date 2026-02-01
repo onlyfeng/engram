@@ -96,6 +96,21 @@ interface ErrorData {
 
 ## 3. 错误分类与原因码
 
+### 3.0 错误码命名空间边界
+
+本章节定义了 Gateway 层两类错误码的边界与使用规范。
+
+| 层级 | 字段位置 | 权威来源 | 命名规范 | 用途 | 同名策略 |
+|------|----------|----------|----------|------|----------|
+| MCP/JSON-RPC 层 | `error.data.reason` | `McpErrorReason` (`error_codes.py`) | `UPPER_SNAKE_CASE` | 协议层/系统层错误响应 | 禁止使用 `ToolResultErrorCode.*` |
+| 业务结果层 | `result.error_code` | `ToolResultErrorCode` (`result_error_codes.py`) | `UPPER_SNAKE_CASE` | 工具执行业务层错误 | 禁止使用 `McpErrorReason.*` |
+
+**边界规则**：
+1. `error.data.reason` 只能使用 `McpErrorReason` 中定义的常量
+2. `result.error_code` 只能使用 `ToolResultErrorCode` 中定义的常量
+3. 两个命名空间相互隔离，即使名称相同（如 `MISSING_REQUIRED_PARAM`）也分属不同用途
+4. 违反边界的代码将被 CI 门禁拒绝（参见 `tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorCodeBoundaryMisuse`）
+
 ### 3.1 protocol - 协议层错误
 
 | 原因码 | 说明 | 可重试 |
@@ -200,12 +215,38 @@ interface ErrorData {
 
 契约由以下模块实现：
 
-- `src/engram/gateway/mcp_rpc.py` - 错误模型定义与转换
-  - `ErrorCategory` - 错误分类常量
-  - `ErrorReason` - 错误原因码常量
-  - `ErrorData` - 结构化错误数据模型
+- `src/engram/gateway/error_codes.py` - MCP/JSON-RPC 错误码定义
+  - `McpErrorCode` - JSON-RPC 2.0 标准错误码
+  - `McpErrorCategory` - 错误分类常量
+  - `McpErrorReason` - 错误原因码常量
   - `to_jsonrpc_error()` - 统一异常转换函数
+
+- `src/engram/gateway/result_error_codes.py` - 工具执行结果错误码
+  - `ToolResultErrorCode` - 业务层 result.error_code 错误码
+
+- `src/engram/gateway/mcp_rpc.py` - 错误模型与 JSON-RPC 处理
+  - `ErrorData` - 结构化错误数据模型
   - `handle_tools_call()` - tools/call 处理器
+
+### 推荐导入路径
+
+**外部集成/插件开发者** 应从稳定公共 API 导入：
+
+```python
+from engram.gateway.public_api import (
+    McpErrorCode,
+    McpErrorCategory,
+    McpErrorReason,
+    ToolResultErrorCode,
+)
+```
+
+**内部模块** 可直接从定义模块导入：
+
+```python
+from engram.gateway.error_codes import McpErrorCode, McpErrorCategory, McpErrorReason
+from engram.gateway.result_error_codes import ToolResultErrorCode
+```
 
 ## 7. 测试覆盖
 

@@ -1032,6 +1032,111 @@ class WorkflowContractValidator:
 
         return self.result
 
+    def validate_frozen_consistency(self, strict: bool = False) -> bool:
+        """
+        验证 frozen allowlist 与 required_steps/required_jobs 的自一致性。
+
+        可选检查：如果启用 strict 模式，验证所有 required_steps 是否都在
+        frozen_step_text.allowlist 中，所有 required_jobs 的 name 是否都在
+        frozen_job_names.allowlist 中。
+
+        这是一个策略性检查，用于团队希望强制所有 required 项都必须冻结的场景。
+
+        Args:
+            strict: 如果为 True，则将不一致作为 ERROR 报告；否则作为 WARNING
+
+        Returns:
+            bool: 一致性检查通过返回 True
+        """
+        all_consistent = True
+
+        # 收集所有 required_steps
+        all_required_steps: set[str] = set()
+        all_required_job_names: set[str] = set()
+
+        for workflow_key in ["ci", "nightly"]:
+            workflow_contract = self.contract.get(workflow_key, {})
+            for job in workflow_contract.get("required_jobs", []):
+                job_name = job.get("name", "")
+                if job_name:
+                    all_required_job_names.add(job_name)
+                for step in job.get("required_steps", []):
+                    all_required_steps.add(step)
+
+        # 检查 required_steps 是否都在 frozen_step_text.allowlist 中
+        unfrozen_steps = all_required_steps - self.frozen_steps
+        if unfrozen_steps:
+            for step in sorted(unfrozen_steps):
+                if strict:
+                    self.result.errors.append(
+                        ValidationError(
+                            workflow="",
+                            file=str(self.contract_path),
+                            error_type="unfrozen_required_step",
+                            key=step,
+                            message=(
+                                f"Required step '{step}' is not in frozen_step_text.allowlist. "
+                                f"如果团队策略要求所有 required_steps 必须冻结，"
+                                f"请将此 step 添加到 frozen_step_text.allowlist。"
+                            ),
+                            location="frozen_step_text.allowlist",
+                        )
+                    )
+                    self.result.success = False
+                    all_consistent = False
+                else:
+                    self.result.warnings.append(
+                        ValidationWarning(
+                            workflow="",
+                            file=str(self.contract_path),
+                            warning_type="unfrozen_required_step",
+                            key=step,
+                            message=(
+                                f"Required step '{step}' is not in frozen_step_text.allowlist. "
+                                f"改名此 step 仅会产生 WARNING（非 ERROR）。"
+                            ),
+                            location="frozen_step_text.allowlist",
+                        )
+                    )
+
+        # 检查 required_jobs 的 name 是否都在 frozen_job_names.allowlist 中
+        unfrozen_jobs = all_required_job_names - self.frozen_job_names
+        if unfrozen_jobs:
+            for job_name in sorted(unfrozen_jobs):
+                if strict:
+                    self.result.errors.append(
+                        ValidationError(
+                            workflow="",
+                            file=str(self.contract_path),
+                            error_type="unfrozen_required_job",
+                            key=job_name,
+                            message=(
+                                f"Required job name '{job_name}' is not in frozen_job_names.allowlist. "
+                                f"如果团队策略要求所有 required_jobs 必须冻结，"
+                                f"请将此 job name 添加到 frozen_job_names.allowlist。"
+                            ),
+                            location="frozen_job_names.allowlist",
+                        )
+                    )
+                    self.result.success = False
+                    all_consistent = False
+                else:
+                    self.result.warnings.append(
+                        ValidationWarning(
+                            workflow="",
+                            file=str(self.contract_path),
+                            warning_type="unfrozen_required_job",
+                            key=job_name,
+                            message=(
+                                f"Required job name '{job_name}' is not in frozen_job_names.allowlist. "
+                                f"改名此 job 仅会产生 WARNING（非 ERROR）。"
+                            ),
+                            location="frozen_job_names.allowlist",
+                        )
+                    )
+
+        return all_consistent
+
     def _find_fuzzy_match(self, target: str, candidates: list[str]) -> Optional[str]:
         """模糊匹配 step name"""
         target_lower = target.lower()
@@ -1429,6 +1534,16 @@ def main():
     )
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
     parser.add_argument("--strict", action="store_true", help="Treat warnings as errors")
+    parser.add_argument(
+        "--check-frozen-consistency",
+        action="store_true",
+        help="Check if all required_steps/job_names are in frozen allowlists (warning level)",
+    )
+    parser.add_argument(
+        "--require-frozen-consistency",
+        action="store_true",
+        help="Require all required_steps/job_names to be in frozen allowlists (error level)",
+    )
 
     args = parser.parse_args()
 
@@ -1441,6 +1556,10 @@ def main():
     # 执行验证
     validator = WorkflowContractValidator(contract_path, workspace_root)
     result = validator.validate()
+
+    # 执行 frozen 一致性检查（如果启用）
+    if args.check_frozen_consistency or args.require_frozen_consistency:
+        validator.validate_frozen_consistency(strict=args.require_frozen_consistency)
 
     # 如果 strict 模式，warnings 也算失败
     if args.strict and result.warnings:

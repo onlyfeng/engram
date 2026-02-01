@@ -114,7 +114,7 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
     """
     compose_file = project_root / "compose" / "logbook.yml"
     details = []
-    
+
     if not compose_file.exists():
         return CheckResult(
             check_id="A",
@@ -123,48 +123,48 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
             message="compose/logbook.yml 文件不存在",
             severity="error",
         )
-    
+
     content = compose_file.read_text()
-    
+
     # 服务账号密码变量（它们是可选的）
     service_account_vars = {
         'LOGBOOK_MIGRATOR_PASSWORD',
-        'LOGBOOK_SVC_PASSWORD', 
+        'LOGBOOK_SVC_PASSWORD',
         'OPENMEMORY_MIGRATOR_PASSWORD',
         'OPENMEMORY_SVC_PASSWORD',
     }
-    
+
     # 检查 1: 查找没有默认值的环境变量引用
     # 匹配 ${VAR} 但排除 ${VAR:-...} 和 ${VAR:+...} 和 $${VAR} (shell escape)
     # 注意：需要排除在命令字符串中使用的变量引用（如 bash -c 中的 $${VAR}）
-    
+
     # 首先找到所有 ${VAR} 形式的引用
     all_var_refs = re.findall(r'\$\{([A-Z_][A-Z0-9_]*)(:-[^}]*)?\}', content)
-    
+
     # 统计每个变量的引用情况
     vars_with_default = set()
     vars_without_default = set()
-    
+
     for var_name, default_part in all_var_refs:
         if default_part:  # 有 :- 部分，说明有默认值
             vars_with_default.add(var_name)
         else:
             vars_without_default.add(var_name)
-    
+
     # 如果变量在任何地方有默认值，就认为它是安全的
     # 因为 compose 文件会在多处使用同一个变量，只要定义处有默认值即可
     problematic_vars = vars_without_default - vars_with_default - service_account_vars
-    
+
     # 排除在 command 块中使用 $${VAR} 形式引用的变量（这些是 shell 变量，不是 compose 变量）
     # 检查 $${VAR} 模式
     shell_vars = set(re.findall(r'\$\$\{([A-Z_][A-Z0-9_]*)\}', content))
     problematic_vars = problematic_vars - shell_vars
-    
+
     if problematic_vars:
         details.append(f"发现 {len(problematic_vars)} 个无默认值的必需变量:")
         for var in sorted(problematic_vars):
             details.append(f"  - {var}")
-    
+
     # 检查 2: 验证关键变量有默认值
     expected_defaults = {
         'POSTGRES_USER': 'postgres',
@@ -172,19 +172,19 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
         'POSTGRES_DB': 'engram',
         'POSTGRES_PORT': '5432',
     }
-    
+
     missing_defaults = []
     for var, expected_default in expected_defaults.items():
         # 检查是否使用了 ${VAR:-default} 语法
         pattern = rf'\$\{{{var}:-[^}}]+\}}'
         if not re.search(pattern, content):
             missing_defaults.append(var)
-    
+
     if missing_defaults:
-        details.append(f"以下变量未使用 ${{VAR:-default}} 语法提供默认值:")
+        details.append("以下变量未使用 ${VAR:-default} 语法提供默认值:")
         for var in missing_defaults:
             details.append(f"  - {var}")
-    
+
     # 检查 3: 验证服务账号密码变量允许为空（${VAR:-}）
     missing_empty_default = []
     for var in service_account_vars:
@@ -192,12 +192,12 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
         pattern = rf'\$\{{{var}:-[^}}]*\}}'
         if var in content and not re.search(pattern, content):
             missing_empty_default.append(var)
-    
+
     if missing_empty_default:
-        details.append(f"服务账号变量应使用 ${{VAR:-}} 语法允许空值:")
+        details.append("服务账号变量应使用 ${VAR:-} 语法允许空值:")
         for var in missing_empty_default:
             details.append(f"  - {var}")
-    
+
     # 检查 4: 验证文档中描述的 SKIP 模式注释存在
     skip_mode_indicators = [
         r'SKIP\s*模式',
@@ -207,18 +207,18 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
         r'不设置.*PASSWORD',
         r'全部不设置',
     ]
-    
+
     has_skip_mode_doc = any(
-        re.search(pattern, content, re.IGNORECASE) 
+        re.search(pattern, content, re.IGNORECASE)
         for pattern in skip_mode_indicators
     )
-    
+
     if not has_skip_mode_doc:
         details.append("警告: 缺少 SKIP 模式的文档说明注释（预期包含 'SKIP 模式' 或 'logbook-only 模式' 等描述）")
-    
+
     # 判断结果
     has_errors = bool(problematic_vars) or bool(missing_defaults) or bool(missing_empty_default)
-    
+
     if has_errors:
         return CheckResult(
             check_id="A",
@@ -228,10 +228,10 @@ def check_a_initdb_default_env(project_root: Path, verbose: bool = False) -> Che
             severity="error",
             details=details,
         )
-    
+
     details.append("所有环境变量都有合理的默认值或允许为空")
     details.append("服务账号密码策略正确: 不设置时进入 SKIP 模式")
-    
+
     return CheckResult(
         check_id="A",
         check_name="initdb_default_env",
@@ -255,7 +255,7 @@ def check_b_acceptance_logbook_compose_dependency(
     """
     makefile = project_root / "Makefile"
     details = []
-    
+
     if not makefile.exists():
         return CheckResult(
             check_id="B",
@@ -264,19 +264,19 @@ def check_b_acceptance_logbook_compose_dependency(
             message="Makefile 文件不存在",
             severity="error",
         )
-    
+
     content = makefile.read_text()
-    
+
     # 检查必要的 Logbook-only 相关目标
     required_targets = [
         ('setup-db-logbook-only', '一键初始化（Logbook-only 模式）'),
         ('migrate-ddl', 'DDL 迁移'),
         ('verify-permissions', '权限验证'),
     ]
-    
+
     missing_targets = []
     found_targets = []
-    
+
     for target_name, description in required_targets:
         target_pattern = re.compile(
             rf'^{re.escape(target_name)}:',
@@ -286,15 +286,15 @@ def check_b_acceptance_logbook_compose_dependency(
             found_targets.append(f"✓ {target_name} ({description})")
         else:
             missing_targets.append(target_name)
-    
+
     details.extend(found_targets)
-    
+
     if missing_targets:
         details.append("")
         details.append("缺失的目标:")
         for target in missing_targets:
             details.append(f"  ✗ {target}")
-        
+
         return CheckResult(
             check_id="B",
             check_name="acceptance_logbook_compose_dependency",
@@ -303,7 +303,7 @@ def check_b_acceptance_logbook_compose_dependency(
             severity="error",
             details=details,
         )
-    
+
     return CheckResult(
         check_id="B",
         check_name="acceptance_logbook_compose_dependency",
@@ -327,7 +327,7 @@ def check_c_docs_makefile_consistency(
     docs_file = project_root / "docs" / "logbook" / "03_deploy_verify_troubleshoot.md"
     makefile = project_root / "Makefile"
     details = []
-    
+
     if not docs_file.exists():
         return CheckResult(
             check_id="C",
@@ -336,7 +336,7 @@ def check_c_docs_makefile_consistency(
             message="docs/logbook/03_deploy_verify_troubleshoot.md 文件不存在",
             severity="error",
         )
-    
+
     if not makefile.exists():
         return CheckResult(
             check_id="C",
@@ -345,10 +345,10 @@ def check_c_docs_makefile_consistency(
             message="Makefile 文件不存在",
             severity="error",
         )
-    
+
     docs_content = docs_file.read_text()
     makefile_content = makefile.read_text()
-    
+
     # 文档中引用的核心 Makefile 目标
     doc_referenced_targets = [
         'setup-db',
@@ -359,11 +359,11 @@ def check_c_docs_makefile_consistency(
         'verify-permissions',
         'verify-permissions-strict',
     ]
-    
+
     # 检查文档引用的目标是否在 Makefile 中存在
     missing_targets = []
     found_targets = []
-    
+
     for target in doc_referenced_targets:
         # 检查文档是否引用了这个目标
         doc_pattern = rf'make\s+{re.escape(target)}|`{re.escape(target)}`'
@@ -374,15 +374,15 @@ def check_c_docs_makefile_consistency(
                 found_targets.append(f"✓ {target}")
             else:
                 missing_targets.append(target)
-    
+
     details.extend(found_targets)
-    
+
     if missing_targets:
         details.append("")
         details.append("文档引用但 Makefile 中不存在的目标:")
         for target in missing_targets:
             details.append(f"  ✗ {target}")
-        
+
         return CheckResult(
             check_id="C",
             check_name="docs_makefile_consistency",
@@ -391,12 +391,12 @@ def check_c_docs_makefile_consistency(
             severity="error",
             details=details,
         )
-    
+
     # 检查核心部署流程描述
     # 验证文档描述的步骤与实际 Makefile 一致
     if 'setup-db' in docs_content and 'setup-db:' in makefile_content:
         details.append("✓ setup-db 部署流程描述一致")
-    
+
     return CheckResult(
         check_id="C",
         check_name="docs_makefile_consistency",
@@ -420,7 +420,7 @@ def check_d_readme_logbook_only_stepwise_commands(
     readme_file = project_root / "README.md"
     makefile = project_root / "Makefile"
     details = []
-    
+
     if not readme_file.exists():
         return CheckResult(
             check_id="D",
@@ -429,10 +429,10 @@ def check_d_readme_logbook_only_stepwise_commands(
             message="README.md 文件不存在",
             severity="error",
         )
-    
+
     content = readme_file.read_text()
     makefile_content = makefile.read_text() if makefile.exists() else ""
-    
+
     # 检查 README.md 中必须存在的核心命令引用
     required_commands = {
         'setup-db': {
@@ -448,25 +448,25 @@ def check_d_readme_logbook_only_stepwise_commands(
             'description': '权限验证',
         },
     }
-    
+
     missing_commands = []
     found_commands = []
-    
+
     for cmd_name, cmd_info in required_commands.items():
         if re.search(cmd_info['pattern'], content):
             found_commands.append(f"✓ {cmd_name} ({cmd_info['description']})")
         else:
             missing_commands.append(cmd_name)
-    
+
     details.extend(found_commands)
-    
+
     if missing_commands:
         details.append("")
         details.append("README.md 未记录的命令:")
         for cmd in missing_commands:
             cmd_info = required_commands[cmd]
             details.append(f"  ✗ {cmd} - {cmd_info['description']}")
-        
+
         return CheckResult(
             check_id="D",
             check_name="readme_logbook_only_stepwise_commands",
@@ -475,13 +475,13 @@ def check_d_readme_logbook_only_stepwise_commands(
             severity="error",
             details=details,
         )
-    
+
     # 检查引用的命令是否在 Makefile 中存在
     for cmd_name in required_commands.keys():
         makefile_pattern = rf'^{re.escape(cmd_name)}:'
         if re.search(makefile_pattern, makefile_content, re.MULTILINE):
             details.append(f"✓ {cmd_name} 在 Makefile 中存在")
-    
+
     return CheckResult(
         check_id="D",
         check_name="readme_logbook_only_stepwise_commands",
@@ -506,7 +506,7 @@ def check_f_acceptance_criteria_logbook_only_alignment(
     acceptance_file = project_root / "docs" / "logbook" / "04_acceptance_criteria.md"
     makefile = project_root / "Makefile"
     details = []
-    
+
     if not acceptance_file.exists():
         return CheckResult(
             check_id="F",
@@ -515,13 +515,13 @@ def check_f_acceptance_criteria_logbook_only_alignment(
             message="docs/logbook/04_acceptance_criteria.md 文件不存在",
             severity="error",
         )
-    
+
     content = acceptance_file.read_text()
     makefile_content = makefile.read_text() if makefile.exists() else ""
-    
+
     # 定位 Logbook-only 相关章节
     logbook_only_sections = []
-    
+
     # 查找 "Logbook-only 验收" 章节
     logbook_only_section_pattern = re.compile(
         r'###\s*Logbook-only\s+验收.*?(?=###|##|\Z)',
@@ -530,7 +530,7 @@ def check_f_acceptance_criteria_logbook_only_alignment(
     match = logbook_only_section_pattern.search(content)
     if match:
         logbook_only_sections.append(('Logbook-only 验收章节', match.group(0)))
-    
+
     # 查找验收命令汇总表格
     commands_table_pattern = re.compile(
         r'验收命令汇总.*?(?=###|##|\Z)',
@@ -539,12 +539,12 @@ def check_f_acceptance_criteria_logbook_only_alignment(
     commands_match = commands_table_pattern.search(content)
     if commands_match:
         logbook_only_sections.append(('验收命令汇总', commands_match.group(0)))
-    
+
     if not logbook_only_sections:
         details.append("警告: 未找到明确的 Logbook-only 验收章节，检查整个文档")
     else:
         details.append(f"找到 {len(logbook_only_sections)} 个相关章节")
-    
+
     # 必需的命令（使用现代化命名）
     required_commands = {
         'migrate-ddl': {
@@ -556,25 +556,25 @@ def check_f_acceptance_criteria_logbook_only_alignment(
             'description': '权限验证',
         },
     }
-    
+
     missing_commands = []
     found_commands = []
-    
+
     for cmd_name, cmd_info in required_commands.items():
         if re.search(cmd_info['pattern'], content, re.IGNORECASE):
             found_commands.append(f"✓ {cmd_name} ({cmd_info['description']})")
         else:
             missing_commands.append(cmd_name)
-    
+
     details.extend(found_commands)
-    
+
     if missing_commands:
         details.append("")
         details.append("文档未记录的命令:")
         for cmd in missing_commands:
             cmd_info = required_commands[cmd]
             details.append(f"  ✗ {cmd} - {cmd_info['description']}")
-        
+
         return CheckResult(
             check_id="F",
             check_name="acceptance_criteria_logbook_only_alignment",
@@ -583,13 +583,13 @@ def check_f_acceptance_criteria_logbook_only_alignment(
             severity="error",
             details=details,
         )
-    
+
     # 验证命令在 Makefile 中存在
     for cmd_name in required_commands.keys():
         makefile_pattern = rf'^{re.escape(cmd_name)}:'
         if re.search(makefile_pattern, makefile_content, re.MULTILINE):
             details.append(f"✓ {cmd_name} 在 Makefile 中存在")
-    
+
     return CheckResult(
         check_id="F",
         check_name="acceptance_criteria_logbook_only_alignment",
@@ -655,22 +655,22 @@ def print_json(report: ConsistencyReport) -> None:
 def run_checks(project_root: Path, verbose: bool = False) -> ConsistencyReport:
     """执行所有检查"""
     report = ConsistencyReport()
-    
+
     # 检查 A: initdb 默认环境
     report.checks.append(check_a_initdb_default_env(project_root, verbose))
-    
+
     # 检查 B: acceptance-logbook-only compose 依赖
     report.checks.append(check_b_acceptance_logbook_compose_dependency(project_root, verbose))
-    
+
     # 检查 C: docs/logbook/03_deploy_verify_troubleshoot.md 与 Makefile 一致性
     report.checks.append(check_c_docs_makefile_consistency(project_root, verbose))
-    
+
     # 检查 D: README.md Logbook-only 分步验收命令
     report.checks.append(check_d_readme_logbook_only_stepwise_commands(project_root, verbose))
-    
+
     # 检查 E: 04_acceptance_criteria.md Logbook-only 章节命令对齐
     report.checks.append(check_f_acceptance_criteria_logbook_only_alignment(project_root, verbose))
-    
+
     return report
 
 
@@ -721,10 +721,10 @@ def main() -> int:
         # 自动检测: 从脚本位置向上查找
         script_path = Path(__file__).resolve()
         project_root = script_path.parent.parent
-        
+
         # 验证是否正确（检查 Makefile 存在）
         if not (project_root / "Makefile").exists():
-            print(f"错误: 无法确定项目根目录，请使用 --project-root 指定", file=sys.stderr)
+            print("错误: 无法确定项目根目录，请使用 --project-root 指定", file=sys.stderr)
             return 2
 
     if not project_root.exists():

@@ -38,7 +38,6 @@ import_copy.py - Engram 项目导入复制工具
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -339,7 +338,7 @@ def main() -> int:
         "--mode",
         choices=["logbook-only", "unified"],
         default=DEFAULT_MODE,
-        help=f"部署模式: logbook-only（轻量级事实账本）或 unified（完整栈，默认）",
+        help="部署模式: logbook-only（轻量级事实账本）或 unified（完整栈，默认）",
     )
     parser.add_argument(
         "--manifest",

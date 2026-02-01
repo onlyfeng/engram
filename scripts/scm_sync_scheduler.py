@@ -31,21 +31,15 @@ if str(_ROOT_DIR) not in sys.path:
 
 # 导出核心模块的所有公共 API（向后兼容）
 from engram.logbook.scm_sync_scheduler_core import (
+    BuildJobsResult,
+    BuildJobsSnapshot,
+    SchedulerTickResult,
     # 数据类
     SkippedJob,
-    BuildJobsSnapshot,
-    BuildJobsResult,
-    SchedulerTickResult,
     # 函数
     build_jobs_to_insert,
     run_scheduler_tick,
 )
-
-from engram.logbook.scm_sync_policy import (
-    CircuitBreakerConfig,
-    SchedulerConfig,
-)
-
 
 __all__ = [
     "BuildJobsSnapshot",

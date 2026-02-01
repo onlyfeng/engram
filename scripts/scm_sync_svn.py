@@ -30,37 +30,6 @@ warnings.warn(
 )
 
 # 从包内模块重新导出所有 API
-from engram.logbook.scm_sync_tasks.svn import (
-    # 异常类
-    SvnCommandError,
-    SvnTimeoutError,
-    SvnParseError,
-    PatchFetchError,
-    PatchFetchTimeoutError,
-    PatchFetchContentTooLargeError,
-    PatchFetchCommandError,
-    # 数据类
-    FetchDiffResult,
-    SvnRevision,
-    SyncConfig,
-    # 解析函数
-    parse_svn_log_xml,
-    # SVN 命令函数
-    get_svn_head_revision,
-    fetch_svn_log_xml,
-    run_svn_cmd,
-    fetch_svn_diff,
-    # 辅助函数
-    generate_ministat_from_changed_paths,
-    generate_diffstat,
-    # 数据库操作
-    ensure_repo,
-    insert_svn_revisions,
-    sync_patches_for_revisions,
-    # 同步主函数
-    sync_svn_revisions,
-    backfill_svn_revisions,
-)
 
 
 def parse_args(argv: Optional[List[str]] = None):

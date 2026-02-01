@@ -42,7 +42,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Set
 
-
 # ============================================================================
 # 配置区
 # ============================================================================
@@ -267,7 +266,7 @@ def scan_file(file_path: Path, relative_path: str) -> List[Violation]:
 
     try:
         content = file_path.read_text(encoding="utf-8")
-    except Exception as e:
+    except Exception:
         # 无法读取文件，跳过
         return violations
 

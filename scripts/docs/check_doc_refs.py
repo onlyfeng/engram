@@ -22,9 +22,9 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Set, Dict, Optional, Tuple
+from typing import List, Set, Tuple
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -199,7 +199,7 @@ class RefCheckReport:
     missing_list: List[DocReference] = field(default_factory=list)
     legacy_list: List[DocReference] = field(default_factory=list)
     ignored_patterns: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> dict:
         """转换为字典"""
         return {
@@ -229,14 +229,14 @@ def should_exclude_path(path: Path, project_root: Path) -> bool:
     try:
         rel_path = path.relative_to(project_root)
         rel_str = str(rel_path)
-        
+
         # 检查排除目录
         for excluded in EXCLUDED_DIRS:
             if rel_str.startswith(excluded + "/") or rel_str.startswith(excluded + "\\"):
                 return True
             if rel_str == excluded:
                 return True
-        
+
         # 检查排除文件模式
         for pattern in EXCLUDED_FILES:
             if pattern.startswith("*"):
@@ -244,7 +244,7 @@ def should_exclude_path(path: Path, project_root: Path) -> bool:
                     return True
             elif path.name == pattern:
                 return True
-        
+
         return False
     except ValueError:
         return False
@@ -274,11 +274,11 @@ def normalize_doc_path(raw_ref: str) -> str:
     """规范化文档路径"""
     # 移除前导 ./ 或 /
     path = raw_ref.lstrip("./")
-    
+
     # 确保以 docs/ 开头
     if not path.startswith("docs/"):
         path = "docs/" + path
-    
+
     return path
 
 
@@ -291,23 +291,23 @@ def extract_refs_from_content(
     """从文件内容中提取文档引用"""
     refs = []
     lines = content.split("\n")
-    
+
     for line_num, line in enumerate(lines, 1):
         # 跳过注释行中的某些模式
         stripped = line.strip()
-        
+
         # 1. 检查普通路径引用
         for match in DOCS_PATH_PATTERN.finditer(line):
             raw_ref = match.group(1)
             if should_ignore_ref(raw_ref, ignore_patterns):
                 continue
-            
+
             resolved = normalize_doc_path(raw_ref)
             full_path = project_root / resolved
             exists = full_path.exists()
             is_legacy = is_legacy_path(resolved)
             whitelisted = is_whitelisted(resolved)
-            
+
             refs.append(DocReference(
                 source_file=str(source_file.relative_to(project_root)),
                 line_number=line_num,
@@ -318,20 +318,20 @@ def extract_refs_from_content(
                 is_legacy=is_legacy,
                 whitelisted=whitelisted,
             ))
-        
+
         # 2. 检查 memory:// URI
         for match in MEMORY_URI_PATTERN.finditer(line):
             rel_path = match.group(1)
             raw_ref = f"memory://docs/{rel_path}"
             if should_ignore_ref(raw_ref, ignore_patterns):
                 continue
-            
+
             resolved = f"docs/{rel_path}"
             full_path = project_root / resolved
             exists = full_path.exists()
             is_legacy = is_legacy_path(resolved)
             whitelisted = is_whitelisted(resolved)
-            
+
             refs.append(DocReference(
                 source_file=str(source_file.relative_to(project_root)),
                 line_number=line_num,
@@ -342,13 +342,13 @@ def extract_refs_from_content(
                 is_legacy=is_legacy,
                 whitelisted=whitelisted,
             ))
-        
+
         # 3. 检查字符串中的引用（仅在未被其他模式匹配时）
         for match in STRING_DOCS_PATTERN.finditer(line):
             raw_ref = match.group(1)
             if should_ignore_ref(raw_ref, ignore_patterns):
                 continue
-            
+
             # 避免重复（已被普通路径模式匹配）
             resolved = normalize_doc_path(raw_ref)
             already_found = any(
@@ -357,12 +357,12 @@ def extract_refs_from_content(
             )
             if already_found:
                 continue
-            
+
             full_path = project_root / resolved
             exists = full_path.exists()
             is_legacy = is_legacy_path(resolved)
             whitelisted = is_whitelisted(resolved)
-            
+
             refs.append(DocReference(
                 source_file=str(source_file.relative_to(project_root)),
                 line_number=line_num,
@@ -373,7 +373,7 @@ def extract_refs_from_content(
                 is_legacy=is_legacy,
                 whitelisted=whitelisted,
             ))
-    
+
     return refs
 
 
@@ -392,19 +392,19 @@ def scan_file(
     ignore_patterns: Set[str]
 ) -> List[DocReference]:
     """扫描单个文件"""
-    if not file_path.suffix.lower() in SCAN_EXTENSIONS:
+    if file_path.suffix.lower() not in SCAN_EXTENSIONS:
         return []
-    
+
     # 跳过排除的源文件（如测试文件）
     if should_exclude_source_file(file_path):
         return []
-    
+
     try:
         content = file_path.read_text(encoding="utf-8", errors="ignore")
     except Exception as e:
         print(f"警告: 无法读取文件 {file_path}: {e}", file=sys.stderr)
         return []
-    
+
     return extract_refs_from_content(content, file_path, project_root, ignore_patterns)
 
 
@@ -416,33 +416,33 @@ def scan_directory(
     """扫描目录"""
     files_count = 0
     all_refs = []
-    
+
     if not scan_dir.exists():
         print(f"警告: 目录不存在 {scan_dir}", file=sys.stderr)
         return 0, []
-    
+
     for root, dirs, files in os.walk(scan_dir):
         root_path = Path(root)
-        
+
         # 过滤排除目录
         dirs[:] = [
             d for d in dirs
             if not should_exclude_path(root_path / d, project_root)
         ]
-        
+
         for file_name in files:
             file_path = root_path / file_name
-            
+
             if should_exclude_path(file_path, project_root):
                 continue
-            
+
             if file_path.suffix.lower() not in SCAN_EXTENSIONS:
                 continue
-            
+
             files_count += 1
             refs = scan_file(file_path, project_root, ignore_patterns)
             all_refs.extend(refs)
-    
+
     return files_count, all_refs
 
 
@@ -507,73 +507,73 @@ Legacy 白名单：
         action="store_true",
         help="仅输出 JSON（不输出人类可读的摘要）"
     )
-    
+
     args = parser.parse_args()
-    
+
     project_root = Path(args.project_root).resolve()
     ignore_patterns = set(args.ignore_patterns) | set(BUILTIN_IGNORE_PATTERNS)
-    
+
     # 确定扫描目标
     scan_dirs: List[str] = []
-    
+
     if args.paths:
         scan_dirs = args.paths
     else:
         scan_dirs = DEFAULT_SCAN_DIRS.copy()
-    
+
     if not args.json_only:
         print(f"项目根目录: {project_root}")
         print(f"扫描目录: {scan_dirs}")
         if args.verbose and ignore_patterns:
             print(f"忽略模式: {sorted(ignore_patterns)}")
         print()
-    
+
     # 初始化报告
     report = RefCheckReport(
         scan_dirs=scan_dirs,
         ignored_patterns=list(sorted(ignore_patterns))
     )
-    
+
     # 扫描所有目录
     for rel_dir in scan_dirs:
         scan_path = project_root / rel_dir
         if not args.json_only:
             print(f"扫描目录: {rel_dir}...")
-        
+
         files_count, refs = scan_directory(scan_path, project_root, ignore_patterns)
-        
+
         report.files_scanned += files_count
         report.references.extend(refs)
-        
+
         if args.verbose and not args.json_only:
             print(f"  - 文件数: {files_count}")
             print(f"  - 引用数: {len(refs)}")
-    
+
     # 统计结果
     report.total_refs_found = len(report.references)
-    
+
     for ref in report.references:
         if ref.exists:
             report.valid_refs += 1
         else:
             report.missing_refs += 1
             report.missing_list.append(ref)
-        
+
         if ref.is_legacy:
             report.legacy_refs += 1
             report.legacy_list.append(ref)
             if ref.whitelisted:
                 report.whitelisted_refs += 1
-    
+
     # 确保输出目录存在
     output_dir = project_root / args.output
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 写入报告
     report_path = output_dir / "doc_refs_report.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
-    
+
     if args.json_only:
         # 仅输出 JSON
         print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
@@ -589,7 +589,7 @@ Legacy 白名单：
         print(f"无效引用数: {report.missing_refs}")
         print(f"Legacy 引用数: {report.legacy_refs} (白名单: {report.whitelisted_refs})")
         print(f"报告路径: {report_path}")
-        
+
         if report.missing_list:
             print()
             print("无效引用列表:")
@@ -599,7 +599,7 @@ Legacy 白名单：
                 print(f"  [{ref.ref_type}] {ref.source_file}:{ref.line_number}")
                 print(f"    引用: {ref.raw_ref}")
                 print(f"    解析: {ref.resolved_path}{whitelisted_mark}")
-        
+
         if report.legacy_list and args.verbose:
             print()
             print("Legacy 引用列表 (参见 docs/architecture/docs_legacy_retention_policy.md):")
@@ -608,7 +608,7 @@ Legacy 白名单：
                 status = "[OK/WHITELISTED]" if ref.whitelisted else "[WARN/NOT-WHITELISTED]"
                 print(f"  {status} {ref.source_file}:{ref.line_number}")
                 print(f"    引用: {ref.resolved_path}")
-    
+
     # 退出码
     if args.strict and report.missing_refs > 0:
         # 严格模式：排除白名单后的无效引用
@@ -620,7 +620,7 @@ Legacy 白名单：
                 print()
                 print(f"[ERROR] 严格模式：发现 {len(non_whitelisted_missing)} 个非白名单的无效引用")
             sys.exit(1)
-    
+
     if not args.json_only:
         if report.missing_refs == 0:
             print()
@@ -629,7 +629,7 @@ Legacy 白名单：
             # 所有无效引用都在白名单中
             print()
             print("[OK] 所有无效引用均在白名单中")
-    
+
     sys.exit(0)
 
 

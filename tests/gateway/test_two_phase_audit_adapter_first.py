@@ -268,6 +268,7 @@ class TestAdapterFirstTwoPhaseAuditRedirectedBranch:
         from tests.gateway.fakes import (
             FakeGatewayConfig,
             FakeLogbookAdapter,
+            FakeLogbookDatabase,
             FakeOpenMemoryClient,
         )
 
@@ -280,14 +281,20 @@ class TestAdapterFirstTwoPhaseAuditRedirectedBranch:
         )
         fake_adapter.configure_outbox_success(start_id=42)  # outbox_id 从 42 开始
 
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(
+            team_write_enabled=True,
+            policy_json={"require_evidence": False},
+        )
+
         fake_client = FakeOpenMemoryClient()
         fake_client.configure_store_connection_error("模拟 OpenMemory 连接超时")
 
         deps = GatewayDeps.for_testing(
             config=fake_config,
+            db=fake_db,
             logbook_adapter=fake_adapter,
             openmemory_client=fake_client,
-            # 不注入 db，验证 adapter-first 路径
         )
 
         correlation_id = "corr-aabbccdd11223344"

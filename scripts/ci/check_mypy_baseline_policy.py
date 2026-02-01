@@ -303,7 +303,7 @@ def check_policy(diff: BaselineDiff, pr_context: Optional[PRContext]) -> PolicyR
     passed = True
 
     # 统计信息
-    messages.append(f"Baseline 变更统计:")
+    messages.append("Baseline 变更统计:")
     messages.append(f"  - 新增错误: {diff.added_lines}")
     messages.append(f"  - 修复错误: {diff.removed_lines}")
     messages.append(f"  - 净增: {diff.net_change:+d}")

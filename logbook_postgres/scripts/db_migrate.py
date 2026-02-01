@@ -28,17 +28,6 @@ _DEPRECATION_MSG = """\
 # ---------------------------------------------------------------------------
 # 兼容导出（直接导入，供测试使用）
 # ---------------------------------------------------------------------------
-from engram.logbook.migrate import (
-    run_migrate,
-    run_all_checks,
-    run_precheck,
-    check_schemas_exist,
-    check_tables_exist,
-    check_columns_exist,
-    check_indexes_exist,
-    check_triggers_exist,
-    check_matviews_exist,
-)
 
 
 def main() -> None:

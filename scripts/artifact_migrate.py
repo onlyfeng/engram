@@ -16,7 +16,6 @@ from typing import Any, Dict, Iterable, List, Optional
 from engram.logbook.artifact_store import (
     LocalArtifactsStore,
     ObjectStore,
-    ArtifactNotFoundError,
 )
 
 

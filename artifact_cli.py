@@ -30,7 +30,8 @@ _DEPRECATION_MSG = """\
 # ---------------------------------------------------------------------------
 # 兼容导出（直接导入，无需 sys.path 操作）
 # ---------------------------------------------------------------------------
-from engram.logbook.cli.artifacts import app, main as artifacts_main
+from engram.logbook.cli.artifacts import app
+from engram.logbook.cli.artifacts import main as artifacts_main
 
 # 兼容别名
 artifacts_app = app

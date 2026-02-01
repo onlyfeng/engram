@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SQL 文件重编号映射表 - 机器可读 SSOT，与 sql_renumbering_map.md 保持同步",
+  "version": "2026-02-01",
+  "renumbering_map": [
+    {
+      "old_prefix": "01",
+      "old_path": "sql/01_logbook_schema.sql",
+      "new_prefix": "01",
+      "new_path": "sql/01_logbook_schema.sql",
+      "status": "retained",
+      "notes": "保留（修改）"
+    },
+    {
+      "old_prefix": "02",
+      "old_path": "sql/02_scm_migration.sql",
+      "new_prefix": "02",
+      "new_path": "sql/02_scm_migration.sql",
+      "status": "retained",
+      "notes": "保留（修改）"
+    },
+    {
+      "old_prefix": "03",
+      "old_path": "sql/03_pgvector_extension.sql",
+      "new_prefix": "03",
+      "new_path": "sql/03_pgvector_extension.sql",
+      "status": "retained",
+      "notes": "保留"
+    },
+    {
+      "old_prefix": "04",
+      "old_path": "sql/04_roles_and_grants.sql",
+      "new_prefix": "04",
+      "new_path": "sql/04_roles_and_grants.sql",
+      "status": "retained",
+      "notes": "保留（修改）"
+    },
+    {
+      "old_prefix": "05",
+      "old_path": "sql/05_scm_sync_runs.sql",
+      "new_prefix": "06",
+      "new_path": "sql/06_scm_sync_runs.sql",
+      "status": "integrated",
+      "notes": "整合：原 05 位置让给 openmemory_roles_and_grants.sql"
+    },
+    {
+      "old_prefix": "-",
+      "old_path": null,
+      "new_prefix": "05",
+      "new_path": "sql/05_openmemory_roles_and_grants.sql",
+      "status": "added",
+      "notes": "新增：OpenMemory schema 权限配置"
+    },
+    {
+      "old_prefix": "06",
+      "old_path": "sql/06_scm_sync_locks.sql",
+      "new_prefix": "07",
+      "new_path": "sql/07_scm_sync_locks.sql",
+      "status": "integrated",
+      "notes": "整合：新文件增加了 governance.security_events 表"
+    },
+    {
+      "old_prefix": "07",
+      "old_path": "sql/07_scm_sync_jobs.sql",
+      "new_prefix": "08",
+      "new_path": "sql/08_scm_sync_jobs.sql",
+      "status": "integrated",
+      "notes": "整合"
+    },
+    {
+      "old_prefix": "08",
+      "old_path": "sql/08_evidence_uri_column.sql",
+      "new_prefix": "09",
+      "new_path": "sql/09_evidence_uri_column.sql",
+      "status": "renamed",
+      "notes": "重命名：仅编号变更"
+    },
+    {
+      "old_prefix": "09",
+      "old_path": "sql/09_sync_jobs_dimension_columns.sql",
+      "new_prefix": "11",
+      "new_path": "sql/11_sync_jobs_dimension_columns.sql",
+      "status": "integrated",
+      "notes": "整合：跳过保留的 10 号"
+    },
+    {
+      "old_prefix": "10",
+      "old_path": "sql/10_governance_artifact_ops_audit.sql",
+      "new_prefix": "12",
+      "new_path": "sql/12_governance_artifact_ops_audit.sql",
+      "status": "integrated",
+      "notes": "整合"
+    },
+    {
+      "old_prefix": "11",
+      "old_path": "sql/11_governance_object_store_audit_events.sql",
+      "new_prefix": "13",
+      "new_path": "sql/13_governance_object_store_audit_events.sql",
+      "status": "integrated",
+      "notes": "整合"
+    },
+    {
+      "old_prefix": "99",
+      "old_path": "sql/99_verify_permissions.sql",
+      "new_prefix": "99",
+      "new_path": "sql/verify/99_verify_permissions.sql",
+      "status": "relocated",
+      "notes": "迁移到子目录：验证脚本移动到 verify/ 子目录，避免被 initdb 自动执行"
+    },
+    {
+      "old_prefix": "-",
+      "old_path": null,
+      "new_prefix": "14",
+      "new_path": "sql/14_write_audit_status.sql",
+      "status": "added",
+      "notes": "新增"
+    }
+  ],
+  "deprecated_files": [
+    {
+      "old_path": "sql/05_scm_sync_runs.sql",
+      "new_path": "sql/06_scm_sync_runs.sql",
+      "status": "integrated",
+      "reason": "编号重排：05 位置让给 openmemory_roles_and_grants.sql",
+      "action": "删除旧文件，新文件内容等价"
+    },
+    {
+      "old_path": "sql/06_scm_sync_locks.sql",
+      "new_path": "sql/07_scm_sync_locks.sql",
+      "status": "integrated",
+      "reason": "编号重排",
+      "action": "删除旧文件，新文件增加了 governance.security_events 表"
+    },
+    {
+      "old_path": "sql/07_scm_sync_jobs.sql",
+      "new_path": "sql/08_scm_sync_jobs.sql",
+      "status": "integrated",
+      "reason": "编号重排",
+      "action": "删除旧文件，新文件内容等价"
+    },
+    {
+      "old_path": "sql/08_evidence_uri_column.sql",
+      "new_path": "sql/09_evidence_uri_column.sql",
+      "status": "renamed",
+      "reason": "编号重排",
+      "action": "删除旧文件，仅编号变更"
+    },
+    {
+      "old_path": "sql/09_sync_jobs_dimension_columns.sql",
+      "new_path": "sql/11_sync_jobs_dimension_columns.sql",
+      "status": "integrated",
+      "reason": "编号重排，跳过保留的 10 号",
+      "action": "删除旧文件，新文件内容等价"
+    },
+    {
+      "old_path": "sql/10_governance_artifact_ops_audit.sql",
+      "new_path": "sql/12_governance_artifact_ops_audit.sql",
+      "status": "integrated",
+      "reason": "编号重排",
+      "action": "删除旧文件，新文件内容等价"
+    },
+    {
+      "old_path": "sql/11_governance_object_store_audit_events.sql",
+      "new_path": "sql/13_governance_object_store_audit_events.sql",
+      "status": "integrated",
+      "reason": "编号重排",
+      "action": "删除旧文件，新文件内容等价"
+    },
+    {
+      "old_path": "sql/99_verify_permissions.sql",
+      "new_path": "sql/verify/99_verify_permissions.sql",
+      "status": "relocated",
+      "reason": "验证脚本移动到 verify/ 子目录，避免被 initdb 自动执行",
+      "action": "删除旧文件，需通过 --verify 显式执行"
+    }
+  ],
+  "deprecated_prefixes": {
+    "10": {
+      "status": "reserved",
+      "reason": "编号保留，当前无文件使用"
+    }
+  }
+}

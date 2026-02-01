@@ -39,7 +39,6 @@ from engram.logbook.scm_sync_errors import (
     classify_last_error,
 )
 
-
 # ============ 类型定义 ============
 
 

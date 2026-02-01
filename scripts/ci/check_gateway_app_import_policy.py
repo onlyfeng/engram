@@ -186,7 +186,7 @@ def _class_has_fixture_method(cls_node: ast.ClassDef, fixture_name: str) -> bool
                     func = decorator.func
                     if isinstance(func, ast.Attribute) and func.attr == "fixture":
                         is_fixture = True
-            
+
             if is_fixture:
                 # 检查 fixture 方法是否使用了目标 fixture
                 if _function_uses_fixture(item, fixture_name):
@@ -221,14 +221,14 @@ def check_app_import_policy(file_path: Path) -> list[Violation]:
     # 检查是否有 app 导入
     has_app_import = False
     import_lines: list[tuple[int, str]] = []
-    
+
     lines = content.split("\n")
     for line_num, line in enumerate(lines, start=1):
         # 跳过注释行
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        
+
         # 跳过文档字符串中的内容
         if '"""' in line or "'''" in line:
             continue
@@ -268,17 +268,17 @@ def check_app_import_policy(file_path: Path) -> list[Violation]:
                 node.decorator_list, "gateway_app_import_allowed"
             )
             class_uses_fixture = _class_has_fixture_method(node, "gateway_test_app")
-            
+
             if class_has_marker or class_uses_fixture:
                 has_compliant_usage = True
-                
+
         elif isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
             # 检查测试函数
             has_marker = _has_marker_in_decorators(
                 node.decorator_list, "gateway_app_import_allowed"
             )
             uses_fixture = _function_uses_fixture(node, "gateway_test_app")
-            
+
             if has_marker or uses_fixture:
                 has_compliant_usage = True
 

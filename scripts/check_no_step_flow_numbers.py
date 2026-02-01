@@ -81,17 +81,17 @@ EXCLUDE_DIRS: Set[str] = {
     # === 版本控制和 CI 生成物 ===
     ".git",
     ".artifacts",       # CI 生成的临时制品
-    
+
     # === 上游依赖和快照（ADR §4.1.2 OUT OF SCOPE）===
     "libs",             # 包含 OpenMemory 等外部依赖快照
     "patches",          # 补丁目录，需保持原始上下文
     "archives",         # 上游快照存档
-    
+
     # === 第三方 vendored 代码 ===
     "vendor",
     "third_party",
     "node_modules",
-    
+
     # === 构建和缓存目录 ===
     "__pycache__",
     ".venv",
