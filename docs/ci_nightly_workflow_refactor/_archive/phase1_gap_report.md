@@ -1,9 +1,27 @@
 # Phase 1 差距报告：CI/Nightly Workflow Contract 一致性审计
 
+> [!WARNING]
+> **历史文档 - 仅供参考**
+>
+> 本文档记录的差距已在后续合约版本中**完全解决**。当前合约版本为 **v2.12.0**（2026-02-02），已实施"方向 A：更新 Contract + Docs"策略，workflow 与合约保持一致。
+>
+> **当前推荐的实时检测手段**：
+> - `make validate-workflows-strict` - 严格模式合约校验（CI 门禁）
+> - `make workflow-contract-drift-report-all` - 生成实时漂移报告
+> - CI Artifacts - 每次 CI 运行自动生成 `artifacts/workflow_contract_validation.json`
+>
+> **当前入口文档**：
+> - [contract.md](../contract.md) - 人类可读合约文档（SSOT）
+> - [maintenance.md](../maintenance.md) - 维护指南与变更 Checklist
+> - [coupling_map.md](../coupling_map.md) - Workflow 耦合映射
+
+---
+
 > **生成日期**: 2026-02-02（更新）
 > **审计范围**: `.github/workflows/ci.yml`、`.github/workflows/nightly.yml`、`scripts/ci/workflow_contract.v1.json`
 > **快照来源**: `artifacts/workflow_snapshot.after.json`（由 `generate_workflow_contract_snapshot.py --include-step-details` 生成）
 > **文档目的**: 记录当前 CI/Nightly workflow 与合约定义之间的**结构性差距**，为后续决策提供基准
+> **文档状态**: **已归档** - 差距已在 v2.0.0+ 合约版本中解决
 
 ---
 

@@ -341,12 +341,45 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================================
+  # 迭代文档审计（轻量级 job）
+  # ============================================================================
+  iteration-audit:
+    name: Iteration Docs Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run iteration-audit
+        run: |
+          echo "=== 迭代文档审计 ==="
+          echo ""
+          make iteration-audit
+          echo ""
+          echo "审计报告已生成到 .artifacts/iteration-audit/"
+
+      - name: Upload iteration audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: iteration-audit-${{ github.run_number }}-${{ github.run_id }}
+          path: .artifacts/iteration-audit/
+          retention-days: 90
+          if-no-files-found: warn
+
+  # ============================================================================
   # Nightly 汇总通知
   # ============================================================================
   notify-results:
     name: Notify Results
     runs-on: ubuntu-latest
-    needs: [unified-stack-full]
+    needs: [unified-stack-full, iteration-audit]
     if: always()
 
     steps:
@@ -355,13 +388,11 @@ jobs:
           echo "=== Nightly 运行结果 ==="
           echo ""
           echo "unified-stack-full: ${{ needs.unified-stack-full.result }}"
+          echo "iteration-audit: ${{ needs.iteration-audit.result }}"
           echo ""
           
-          if [ "${{ needs.unified-stack-full.result }}" = "success" ]; then
-            echo "=========================================="
-            echo "[PASS] Nightly 验证全部通过"
-            echo "=========================================="
-          else
+          # unified-stack-full 失败时整体 fail
+          if [ "${{ needs.unified-stack-full.result }}" != "success" ]; then
             echo "=========================================="
             echo "[FAIL] Nightly 验证失败"
             echo "=========================================="
@@ -369,3 +400,17 @@ jobs:
             echo "请检查 unified-stack-full job 的日志"
             exit 1
           fi
+          
+          # iteration-audit 失败仅警告（非阻断）
+          if [ "${{ needs.iteration-audit.result }}" != "success" ]; then
+            echo "=========================================="
+            echo "[WARN] 迭代文档审计发现问题"
+            echo "=========================================="
+            echo ""
+            echo "请检查 iteration-audit job 的日志和 artifacts"
+            echo "注意: 审计问题不阻断 Nightly 流水线"
+          fi
+          
+          echo "=========================================="
+          echo "[PASS] Nightly 验证全部通过"
+          echo "=========================================="

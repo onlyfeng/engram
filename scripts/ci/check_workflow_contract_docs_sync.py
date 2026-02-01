@@ -5,9 +5,11 @@ Workflow Contract 与文档同步校验脚本
 校验 workflow_contract.v1.json 中的关键元素是否在 contract.md 文档中有对应描述。
 
 校验范围：
-1. <workflow>.job_ids: 每个 workflow（ci/nightly）的 job id 在文档中可被找到
-2. <workflow>.job_names: 每个 workflow 的 job name 在文档中可被找到
-3. frozen_step_text.allowlist: 每个 frozen step 在文档中可被找到
+1. <workflow>.job_ids: 每个 workflow（ci/nightly）的 job id 在对应章节可被找到
+2. <workflow>.job_names: 每个 workflow 的 job name 在对应章节可被找到
+3. frozen_step_text.allowlist: 每个 frozen step 在冻结 Step 章节可被找到
+4. frozen_job_names.allowlist: 每个 frozen job name 在 Frozen Job Names 章节可被找到
+5. <workflow>.labels: 每个 label 在 PR Labels 章节可被找到
 
 使用方式：
     python scripts/ci/check_workflow_contract_docs_sync.py
@@ -52,10 +54,11 @@ METADATA_KEYS = frozenset(
 
 # 文档中各 workflow 章节的锚点关键字（用于章节定位和切片）
 # 检查 job_ids/job_names 时，只在对应 workflow 章节内匹配
+# 注意：锚点必须足够精确，避免匹配到其他章节（如关键文件清单中的路径引用）
 WORKFLOW_DOC_ANCHORS = {
-    "ci": ["ci.yml", "CI Workflow"],
-    "nightly": ["nightly.yml", "Nightly Workflow"],
-    "release": ["release.yml", "Release Workflow"],
+    "ci": ["### 2.1 CI Workflow", "CI Workflow (`ci.yml`)"],
+    "nightly": ["### 2.2 Nightly Workflow", "Nightly Workflow (`nightly.yml`)"],
+    "release": ["### 2.3 Release Workflow", "Release Workflow (`release.yml`)"],
 }
 
 # 冻结 Step 章节的锚点关键字（用于 frozen_step_text 匹配）
@@ -75,6 +78,23 @@ SEMVER_POLICY_DOC_ANCHORS = [
     "SemVer Policy",  # 英文标题
     "版本策略",  # 中文标题
     "SemVer",  # 简短关键字
+]
+
+# Frozen Job Names 章节的锚点关键字（用于 frozen_job_names.allowlist 匹配）
+# frozen job name 必须在此章节内出现才算有效
+FROZEN_JOB_DOC_ANCHORS = [
+    "Frozen Job Names",  # 文档 5.1 节标题
+    "frozen_job_names.allowlist",  # 合约字段引用
+    "冻结的 Job Names",  # 中文标题（如有）
+]
+
+# PR Labels 章节的锚点关键字（用于 ci.labels / nightly.labels 匹配）
+# labels 必须在此章节内出现才算有效
+LABELS_DOC_ANCHORS = [
+    "PR Label 列表与语义",  # 文档 3 节标题
+    "PR Labels",  # 英文简称
+    "Label 列表",  # 中文简称
+    "ci.labels",  # 合约字段引用
 ]
 
 
@@ -103,6 +123,8 @@ class SyncResult:
     checked_job_ids: list[str] = field(default_factory=list)
     checked_job_names: list[str] = field(default_factory=list)
     checked_frozen_steps: list[str] = field(default_factory=list)
+    checked_frozen_job_names: list[str] = field(default_factory=list)
+    checked_labels: list[str] = field(default_factory=list)
     checked_version: str = ""
     checked_make_targets: list[str] = field(default_factory=list)
 
@@ -487,6 +509,139 @@ class WorkflowContractDocsSyncChecker:
             elif self.verbose:
                 print(f"  [OK] frozen_step: {step}")
 
+    def extract_frozen_job_names_section(self) -> str | None:
+        """提取 Frozen Job Names 章节的文本
+
+        Returns:
+            Frozen Job Names 章节的文本，如果找不到则返回 None
+        """
+        return self.extract_section_text(FROZEN_JOB_DOC_ANCHORS)
+
+    def extract_labels_section(self) -> str | None:
+        """提取 PR Labels 章节的文本
+
+        Returns:
+            PR Labels 章节的文本，如果找不到则返回 None
+        """
+        return self.extract_section_text(LABELS_DOC_ANCHORS)
+
+    def check_frozen_job_names(self) -> None:
+        """校验 frozen_job_names.allowlist
+
+        使用章节切片确保 frozen job name 出现在 Frozen Job Names 章节中。
+        """
+        frozen_job_names = self.contract.get("frozen_job_names", {})
+        allowlist = frozen_job_names.get("allowlist", [])
+
+        if not allowlist:
+            self.result.add_warning("No frozen_job_names.allowlist found in contract")
+            return
+
+        # 提取 Frozen Job Names 章节文本
+        section_text = self.extract_frozen_job_names_section()
+
+        if section_text is None:
+            self.result.add_error(
+                SyncError(
+                    error_type="frozen_job_names_section_missing",
+                    category="frozen_job_name",
+                    value="frozen_job_names",
+                    message=(
+                        "Documentation missing 'Frozen Job Names' section. "
+                        "Please add section 5.1 with title containing 'Frozen Job Names'."
+                    ),
+                )
+            )
+            # 章节不存在时，所有 frozen job name 都会报错
+            for job_name in allowlist:
+                self.result.checked_frozen_job_names.append(job_name)
+                self.result.add_error(
+                    SyncError(
+                        error_type="frozen_job_name_not_in_doc",
+                        category="frozen_job_name",
+                        value=job_name,
+                        message=f"Frozen job name '{job_name}' not found in documentation (section missing)",
+                    )
+                )
+            return
+
+        for job_name in allowlist:
+            self.result.checked_frozen_job_names.append(job_name)
+            # 使用章节切片匹配，而不是全文匹配
+            if not self.check_value_in_section(job_name, section_text):
+                self.result.add_error(
+                    SyncError(
+                        error_type="frozen_job_name_not_in_doc",
+                        category="frozen_job_name",
+                        value=job_name,
+                        message=f"Frozen job name '{job_name}' not found in 'Frozen Job Names' section (5.1)",
+                    )
+                )
+            elif self.verbose:
+                print(f"  [OK] frozen_job_name: {job_name}")
+
+    def check_labels(self) -> None:
+        """校验所有 workflow 的 labels
+
+        遍历动态发现的每个 workflow，检查其 labels 是否在 PR Labels 章节内出现。
+        使用章节切片确保 label 出现在正确的章节中。
+        """
+        # 提取 PR Labels 章节文本
+        section_text = self.extract_labels_section()
+
+        all_labels: list[tuple[str, str]] = []  # (label, workflow_key)
+
+        for workflow_key in self.workflow_keys:
+            workflow_config = self.contract.get(workflow_key, {})
+            labels = workflow_config.get("labels", [])
+
+            for label in labels:
+                all_labels.append((label, workflow_key))
+
+        if not all_labels:
+            # labels 是可选的，不产生警告
+            return
+
+        if section_text is None:
+            self.result.add_error(
+                SyncError(
+                    error_type="labels_section_missing",
+                    category="label",
+                    value="PR Labels",
+                    message=(
+                        "Documentation missing 'PR Label' section. "
+                        "Please add section 3 with title containing 'PR Label 列表与语义' or 'PR Labels'."
+                    ),
+                )
+            )
+            # 章节不存在时，所有 labels 都会报错
+            for label, workflow_key in all_labels:
+                self.result.checked_labels.append(label)
+                self.result.add_error(
+                    SyncError(
+                        error_type="label_not_in_doc",
+                        category="label",
+                        value=label,
+                        message=f"Label '{label}' ({workflow_key}) not found in documentation (section missing)",
+                    )
+                )
+            return
+
+        for label, workflow_key in all_labels:
+            self.result.checked_labels.append(label)
+            # 使用章节切片匹配，而不是全文匹配
+            if not self.check_value_in_section(label, section_text):
+                self.result.add_error(
+                    SyncError(
+                        error_type="label_not_in_doc",
+                        category="label",
+                        value=label,
+                        message=f"Label '{label}' ({workflow_key}) not found in 'PR Labels' section (section 3)",
+                    )
+                )
+            elif self.verbose:
+                print(f"  [OK] label ({workflow_key}): {label}")
+
     def check_version(self) -> None:
         """校验 version 字段是否在文档中
 
@@ -616,6 +771,14 @@ class WorkflowContractDocsSyncChecker:
         self.check_frozen_steps()
 
         if self.verbose:
+            print("\nChecking frozen_job_names.allowlist...")
+        self.check_frozen_job_names()
+
+        if self.verbose:
+            print(f"\nChecking labels across workflows: {self.workflow_keys}...")
+        self.check_labels()
+
+        if self.verbose:
             print("\nChecking make.targets_required...")
         self.check_make_targets()
 
@@ -650,6 +813,8 @@ def format_text_output(result: SyncResult) -> str:
     lines.append(f"  - Checked job_ids: {len(result.checked_job_ids)}")
     lines.append(f"  - Checked job_names: {len(result.checked_job_names)}")
     lines.append(f"  - Checked frozen_steps: {len(result.checked_frozen_steps)}")
+    lines.append(f"  - Checked frozen_job_names: {len(result.checked_frozen_job_names)}")
+    lines.append(f"  - Checked labels: {len(result.checked_labels)}")
     lines.append(f"  - Checked make_targets: {len(result.checked_make_targets)}")
     lines.append(f"  - Errors: {len(result.errors)}")
     lines.append(f"  - Warnings: {len(result.warnings)}")
@@ -680,6 +845,8 @@ def format_json_output(result: SyncResult) -> str:
         "checked_job_ids": result.checked_job_ids,
         "checked_job_names": result.checked_job_names,
         "checked_frozen_steps": result.checked_frozen_steps,
+        "checked_frozen_job_names": result.checked_frozen_job_names,
+        "checked_labels": result.checked_labels,
         "checked_make_targets": result.checked_make_targets,
         "errors": [
             {

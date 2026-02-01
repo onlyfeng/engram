@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov lint format typecheck migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-iteration-docs check-iteration-docs-superseded-only iteration-init iteration-promote
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate mypy-baseline-update migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-docs-superseded-only iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -132,6 +132,9 @@ test-e2e:  ## 运行端到端测试
 test-quick:  ## 快速冒烟测试（仅安装和导入验证）
 	$(PYTEST) tests/acceptance/test_installation.py -v
 
+test-iteration-tools:  ## 运行迭代工具脚本测试（无需数据库）
+	$(PYTEST) tests/iteration/ -q
+
 test-cov:  ## 运行测试并生成覆盖率报告
 	$(PYTEST) tests/ --cov=src/engram --cov-report=html --cov-report=term
 
@@ -148,6 +151,16 @@ format-check:  ## 代码格式检查（不修改）
 
 typecheck:  ## 类型检查（mypy）
 	mypy src/engram/
+
+typecheck-gate:  ## mypy 类型检查（baseline 模式，CI 门禁使用）
+	@echo "运行 mypy 类型检查（baseline 模式）..."
+	$(PYTHON) scripts/ci/check_mypy_gate.py
+	@echo "mypy 类型检查通过"
+
+mypy-baseline-update:  ## 更新 mypy baseline 文件
+	@echo "更新 mypy baseline..."
+	$(PYTHON) scripts/ci/check_mypy_gate.py --write-baseline
+	@echo "mypy baseline 已更新"
 
 ## ==================== CI 检查目标（与 GitHub Actions 对齐） ====================
 
@@ -194,9 +207,36 @@ check-gateway-error-reason-usage:  ## 检查 Gateway ErrorReason 使用规范（
 	$(PYTHON) scripts/ci/check_gateway_error_reason_usage.py --verbose
 	@echo "Gateway ErrorReason 使用规范检查通过"
 
-check-iteration-docs:  ## 检查迭代文档规范（.iteration/ 链接禁止 + SUPERSEDED 一致性）
+check-gateway-public-api-surface:  ## 检查 Gateway Public API 导入表面（确保 Tier B 模块懒加载）
+	@echo "检查 Gateway Public API 导入表面..."
+	$(PYTHON) scripts/ci/check_gateway_public_api_import_surface.py --verbose
+	@echo "Gateway Public API 导入表面检查通过"
+
+check-gateway-public-api-docs-sync:  ## 检查 Gateway Public API 代码与文档同步
+	@echo "检查 Gateway Public API 文档同步..."
+	$(PYTHON) scripts/ci/check_gateway_public_api_docs_sync.py --verbose
+	@echo "Gateway Public API 文档同步检查通过"
+
+check-gateway-di-boundaries:  ## 检查 Gateway DI 边界（禁止 deps.db 直接使用）
+	@echo "检查 Gateway DI 边界..."
+	$(PYTHON) scripts/ci/check_gateway_di_boundaries.py --verbose
+	@echo "Gateway DI 边界检查通过"
+
+check-gateway-import-surface:  ## 检查 Gateway __init__.py 懒加载策略（禁止 eager-import）
+	@echo "检查 Gateway Import Surface..."
+	$(PYTHON) scripts/ci/check_gateway_import_surface.py --verbose
+	@echo "Gateway Import Surface 检查通过"
+
+check-gateway-correlation-id-single-source:  ## 检查 Gateway correlation_id 单一来源（禁止重复定义）
+	@echo "检查 Gateway correlation_id 单一来源..."
+	$(PYTHON) scripts/ci/check_gateway_correlation_id_single_source.py --verbose
+	@echo "Gateway correlation_id 单一来源检查通过"
+
+check-iteration-docs:  ## 检查迭代文档规范（.iteration/ 链接禁止 + .artifacts/ 链接禁止 + SUPERSEDED 一致性 + 模板占位符）
 	@echo "检查迭代文档规范..."
 	$(PYTHON) scripts/ci/check_no_iteration_links_in_docs.py --verbose
+	$(PYTHON) scripts/ci/check_no_local_artifact_links_in_docs.py --verbose
+	$(PYTHON) scripts/ci/check_iteration_docs_placeholders.py --verbose
 	@echo "迭代文档规范检查通过"
 
 check-iteration-docs-superseded-only:  ## 仅检查 SUPERSEDED 一致性（跳过 .iteration/ 链接检查）
@@ -204,7 +244,81 @@ check-iteration-docs-superseded-only:  ## 仅检查 SUPERSEDED 一致性（跳�
 	$(PYTHON) scripts/ci/check_no_iteration_links_in_docs.py --superseded-only --verbose
 	@echo "SUPERSEDED 一致性检查通过"
 
-ci: lint format-check typecheck check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
+validate-workflows:  ## Workflow 合约校验（默认模式）
+	@echo "校验 Workflow 合约..."
+	$(PYTHON) scripts/ci/validate_workflows.py
+	@echo "Workflow 合约校验通过"
+
+validate-workflows-strict:  ## Workflow 合约校验（严格模式，CI 使用）
+	@echo "校验 Workflow 合约（严格模式）..."
+	$(PYTHON) scripts/ci/validate_workflows.py --strict
+	@echo "Workflow 合约校验通过（严格模式）"
+
+validate-workflows-json:  ## Workflow 合约校验（JSON 输出）
+	$(PYTHON) scripts/ci/validate_workflows.py --json
+
+check-workflow-contract-docs-sync:  ## Workflow 合约与文档同步检查
+	@echo "检查 Workflow 合约与文档同步..."
+	$(PYTHON) scripts/ci/check_workflow_contract_docs_sync.py
+	@echo "Workflow 合约与文档同步检查通过"
+
+check-workflow-contract-docs-sync-json:  ## Workflow 合约与文档同步检查（JSON 输出）
+	$(PYTHON) scripts/ci/check_workflow_contract_docs_sync.py --json
+
+check-workflow-contract-version-policy:  ## Workflow 合约版本策略检查（关键文件变更时强制版本更新）
+	@echo "检查 Workflow 合约版本策略..."
+	$(PYTHON) scripts/ci/check_workflow_contract_version_policy.py --pr-mode
+	@echo "Workflow 合约版本策略检查通过"
+
+check-workflow-contract-version-policy-json:  ## Workflow 合约版本策略检查（JSON 输出）
+	$(PYTHON) scripts/ci/check_workflow_contract_version_policy.py --pr-mode --json
+
+workflow-contract-drift-report:  ## Workflow 合约 drift 报告（JSON 输出）
+	$(PYTHON) scripts/ci/workflow_contract_drift_report.py
+
+workflow-contract-drift-report-json:  ## Workflow 合约 drift 报告（JSON 输出到文件）
+	@mkdir -p artifacts
+	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --output artifacts/workflow_contract_drift.json
+
+workflow-contract-drift-report-markdown:  ## Workflow 合约 drift 报告（Markdown 输出）
+	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --markdown
+
+workflow-contract-drift-report-all:  ## Workflow 合约 drift 报告（JSON + Markdown 输出到 artifacts/）
+	@mkdir -p artifacts
+	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --output artifacts/workflow_contract_drift.json || true
+	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --markdown --output artifacts/workflow_contract_drift.md || true
+	@echo "Drift reports 已生成到 artifacts/ 目录"
+
+check-cli-entrypoints:  ## CLI 入口点一致性检查（pyproject.toml 与文档同步）
+	@echo "检查 CLI 入口点一致性..."
+	$(PYTHON) scripts/verify_cli_entrypoints_consistency.py --verbose
+	@echo "CLI 入口点一致性检查通过"
+
+check-noqa-policy:  ## noqa 注释策略检查
+	@echo "检查 noqa 注释策略..."
+	$(PYTHON) scripts/ci/check_noqa_policy.py --verbose
+	@echo "noqa 注释策略检查通过"
+
+check-no-root-wrappers:  ## 根目录 wrapper 禁止导入检查
+	@echo "检查根目录 wrapper 导入..."
+	$(PYTHON) scripts/ci/check_no_root_wrappers_usage.py --verbose
+	$(PYTHON) scripts/ci/check_no_root_wrappers_allowlist.py --verbose
+	@echo "根目录 wrapper 导入检查通过"
+
+check-mcp-error-contract:  ## MCP JSON-RPC 错误码合约检查
+	@echo "检查 MCP JSON-RPC 错误码合约..."
+	$(PYTHON) scripts/ci/check_mcp_jsonrpc_error_contract.py --verbose
+	@echo "MCP JSON-RPC 错误码合约检查通过"
+
+check-mcp-error-docs-sync:  ## MCP JSON-RPC 错误码文档与 Schema 同步检查
+	@echo "检查 MCP JSON-RPC 错误码文档同步..."
+	$(PYTHON) scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --verbose
+	@echo "MCP JSON-RPC 错误码文档同步检查通过"
+
+check-mcp-error-docs-sync-json:  ## MCP JSON-RPC 错误码文档同步检查（JSON 输出）
+	$(PYTHON) scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --json
+
+ci: lint format-check typecheck check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs validate-workflows-strict check-workflow-contract-docs-sync check-workflow-contract-version-policy check-mcp-error-contract check-mcp-error-docs-sync  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
 	@echo ""
 	@echo "=========================================="
 	@echo "[OK] 所有 CI 检查通过"
@@ -383,12 +497,19 @@ db-drop:  ## 删除数据库（危险操作）
 # 迭代编号（通过 N= 参数传入）
 N ?=
 
-iteration-init:  ## 初始化本地迭代草稿（用法: make iteration-init N=13）
+iteration-init:  ## 初始化本地迭代草稿（用法: make iteration-init N=13 或 make iteration-init N=next）
 	@if [ -z "$(N)" ]; then \
-		echo "❌ 错误: 请指定迭代编号，例如: make iteration-init N=13"; \
+		echo "❌ 错误: 请指定迭代编号，例如: make iteration-init N=13 或 make iteration-init N=next"; \
 		exit 1; \
 	fi
-	$(PYTHON) scripts/iteration/init_local_iteration.py $(N)
+	@if [ "$(N)" = "next" ]; then \
+		$(PYTHON) scripts/iteration/init_local_iteration.py --next; \
+	else \
+		$(PYTHON) scripts/iteration/init_local_iteration.py $(N); \
+	fi
+
+iteration-init-next:  ## 初始化下一可用编号的本地迭代草稿（自动选择编号）
+	$(PYTHON) scripts/iteration/init_local_iteration.py --next
 
 iteration-promote:  ## 将本地迭代晋升到 SSOT（用法: make iteration-promote N=13）
 	@if [ -z "$(N)" ]; then \
@@ -396,6 +517,34 @@ iteration-promote:  ## 将本地迭代晋升到 SSOT（用法: make iteration-pr
 		exit 1; \
 	fi
 	$(PYTHON) scripts/iteration/promote_iteration.py $(N)
+
+iteration-export:  ## 导出本地迭代草稿为 zip 以便分享（用法: make iteration-export N=13）
+	@if [ -z "$(N)" ]; then \
+		echo "❌ 错误: 请指定迭代编号，例如: make iteration-export N=13"; \
+		exit 1; \
+	fi
+	$(PYTHON) scripts/iteration/export_local_iteration.py $(N) --output-zip .artifacts/iteration-draft-export/iteration_$(N)_draft.zip
+
+# 快照可选参数
+OUT ?=
+FORCE ?=
+
+iteration-snapshot:  ## 快照 SSOT 迭代到本地只读副本（用法: make iteration-snapshot N=10 [OUT=path] [FORCE=1]）
+	@if [ -z "$(N)" ]; then \
+		echo "❌ 错误: 请指定迭代编号，例如: make iteration-snapshot N=10"; \
+		echo ""; \
+		echo "💡 列出可用编号: python scripts/iteration/snapshot_ssot_iteration.py --list"; \
+		exit 1; \
+	fi
+	@ARGS="$(N)"; \
+	if [ -n "$(OUT)" ]; then ARGS="$$ARGS --output-dir $(OUT)"; fi; \
+	if [ "$(FORCE)" = "1" ]; then ARGS="$$ARGS --force"; fi; \
+	$(PYTHON) scripts/iteration/snapshot_ssot_iteration.py $$ARGS
+	@echo ""
+	@echo "⚠️  重要: 快照仅供本地阅读和实验，不可用于 promote 覆盖旧编号"
+
+iteration-audit:  ## 生成迭代文档审计报告（输出到 .artifacts/iteration-audit/）
+	$(PYTHON) scripts/iteration/audit_iteration_docs.py --output-dir .artifacts/iteration-audit
 
 ## ==================== 服务 ====================
 

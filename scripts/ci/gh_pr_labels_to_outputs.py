@@ -11,20 +11,20 @@ Environment Variables:
     GITHUB_OUTPUT: Path to GitHub Actions output file
 
 Outputs (to GITHUB_OUTPUT):
-    has_migrate_dry_run_label: true/false
-    has_dual_read_label: true/false
     has_freeze_override_label: true/false
-    has_compat_strict_label: true/false
+
+Note:
+    SeekDB-related labels (ci:dual-read, ci:seek-compat-strict, ci:seek-migrate-dry-run)
+    and their corresponding outputs were removed in v2.0.0 as part of "移除 SeekDB 组件".
 """
 
 import os
 import sys
 
 # Label constants
-LABEL_MIGRATE_DRY_RUN = "ci:seek-migrate-dry-run"
-LABEL_DUAL_READ = "ci:dual-read"
+# NOTE: SeekDB-related labels (ci:dual-read, ci:seek-compat-strict, ci:seek-migrate-dry-run)
+# were removed in v2.0.0 as part of "移除 SeekDB 组件"
 LABEL_FREEZE_OVERRIDE = "openmemory:freeze-override"
-LABEL_COMPAT_STRICT = "ci:seek-compat-strict"
 
 
 def parse_labels(labels_str: str) -> set[str]:
@@ -49,38 +49,20 @@ def main() -> int:
     labels_str = os.environ.get("PR_LABELS", "")
 
     # Default values
-    has_migrate_label = "false"
-    has_dual_read_label = "false"
     has_freeze_override_label = "false"
-    has_compat_strict_label = "false"
 
     if event_name == "pull_request":
         labels = parse_labels(labels_str)
         print(f"PR Labels: {labels_str}")
 
-        if LABEL_MIGRATE_DRY_RUN in labels:
-            has_migrate_label = "true"
-            print(f"Found label: {LABEL_MIGRATE_DRY_RUN}")
-
-        if LABEL_DUAL_READ in labels:
-            has_dual_read_label = "true"
-            print(f"Found label: {LABEL_DUAL_READ}")
-
         if LABEL_FREEZE_OVERRIDE in labels:
             has_freeze_override_label = "true"
             print(f"Found label: {LABEL_FREEZE_OVERRIDE}")
-
-        if LABEL_COMPAT_STRICT in labels:
-            has_compat_strict_label = "true"
-            print(f"Found label: {LABEL_COMPAT_STRICT}")
     else:
         print(f"Event type: {event_name} (not pull_request, skipping label check)")
 
     # Write outputs
-    write_output("has_migrate_dry_run_label", has_migrate_label)
-    write_output("has_dual_read_label", has_dual_read_label)
     write_output("has_freeze_override_label", has_freeze_override_label)
-    write_output("has_compat_strict_label", has_compat_strict_label)
 
     return 0
 

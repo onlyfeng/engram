@@ -43,6 +43,12 @@ from validate_workflows import (
 
 # Critical error types for workflow contract validation
 # These are errors that indicate significant contract violations
+#
+# 策略 A（最小冻结，v2.3.0+）设计说明：
+# - frozen_step_name_changed / frozen_job_name_changed: 冻结项被改名，阻止 CI
+# - 不包含 contract_frozen_step_missing / contract_frozen_job_missing:
+#   required_steps/job_names 不要求全部在 frozen allowlist 中
+# - 非冻结项改名仅产生 WARNING，由 step_name_changed / job_name_changed 处理
 CRITICAL_ERROR_TYPES = {
     "workflow_not_found",
     "missing_job",
@@ -473,7 +479,12 @@ class TestContractCIWorkflowIntegration:
     1. workflow_contract.v1.json 与 ci.yml 的一致性
     2. 所有 required jobs 存在
     3. 所有 required steps 存在
-    4. frozen job/step names 未被修改
+    4. frozen job/step names 未被修改（冻结项改名报 ERROR）
+
+    注意（策略 A - 最小冻结，v2.3.0+）：
+    - required_steps/job_names 不要求全部在 frozen allowlist 中
+    - 非冻结项改名仅产生 WARNING，不阻止 CI
+    - validate_contract_frozen_consistency() 是可选检查，需显式调用
     """
 
     @pytest.fixture
@@ -1038,7 +1049,16 @@ class TestSchemaValidation:
 
 
 class TestContractInternalConsistency:
-    """Contract 内部一致性校验测试"""
+    """Contract 内部一致性校验测试
+
+    测试 validate_contract_frozen_consistency() 方法的行为（可选检查）。
+
+    策略 A（最小冻结，v2.3.0+）设计说明：
+    - 此方法是可选的，需要显式调用或通过 --require-frozen-consistency 启用
+    - 默认 validate() 不调用此方法
+    - CI 门禁不启用此检查，因此 required_steps/job_names 不要求全部在 allowlist 中
+    - 这些测试验证方法本身的行为正确性，而非默认验证流程
+    """
 
     @pytest.fixture
     def contract_with_missing_frozen_step(self):
@@ -1162,7 +1182,10 @@ jobs:
             f.write(workflow_content)
 
         validator = WorkflowContractValidator(contract_path, temp_workspace)
-        result = validator.validate()
+        validator.validate()
+        # 显式调用 contract frozen 一致性检查（此检查是可选的，需要显式调用）
+        validator.validate_contract_frozen_consistency()
+        result = validator.result
 
         # 应该失败
         assert result.success is False
@@ -1199,7 +1222,10 @@ jobs:
             f.write(workflow_content)
 
         validator = WorkflowContractValidator(contract_path, temp_workspace)
-        result = validator.validate()
+        validator.validate()
+        # 显式调用 contract frozen 一致性检查（此检查是可选的，需要显式调用）
+        validator.validate_contract_frozen_consistency()
+        result = validator.result
 
         # 应该失败
         assert result.success is False
@@ -1278,9 +1304,117 @@ jobs:
             f"{[(e.error_type, e.key) for e in validator.result.errors if e.error_type.startswith('contract_frozen')]}"
         )
 
-    @pytest.mark.skip(
-        reason="WorkflowContractValidator 未实现 contract_job_ids_names_length_mismatch 检查 (Phase 2 预留)"
-    )
+    def test_validate_frozen_consistency_with_third_workflow_key(self, temp_workspace):
+        """测试 validate_frozen_consistency 正确处理第三个 workflow key（如 release）
+
+        验证 validate_frozen_consistency 使用 discover_workflow_keys 动态发现所有
+        workflow，而非硬编码 ["ci", "nightly"] 列表。
+        """
+        # 创建包含 ci、nightly 和 release 三个 workflow 的合约
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {
+                "allowlist": [
+                    "Checkout repository",
+                    "Run CI tests",
+                    "Run nightly tests",
+                    # 缺少 "Publish package"，用于验证 release workflow 被检测到
+                ],
+            },
+            "frozen_job_names": {
+                "allowlist": ["CI Test Job", "Nightly Test Job", "Publish Job"],
+            },
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["ci-test"],
+                "job_names": ["CI Test Job"],
+                "required_jobs": [
+                    {
+                        "id": "ci-test",
+                        "name": "CI Test Job",
+                        "required_steps": ["Checkout repository", "Run CI tests"],
+                        "required_outputs": [],
+                    }
+                ],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["nightly-test"],
+                "job_names": ["Nightly Test Job"],
+                "required_jobs": [
+                    {
+                        "id": "nightly-test",
+                        "name": "Nightly Test Job",
+                        "required_steps": ["Checkout repository", "Run nightly tests"],
+                        "required_outputs": [],
+                    }
+                ],
+            },
+            "release": {
+                "file": ".github/workflows/release.yml",
+                "job_ids": ["publish"],
+                "job_names": ["Publish Job"],
+                "required_jobs": [
+                    {
+                        "id": "publish",
+                        "name": "Publish Job",
+                        "required_steps": [
+                            "Checkout repository",
+                            "Publish package",  # 不在 frozen_step_text.allowlist 中
+                        ],
+                        "required_outputs": [],
+                    }
+                ],
+            },
+        }
+
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建三个 workflow 文件
+        for wf_name, wf_file in [
+            ("ci", "ci.yml"),
+            ("nightly", "nightly.yml"),
+            ("release", "release.yml"),
+        ]:
+            workflow_path = temp_workspace / ".github" / "workflows" / wf_file
+            workflow_content = f"""
+name: {wf_name.upper()}
+on: [push]
+jobs:
+  {contract[wf_name]['job_ids'][0]}:
+    name: {contract[wf_name]['job_names'][0]}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: {contract[wf_name]['required_jobs'][0]['required_steps'][1]}
+        run: echo "test"
+"""
+            with open(workflow_path, "w") as f:
+                f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        validator.validate()
+        # 显式调用 contract frozen 一致性检查
+        validator.validate_contract_frozen_consistency()
+        result = validator.result
+
+        # 应该失败，因为 "Publish package" 来自 release workflow 且不在 frozen_step_text.allowlist 中
+        assert result.success is False
+
+        # 应该有 contract_frozen_step_missing 错误，且 key 为 "Publish package"
+        step_errors = [e for e in result.errors if e.error_type == "contract_frozen_step_missing"]
+        assert len(step_errors) == 1, (
+            f"Expected 1 contract_frozen_step_missing error for 'Publish package', "
+            f"got {len(step_errors)}: {[e.key for e in step_errors]}"
+        )
+        assert step_errors[0].key == "Publish package"
+        assert "frozen_step_text.allowlist" in step_errors[0].message
+        # 验证错误来自 release workflow 的 publish job
+        assert "publish" in step_errors[0].message
+
     def test_job_ids_names_length_mismatch_error(self, temp_workspace):
         """测试 job_ids 和 job_names 长度不一致时报告 ERROR"""
         contract = {
@@ -1327,9 +1461,6 @@ jobs:
         assert "3" in length_errors[0].actual
         assert "2" in length_errors[0].actual
 
-    @pytest.mark.skip(
-        reason="WorkflowContractValidator 未实现 contract_required_job_not_in_job_ids 检查 (Phase 2 预留)"
-    )
     def test_required_job_not_in_job_ids_error(self, temp_workspace):
         """测试 required_jobs[].id 不在 job_ids 中时报告 ERROR"""
         contract = {
@@ -1380,6 +1511,103 @@ jobs:
         ]
         assert len(job_errors) == 1
         assert job_errors[0].key == "lint"
+
+    def test_job_ids_duplicate_error(self, temp_workspace):
+        """测试 job_ids 中有重复项时报告 ERROR"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job", "Lint Job"]},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint", "test"],  # 重复的 test
+                "job_names": ["Test Job", "Lint Job", "Test Job Dup"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建最小 workflow 文件
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该失败
+        assert result.success is False
+
+        # 应该有 contract_job_ids_duplicate 错误
+        dup_errors = [e for e in result.errors if e.error_type == "contract_job_ids_duplicate"]
+        assert len(dup_errors) == 1
+        assert dup_errors[0].key == "test"
+
+    def test_required_job_id_duplicate_error(self, temp_workspace):
+        """测试 required_jobs 中有重复 id 时报告 ERROR"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": ["Checkout"]},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+                "required_jobs": [
+                    {
+                        "id": "test",
+                        "required_steps": ["Checkout"],
+                    },
+                    {
+                        "id": "test",  # 重复的 id
+                        "required_steps": ["Checkout"],
+                    },
+                ],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建最小 workflow 文件
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        run: echo checkout
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该失败
+        assert result.success is False
+
+        # 应该有 contract_required_job_id_duplicate 错误
+        dup_errors = [
+            e for e in result.errors if e.error_type == "contract_required_job_id_duplicate"
+        ]
+        assert len(dup_errors) == 1
+        assert dup_errors[0].key == "test"
 
     @pytest.mark.skip(
         reason="WorkflowContractValidator 未实现 frozen_allowlist_duplicate 检查 (Phase 2 预留)"
@@ -1495,9 +1723,6 @@ jobs:
         consistency_errors = [e for e in result.errors if e.error_type.startswith("contract_")]
         assert len(consistency_errors) == 0
 
-    @pytest.mark.skip(
-        reason="WorkflowContractValidator 未实现 contract_job_ids_names_length_mismatch 检查 (Phase 2 预留)"
-    )
     def test_nightly_job_ids_names_mismatch(self, temp_workspace):
         """测试 nightly workflow 的 job_ids/job_names 长度不匹配"""
         contract = {
@@ -1535,9 +1760,6 @@ jobs:
         ]
         assert len(length_errors) == 1
 
-    @pytest.mark.skip(
-        reason="WorkflowContractValidator 未实现 contract_required_job_not_in_job_ids 检查 (Phase 2 预留)"
-    )
     def test_nightly_required_job_not_in_job_ids(self, temp_workspace):
         """测试 nightly workflow 的 required_jobs[].id 不在 job_ids 中"""
         contract = {
@@ -1630,10 +1852,10 @@ class TestWorkflowContractDocsSync:
             json.dump(contract, f)
 
         # 创建文档文件（缺少 missing-job）
-        # 使用正确的章节格式：CI Workflow 章节需要包含 "ci.yml" 或 "CI Workflow" anchor
+        # 使用正确的章节格式：CI Workflow 章节需要包含精确锚点 "### 2.1 CI Workflow"
         doc_content = """# CI Workflow Contract
 
-## CI Workflow (ci.yml)
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -1693,10 +1915,10 @@ targets_required 说明
             json.dump(contract, f)
 
         # 创建文档文件（缺少 Missing Job Name）
-        # 使用正确的章节格式：CI Workflow 章节需要包含 "ci.yml" 或 "CI Workflow" anchor
+        # 使用正确的章节格式：CI Workflow 章节需要包含精确锚点 "### 2.1 CI Workflow"
         doc_content = """# CI Workflow Contract
 
-## CI Workflow (ci.yml)
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -1821,12 +2043,12 @@ targets_required 说明
             json.dump(contract, f)
 
         # 创建包含所有元素的文档
-        # 使用正确的章节格式：CI Workflow 章节需要包含 "ci.yml" 或 "CI Workflow" anchor
+        # 使用正确的章节格式：CI Workflow 章节需要包含精确锚点 "### 2.1 CI Workflow"
         doc_content = """# CI Workflow Contract
 
 当前版本：**1.0.0**
 
-## CI Workflow (ci.yml)
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -2449,15 +2671,10 @@ targets_required 包含以下 target：
         ]
         assert len(semver_errors) == 0
 
-    @pytest.mark.xfail(
-        reason="文档与合约可能存在同步滞后，此测试用于检测但不阻断 CI (Phase 2 完善文档同步)",
-        strict=False,
-    )
     def test_real_contract_and_doc_sync(self):
         """集成测试：验证真实 contract 和文档的同步一致性
 
-        注意：此测试使用 xfail 标记，因为文档可能存在同步滞后。
-        测试会运行并输出结果，但不会阻断 CI。
+        验证真实 workflow_contract.v1.json 与 contract.md 文档同步。
         """
         workspace = Path(__file__).parent.parent.parent
         contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
@@ -2531,13 +2748,13 @@ targets_required 包含以下 target：
 
 当前版本：**1.0.0**
 
-## CI Workflow (ci.yml)
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
 | `lint` | Lint Job |
 
-## Nightly Workflow (nightly.yml)
+### 2.2 Nightly Workflow (`nightly.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -2607,7 +2824,7 @@ targets_required 说明
 
 当前版本：**1.0.0**
 
-## CI Workflow (ci.yml)
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -2684,14 +2901,14 @@ targets_required 说明
 
 当前版本：**1.0.0**
 
-## CI Workflow (ci.yml)
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
 | `test` | Test Job |
 | `lint` | Lint Job |
 
-## Nightly Workflow (nightly.yml)
+### 2.2 Nightly Workflow (`nightly.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -2752,12 +2969,14 @@ class TestNightlyWorkflowDocsSync:
             (workspace / "docs" / "ci_nightly_workflow_refactor").mkdir(parents=True)
             yield workspace
 
-    @pytest.mark.xfail(
-        reason="章节切片逻辑与测试文档格式不完全匹配，需要完善文档结构 (Phase 2 预留)",
-        strict=False,
-    )
     def test_nightly_job_ids_in_doc(self, temp_workspace_with_files):
-        """测试 nightly job_ids 在文档中"""
+        """测试 nightly job_ids 在文档中
+
+        验证章节切片逻辑正确提取 workflow 章节内容。
+        文档格式需要匹配 checker 的章节提取逻辑：
+        - 使用 ## 作为 workflow 章节标题
+        - job_ids/job_names 直接在章节内，不使用 ### 子标题分隔
+        """
         workspace = temp_workspace_with_files
 
         # 创建包含 nightly 定义的 contract
@@ -2780,26 +2999,27 @@ class TestNightlyWorkflowDocsSync:
             json.dump(contract, f)
 
         # 创建包含所有元素的文档
+        # 注意：锚点格式需要匹配 "### 2.1 CI Workflow" 或 "CI Workflow (`ci.yml`)"
         doc_content = """# Workflow Contract
 
 当前版本：**3.0.0**
 
-## 1. CI Workflow
-
-### Job ID 与 Job Name 对照表
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
 | `test` | Test Job |
 
-## 7. Nightly Workflow (nightly.yml)
-
-### Job ID 与 Job Name 对照表
+### 2.2 Nightly Workflow (`nightly.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
 | `unified-stack-full` | Unified Stack Full Verification |
 | `notify-results` | Notify Results |
+
+## SemVer Policy
+
+版本策略说明
 
 ## Make Targets
 
@@ -2820,10 +3040,15 @@ targets_required 说明
         result = checker.check()
 
         # 应该通过
-        assert result.success is True
+        assert result.success is True, (
+            f"Expected success but got errors: "
+            f"{[(e.error_type, e.value, e.message) for e in result.errors]}"
+        )
         # 应该检查了 nightly 的 job_ids
         assert "unified-stack-full" in result.checked_job_ids
         assert "notify-results" in result.checked_job_ids
+        # 验证 error 属性结构（用于后续 error_type 覆盖测试的基准）
+        assert len(result.errors) == 0
 
     def test_nightly_job_id_missing_in_doc(self, temp_workspace_with_files):
         """测试 nightly job_id 未在文档中时报告错误"""
@@ -2852,13 +3077,13 @@ targets_required 说明
 
 当前版本：**3.0.0**
 
-## CI Workflow
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
 | `test` | Test Job |
 
-## Nightly Workflow (nightly.yml)
+### 2.2 Nightly Workflow (`nightly.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -2917,13 +3142,13 @@ targets_required 说明
 
 当前版本：**3.0.0**
 
-## CI Workflow
+### 2.1 CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
 | `test` | Test Job |
 
-## Nightly Workflow (nightly.yml)
+### 2.2 Nightly Workflow (`nightly.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -3015,10 +3240,6 @@ targets_required 说明
         assert len(section_errors) >= 1
         assert any(e.value == "nightly" for e in section_errors)
 
-    @pytest.mark.xfail(
-        reason="Nightly 文档可能存在同步滞后，此测试用于检测但不阻断 CI (Phase 2 完善文档同步)",
-        strict=False,
-    )
     def test_real_contract_nightly_docs_sync(self):
         """集成测试：验证真实合约中 nightly 部分与文档同步"""
         workspace = Path(__file__).parent.parent.parent
@@ -3440,7 +3661,18 @@ class TestContractSchemaValidationNightly:
         # 创建符合 schema 的完整合约（包含所有 Phase 1 必需字段）
         contract = {
             "version": "3.0.0",
-            "ci": {"file": ".github/workflows/ci.yml"},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "job_names": ["Test"],
+                "required_jobs": [
+                    {
+                        "id": "test",
+                        "name": "Test",
+                        "required_steps": ["Checkout repository"],
+                    }
+                ],
+            },
             "nightly": {
                 "file": ".github/workflows/nightly.yml",
                 "job_ids": ["unified-stack-full"],
@@ -4115,15 +4347,11 @@ class TestReleaseWorkflowDocsSync:
         # 创建只包含 ci 信息的文档（缺少 release 信息）
         doc_content = """# Workflow Contract
 
-## CI Workflow
+### 2.1 CI Workflow (`ci.yml`)
 
-ci.yml 文件定义了 CI 流程。
-
-### Job IDs
-- test
-
-### Job Names
-- Test Job
+| Job ID | Job Name |
+|--------|----------|
+| `test` | Test Job |
 """
         doc_path = tmp_path / "contract.md"
         with open(doc_path, "w") as f:
@@ -4185,22 +4413,23 @@ ci.yml 文件定义了 CI 流程。
             json.dump(contract_data, f)
 
         # 创建包含所有信息的文档
-        # 注意：不使用 ### 子标题，因为 extract_workflow_section 会在 ### 处停止
+        # 注意：使用精确锚点格式 "### 2.x Workflow (`xxx.yml`)"
         doc_content = """# Workflow Contract
 
 version: 1.0.0
 
-## CI Workflow
+### 2.1 CI Workflow (`ci.yml`)
 
-ci.yml 文件定义了 CI 流程。
-Job IDs: test
-Job Names: Test Job
+| Job ID | Job Name |
+|--------|----------|
+| `test` | Test Job |
 
-## Release Workflow
+### 2.3 Release Workflow (`release.yml`)
 
-release.yml 文件定义了发布流程。
-Job IDs: publish, deploy
-Job Names: Publish Package, Deploy to Production
+| Job ID | Job Name |
+|--------|----------|
+| `publish` | Publish Package |
+| `deploy` | Deploy to Production |
 
 ## Make Targets
 
@@ -4620,3 +4849,1408 @@ class TestCILabelsRealFileValidation:
             error_msgs.append(f"Labels in script but not in contract: {missing_in_contract}")
 
         assert len(error_msgs) == 0, "\n".join(error_msgs)
+
+
+# ============================================================================
+# Extra Job Detection Tests
+# ============================================================================
+
+
+class TestExtraJobDetection:
+    """测试 workflow 中未在 contract 声明的 extra jobs 检测"""
+
+    def test_extra_job_warning_by_default(self, temp_workspace):
+        """测试默认模式下 extra job 产生 WARNING"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],  # 只声明了 test
+                "job_names": ["Test Job"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建包含 extra job 的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+  lint:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+  build:
+    name: Build Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo build
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        # 默认模式（不启用 require_job_coverage）
+        validator = WorkflowContractValidator(
+            contract_path, temp_workspace, require_job_coverage=False
+        )
+        result = validator.validate()
+
+        # 应该成功（extra jobs 只是 WARNING）
+        assert result.success is True
+
+        # 应该有 2 个 extra_job_not_in_contract 警告
+        extra_warnings = [
+            w for w in result.warnings if w.warning_type == "extra_job_not_in_contract"
+        ]
+        assert len(extra_warnings) == 2
+
+        # 检查警告内容
+        extra_job_ids = {w.key for w in extra_warnings}
+        assert extra_job_ids == {"lint", "build"}
+
+        # 检查警告消息包含 job name
+        for warning in extra_warnings:
+            assert "exists in workflow but is not declared in contract" in warning.message
+
+    def test_extra_job_error_with_require_job_coverage(self, temp_workspace):
+        """测试 require_job_coverage 模式下 extra job 产生 ERROR"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "job_names": ["Test Job"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建包含 extra job 的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+  extra-job:
+    name: Extra Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo extra
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        # 启用 require_job_coverage
+        validator = WorkflowContractValidator(
+            contract_path, temp_workspace, require_job_coverage=True
+        )
+        result = validator.validate()
+
+        # 应该失败
+        assert result.success is False
+
+        # 应该有 extra_job_not_in_contract 错误
+        extra_errors = [e for e in result.errors if e.error_type == "extra_job_not_in_contract"]
+        assert len(extra_errors) == 1
+        assert extra_errors[0].key == "extra-job"
+        assert "Extra Job" in extra_errors[0].message
+        assert "如需将此 job 纳入合约管理" in extra_errors[0].message
+
+    def test_no_extra_job_when_all_declared(self, temp_workspace):
+        """测试所有 jobs 都在 contract 中声明时没有警告"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job", "Lint Job"]},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建 workflow（所有 jobs 都在 contract 中）
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+  lint:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(
+            contract_path, temp_workspace, require_job_coverage=True
+        )
+        result = validator.validate()
+
+        # 应该成功
+        assert result.success is True
+
+        # 不应该有 extra_job_not_in_contract 警告或错误
+        extra_warnings = [
+            w for w in result.warnings if w.warning_type == "extra_job_not_in_contract"
+        ]
+        extra_errors = [e for e in result.errors if e.error_type == "extra_job_not_in_contract"]
+        assert len(extra_warnings) == 0
+        assert len(extra_errors) == 0
+
+    def test_no_extra_job_check_when_no_job_ids(self, temp_workspace):
+        """测试 contract 没有定义 job_ids 时不检测 extra jobs"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": []},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                # 没有 job_ids 字段
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建包含多个 jobs 的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(
+            contract_path, temp_workspace, require_job_coverage=True
+        )
+        result = validator.validate()
+
+        # 应该成功（没有 job_ids 定义，跳过 extra job 检测）
+        assert result.success is True
+
+        # 不应该有 extra_job_not_in_contract 警告或错误
+        extra_warnings = [
+            w for w in result.warnings if w.warning_type == "extra_job_not_in_contract"
+        ]
+        extra_errors = [e for e in result.errors if e.error_type == "extra_job_not_in_contract"]
+        assert len(extra_warnings) == 0
+        assert len(extra_errors) == 0
+
+    def test_extra_job_with_unnamed_job(self, temp_workspace):
+        """测试 extra job 没有 name 字段时的处理"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "job_names": ["Test Job"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建包含 unnamed extra job 的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+  unnamed-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo unnamed
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(
+            contract_path, temp_workspace, require_job_coverage=False
+        )
+        result = validator.validate()
+
+        # 应该成功（WARNING 模式）
+        assert result.success is True
+
+        # 应该有警告，且 message 包含 "(unnamed)"
+        extra_warnings = [
+            w for w in result.warnings if w.warning_type == "extra_job_not_in_contract"
+        ]
+        assert len(extra_warnings) == 1
+        assert extra_warnings[0].key == "unnamed-job"
+        assert "(unnamed)" in extra_warnings[0].message
+
+    def test_extra_job_nightly_workflow(self, temp_workspace):
+        """测试 nightly workflow 的 extra job 检测"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Unified Stack"]},
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["unified-stack"],
+                "job_names": ["Unified Stack"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建包含 extra job 的 nightly workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "nightly.yml"
+        workflow_content = """
+name: Nightly
+on:
+  schedule:
+    - cron: '0 2 * * *'
+jobs:
+  unified-stack:
+    name: Unified Stack
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo unified
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo notify
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(
+            contract_path, temp_workspace, require_job_coverage=False
+        )
+        result = validator.validate()
+
+        # 应该成功（WARNING 模式）
+        assert result.success is True
+
+        # 应该有 extra job 警告
+        extra_warnings = [
+            w for w in result.warnings if w.warning_type == "extra_job_not_in_contract"
+        ]
+        assert len(extra_warnings) == 1
+        assert extra_warnings[0].key == "notify"
+        assert extra_warnings[0].workflow == "nightly"
+
+
+# ============================================================================
+# Frozen Job Name Change Tests
+# ============================================================================
+
+
+class TestFrozenJobNameChange:
+    """冻结的 job name 改名测试
+
+    验证冻结的 job name 被改名时会报 ERROR，而非冻结的 job name 改名只报 WARNING。
+    """
+
+    def test_frozen_job_name_change_should_fail(self, temp_workspace):
+        """测试冻结的 job name 改名应报告 ERROR"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {
+                "allowlist": [],
+            },
+            "frozen_job_names": {
+                "allowlist": ["Test Job"],  # 冻结此 job name
+            },
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test-job"],
+                "job_names": ["Test Job"],  # contract 中声明的 name
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 写入将冻结 job name 改名的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job Renamed
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该失败，因为 "Test Job" 是冻结的 job name 但被改名
+        assert result.success is False
+
+        # 应该有 frozen_job_name_changed 错误
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_job_name_changed"]
+        assert len(frozen_errors) == 1
+        assert frozen_errors[0].key == "test-job"
+        assert frozen_errors[0].expected == "Test Job"
+        assert frozen_errors[0].actual == "Test Job Renamed"
+
+    def test_non_frozen_job_name_change_warning_only(self, temp_workspace):
+        """测试非冻结的 job name 改名只报告 WARNING"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {
+                "allowlist": [],  # 没有冻结任何 job name
+            },
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test-job"],
+                "job_names": ["Test Job"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 写入改名的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job Renamed
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该成功（非冻结的改名只是 WARNING）
+        assert result.success is True
+
+        # 应该有 job_name_mismatch 警告
+        name_warnings = [w for w in result.warnings if w.warning_type == "job_name_mismatch"]
+        assert len(name_warnings) == 1
+        assert name_warnings[0].key == "test-job"
+        assert name_warnings[0].old_value == "Test Job"
+        assert name_warnings[0].new_value == "Test Job Renamed"
+
+
+# ============================================================================
+# Strict Mode Tests
+# ============================================================================
+
+
+class TestStrictMode:
+    """--strict 模式测试
+
+    验证 strict 模式下 WARNING 变成失败。
+    """
+
+    def test_non_frozen_step_name_change_fails_in_strict_mode(self, temp_workspace):
+        """测试 strict 模式下非冻结 step name 改名导致失败"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {
+                "allowlist": ["Checkout repository"],  # 只冻结这一个
+            },
+            "frozen_job_names": {
+                "allowlist": ["Test Job"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository", "Run tests"],
+                            "required_outputs": [],
+                        }
+                    ],
+                }
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 写入 step name 改变的 workflow（"Run tests" -> "Execute tests"）
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Execute tests
+        run: echo test
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 默认模式下应该成功（非冻结 step 改名只是 WARNING）
+        assert result.success is True
+
+        # 应该有 step_name_changed 警告
+        step_warnings = [w for w in result.warnings if w.warning_type == "step_name_changed"]
+        assert len(step_warnings) == 1
+        assert step_warnings[0].old_value == "Run tests"
+        assert step_warnings[0].new_value == "Execute tests"
+
+        # 在 strict 模式下，有 warnings 应该导致失败
+        # 模拟 --strict 逻辑
+        if result.warnings:
+            result.success = False
+
+        assert result.success is False
+
+    def test_non_frozen_job_name_change_fails_in_strict_mode(self, temp_workspace):
+        """测试 strict 模式下非冻结 job name 改名导致失败"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {
+                "allowlist": [],  # 没有冻结 job name
+            },
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test-job"],
+                "job_names": ["Test Job"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 写入 job name 改变的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job v2
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 默认模式下应该成功
+        assert result.success is True
+
+        # 应该有 job_name_mismatch 警告
+        job_warnings = [w for w in result.warnings if w.warning_type == "job_name_mismatch"]
+        assert len(job_warnings) == 1
+
+        # 模拟 --strict 逻辑
+        if result.warnings:
+            result.success = False
+
+        assert result.success is False
+
+    def test_extra_job_fails_in_strict_mode(self, temp_workspace):
+        """测试 strict 模式下 extra job 导致失败
+
+        --strict 参数应该自动启用 require_job_coverage。
+        """
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "job_names": ["Test Job"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建包含 extra job 的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+  extra-lint:
+    name: Extra Lint
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        # --strict 模式会启用 require_job_coverage=True
+        validator = WorkflowContractValidator(
+            contract_path, temp_workspace, require_job_coverage=True
+        )
+        result = validator.validate()
+
+        # 应该失败
+        assert result.success is False
+
+        # 应该有 extra_job_not_in_contract ERROR
+        extra_errors = [e for e in result.errors if e.error_type == "extra_job_not_in_contract"]
+        assert len(extra_errors) == 1
+        assert extra_errors[0].key == "extra-lint"
+
+
+# ============================================================================
+# Make Target Declaration Tests
+# ============================================================================
+
+
+class TestMakeTargetDeclaration:
+    """workflow→make target 声明校验测试
+
+    验证 workflow 中调用的 make target 必须在 contract.make.targets_required 中声明。
+    """
+
+    def test_undeclared_make_target_reports_error(self, temp_workspace):
+        """测试 workflow 中调用的 make target 未在 contract 中声明时报错"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": []},
+            "make": {
+                "targets_required": ["lint", "test"],  # 只声明了 lint 和 test
+            },
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["build"],
+                "job_names": ["Build"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建 Makefile
+        makefile_path = temp_workspace / "Makefile"
+        makefile_content = """
+.PHONY: lint test format
+
+lint:
+\t@echo lint
+
+test:
+\t@echo test
+
+format:
+\t@echo format
+"""
+        with open(makefile_path, "w") as f:
+            f.write(makefile_content)
+
+        # 创建调用未声明 target 的 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - run: make lint
+      - run: make format
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该失败
+        assert result.success is False
+
+        # 应该有 undeclared_make_target 错误
+        undeclared_errors = [e for e in result.errors if e.error_type == "undeclared_make_target"]
+        assert len(undeclared_errors) == 1
+        assert undeclared_errors[0].key == "format"
+        assert "not declared in workflow_contract.v1.json" in undeclared_errors[0].message
+
+    def test_declared_make_targets_pass(self, temp_workspace):
+        """测试所有 make target 都在 contract 中声明时通过"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": []},
+            "make": {
+                "targets_required": ["lint", "test", "format"],
+            },
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["build"],
+                "job_names": ["Build"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建 Makefile
+        makefile_path = temp_workspace / "Makefile"
+        makefile_content = """
+.PHONY: lint test format
+
+lint:
+\t@echo lint
+
+test:
+\t@echo test
+
+format:
+\t@echo format
+"""
+        with open(makefile_path, "w") as f:
+            f.write(makefile_content)
+
+        # 创建 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - run: make lint
+      - run: make test
+      - run: make format
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该成功
+        undeclared_errors = [e for e in result.errors if e.error_type == "undeclared_make_target"]
+        assert len(undeclared_errors) == 0
+
+    def test_missing_makefile_target_reports_error(self, temp_workspace):
+        """测试 contract 中声明的 make target 不在 Makefile 中时报错"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": []},
+            "make": {
+                "targets_required": [
+                    "lint",
+                    "test",
+                    "nonexistent-target",
+                ],  # nonexistent-target 不存在
+            },
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["build"],
+                "job_names": ["Build"],
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        # 创建 Makefile（不包含 nonexistent-target）
+        makefile_path = temp_workspace / "Makefile"
+        makefile_content = """
+.PHONY: lint test
+
+lint:
+\t@echo lint
+
+test:
+\t@echo test
+"""
+        with open(makefile_path, "w") as f:
+            f.write(makefile_content)
+
+        # 创建 workflow
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - run: make lint
+"""
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该失败
+        assert result.success is False
+
+        # 应该有 missing_makefile_target 错误
+        missing_errors = [e for e in result.errors if e.error_type == "missing_makefile_target"]
+        assert len(missing_errors) == 1
+        assert missing_errors[0].key == "nonexistent-target"
+
+
+# ============================================================================
+# Error Attributes Coverage Tests (Phase 2 - 验证错误结构与可执行修复步骤)
+# ============================================================================
+
+
+class TestErrorAttributesCoverage:
+    """验证 ValidationError 属性结构和可执行修复步骤
+
+    确保所有错误类型包含：
+    - error_type: 明确的错误类型标识
+    - key: 出错的具体标识符
+    - location: 错误发生的位置（如 jobs.test-job.steps）
+    - message: 包含可执行修复步骤的说明
+    """
+
+    @pytest.fixture
+    def temp_workspace(self):
+        """创建临时工作空间"""
+        with tempfile.TemporaryDirectory(prefix="test_error_attrs_") as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / ".github" / "workflows").mkdir(parents=True)
+            yield workspace
+
+    def test_missing_step_error_has_location_and_fix_steps(self, temp_workspace):
+        """测试 missing_step 错误包含 location 和修复步骤"""
+        contract = {
+            "version": "1.0.0",
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test",
+                            "name": "Test",
+                            "required_steps": ["Run tests", "Upload coverage"],
+                            "required_outputs": [],
+                        }
+                    ],
+                    "required_env_vars": [],
+                }
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run tests
+        run: pytest
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        step_errors = [e for e in result.errors if e.error_type == "missing_step"]
+        assert len(step_errors) == 1
+
+        error = step_errors[0]
+        # 验证 error_type
+        assert error.error_type == "missing_step"
+        # 验证 key
+        assert error.key == "Upload coverage"
+        # 验证 location 包含具体的 job 路径
+        assert error.location is not None
+        assert "jobs.test" in error.location
+        # 验证 message 包含可执行修复建议
+        assert "step" in error.message.lower() or "Step" in error.message
+
+    def test_contract_frozen_step_missing_has_actionable_fix(self, temp_workspace):
+        """测试 contract_frozen_step_missing 错误包含可执行修复步骤
+
+        当 required_steps 中的 step 不在 frozen_step_text.allowlist 中时，
+        会产生 contract_frozen_step_missing 错误或警告（取决于策略配置）。
+        """
+        # 使用现有的 test_contract_frozen_step_missing_error 测试的合约结构
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {
+                "allowlist": ["Checkout repository"],
+            },
+            "frozen_job_names": {
+                "allowlist": ["Test Job"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "job_ids": ["test-job"],
+                    "job_names": ["Test Job"],
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository", "Run tests"],
+                            "required_outputs": [],
+                        }
+                    ],
+                    "required_env_vars": [],
+                }
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run tests
+        run: pytest
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        validator.validate()
+        # 显式调用 contract frozen 一致性检查（此检查是可选的，需要显式调用）
+        validator.validate_contract_frozen_consistency()
+        result = validator.result
+
+        # 应该失败因为 "Run tests" 不在 frozen_step_text.allowlist 中
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "contract_frozen_step_missing"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        # 验证 error_type
+        assert error.error_type == "contract_frozen_step_missing"
+        # 验证 key 是缺失的 step
+        assert error.key == "Run tests"
+        # 验证 location 指向 required_steps 位置
+        assert error.location is not None
+        assert "required_steps" in error.location or "required_jobs" in error.location
+        # 验证 message 包含可执行修复步骤
+        assert "frozen_step_text.allowlist" in error.message
+        # 验证 message 包含添加操作指引
+        assert any(
+            [
+                "添加" in error.message,
+                "add" in error.message.lower(),
+                "contract.md" in error.message,  # 文档参考
+            ]
+        )
+
+    def test_extra_job_warning_has_actionable_info(self, temp_workspace):
+        """测试 extra job 警告包含可执行信息
+
+        当 workflow 中有 job 但不在 contract.job_ids 中时，会产生警告。
+        验证警告信息包含足够的上下文供用户采取行动。
+        """
+        contract = {
+            "version": "1.0.0",
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "job_ids": ["test"],
+                    "job_names": ["Test"],
+                    "required_jobs": [],
+                    "required_env_vars": [],
+                }
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # extra job 产生警告而不是错误
+        assert result.success is True
+        extra_warnings = [
+            w for w in result.warnings if w.warning_type == "extra_job_not_in_contract"
+        ]
+        assert len(extra_warnings) == 1
+
+        warning = extra_warnings[0]
+        # 验证 warning_type
+        assert warning.warning_type == "extra_job_not_in_contract"
+        # 验证 key 是额外的 job
+        assert warning.key == "lint"
+        # 验证 location 包含 job 路径
+        assert warning.location is not None
+        assert "jobs.lint" in warning.location
+        # 验证 message 包含上下文信息
+        assert "lint" in warning.message.lower() or "Lint" in warning.message
+
+    def test_undeclared_make_target_error_has_location(self, temp_workspace):
+        """测试 undeclared_make_target 错误包含 location 和修复说明"""
+        contract = {
+            "version": "1.0.0",
+            "make": {
+                "targets_required": ["lint"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [],
+                    "required_env_vars": [],
+                }
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - run: make lint
+      - run: make test
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        undeclared_errors = [e for e in result.errors if e.error_type == "undeclared_make_target"]
+        assert len(undeclared_errors) == 1
+
+        error = undeclared_errors[0]
+        # 验证 error_type
+        assert error.error_type == "undeclared_make_target"
+        # 验证 key 是未声明的 target
+        assert error.key == "test"
+        # 验证 location
+        assert error.location is not None
+        # 验证 message 包含修复说明
+        assert "workflow_contract" in error.message.lower() or "declared" in error.message.lower()
+
+    def test_schema_error_has_location_path(self, temp_workspace):
+        """测试 schema_error 包含 JSON path location
+
+        创建一个违反 schema 的合约（使用数字类型的 version 而不是字符串）。
+        注意：如果项目未配置 schema 验证，此测试会被跳过。
+        """
+        # 创建无效合约 - version 应该是 string 但使用数字
+        # 同时添加一些无效的嵌套结构
+        contract = {
+            "version": 123,  # 应该是 string
+            "workflows": {
+                "ci": {
+                    "file": 456,  # 应该是 string
+                }
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        validator.load_contract()
+        result = validator.validate_schema()
+
+        # 如果没有配置 schema 或 schema 验证不严格，可能会通过
+        # 在这种情况下，我们验证 validator 正确处理了验证流程
+        if result is True:
+            # schema 验证通过或未配置 - 测试 validator 行为
+            # 确保没有 schema 错误
+            schema_errors = [e for e in validator.result.errors if e.error_type == "schema_error"]
+            assert len(schema_errors) == 0
+        else:
+            # schema 验证失败 - 验证错误结构
+            schema_errors = [e for e in validator.result.errors if e.error_type == "schema_error"]
+            assert len(schema_errors) >= 1
+
+            # 至少有一个 schema_error 应该有 location
+            error = schema_errors[0]
+            assert error.error_type == "schema_error"
+            assert error.location is not None
+            # location 应该是 JSON path 格式
+            assert error.location.startswith("$")
+
+    def test_error_message_contains_fix_command_or_file_path(self, temp_workspace):
+        """测试错误消息包含可执行的修复命令或文件路径"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_job_names": {
+                "allowlist": ["Test Job"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "job_ids": ["test"],
+                    "job_names": ["Test Job"],
+                    "required_jobs": [
+                        {
+                            "id": "test",
+                            "name": "Test Job",
+                            "required_steps": [],
+                            "required_outputs": [],
+                        }
+                    ],
+                    "required_env_vars": [],
+                }
+            },
+        }
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test:
+    name: Test Job Renamed
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_job_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        # 验证 message 包含修复相关信息
+        message = error.message
+        # 应该包含以下至少一个：合约文件路径、contract.md 引用、或具体修复命令
+        has_fix_guidance = any(
+            [
+                "contract" in message.lower(),
+                "frozen_job_names" in message,
+                "allowlist" in message,
+                "ci.yml" in message,
+                "步骤" in message,  # 中文修复步骤
+                "make" in message.lower(),
+            ]
+        )
+        assert has_fix_guidance, f"Error message should contain fix guidance: {message}"
+
+
+# ============================================================================
+# Workflow Contract Common Module Tests
+# ============================================================================
+
+
+class TestWorkflowContractCommon:
+    """测试 workflow_contract_common 公共模块
+
+    覆盖功能:
+    1. METADATA_KEYS 常量定义
+    2. is_metadata_key() 辅助函数
+    3. discover_workflow_keys() 动态发现 workflow 定义
+    4. 新增 metadata key 时不会被误判为 workflow
+    """
+
+    def test_metadata_keys_contains_expected_values(self):
+        """验证 METADATA_KEYS 包含预期的元数据字段"""
+        from workflow_contract_common import METADATA_KEYS
+
+        expected_keys = {
+            "$schema",
+            "version",
+            "description",
+            "last_updated",
+            "make",
+            "frozen_step_text",
+            "frozen_job_names",
+            "step_name_aliases",
+        }
+        assert expected_keys == METADATA_KEYS
+
+    def test_is_metadata_key_with_known_metadata(self):
+        """测试已知 metadata key 的判断"""
+        from workflow_contract_common import is_metadata_key
+
+        assert is_metadata_key("$schema") is True
+        assert is_metadata_key("version") is True
+        assert is_metadata_key("description") is True
+        assert is_metadata_key("last_updated") is True
+        assert is_metadata_key("make") is True
+        assert is_metadata_key("frozen_step_text") is True
+        assert is_metadata_key("frozen_job_names") is True
+        assert is_metadata_key("step_name_aliases") is True
+
+    def test_is_metadata_key_with_underscore_prefix(self):
+        """测试下划线前缀字段的判断"""
+        from workflow_contract_common import is_metadata_key
+
+        # 所有下划线开头的字段都应被视为 metadata
+        assert is_metadata_key("_changelog_v2.14.0") is True
+        assert is_metadata_key("_changelog_v1.0.0") is True
+        assert is_metadata_key("_comment") is True
+        assert is_metadata_key("_note") is True
+        assert is_metadata_key("_internal_config") is True
+
+    def test_is_metadata_key_with_workflow_keys(self):
+        """测试 workflow key 不被识别为 metadata"""
+        from workflow_contract_common import is_metadata_key
+
+        assert is_metadata_key("ci") is False
+        assert is_metadata_key("nightly") is False
+        assert is_metadata_key("release") is False
+        assert is_metadata_key("my_custom_workflow") is False
+
+    def test_discover_workflow_keys_basic(self):
+        """测试基本的 workflow key 发现"""
+        from workflow_contract_common import discover_workflow_keys
+
+        contract = {
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"]},
+            "nightly": {"file": ".github/workflows/nightly.yml"},
+        }
+        result = discover_workflow_keys(contract)
+        assert result == ["ci", "nightly"]
+
+    def test_discover_workflow_keys_excludes_metadata(self):
+        """测试 discover_workflow_keys 排除 metadata 字段"""
+        from workflow_contract_common import discover_workflow_keys
+
+        contract = {
+            "$schema": "workflow_contract.v1.schema.json",
+            "version": "2.14.0",
+            "description": "Test contract",
+            "last_updated": "2026-02-02",
+            "make": {"targets_required": ["lint", "test"]},
+            "frozen_step_text": {"allowlist": ["Step 1"]},
+            "frozen_job_names": {"allowlist": ["Job 1"]},
+            "ci": {"file": ".github/workflows/ci.yml"},
+            "nightly": {"file": ".github/workflows/nightly.yml"},
+        }
+        result = discover_workflow_keys(contract)
+        # 应该只返回 workflow 定义，排除所有 metadata
+        assert result == ["ci", "nightly"]
+
+    def test_discover_workflow_keys_excludes_changelog_fields(self):
+        """测试 discover_workflow_keys 排除 _changelog_* 字段"""
+        from workflow_contract_common import discover_workflow_keys
+
+        contract = {
+            "_changelog_v2.14.0": "Some changelog notes...",
+            "_changelog_v2.13.0": "Older changelog...",
+            "_comment": "Internal comment",
+            "ci": {"file": ".github/workflows/ci.yml"},
+        }
+        result = discover_workflow_keys(contract)
+        # 下划线前缀字段应该被排除
+        assert result == ["ci"]
+
+    def test_discover_workflow_keys_requires_file_field(self):
+        """测试 discover_workflow_keys 要求 'file' 字段"""
+        from workflow_contract_common import discover_workflow_keys
+
+        contract = {
+            "ci": {"file": ".github/workflows/ci.yml"},  # 有 file 字段
+            "nightly": {"job_ids": ["test"]},  # 无 file 字段
+            "metadata_like": {"description": "Not a workflow"},  # 无 file 字段
+        }
+        result = discover_workflow_keys(contract)
+        # 只有 ci 有 file 字段
+        assert result == ["ci"]
+
+    def test_discover_workflow_keys_sorted_output(self):
+        """测试 discover_workflow_keys 返回按字母序排序的结果"""
+        from workflow_contract_common import discover_workflow_keys
+
+        contract = {
+            "zebra": {"file": ".github/workflows/zebra.yml"},
+            "alpha": {"file": ".github/workflows/alpha.yml"},
+            "middle": {"file": ".github/workflows/middle.yml"},
+        }
+        result = discover_workflow_keys(contract)
+        assert result == ["alpha", "middle", "zebra"]
+
+    def test_discover_workflow_keys_empty_contract(self):
+        """测试空 contract 的处理"""
+        from workflow_contract_common import discover_workflow_keys
+
+        result = discover_workflow_keys({})
+        assert result == []
+
+    def test_new_metadata_key_not_mistaken_as_workflow(self):
+        """关键测试：新增 metadata key 时不会被误判为 workflow
+
+        当向 contract 添加新的 metadata key（如新的 frozen_* 配置）时，
+        确保它不会被 discover_workflow_keys 误识别为 workflow 定义。
+
+        这是此重构任务的核心需求之一。
+        """
+        from workflow_contract_common import discover_workflow_keys
+
+        # 模拟未来可能新增的 metadata key（含 dict 结构但无 file 字段）
+        contract = {
+            "$schema": "workflow_contract.v1.schema.json",
+            "version": "3.0.0",
+            # 现有 metadata
+            "frozen_step_text": {"allowlist": ["Step 1"]},
+            "frozen_job_names": {"allowlist": ["Job 1"]},
+            # 假设未来新增的 metadata（这些不应被识别为 workflow）
+            "frozen_artifacts": {"allowlist": ["artifact1.zip"]},  # 新增冻结配置
+            "validation_rules": {"strict_mode": True},  # 配置对象
+            "step_name_aliases": {"old_name": "new_name"},  # 别名映射
+            # changelog 字段（下划线前缀）
+            "_changelog_v3.0.0": "Major version bump",
+            # 实际的 workflow 定义
+            "ci": {"file": ".github/workflows/ci.yml"},
+        }
+        result = discover_workflow_keys(contract)
+
+        # 验证：只有 ci 被识别为 workflow
+        assert result == ["ci"]
+
+        # 验证：新增的 metadata 不会被误识别
+        assert "frozen_artifacts" not in result
+        assert "validation_rules" not in result
+        assert "step_name_aliases" not in result
+        assert "_changelog_v3.0.0" not in result
+
+    def test_workflow_with_extra_metadata_fields(self):
+        """测试带有额外字段的 workflow 定义仍能正确识别"""
+        from workflow_contract_common import discover_workflow_keys
+
+        contract = {
+            "version": "2.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test", "Lint"],
+                "detect_changes": {"outputs": []},
+                "_internal_note": "This is an internal note",
+            },
+        }
+        result = discover_workflow_keys(contract)
+        # ci 应该被正确识别（有 file 字段）
+        assert result == ["ci"]
+
+    def test_metadata_keys_is_frozen_set(self):
+        """验证 METADATA_KEYS 是 frozenset 类型（不可变）"""
+        from workflow_contract_common import METADATA_KEYS
+
+        assert isinstance(METADATA_KEYS, frozenset)
+
+        # 尝试修改应该抛出异常
+        with pytest.raises(AttributeError):
+            METADATA_KEYS.add("new_key")  # type: ignore

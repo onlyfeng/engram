@@ -1,8 +1,19 @@
 {
   "$schema": "workflow_contract.v1.schema.json",
-  "version": "2.3.0",
+  "version": "2.14.0",
   "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
   "last_updated": "2026-02-02",
+  "_changelog_v2.14.0": "新增 contract.md 第 0 章合约系统概览：关键文件清单、检查脚本详细说明（运行命令/exit code/artifact 路径）、CI 阻断策略边界定义；章节重编号（原 13 章改为 14 章）",
+  "_changelog_v2.13.0": "新增 Drift Report 漂移报告合约：补充 contract.md 8.7 节和 maintenance.md 第 4 章；更新 artifact_archive 配置包含 drift report 输出",
+  "_changelog_v2.12.0": "新增 mcp-error-contract job 到 CI workflow 合约：MCP JSON-RPC 错误码合约与文档同步检查",
+  "_changelog_v2.11.0": "新增 iteration-audit job 到 nightly workflow 合约：迭代文档审计（轻量级 job）；新增 iteration-audit make target",
+  "_changelog_v2.10.0": "新增 contract 内部一致性检查：job_ids/job_names 长度一致、job_ids 无重复、required_jobs id 无重复、required_jobs id 在 job_ids 中",
+  "_changelog_v2.9.0": "新增 iteration-tools-test job：运行迭代工具脚本测试（无需数据库依赖）",
+  "_changelog_v2.8.0": "新增 workflow contract version policy 检查：关键文件变更时强制要求 version/last_updated 更新并同步到 contract.md 版本控制表",
+  "_changelog_v2.7.1": "新增 required_steps 覆盖原则文档（contract.md 5.5 节）：定义核心子集/全量两档策略；更新 validate_workflows.py 报错文案",
+  "_changelog_v2.6.0": "新增 gateway-correlation-id-single-source job：检查 Gateway correlation_id 单一来源（SSOT 模块）",
+  "_changelog_v2.5.0": "新增 gateway-import-surface job：检查 Gateway __init__.py 懒加载策略（禁止 eager-import）",
+  "_changelog_v2.4.0": "新增 gateway-public-api-surface job：检查 Gateway Public API 导入表面（__all__ 与实际导出一致性）",
   "_changelog_v2.3.0": "重构冻结范围：frozen_job_names 精简为 4 个核心 job（Required Checks 引用）；frozen_step_text 精简为 12 个核心 step（artifact/验证流程）；非冻结项改名仅产生 WARNING",
   "_changelog_v2.2.0": "新增 iteration-docs-check job：检查 .iteration/ 链接和 SUPERSEDED 一致性",
   "_changelog_v2.1.0": "CI 合约完善：补全所有 job 的 required_steps（含 cache、verify、artifact 上传步骤）；添加 required_artifact_paths 覆盖 ci.yml 中的 artifact 上传路径",
@@ -15,10 +26,7 @@
       "outputs": []
     },
     "labels": [
-      "openmemory:freeze-override",
-      "ci:dual-read",
-      "ci:seek-compat-strict",
-      "ci:seek-migrate-dry-run"
+      "openmemory:freeze-override"
     ],
     "job_ids": [
       "test",
@@ -32,7 +40,12 @@
       "gateway-di-boundaries",
       "scm-sync-consistency",
       "gateway-error-reason-usage",
+      "gateway-import-surface",
+      "gateway-public-api-surface",
+      "gateway-correlation-id-single-source",
+      "mcp-error-contract",
       "iteration-docs-check",
+      "iteration-tools-test",
       "workflow-contract"
     ],
     "job_names": [
@@ -47,7 +60,12 @@
       "Gateway DI Boundaries Check",
       "SCM Sync Consistency Check",
       "Gateway ErrorReason Usage Check",
+      "Gateway Import Surface Check",
+      "Gateway Public API Import Surface Check",
+      "Gateway correlation_id Single Source Check",
+      "MCP Error Contract Check",
       "Iteration Docs Check",
+      "Iteration Tools Test",
       "Workflow Contract Validation"
     ],
     "required_jobs": [
@@ -164,6 +182,48 @@
         ]
       },
       {
+        "id": "gateway-import-surface",
+        "name": "Gateway Import Surface Check",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway import surface"
+        ]
+      },
+      {
+        "id": "gateway-public-api-surface",
+        "name": "Gateway Public API Import Surface Check",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway Public API import surface"
+        ]
+      },
+      {
+        "id": "gateway-correlation-id-single-source",
+        "name": "Gateway correlation_id Single Source Check",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway correlation_id single source"
+        ]
+      },
+      {
+        "id": "mcp-error-contract",
+        "name": "MCP Error Contract Check",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Check MCP JSON-RPC error contract",
+          "Check MCP JSON-RPC error docs sync",
+          "Generate contract report (JSON)",
+          "Generate sync report (JSON)",
+          "Upload contract report",
+          "Upload sync report"
+        ]
+      },
+      {
         "id": "iteration-docs-check",
         "name": "Iteration Docs Check",
         "required_steps": [
@@ -173,15 +233,33 @@
         ]
       },
       {
+        "id": "iteration-tools-test",
+        "name": "Iteration Tools Test",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Run iteration tools tests"
+        ]
+      },
+      {
         "id": "workflow-contract",
         "name": "Workflow Contract Validation",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
           "Install dependencies",
+          "Run CI script tests",
           "Validate workflow contract",
+          "Check workflow contract docs sync",
+          "Check workflow contract version policy",
           "Generate validation report (JSON)",
-          "Upload validation report"
+          "Generate docs sync report (JSON)",
+          "Generate drift report (JSON)",
+          "Generate drift report (Markdown)",
+          "Upload validation report",
+          "Upload docs sync report",
+          "Upload drift report"
         ]
       }
     ],
@@ -194,13 +272,18 @@
         "migration-output-*.log",
         "verify-output-*.log",
         "schema-validation-results.json",
-        "artifacts/workflow_contract_validation.json"
+        "artifacts/workflow_contract_validation.json",
+        "artifacts/workflow_contract_docs_sync.json",
+        "artifacts/workflow_contract_drift.json",
+        "artifacts/workflow_contract_drift.md"
       ],
       "artifact_step_names": [
         "Upload test results",
         "Upload migration logs",
         "Upload validation results",
-        "Upload validation report"
+        "Upload validation report",
+        "Upload docs sync report",
+        "Upload drift report"
       ]
     }
   },
@@ -208,10 +291,12 @@
     "file": ".github/workflows/nightly.yml",
     "job_ids": [
       "unified-stack-full",
+      "iteration-audit",
       "notify-results"
     ],
     "job_names": [
       "Unified Stack Full Verification",
+      "Iteration Docs Audit",
       "Notify Results"
     ],
     "required_jobs": [
@@ -235,6 +320,16 @@
           "Upload test results"
         ],
         "_comment": "完整验证流程：环境检测 -> Gate Contract 校验 -> Docker Compose 启动 -> 服务健康检查 -> 集成测试 -> 验证 -> 清理 -> 记录 -> 上传"
+      },
+      {
+        "id": "iteration-audit",
+        "name": "Iteration Docs Audit",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Run iteration-audit",
+          "Upload iteration audit report"
+        ]
       },
       {
         "id": "notify-results",
@@ -272,6 +367,15 @@
       "check-migration-sanity",
       "check-scm-sync-consistency",
       "check-gateway-error-reason-usage",
+      "check-gateway-public-api-surface",
+      "check-gateway-di-boundaries",
+      "check-gateway-import-surface",
+      "check-gateway-correlation-id-single-source",
+      "check-iteration-docs",
+      "iteration-audit",
+      "validate-workflows-strict",
+      "check-workflow-contract-docs-sync",
+      "check-workflow-contract-version-policy",
       "verify-unified",
       "verify-permissions",
       "verify-permissions-strict",
@@ -283,7 +387,7 @@
   },
   "frozen_job_names": {
     "_comment": "仅冻结被 GitHub Required Checks 引用或外部系统依赖的核心 Job Names。非核心 job 改名只产生 WARNING",
-    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 job_names[]；3) 更新 docs/ci_nightly_workflow_refactor/contract.md 第 5.1 节；4) 运行 make validate-workflows",
+    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 job_names[]；3) 更新 contract.md 'Frozen Job Names' 节 (contract.md#51-frozen-job-names)；4) 运行 make validate-workflows；详见 maintenance.md#62-冻结-step-rename-标准流程",
     "allowlist": [
       "Test (Python ${{ matrix.python-version }})",
       "Lint",
@@ -293,7 +397,7 @@
   },
   "frozen_step_text": {
     "_comment": "仅冻结被外部系统引用（如 artifact 名称、日志搜索）或核心验证流程的 Step Names。非核心 step 改名只产生 WARNING",
-    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 required_jobs[].required_steps（如有引用）；3) 更新 docs/ci_nightly_workflow_refactor/contract.md 第 5.2 节；4) 运行 make validate-workflows",
+    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 required_jobs[].required_steps（如有引用）；3) 更新 contract.md 'Frozen Step Names' 节 (contract.md#52-frozen-step-names)；4) 运行 make validate-workflows；详见 maintenance.md#62-冻结-step-rename-标准流程",
     "allowlist": [
       "Checkout repository",
       "Set up Python",
@@ -304,6 +408,7 @@
       "Upload migration logs",
       "Upload validation results",
       "Upload validation report",
+      "Upload drift report",
       "Validate workflow contract",
       "Start unified stack with Docker Compose",
       "Run unified stack verification (full)"

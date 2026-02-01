@@ -32,8 +32,8 @@
 
     "implementation_mode": {
       "type": "string",
-      "description": "在 workflow 中的实现方式",
-      "enum": ["direct", "composed"]
+      "description": "在 workflow 中的实现方式：direct=直接调用 Makefile target，composed=分步执行，none=不执行",
+      "enum": ["direct", "composed", "none"]
     },
 
     "evidence_path": {
@@ -95,20 +95,34 @@
                 "type": "string",
                 "description": "步骤描述"
               },
-              "command": {
-                "type": "string",
-                "description": "执行的命令或 Makefile 目标"
-              },
-              "env_overrides": {
-                "type": "object",
-                "description": "环境变量覆盖",
-                "additionalProperties": {
-                  "type": "string"
+                "command": {
+                  "type": "string",
+                  "description": "执行的命令或 Makefile 目标"
+                },
+                "env_overrides": {
+                  "type": "object",
+                  "description": "环境变量覆盖",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "artifact_paths": {
+                  "type": "array",
+                  "description": "上传的 artifact 路径列表",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "metadata_fields": {
+                  "type": "array",
+                  "description": "记录的 metadata 字段列表",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               }
             }
-          }
-        },
+          },
         "depends_on": {
           "type": "array",
           "description": "依赖的前置 job（非 acceptance 步骤本身）",
@@ -203,6 +217,11 @@
       "type": "string",
       "description": "JSON Schema 引用（可选）",
       "format": "uri-reference"
+    },
+
+    "_note": {
+      "type": "string",
+      "description": "文档说明（非门禁 SSOT 标注）"
     },
 
     "version": {

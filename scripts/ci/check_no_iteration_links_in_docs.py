@@ -22,7 +22,7 @@ SUPERSEDED 规则 (参见 docs/acceptance/00_acceptance_matrix.md):
 - R3: 后继排序在上方 - 后继迭代在表格中的位置必须在被取代迭代上方
 - R4: 禁止环形引用 - 不允许 A→B→A 的循环取代链
 - R5: 禁止多后继 - 每个迭代只能有一个直接后继
-- R6: regression 声明必须存在 - regression 文件顶部必须有 superseded 声明
+- R6: regression 声明必须存在 - regression 文件前 20 行内必须包含 `Superseded by Iteration M`，且后继编号 M 与索引表一致
 
 索引完整性规则:
 - R7: 链接文件必须存在 - 索引表中 plan_link/regression_link 指向的文件必须存在
@@ -45,6 +45,9 @@ SUPERSEDED 规则 (参见 docs/acceptance/00_acceptance_matrix.md):
     # 跳过 SUPERSEDED 检查
     python scripts/ci/check_no_iteration_links_in_docs.py --skip-superseded-check
 
+    # 输出机器可读的 JSON 修复建议（快速定位 R3/R9 等排序问题）
+    python scripts/ci/check_no_iteration_links_in_docs.py --suggest-fixes
+
 退出码:
     0 - 检查通过或 --stats-only 模式
     1 - 检查失败（存在违规）
@@ -53,11 +56,12 @@ SUPERSEDED 规则 (参见 docs/acceptance/00_acceptance_matrix.md):
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Set
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 # ============================================================================
 # 数据结构
@@ -144,6 +148,255 @@ class IndexIntegrityCheckResult:
     missing_files: List[str] = field(default_factory=list)
     orphan_files: List[str] = field(default_factory=list)
     order_violations: List[tuple[int, int]] = field(default_factory=list)  # (prev, curr)
+
+
+@dataclass
+class FixSuggestion:
+    """修复建议。"""
+
+    rule_id: str
+    iteration_number: int
+    action: str  # "move_above", "add_successor", "remove_cycle", etc.
+    description: str
+    target_iteration: Optional[int] = None  # 目标迭代编号（如需移动）
+    file: Optional[str] = None  # 需要修改的文件
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式。"""
+        result: Dict[str, Any] = {
+            "rule_id": self.rule_id,
+            "iteration_number": self.iteration_number,
+            "action": self.action,
+            "description": self.description,
+        }
+        if self.target_iteration is not None:
+            result["target_iteration"] = self.target_iteration
+        if self.file is not None:
+            result["file"] = self.file
+        return result
+
+
+@dataclass
+class SuggestFixesReport:
+    """修复建议报告。"""
+
+    violations_count: int = 0
+    suggestions: List[FixSuggestion] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式。"""
+        return {
+            "violations_count": self.violations_count,
+            "suggestions_count": len(self.suggestions),
+            "suggestions": [s.to_dict() for s in self.suggestions],
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        """转换为 JSON 字符串。"""
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+
+
+# ============================================================================
+# 修复建议生成
+# ============================================================================
+
+
+def generate_fix_suggestions(
+    superseded_result: Optional[SupersededCheckResult],
+    integrity_result: Optional[IndexIntegrityCheckResult],
+    project_root: Path,
+) -> SuggestFixesReport:
+    """
+    根据违规结果生成修复建议。
+
+    Args:
+        superseded_result: SUPERSEDED 检查结果
+        integrity_result: 索引完整性检查结果
+        project_root: 项目根目录
+
+    Returns:
+        修复建议报告
+    """
+    report = SuggestFixesReport()
+    matrix_file = "docs/acceptance/00_acceptance_matrix.md"
+
+    # 处理 SUPERSEDED 违规
+    if superseded_result:
+        report.violations_count += len(superseded_result.violations)
+
+        for violation in superseded_result.violations:
+            suggestion: Optional[FixSuggestion] = None
+
+            if violation.rule_id == "R1":
+                # R1: 缺后继链接
+                suggestion = FixSuggestion(
+                    rule_id="R1",
+                    iteration_number=violation.iteration_number,
+                    action="add_successor_declaration",
+                    description=(
+                        f"在索引表 Iteration {violation.iteration_number} 的说明字段添加 "
+                        f"'已被 Iteration X 取代'（将 X 替换为实际后继迭代编号）"
+                    ),
+                    file=matrix_file,
+                )
+
+            elif violation.rule_id == "R2":
+                # R2: 后继不存在
+                # 从消息中提取后继编号
+                import re as re_module
+
+                match = re_module.search(r"Iteration\s+(\d+)", violation.message)
+                target = int(match.group(1)) if match else None
+                suggestion = FixSuggestion(
+                    rule_id="R2",
+                    iteration_number=violation.iteration_number,
+                    action="add_successor_to_index",
+                    description=(
+                        f"先在索引表中添加 Iteration {target} 条目，"
+                        f"然后再将 Iteration {violation.iteration_number} 标记为 SUPERSEDED"
+                    ),
+                    target_iteration=target,
+                    file=matrix_file,
+                )
+
+            elif violation.rule_id == "R3":
+                # R3: 后继排序错误 - 需要移动行
+                # 从消息中提取后继编号
+                import re as re_module
+
+                match = re_module.search(
+                    r"后继 Iteration (\d+) \(行 \d+\) 应排在当前迭代 \(行 \d+\) 的上方",
+                    violation.message,
+                )
+                if match:
+                    successor = int(match.group(1))
+                    suggestion = FixSuggestion(
+                        rule_id="R3",
+                        iteration_number=violation.iteration_number,
+                        action="move_above",
+                        description=(
+                            f"将 Iteration {successor} 行移动到 "
+                            f"Iteration {violation.iteration_number} 行的上方"
+                        ),
+                        target_iteration=successor,
+                        file=matrix_file,
+                    )
+
+            elif violation.rule_id == "R4":
+                # R4: 环形引用
+                suggestion = FixSuggestion(
+                    rule_id="R4",
+                    iteration_number=violation.iteration_number,
+                    action="break_cycle",
+                    description=(
+                        "检查取代链并打破环形引用，确保 SUPERSEDED 关系形成有向无环图 (DAG)"
+                    ),
+                    file=matrix_file,
+                )
+
+            elif violation.rule_id == "R5":
+                # R5: 多后继
+                suggestion = FixSuggestion(
+                    rule_id="R5",
+                    iteration_number=violation.iteration_number,
+                    action="remove_extra_successor",
+                    description=(
+                        f"在 Iteration {violation.iteration_number} 的说明字段中"
+                        f"保留一个后继声明，移除多余的后继声明"
+                    ),
+                    file=matrix_file,
+                )
+
+            elif violation.rule_id == "R6":
+                # R6: regression 文件缺声明
+                file_path = str(violation.file) if violation.file else None
+                if file_path:
+                    # 转换为相对路径
+                    try:
+                        rel_path = Path(file_path).relative_to(project_root)
+                        file_path = str(rel_path)
+                    except ValueError:
+                        pass
+
+                suggestion = FixSuggestion(
+                    rule_id="R6",
+                    iteration_number=violation.iteration_number,
+                    action="add_superseded_header",
+                    description=(
+                        "在 regression 文件顶部添加 '> **⚠️ Superseded by Iteration X**' 声明"
+                    ),
+                    file=file_path,
+                )
+
+            if suggestion:
+                report.suggestions.append(suggestion)
+
+    # 处理索引完整性违规
+    if integrity_result:
+        report.violations_count += len(integrity_result.violations)
+
+        for violation in integrity_result.violations:
+            suggestion: Optional[FixSuggestion] = None
+
+            if violation.rule_id == "R7":
+                # R7: 链接文件不存在
+                suggestion = FixSuggestion(
+                    rule_id="R7",
+                    iteration_number=violation.iteration_number,
+                    action="create_or_remove_link",
+                    description="创建缺失的文件，或将索引表中的链接改为 '-'",
+                    file=matrix_file,
+                )
+
+            elif violation.rule_id == "R8":
+                # R8: 孤儿文件
+                file_path = str(violation.file) if violation.file else None
+                if file_path:
+                    try:
+                        rel_path = Path(file_path).relative_to(project_root)
+                        file_path = str(rel_path)
+                    except ValueError:
+                        pass
+
+                suggestion = FixSuggestion(
+                    rule_id="R8",
+                    iteration_number=violation.iteration_number,
+                    action="add_to_index_or_delete",
+                    description=(
+                        f"在索引表中添加 Iteration {violation.iteration_number} 条目，"
+                        f"或删除孤儿文件"
+                    ),
+                    file=file_path,
+                )
+
+            elif violation.rule_id == "R9":
+                # R9: 索引排序错误 - 需要移动行
+                # 从 order_violations 中获取详细信息
+                import re as re_module
+
+                match = re_module.search(
+                    r"Iteration (\d+) \(行 \d+\) 应在 Iteration (\d+) 之前",
+                    violation.message,
+                )
+                if match:
+                    current = int(match.group(1))
+                    prev = int(match.group(2))
+                    suggestion = FixSuggestion(
+                        rule_id="R9",
+                        iteration_number=current,
+                        action="move_above",
+                        description=(
+                            f"将 Iteration {current} 行移动到 "
+                            f"Iteration {prev} 行的上方（索引应按迭代编号降序排列）"
+                        ),
+                        target_iteration=prev,
+                        file=matrix_file,
+                    )
+
+            if suggestion:
+                report.suggestions.append(suggestion)
+
+    return report
 
 
 # ============================================================================
@@ -663,6 +916,7 @@ def run_check(
     paths: List[str] | None = None,
     verbose: bool = False,
     project_root: Path | None = None,
+    quiet: bool = False,
 ) -> tuple[List[IterationLinkViolation], int]:
     """
     执行 .iteration/ 链接检查。
@@ -671,6 +925,7 @@ def run_check(
         paths: 要检查的路径列表（None 则使用默认路径 docs/）
         verbose: 是否显示详细输出
         project_root: 项目根目录（None 则自动检测）
+        quiet: 是否静默模式（抑制所有输出）
 
     Returns:
         (违规列表, 总扫描文件数)
@@ -681,16 +936,18 @@ def run_check(
     # 获取要检查的路径
     if paths is None:
         paths = get_default_paths()
-        print(f"[INFO] 使用默认路径: {', '.join(paths)}")
+        if not quiet:
+            print(f"[INFO] 使用默认路径: {', '.join(paths)}")
 
     # 展开路径为文件列表
     files = expand_paths(paths, project_root)
 
     if not files:
-        print("[WARN] 未找到任何 Markdown 文件")
+        if not quiet:
+            print("[WARN] 未找到任何 Markdown 文件")
         return [], 0
 
-    if verbose:
+    if verbose and not quiet:
         print(f"[INFO] 将检查 {len(files)} 个文件")
         for f in files[:10]:
             print(f"       - {f.relative_to(project_root)}")
@@ -705,7 +962,7 @@ def run_check(
         for violation in scan_file_for_iteration_links(file_path):
             violations.append(violation)
 
-            if verbose:
+            if verbose and not quiet:
                 rel_path = file_path.relative_to(project_root)
                 print(f"  ❌ {rel_path}:{violation.line_number}")
                 print(f"     链接: {violation.matched_link}")
@@ -768,15 +1025,19 @@ def print_report(
         print("  .iteration/ 是临时工作目录，不应在文档中被引用。")
         print()
         print("  建议修复方式:")
-        print("  1. 将引用的内容迁移到 docs/acceptance/ 目录:")
+        print()
+        print("  1. 若内容需要长期引用：晋升到 docs/acceptance/")
+        print("     使用 promote_iteration.py 将迭代文档正式化:")
+        print("     $ python scripts/iteration/promote_iteration.py N")
         print("     ❌ [计划](../.iteration/plan.md)")
         print("     ✓  [计划](../acceptance/iteration_N_plan.md)")
         print()
-        print("  2. 使用行内代码引用（如果仅需提及路径）:")
+        print("  2. 若只是分享草稿：使用 export_local_iteration.py")
+        print("     $ python scripts/iteration/export_local_iteration.py N --output-dir /tmp/")
+        print()
+        print("  3. 若仅需提及路径：改为 inline code 或纯文本，不要 Markdown 链接")
         print("     ❌ [详见](.iteration/notes.md)")
         print("     ✓  详见 `.iteration/notes.md`")
-        print()
-        print("  3. 移除已过时的链接")
         print()
     else:
         print("[OK] 未发现 .iteration/ 链接")
@@ -933,6 +1194,11 @@ def main() -> int:
         action="store_true",
         help="仅执行索引完整性检查",
     )
+    parser.add_argument(
+        "--suggest-fixes",
+        action="store_true",
+        help="输出机器可读的 JSON 格式修复建议",
+    )
 
     args = parser.parse_args()
 
@@ -943,49 +1209,69 @@ def main() -> int:
     superseded_result: Optional[SupersededCheckResult] = None
     integrity_result: Optional[IndexIntegrityCheckResult] = None
 
+    # --suggest-fixes 模式：静默执行检查，仅输出 JSON
+    quiet_mode = args.suggest_fixes
+
     # 执行 .iteration/ 链接检查
     if not args.superseded_only and not args.integrity_only:
-        print("=" * 70)
-        print(".iteration/ 链接检查")
-        print("=" * 70)
-        print()
+        if not quiet_mode:
+            print("=" * 70)
+            print(".iteration/ 链接检查")
+            print("=" * 70)
+            print()
 
         link_violations, total_files = run_check(
             paths=args.paths,
             verbose=args.verbose,
             project_root=project_root,
+            quiet=quiet_mode,
         )
         total_violations += len(link_violations)
 
     # 执行 SUPERSEDED 一致性检查
     if not args.skip_superseded_check and not args.integrity_only:
-        if not args.superseded_only:
+        if not quiet_mode:
+            if not args.superseded_only:
+                print()
+            print("=" * 70)
+            print("SUPERSEDED 一致性检查")
+            print("=" * 70)
             print()
-        print("=" * 70)
-        print("SUPERSEDED 一致性检查")
-        print("=" * 70)
-        print()
 
         superseded_result = check_superseded_consistency(
             project_root=project_root,
-            verbose=args.verbose,
+            verbose=args.verbose and not quiet_mode,
         )
         total_violations += len(superseded_result.violations)
 
     # 执行索引完整性检查
     if not args.skip_integrity_check and not args.superseded_only:
-        if not args.integrity_only:
+        if not quiet_mode:
+            if not args.integrity_only:
+                print()
+            print("=" * 70)
+            print("索引完整性检查")
+            print("=" * 70)
             print()
-        print("=" * 70)
-        print("索引完整性检查")
-        print("=" * 70)
-        print()
 
         integrity_result = check_index_integrity(
             project_root=project_root,
-            verbose=args.verbose,
+            verbose=args.verbose and not quiet_mode,
         )
         total_violations += len(integrity_result.violations)
+
+    # --suggest-fixes 模式：输出 JSON 格式的修复建议
+    if args.suggest_fixes:
+        fix_report = generate_fix_suggestions(
+            superseded_result=superseded_result,
+            integrity_result=integrity_result,
+            project_root=project_root,
+        )
+        print(fix_report.to_json())
+        # suggest-fixes 模式下，根据是否有违规决定退出码
+        if args.stats_only:
+            return 0
+        return 1 if fix_report.violations_count > 0 else 0
 
     # 打印报告
     if not args.superseded_only and not args.integrity_only:

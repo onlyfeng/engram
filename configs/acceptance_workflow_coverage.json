@@ -2,6 +2,8 @@
   "$schema": "../schemas/acceptance_workflow_coverage_v1.schema.json",
   "version": "1.0.0",
 
+  "_note": "本文件为 Acceptance Workflow Coverage 参考文档，非门禁 SSOT。实际门禁逻辑由 check_acceptance_coverage_contract.py 定义。record_acceptance_run.py 和 render_acceptance_matrix.py 仅在 nightly.yml 中执行，ci.yml 不包含这些步骤。",
+
   "ssot_references": {
     "profile_definitions": "src/engram/unified_stack/gate_contract.py::PROFILE_CONFIGS",
     "step_definitions": "src/engram/unified_stack/gate_contract.py::StepName",
@@ -84,20 +86,9 @@
             }
           },
           {
-            "name": "record_acceptance_run",
-            "description": "记录验收运行（含 CI metadata）",
-            "command": "python scripts/acceptance/record_acceptance_run.py",
-            "metadata_fields": ["workflow", "profile", "github_run_id", "event_name", "sha", "python_version"]
-          },
-          {
-            "name": "render_acceptance_matrix",
-            "description": "渲染 acceptance 矩阵摘要",
-            "command": "python scripts/acceptance/render_acceptance_matrix.py --output-dir .artifacts --runs-dir .artifacts/acceptance-runs"
-          },
-          {
-            "name": "upload_acceptance_artifacts",
-            "description": "上传 acceptance artifacts",
-            "artifact_paths": [".artifacts/acceptance-runs/*", ".artifacts/acceptance-matrix.md", ".artifacts/acceptance-matrix.json"]
+            "name": "upload_test_results",
+            "description": "上传测试结果",
+            "artifact_paths": ["test-results-*.xml", "acceptance-results-*.xml"]
           }
         ],
         "depends_on": [
@@ -105,27 +96,12 @@
           "schema-validate",
           "migration-sanity"
         ],
-        "notes": "CI 采用组合式覆盖策略：不直接执行 make acceptance-unified-min，而是在 workflow 中分步执行核心步骤，以支持细粒度条件检查和独立 artifact 收集。"
+        "notes": "CI 仅运行测试，不执行 acceptance record/matrix 脚本。record_acceptance_run.py 和 render_acceptance_matrix.py 仅在 nightly.yml 中执行。"
       },
       "nightly_implementation": {
-        "mode": "composed",
+        "mode": "none",
         "workflow_file": "nightly.yml",
-        "composed_steps": [
-          {
-            "name": "deploy",
-            "description": "启动统一栈（与 CI 共享）",
-            "command": "docker compose -f docker-compose.unified.yml up -d"
-          },
-          {
-            "name": "test-gateway-integration",
-            "description": "Gateway 集成测试（HTTP 模式）",
-            "command": "pytest tests/gateway/test_unified_stack_integration.py -v --gate-profile http_only",
-            "env_overrides": {
-              "GATE_PROFILE": "http_only"
-            }
-          }
-        ],
-        "notes": "Nightly 主要执行 acceptance-unified-full，但也可包含 min 验证作为前置检查。"
+        "notes": "Nightly 只执行 acceptance-unified-full（FULL profile），不单独执行 acceptance-unified-min。acceptance record/matrix 步骤在 unified-stack-full job 的后处理中执行。"
       },
       "environment": {
         "HTTP_ONLY_MODE": "1",
@@ -234,9 +210,19 @@
             "env_overrides": {
               "VERIFY_FULL": "1"
             }
+          },
+          {
+            "name": "record_acceptance_run",
+            "description": "记录 Acceptance Run（用于审计和可复现性）",
+            "command": "python scripts/acceptance/record_acceptance_run.py --name nightly-unified-stack-full --artifacts-dir .artifacts --result $RESULT"
+          },
+          {
+            "name": "render_acceptance_matrix",
+            "description": "渲染 Acceptance Matrix",
+            "command": "python scripts/acceptance/render_acceptance_matrix.py --output-dir .artifacts --runs-dir .artifacts/acceptance-runs"
           }
         ],
-        "notes": "Nightly workflow 直接启动完整服务栈并运行 FULL profile 验证。缺失能力必须 fail（不能静默跳过）。"
+        "notes": "Nightly workflow 直接启动完整服务栈并运行 FULL profile 验证。缺失能力必须 fail（不能静默跳过）。record_acceptance_run.py 和 render_acceptance_matrix.py 在此 job 中执行。"
       },
       "environment": {
         "VERIFY_FULL": "1",

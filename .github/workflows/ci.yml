@@ -430,6 +430,137 @@ jobs:
           echo "Gateway ErrorReason usage check passed"
 
   # ============================================================================
+  # Gateway Import Surface 检查（懒加载策略）
+  # ============================================================================
+  gateway-import-surface:
+    name: Gateway Import Surface Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Gateway import surface
+        run: |
+          python scripts/ci/check_gateway_import_surface.py --verbose
+          echo "Gateway import surface check passed"
+
+  # ============================================================================
+  # Gateway Public API Import Surface 检查
+  # ============================================================================
+  gateway-public-api-surface:
+    name: Gateway Public API Import Surface Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Gateway Public API import surface
+        run: |
+          python scripts/ci/check_gateway_public_api_import_surface.py --verbose
+          echo "Gateway Public API import surface check passed"
+
+      - name: Check Gateway Public API docs sync
+        run: |
+          python scripts/ci/check_gateway_public_api_docs_sync.py --verbose
+          echo "Gateway Public API docs sync check passed"
+
+  # ============================================================================
+  # Gateway correlation_id 单一来源检查
+  # ============================================================================
+  gateway-correlation-id-single-source:
+    name: Gateway correlation_id Single Source Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check Gateway correlation_id single source
+        run: |
+          python scripts/ci/check_gateway_correlation_id_single_source.py --verbose
+          echo "Gateway correlation_id single source check passed"
+
+  # ============================================================================
+  # MCP JSON-RPC 错误码合约与文档同步检查
+  # ============================================================================
+  mcp-error-contract:
+    name: MCP Error Contract Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check MCP JSON-RPC error contract
+        run: |
+          python scripts/ci/check_mcp_jsonrpc_error_contract.py --verbose
+          echo "MCP JSON-RPC error contract check passed"
+
+      - name: Check MCP JSON-RPC error docs sync
+        run: |
+          python scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --verbose
+          echo "MCP JSON-RPC error docs sync check passed"
+
+      - name: Generate contract report (JSON)
+        if: always()
+        run: |
+          mkdir -p artifacts
+          python scripts/ci/check_mcp_jsonrpc_error_contract.py --json > artifacts/mcp_error_contract.json || true
+
+      - name: Generate sync report (JSON)
+        if: always()
+        run: |
+          mkdir -p artifacts
+          python scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --json > artifacts/mcp_error_docs_sync.json || true
+
+      - name: Upload contract report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-error-contract
+          path: artifacts/mcp_error_contract.json
+          retention-days: 14
+
+      - name: Upload sync report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-error-docs-sync
+          path: artifacts/mcp_error_docs_sync.json
+          retention-days: 14
+
+  # ============================================================================
   # 迭代文档检查（.iteration/ 链接 + SUPERSEDED 一致性）
   # ============================================================================
   iteration-docs-check:
@@ -450,6 +581,36 @@ jobs:
         run: |
           python scripts/ci/check_no_iteration_links_in_docs.py --verbose
           echo "Iteration docs consistency check passed"
+
+  # ============================================================================
+  # 迭代工具脚本测试（无需数据库）
+  # ============================================================================
+  iteration-tools-test:
+    name: Iteration Tools Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run iteration tools tests
+        run: |
+          echo "=== Iteration Tools Tests ==="
+          echo "运行 tests/iteration/ 目录下的测试（无需数据库）"
+          echo ""
+          pytest tests/iteration/ -q
+          echo "Iteration tools tests passed"
 
   # ============================================================================
   # Workflow 合约校验
@@ -481,7 +642,6 @@ jobs:
           pytest tests/ci/ -q \
             --ignore=tests/ci/test_gateway_deps_db_allowlist.py \
             --ignore=tests/ci/test_gateway_deps_db_gate.py \
-            --ignore=tests/ci/test_gateway_import_surface_gate.py \
             --ignore=tests/ci/test_strict_island_admission.py \
             --ignore=tests/ci/test_mypy_baseline_policy.py \
             --ignore=tests/ci/test_mypy_metrics.py
@@ -493,16 +653,21 @@ jobs:
           echo "校验范围: ci.yml + nightly.yml"
           echo "合约文件: scripts/ci/workflow_contract.v1.json"
           echo ""
-          python scripts/ci/validate_workflows.py
-          echo "Workflow contract validation passed"
+          make validate-workflows-strict
 
       - name: Check workflow contract docs sync
         run: |
           echo "=== Workflow Contract Docs Sync Check ==="
           echo "检查合约定义与文档是否同步"
           echo ""
-          python scripts/ci/check_workflow_contract_docs_sync.py
-          echo "Workflow contract docs sync check passed"
+          make check-workflow-contract-docs-sync
+
+      - name: Check workflow contract version policy
+        run: |
+          echo "=== Workflow Contract Version Policy Check ==="
+          echo "检查关键文件变更时版本是否正确更新"
+          echo ""
+          make check-workflow-contract-version-policy
 
       - name: Generate validation report (JSON)
         if: always()
@@ -515,6 +680,18 @@ jobs:
         run: |
           mkdir -p artifacts
           python scripts/ci/check_workflow_contract_docs_sync.py --json > artifacts/workflow_contract_docs_sync.json || true
+
+      - name: Generate drift report (JSON)
+        if: always()
+        run: |
+          mkdir -p artifacts
+          python scripts/ci/workflow_contract_drift_report.py --output artifacts/workflow_contract_drift.json || true
+
+      - name: Generate drift report (Markdown)
+        if: always()
+        run: |
+          mkdir -p artifacts
+          python scripts/ci/workflow_contract_drift_report.py --markdown --output artifacts/workflow_contract_drift.md || true
 
       - name: Upload validation report
         if: always()
@@ -530,4 +707,14 @@ jobs:
         with:
           name: workflow-contract-docs-sync
           path: artifacts/workflow_contract_docs_sync.json
+          retention-days: 14
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-contract-drift
+          path: |
+            artifacts/workflow_contract_drift.json
+            artifacts/workflow_contract_drift.md
           retention-days: 14
