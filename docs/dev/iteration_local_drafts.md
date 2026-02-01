@@ -586,6 +586,24 @@ python scripts/iteration/audit_iteration_docs.py --output-dir .artifacts/iterati
 
 当需要记录迭代验收测试的执行证据时，可使用 `record_iteration_evidence.py` 脚本将证据写入版本化目录。
 
+### 重要约束
+
+> **证据文件必须由脚本生成，禁止手动创建占位符文件提交。**
+
+| 场景 | 策略 | 说明 |
+|------|------|------|
+| **正式证据** | 使用 `record_iteration_evidence.py` 脚本生成 | ✅ 推荐，自动脱敏、格式合规 |
+| **占位符/草稿** | ❌ **禁止提交到版本库** | 模板仅供参考，不要手动创建草稿文件提交 |
+| **测试/调试** | 使用 `--dry-run` 预览 | 脚本支持预览模式，不实际写入 |
+
+**禁止的做法**：
+
+- ❌ 手动创建包含 `{PLACEHOLDER}` 或 `TODO` 的草稿证据文件并提交
+- ❌ 复制模板文件到 `evidence/` 目录并手动编辑
+- ❌ 提交不完整或未脱敏的证据文件
+
+> 详细策略说明参见 [ADR: 版本化证据文件](../architecture/adr_iteration_docs_workflow.md#35-版本化证据文件)
+
 ### 基本用法
 
 ```bash

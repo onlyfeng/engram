@@ -189,31 +189,39 @@
 make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 ```
 
-### 最小门禁命令块（可选）
+## 最小门禁命令块
 
-> **提示**：如需生成特定 profile 的最小门禁命令块，可使用脚本自动生成：
+> **说明**：此区块由脚本自动生成和更新。
 >
+> **手动生成**：
 > ```bash
-> # 生成完整门禁命令块
-> python scripts/iteration/render_min_gate_block.py {N}
->
-> # 生成特定代理的门禁命令块
-> python scripts/iteration/render_min_gate_block.py {N} --profile docs-only
-> python scripts/iteration/render_min_gate_block.py {N} --profile ci-only
-> python scripts/iteration/render_min_gate_block.py {N} --profile gateway-only
-> python scripts/iteration/render_min_gate_block.py {N} --profile sql-only
+> python scripts/iteration/render_min_gate_block.py {N} --profile full
 > ```
 >
-> 支持的 profile：
-> - `full`: 完整 CI 门禁（make ci）
-> - `docs-only`: 文档代理最小门禁
-> - `ci-only`: CI 代理最小门禁
-> - `gateway-only`: Gateway 代理最小门禁
-> - `sql-only`: SQL 代理最小门禁
+> **自动同步**（推荐）：
+> ```bash
+> # 同步所有自动生成区块（min_gate_block + evidence_snippet）
+> python scripts/iteration/sync_iteration_regression.py {N} --write
+>
+> # 仅同步最小门禁命令块
+> python scripts/iteration/sync_iteration_regression.py {N} --only-min-gate --write
+> ```
+>
+> 可选 `--profile` 参数：`full`（默认）、`regression`、`docs-only`、`ci-only`、`gateway-only`、`sql-only`
+
+<!-- BEGIN GENERATED: min_gate_block profile=full -->
+
+（使用上述脚本生成内容后，此区块将被自动替换）
+
+<!-- END GENERATED: min_gate_block -->
 
 ---
 
+<!-- BEGIN GENERATED: evidence_snippet -->
+
 ## 验收证据
+
+<!-- 此段落由脚本自动生成，请勿手动编辑 -->
 
 | 项目 | 值 |
 |------|-----|
@@ -222,19 +230,88 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 | **记录时间** | {YYYY-MM-DDTHH:MM:SSZ} |
 | **Commit SHA** | `{commit_sha}` |
 
-> **证据文件说明**：结构化验收证据存放于 `docs/acceptance/evidence/` 目录，符合 `schemas/iteration_evidence_v1.schema.json` 格式。
->
-> **创建证据文件**：
-> 1. 复制模板 `docs/acceptance/_templates/iteration_evidence.template.json` 到 `docs/acceptance/evidence/iteration_{N}_evidence.json`
-> 2. 替换所有占位符（`iteration_number`、`recorded_at`、`commit_sha` 等）为实际值
-> 3. 运行校验确保格式正确
->
-> **校验命令**:
-> ```bash
-> python -m jsonschema -i docs/acceptance/evidence/iteration_{N}_evidence.json schemas/iteration_evidence_v1.schema.json
-> ```
->
-> **注意**：模板文件 `iteration_evidence.template.json` 中的占位值仅供参考，**不可直接提交**，必须替换为实际迭代数据。
+### 门禁命令执行摘要
+
+> 以下表格由脚本从证据文件自动渲染。
+
+| 命令 | 结果 | 耗时 | 摘要 |
+|------|------|------|------|
+| `make ci` | ✅ PASS | - | - |
+
+### 整体验收结果
+
+- **结果**: ✅ PASS
+- **说明**: 所有门禁通过
+
+<!-- END GENERATED: evidence_snippet -->
+
+> **重要**：证据文件应由脚本自动生成，禁止手工创建或修改 JSON 文件。
+
+### 证据文件生成与同步流程
+
+**步骤 1: 生成证据文件**
+
+使用 `record_iteration_evidence.py` 脚本生成符合 schema 的证据文件：
+
+```bash
+# 1. 预览模式（推荐先执行，确认输出路径和内容）
+python scripts/iteration/record_iteration_evidence.py {N} --dry-run
+
+# 2. 基本用法（自动获取当前 commit SHA）
+python scripts/iteration/record_iteration_evidence.py {N}
+
+# 3. 添加门禁命令执行结果
+python scripts/iteration/record_iteration_evidence.py {N} \
+  --add-command "ci:make ci:PASS" \
+  --add-command "gateway-test:pytest tests/gateway/ -q:PASS" \
+  --add-command "acceptance-test:pytest tests/acceptance/ -q:PASS"
+
+# 4. 关联 CI 运行 URL（适用于 GitHub Actions 触发的验收）
+python scripts/iteration/record_iteration_evidence.py {N} \
+  --ci-run-url https://github.com/org/repo/actions/runs/{run_id} \
+  --add-command "ci:make ci:PASS"
+
+# 5. 添加备注说明
+python scripts/iteration/record_iteration_evidence.py {N} \
+  --notes "所有门禁通过，验收完成" \
+  --add-command "ci:make ci:PASS"
+```
+
+**步骤 2: 同步到回归文档**
+
+使用 `sync_iteration_regression.py` 将证据和门禁命令块同步到回归文档：
+
+```bash
+# 预览模式（推荐先执行）
+python scripts/iteration/sync_iteration_regression.py {N}
+
+# 写入模式（同步 min_gate_block 和 evidence_snippet）
+python scripts/iteration/sync_iteration_regression.py {N} --write
+
+# 仅同步证据片段
+python scripts/iteration/sync_iteration_regression.py {N} --only-evidence --write
+
+# 使用 regression profile
+python scripts/iteration/sync_iteration_regression.py {N} --profile regression --write
+```
+
+**脚本功能**：
+- 自动收集环境信息（OS、Python 版本、架构）
+- 自动获取当前 git commit SHA
+- 内置敏感信息脱敏（PASSWORD/DSN/TOKEN 等）
+- 输出格式符合 `iteration_evidence_v1.schema.json`
+
+**文件命名规范**：
+- Canonical path（固定文件名）：`iteration_{N}_evidence.json`
+- 详见 `scripts/iteration/iteration_evidence_naming.py` 的命名策略说明
+
+### Schema 校验（可选）
+
+证据文件生成后可手动校验格式正确性：
+
+```bash
+python -m jsonschema -i docs/acceptance/evidence/iteration_{N}_evidence.json schemas/iteration_evidence_v1.schema.json
+```
 
 ---
 
@@ -395,7 +472,7 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 - [ ] 执行 `pytest tests/acceptance/ -q` 并记录结果
 - [ ] 如有失败，填写失败修复建议和追踪表
 - [ ] 与上一迭代对比，填写变化分析
-- [ ] 创建证据文件 `docs/acceptance/evidence/iteration_{N}_evidence.json`（使用 [iteration_evidence.template.json](iteration_evidence.template.json)）
+- [ ] 使用 `python scripts/iteration/record_iteration_evidence.py {N}` 生成证据文件
 - [ ] 填写"验收证据"段落，链接到证据文件
 - [ ] 在 [00_acceptance_matrix.md](../00_acceptance_matrix.md) 更新索引条目
 - [ ] 移除模板说明（本文件顶部的使用说明区块）

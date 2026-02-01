@@ -545,6 +545,14 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 
 ---
 
+## 验收证据
+
+- **证据文件**: [iteration_13_evidence.json](evidence/iteration_13_evidence.json)
+- **记录时间**: 2026-02-02
+- **验收状态**: ✅ PASS（所有门禁和测试通过）
+
+---
+
 ## 相关文档
 
 - [Iteration 12 回归记录](iteration_12_regression.md)
@@ -556,4 +564,4 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 
 ---
 
-_文档版本：v1.2 | 创建日期：2026-02-02 | 更新日期：2026-02-02 | 复测日期：2026-02-02 (所有门禁通过)_
+_文档版本：v1.3 | 创建日期：2026-02-02 | 更新日期：2026-02-02 | 复测日期：2026-02-02 (所有门禁通过)_

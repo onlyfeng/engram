@@ -193,16 +193,31 @@ python scripts/iteration/record_iteration_evidence.py 13 --dry-run
 
 ### 在 regression 文档中引用证据
 
-在 `iteration_<N>_regression.md` 的末尾添加"验收证据"段落：
+在 `iteration_<N>_regression.md` 的末尾添加"验收证据"段落。
+
+**推荐方式**：使用脚本自动渲染（读取 evidence JSON 的 commands）：
+
+```bash
+# 渲染最小门禁块到 regression 文档
+python scripts/iteration/render_min_gate_block.py <N>
+
+# 或更新已有文档中的证据块
+python scripts/iteration/update_min_gate_block_in_regression.py <N>
+```
+
+**生成后的段落示例**：
 
 ```markdown
 ## 验收证据
 
+<!-- AUTO-GENERATED EVIDENCE BLOCK START -->
+<!-- 此段落由脚本自动生成，请勿手动编辑 -->
+
 | 项目 | 值 |
 |------|-----|
-| **证据文件** | [`iteration_<N>_evidence.json`](evidence/iteration_<N>_evidence.json) |
+| **证据文件** | [`iteration_13_evidence.json`](evidence/iteration_13_evidence.json) |
 | **Schema 版本** | `iteration_evidence_v1.schema.json` |
-| **记录时间** | 2026-02-01T20:35:41Z |
+| **记录时间** | 2026-02-02T14:30:22Z |
 | **Commit SHA** | `abc1234` |
 
 ### 门禁命令执行摘要
@@ -214,9 +229,9 @@ python scripts/iteration/record_iteration_evidence.py 13 --dry-run
 ### 整体验收结果
 
 - **结果**: PASS
-- **说明**: 所有门禁通过，验收完成
+- **说明**: 所有门禁通过
 
-> **校验命令**: `python -m jsonschema -i docs/acceptance/evidence/iteration_<N>_evidence.json schemas/iteration_evidence_v1.schema.json`
+<!-- AUTO-GENERATED EVIDENCE BLOCK END -->
 ```
 
 **引用规范**：
