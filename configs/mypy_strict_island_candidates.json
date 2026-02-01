@@ -1,0 +1,10 @@
+{
+  "$schema": "../schemas/mypy_strict_island_candidates_v1.schema.json",
+  "version": "1",
+  "description": "Mypy Strict Island 准入候选清单",
+  "candidates": [],
+  "metadata": {
+    "last_updated": "2026-02-01",
+    "updated_by": "@platform-team"
+  }
+}

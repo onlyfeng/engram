@@ -1,0 +1,6 @@
+{
+  "generated_at": "2026-02-01T00:00:00Z",
+  "description": "Future baseline for ruff rules. Contains rules that are being gradually adopted.",
+  "rules": [],
+  "violations": {}
+}

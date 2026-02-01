@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/no_root_wrappers_allowlist_v1.schema.json",
+  "title": "No Root Wrappers Allowlist V1 Schema",
+  "description": "根目录 Wrapper 导入例外允许列表 JSON Schema (V1)，用于 scripts/ci/check_no_root_wrappers_usage.py 的例外管理",
+  "$comment": "【SSOT 声明】此 Schema 是 allowlist 格式的权威定义。数据文件: scripts/ci/no_root_wrappers_allowlist.json。检查脚本: scripts/ci/check_no_root_wrappers_usage.py",
+
+  "definitions": {
+    "iso8601_date": {
+      "type": "string",
+      "description": "ISO8601 格式的日期字符串 (YYYY-MM-DD)",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+
+    "iso8601_datetime": {
+      "type": "string",
+      "description": "ISO8601 格式的日期时间字符串",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?$"
+    },
+
+    "scope": {
+      "type": "string",
+      "description": "例外作用范围：import（Python 导入语句）或 subprocess（子进程调用）",
+      "enum": ["import", "subprocess"]
+    },
+
+    "category": {
+      "type": "string",
+      "description": "例外分类，用于统计和管理",
+      "enum": [
+        "acceptance_test",
+        "backward_compat_test",
+        "integration_test",
+        "compat_wrapper",
+        "legacy_migration",
+        "tooling",
+        "other"
+      ]
+    },
+
+    "allowlist_entry": {
+      "type": "object",
+      "description": "单个例外允许条目",
+      "required": ["id", "scope", "module", "file_glob", "reason", "owner", "category"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "唯一标识符，格式建议: <scope>-<module>-<序号>",
+          "pattern": "^[a-z0-9_-]+$",
+          "minLength": 1
+        },
+        "scope": {
+          "$ref": "#/definitions/scope"
+        },
+        "module": {
+          "type": "string",
+          "description": "被允许导入/调用的根目录 wrapper 模块名（不带 .py 后缀）",
+          "minLength": 1
+        },
+        "file_glob": {
+          "type": "string",
+          "description": "适用的文件 glob 模式，例如 'tests/**/*.py' 或 'src/engram/logbook/cli/*.py'",
+          "minLength": 1
+        },
+        "file_path": {
+          "type": "string",
+          "description": "（可选）精确文件路径，优先级高于 file_glob。若指定则忽略 file_glob"
+        },
+        "reason": {
+          "type": "string",
+          "description": "允许例外的原因说明，需清晰说明为何需要此例外",
+          "minLength": 10
+        },
+        "owner": {
+          "type": "string",
+          "description": "例外负责人，格式: GitHub 用户名或团队",
+          "minLength": 1
+        },
+        "expires_on": {
+          "$ref": "#/definitions/iso8601_date",
+          "description": "（可选）例外过期日期，超过此日期后 CI 应报错。格式: YYYY-MM-DD"
+        },
+        "category": {
+          "$ref": "#/definitions/category"
+        },
+        "created_at": {
+          "$ref": "#/definitions/iso8601_date",
+          "description": "（可选）条目创建日期"
+        },
+        "jira_ticket": {
+          "type": "string",
+          "description": "（可选）关联的 JIRA 工单号或 GitHub Issue"
+        },
+        "notes": {
+          "type": "string",
+          "description": "（可选）补充说明"
+        },
+        "migration_target": {
+          "type": "string",
+          "description": "（可选）推荐的迁移目标，如 'python -m engram.logbook.cli.db_migrate' 或 console script 名称"
+        },
+        "expiry_action": {
+          "type": "string",
+          "description": "（可选）过期后应执行的操作说明"
+        }
+      }
+    }
+  },
+
+  "type": "object",
+  "required": ["version", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Allowlist 文件格式版本（支持 '1' 或 '1.0'）",
+      "enum": ["1", "1.0"]
+    },
+    "generated_at": {
+      "$ref": "#/definitions/iso8601_datetime",
+      "description": "（可选）文件生成/更新时间戳"
+    },
+    "description": {
+      "type": "string",
+      "description": "（可选）文件用途说明"
+    },
+    "entries": {
+      "type": "array",
+      "description": "例外允许条目列表",
+      "items": {
+        "$ref": "#/definitions/allowlist_entry"
+      },
+      "uniqueItems": true
+    }
+  },
+
+  "examples": [
+    {
+      "version": "1.0",
+      "generated_at": "2026-02-01T12:00:00Z",
+      "description": "根目录 wrapper 导入例外允许列表",
+      "entries": [
+        {
+          "id": "import-db-acceptance-test-1",
+          "scope": "import",
+          "module": "db",
+          "file_glob": "tests/logbook/test_scm_sync_integration.py",
+          "reason": "验收测试需要验证根目录 db.py 兼容包装器的行为，确保向后兼容",
+          "owner": "@engram-team",
+          "expires_on": "2026-12-31",
+          "category": "acceptance_test",
+          "created_at": "2026-02-01"
+        },
+        {
+          "id": "import-kv-acceptance-test-1",
+          "scope": "import",
+          "module": "kv",
+          "file_glob": "tests/logbook/test_scm_sync_integration.py",
+          "reason": "验收测试需要验证根目录 kv.py 兼容包装器的行为，确保向后兼容",
+          "owner": "@engram-team",
+          "expires_on": "2026-12-31",
+          "category": "acceptance_test",
+          "created_at": "2026-02-01"
+        }
+      ]
+    }
+  ]
+}

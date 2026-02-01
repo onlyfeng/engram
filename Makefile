@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov lint format typecheck migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov lint format typecheck migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-iteration-docs check-iteration-docs-superseded-only iteration-init iteration-promote
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -189,7 +189,22 @@ check-scm-sync-consistency:  ## 检查 SCM Sync 一致性（文档/代码/配置
 	$(PYTHON) scripts/verify_scm_sync_consistency.py --verbose
 	@echo "SCM Sync 一致性检查通过"
 
-ci: lint format-check typecheck check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
+check-gateway-error-reason-usage:  ## 检查 Gateway ErrorReason 使用规范（禁止硬编码 reason 字符串）
+	@echo "检查 Gateway ErrorReason 使用规范..."
+	$(PYTHON) scripts/ci/check_gateway_error_reason_usage.py --verbose
+	@echo "Gateway ErrorReason 使用规范检查通过"
+
+check-iteration-docs:  ## 检查迭代文档规范（.iteration/ 链接禁止 + SUPERSEDED 一致性）
+	@echo "检查迭代文档规范..."
+	$(PYTHON) scripts/ci/check_no_iteration_links_in_docs.py --verbose
+	@echo "迭代文档规范检查通过"
+
+check-iteration-docs-superseded-only:  ## 仅检查 SUPERSEDED 一致性（跳过 .iteration/ 链接检查）
+	@echo "检查 SUPERSEDED 一致性..."
+	$(PYTHON) scripts/ci/check_no_iteration_links_in_docs.py --superseded-only --verbose
+	@echo "SUPERSEDED 一致性检查通过"
+
+ci: lint format-check typecheck check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
 	@echo ""
 	@echo "=========================================="
 	@echo "[OK] 所有 CI 检查通过"
@@ -362,6 +377,25 @@ db-drop:  ## 删除数据库（危险操作）
 	@echo "警告：即将删除数据库 $(POSTGRES_DB)"
 	@read -p "确认删除？(y/N) " confirm && [ "$$confirm" = "y" ] && \
 		dropdb -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) $(POSTGRES_DB) || echo "已取消"
+
+## ==================== 迭代文档工作流 ====================
+
+# 迭代编号（通过 N= 参数传入）
+N ?=
+
+iteration-init:  ## 初始化本地迭代草稿（用法: make iteration-init N=13）
+	@if [ -z "$(N)" ]; then \
+		echo "❌ 错误: 请指定迭代编号，例如: make iteration-init N=13"; \
+		exit 1; \
+	fi
+	$(PYTHON) scripts/iteration/init_local_iteration.py $(N)
+
+iteration-promote:  ## 将本地迭代晋升到 SSOT（用法: make iteration-promote N=13）
+	@if [ -z "$(N)" ]; then \
+		echo "❌ 错误: 请指定迭代编号，例如: make iteration-promote N=13"; \
+		exit 1; \
+	fi
+	$(PYTHON) scripts/iteration/promote_iteration.py $(N)
 
 ## ==================== 服务 ====================
 

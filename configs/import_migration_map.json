@@ -1,0 +1,218 @@
+{
+  "$schema": "../schemas/import_migration_map_v1.schema.json",
+  "version": "1",
+  "description": "Import migration map - Single Source of Truth (SSOT) for root wrapper module deprecation",
+  "updated_at": "2026-02-01",
+  "modules": [
+    {
+      "old_module": "scm_sync_runner",
+      "import_target": "engram.logbook.cli.scm_sync:runner_main",
+      "cli_target": "engram-scm-runner",
+      "notes": "根目录已移除，scripts/ 弃用入口",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_sync_scheduler",
+      "import_target": "engram.logbook.cli.scm_sync:scheduler_main",
+      "cli_target": "engram-scm-scheduler",
+      "notes": "根目录已移除，scripts/ 弃用入口",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_sync_status",
+      "import_target": "engram.logbook.cli.scm_sync:status_main",
+      "cli_target": "engram-scm-status",
+      "notes": "根目录已移除",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_sync_reaper",
+      "import_target": "engram.logbook.cli.scm_sync:reaper_main",
+      "cli_target": "engram-scm-reaper",
+      "notes": "根目录已移除，scripts/ 弃用入口",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_sync_worker",
+      "import_target": "engram.logbook.cli.scm_sync:worker_main",
+      "cli_target": "engram-scm-worker",
+      "notes": "根目录已移除，scripts/ 弃用入口",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_sync_gitlab_commits",
+      "import_target": null,
+      "cli_target": "engram-scm-sync runner incremental --repo gitlab:<id>",
+      "notes": "根目录已移除，scripts/ 弃用入口",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_sync_gitlab_mrs",
+      "import_target": null,
+      "cli_target": "engram-scm-sync runner incremental --repo gitlab:<id> --job mrs",
+      "notes": "根目录已移除，scripts/ 弃用入口",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_sync_svn",
+      "import_target": null,
+      "cli_target": "engram-scm-sync runner incremental --repo svn:<id>",
+      "notes": "根目录已移除，scripts/ 弃用入口",
+      "deprecated": true,
+      "status": "migrated",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_materialize_patch_blob",
+      "import_target": "engram.logbook.materialize_patch_blob",
+      "cli_target": null,
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "artifact_audit",
+      "import_target": null,
+      "cli_target": "scripts/artifact_audit.py",
+      "notes": "根目录 wrapper 存在，运维脚本保留",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "artifact_cli",
+      "import_target": "engram.logbook.cli.artifacts:main",
+      "cli_target": "engram-artifacts",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "artifact_gc",
+      "import_target": "engram.logbook.cli.artifacts",
+      "cli_target": "engram-artifacts gc",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "artifact_migrate",
+      "import_target": "engram.logbook.cli.artifacts",
+      "cli_target": "engram-artifacts migrate",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "db_bootstrap",
+      "import_target": "engram.logbook.cli.db_bootstrap:main",
+      "cli_target": "engram-bootstrap-roles",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "db_migrate",
+      "import_target": "engram.logbook.cli.db_migrate:main",
+      "cli_target": "engram-migrate",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "logbook_cli_main",
+      "import_target": "engram.logbook.cli.logbook:main",
+      "cli_target": "engram-logbook",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "logbook_cli",
+      "import_target": "engram.logbook.cli.logbook:main",
+      "cli_target": "engram-logbook",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "identity_sync",
+      "import_target": "engram.logbook.identity_sync:main",
+      "cli_target": "engram-identity-sync",
+      "notes": "根目录 wrapper 存在",
+      "deprecated": true,
+      "status": "wrapper_exists",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "db",
+      "import_target": "engram.logbook.db",
+      "cli_target": null,
+      "notes": "数据库连接工具模块，被多个脚本依赖",
+      "deprecated": false,
+      "status": "preserved",
+      "owner": "@engram-team",
+      "target_version": null
+    },
+    {
+      "old_module": "kv",
+      "import_target": "engram.logbook.kv",
+      "cli_target": null,
+      "notes": "KV 存储工具模块，被多个脚本依赖",
+      "deprecated": false,
+      "status": "preserved",
+      "owner": "@engram-team",
+      "target_version": null
+    },
+    {
+      "old_module": "artifacts",
+      "import_target": "engram.logbook.scm_artifacts",
+      "cli_target": null,
+      "notes": "SCM 路径与制品工具，工具模块保留",
+      "deprecated": false,
+      "status": "preserved",
+      "owner": "@engram-team",
+      "target_version": null
+    }
+  ]
+}
