@@ -167,35 +167,39 @@ Drift Report 使用 `|| true` 的原因：
 
 ### 2.1 CI Workflow (`ci.yml`)
 
+<!-- BEGIN:CI_JOB_TABLE -->
 | Job ID | Job Name | 说明 |
 |--------|----------|------|
-| `test` | Test (Python ${{ matrix.python-version }}) | 单元测试和验收测试（矩阵：3.10, 3.11, 3.12） |
-| `lint` | Lint | 代码风格检查（ruff check, ruff format, mypy） |
-| `no-iteration-tracked` | No .iteration/ Tracked Files | 检查 .iteration/ 目录未被 git 跟踪 |
-| `env-var-consistency` | Environment Variable Consistency | 环境变量一致性检查 |
-| `schema-validate` | Schema Validation | JSON Schema 和 fixtures 校验 |
-| `logbook-consistency` | Logbook Consistency Check | Logbook 配置一致性检查 |
-| `migration-sanity` | Migration Sanity Check | SQL 迁移文件存在性和基本语法检查 |
-| `sql-safety` | SQL Migration Safety Check | SQL 迁移安全性检查（高危语句检测） |
-| `gateway-di-boundaries` | Gateway DI Boundaries Check | Gateway DI 边界检查 |
-| `scm-sync-consistency` | SCM Sync Consistency Check | SCM Sync 一致性检查 |
-| `gateway-error-reason-usage` | Gateway ErrorReason Usage Check | Gateway ErrorReason 使用规范检查 |
-| `gateway-import-surface` | Gateway Import Surface Check | Gateway __init__.py 懒加载策略检查（禁止 eager-import） |
-| `gateway-public-api-surface` | Gateway Public API Import Surface Check | Gateway Public API 导入表面检查（__all__ 与实际导出一致性、可选依赖隔离） |
-| `gateway-correlation-id-single-source` | Gateway correlation_id Single Source Check | Gateway correlation_id 单一来源检查（禁止重复定义） |
-| `mcp-error-contract` | MCP Error Contract Check | MCP JSON-RPC 错误码合约与文档同步检查 |
-| `iteration-docs-check` | Iteration Docs Check | 迭代文档检查（.iteration/ 链接 + SUPERSEDED 一致性） |
-| `ci-test-isolation` | CI Test Isolation Check | CI 测试隔离检查（sys.path 污染和顶层 CI 模块导入） |
-| `iteration-tools-test` | Iteration Tools Test | 迭代工具脚本测试（无需数据库依赖） |
-| `workflow-contract` | Workflow Contract Validation | Workflow 合约校验和文档同步检查 |
+| `test` | Test (Python ${{ matrix.python-version }}) | 10 个必需步骤 |
+| `lint` | Lint | 7 个必需步骤 |
+| `no-iteration-tracked` | No .iteration/ Tracked Files | 2 个必需步骤 |
+| `env-var-consistency` | Environment Variable Consistency | 3 个必需步骤 |
+| `schema-validate` | Schema Validation | 5 个必需步骤 |
+| `logbook-consistency` | Logbook Consistency Check | 3 个必需步骤 |
+| `migration-sanity` | Migration Sanity Check | 3 个必需步骤 |
+| `sql-safety` | SQL Migration Safety Check | 4 个必需步骤 |
+| `gateway-di-boundaries` | Gateway DI Boundaries Check | 3 个必需步骤 |
+| `scm-sync-consistency` | SCM Sync Consistency Check | 4 个必需步骤 |
+| `gateway-error-reason-usage` | Gateway ErrorReason Usage Check | 3 个必需步骤 |
+| `gateway-import-surface` | Gateway Import Surface Check | 3 个必需步骤 |
+| `gateway-public-api-surface` | Gateway Public API Import Surface Check | 4 个必需步骤 |
+| `gateway-correlation-id-single-source` | Gateway correlation_id Single Source Check | 3 个必需步骤 |
+| `mcp-error-contract` | MCP Error Contract Check | 9 个必需步骤 |
+| `iteration-docs-check` | Iteration Docs Check | 3 个必需步骤 |
+| `ci-test-isolation` | CI Test Isolation Check | 5 个必需步骤 |
+| `iteration-tools-test` | Iteration Tools Test | 4 个必需步骤 |
+| `workflow-contract` | Workflow Contract Validation | 17 个必需步骤 |
+<!-- END:CI_JOB_TABLE -->
 
 ### 2.2 Nightly Workflow (`nightly.yml`)
 
+<!-- BEGIN:NIGHTLY_JOB_TABLE -->
 | Job ID | Job Name | 说明 |
 |--------|----------|------|
-| `unified-stack-full` | Unified Stack Full Verification | 完整统一栈验证（Docker Compose + Gate Contract + 集成测试） |
-| `iteration-audit` | Iteration Docs Audit | 迭代文档审计（轻量级 job） |
-| `notify-results` | Notify Results | Nightly 汇总通知 |
+| `unified-stack-full` | Unified Stack Full Verification | 完整验证流程：环境检测 -> Gate Contract 校验 -> Docker Compose 启动 -> 服务健康检查 -> 集成测试 -> 验证 -> 清理 -> 记录 -> 上传 |
+| `iteration-audit` | Iteration Docs Audit | 4 个必需步骤 |
+| `notify-results` | Notify Results | 1 个必需步骤 |
+<!-- END:NIGHTLY_JOB_TABLE -->
 
 ### 2.3 Release Workflow (`release.yml`) - Phase 2 预留
 
@@ -347,9 +351,11 @@ Drift Report 使用 `|| true` 的原因：
 >
 > **当前状态**: CI workflow 当前**不消费** PR labels。`gh_pr_labels_to_outputs.py` 脚本存在但未被 ci.yml 调用。Labels 仅用于合约定义和一致性校验。
 
-| Label | 语义 | 使用场景 |
-|-------|------|----------|
-| `openmemory:freeze-override` | 绕过 OpenMemory 升级冻结 | 冻结期间的紧急修复（需配合 Override Reason） |
+<!-- BEGIN:LABELS_TABLE -->
+| Label | Workflow | 语义 |
+|-------|----------|------|
+| `openmemory:freeze-override` | ci | PR label |
+<!-- END:LABELS_TABLE -->
 
 > **Labels 一致性校验**: `validate_workflows.py` 会自动校验 `ci.labels` 与 `gh_pr_labels_to_outputs.py` 中 `LABEL_*` 常量的一致性。若不一致会报 ERROR 并提示同步更新脚本/contract/docs。
 >
@@ -549,12 +555,14 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 **仅冻结被 GitHub Required Checks 引用的核心 Jobs（共 4 个）：**
 
+<!-- BEGIN:FROZEN_JOB_NAMES_TABLE -->
 | Job Name | 原因 |
 |----------|------|
-| `Test (Python ${{ matrix.python-version }})` | Required Check，单元测试门禁 |
-| `Lint` | Required Check，代码质量门禁 |
-| `Workflow Contract Validation` | Required Check，合约校验门禁 |
-| `Unified Stack Full Verification` | Nightly 核心验证 |
+| `Lint` | Required Check |
+| `Test (Python ${{ matrix.python-version }})` | Required Check |
+| `Unified Stack Full Verification` | Required Check |
+| `Workflow Contract Validation` | Required Check |
+<!-- END:FROZEN_JOB_NAMES_TABLE -->
 
 **非冻结 Jobs（改名仅产生 WARNING）：**
 - 辅助检查 jobs（如 `Schema Validation`、`Migration Sanity Check` 等）
@@ -572,21 +580,23 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 **仅冻结核心步骤（共 13 个）：**
 
+<!-- BEGIN:FROZEN_STEP_NAMES_TABLE -->
 | Step Name | 冻结原因 |
 |-----------|----------|
-| `Checkout repository` | 基础步骤，所有 job 依赖 |
-| `Set up Python` | 基础步骤，所有 job 依赖 |
-| `Install dependencies` | 基础步骤，所有 job 依赖 |
-| `Run unit and integration tests` | 核心测试步骤 |
-| `Run acceptance tests` | 核心验收步骤 |
-| `Upload test results` | Artifact 上传，被 CI 系统引用 |
-| `Upload migration logs` | Artifact 上传，被 CI 系统引用 |
-| `Upload validation results` | Artifact 上传，被 CI 系统引用 |
-| `Upload validation report` | Artifact 上传，被 CI 系统引用 |
-| `Upload drift report` | Artifact 上传，被 CI 系统引用 |
-| `Validate workflow contract` | 核心合约校验步骤 |
-| `Start unified stack with Docker Compose` | Nightly 核心部署步骤 |
-| `Run unified stack verification (full)` | Nightly 核心验证步骤 |
+| `Checkout repository` | 核心步骤 |
+| `Install dependencies` | 核心步骤 |
+| `Run acceptance tests` | 核心步骤 |
+| `Run unified stack verification (full)` | 核心步骤 |
+| `Run unit and integration tests` | 核心步骤 |
+| `Set up Python` | 核心步骤 |
+| `Start unified stack with Docker Compose` | 核心步骤 |
+| `Upload drift report` | 核心步骤 |
+| `Upload migration logs` | 核心步骤 |
+| `Upload test results` | 核心步骤 |
+| `Upload validation report` | 核心步骤 |
+| `Upload validation results` | 核心步骤 |
+| `Validate workflow contract` | 核心步骤 |
+<!-- END:FROZEN_STEP_NAMES_TABLE -->
 
 **非冻结 Steps（改名仅产生 WARNING）：**
 - 辅助检查步骤（如 `Check SQL migration files exist`、`Run ruff check (lint)` 等）
@@ -836,31 +846,41 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 以下 Make targets 在 `workflow_contract.v1.json` 的 `make.targets_required` 中定义，CI 校验会验证这些目标的存在：
 
-| Make Target | 用途 | 对应 CI Job |
-|-------------|------|-------------|
-| `ci` | CI 聚合目标 | 本地开发验证 |
-| `lint` | 代码风格检查（ruff check） | lint |
-| `format` | 代码格式化 | - |
-| `format-check` | 代码格式检查（不修改） | lint |
-| `typecheck` | 类型检查（mypy） | lint |
-| `check-env-consistency` | 环境变量一致性检查 | env-var-consistency |
-| `check-logbook-consistency` | Logbook 配置一致性检查 | logbook-consistency |
-| `check-schemas` | JSON Schema 和 fixtures 校验 | schema-validate |
-| `check-migration-sanity` | SQL 迁移文件存在性检查 | migration-sanity |
-| `check-scm-sync-consistency` | SCM Sync 一致性检查 | scm-sync-consistency |
-| `check-gateway-error-reason-usage` | Gateway ErrorReason 使用规范检查 | gateway-error-reason-usage |
-| `check-gateway-public-api-surface` | Gateway Public API 导入表面检查 | gateway-public-api-surface |
-| `check-gateway-di-boundaries` | Gateway DI 边界检查（禁止 deps.db 直接使用） | gateway-di-boundaries |
-| `check-gateway-import-surface` | Gateway Import Surface 检查（懒加载策略） | gateway-import-surface |
-| `check-gateway-correlation-id-single-source` | Gateway correlation_id 单一来源检查 | gateway-correlation-id-single-source |
-| `check-iteration-docs` | 迭代文档规范检查（.iteration/ 链接禁止 + SUPERSEDED 一致性） | iteration-docs-check |
-| `check-ci-test-isolation` | CI 测试隔离检查（sys.path 污染和顶层 CI 模块导入） | ci-test-isolation |
-| `iteration-audit` | 迭代文档审计（详细报告生成） | iteration-audit (nightly) |
-| `validate-workflows-strict` | Workflow 合约校验（严格模式） | workflow-contract |
-| `check-workflow-contract-docs-sync` | Workflow 合约与文档同步检查 | workflow-contract |
-| `check-workflow-contract-version-policy` | Workflow 合约版本策略检查（关键文件变更时强制版本更新） | workflow-contract |
-| `check-workflow-contract-doc-anchors` | Workflow 合约文档锚点检查（验证错误消息中引用的锚点） | workflow-contract |
-| `check-workflow-contract-internal-consistency` | Workflow 合约内部一致性检查（job_ids/job_names 长度、无重复等） | workflow-contract |
+<!-- BEGIN:MAKE_TARGETS_TABLE -->
+| Make Target | 用途 |
+|-------------|------|
+| `apply-openmemory-grants` | CI 必需目标 |
+| `apply-roles` | CI 必需目标 |
+| `check-ci-test-isolation` | CI 必需目标 |
+| `check-env-consistency` | CI 必需目标 |
+| `check-gateway-correlation-id-single-source` | CI 必需目标 |
+| `check-gateway-di-boundaries` | CI 必需目标 |
+| `check-gateway-error-reason-usage` | CI 必需目标 |
+| `check-gateway-import-surface` | CI 必需目标 |
+| `check-gateway-public-api-surface` | CI 必需目标 |
+| `check-iteration-docs` | CI 必需目标 |
+| `check-logbook-consistency` | CI 必需目标 |
+| `check-migration-sanity` | CI 必需目标 |
+| `check-schemas` | CI 必需目标 |
+| `check-scm-sync-consistency` | CI 必需目标 |
+| `check-workflow-contract-doc-anchors` | CI 必需目标 |
+| `check-workflow-contract-docs-sync` | CI 必需目标 |
+| `check-workflow-contract-internal-consistency` | CI 必需目标 |
+| `check-workflow-contract-version-policy` | CI 必需目标 |
+| `check-workflow-make-targets-consistency` | CI 必需目标 |
+| `ci` | CI 必需目标 |
+| `format` | CI 必需目标 |
+| `format-check` | CI 必需目标 |
+| `iteration-audit` | CI 必需目标 |
+| `lint` | CI 必需目标 |
+| `migrate-ddl` | CI 必需目标 |
+| `migrate-plan` | CI 必需目标 |
+| `typecheck` | CI 必需目标 |
+| `validate-workflows-strict` | CI 必需目标 |
+| `verify-permissions` | CI 必需目标 |
+| `verify-permissions-strict` | CI 必需目标 |
+| `verify-unified` | CI 必需目标 |
+<!-- END:MAKE_TARGETS_TABLE -->
 
 ### 7.2 数据库相关目标
 
@@ -2095,6 +2115,7 @@ class ErrorTypes:
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.22.1 | 2026-02-02 | docs: enable controlled blocks for contract.md/coupling_map.md |
 | v2.22.0 | 2026-02-02 | 新增 ci-test-isolation job 到 CI workflow 合约：CI 测试隔离检查；新增 make.targets_required: 'check-ci-test-isolation' |
 | v2.21.0 | 2026-02-02 | 新增 workflow make targets 一致性检查：workflow-contract job required_steps 添加 'Check workflow make targets consistency'；make.targets_required 添加 'check-workflow-make-targets-consistency' |
 | v2.20.0 | 2026-02-02 | 新增 workflow-contract job required_steps：'Check workflow contract internal consistency'；新增 make.targets_required：'check-workflow-contract-internal-consistency' |

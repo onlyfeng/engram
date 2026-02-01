@@ -60,8 +60,12 @@ class PlaceholderViolation:
             return f"{self.file}:{self.line_number}: 模板占位符未替换: {self.matched_text}"
         elif self.violation_type == "usage_instruction":
             return f"{self.file}:{self.line_number}: 模板使用说明未移除: {self.matched_text}"
-        else:  # missing_heading
+        elif self.violation_type == "missing_heading":
             return f"{self.file}:{self.line_number}: 缺少标准标题: {self.matched_text}"
+        elif self.violation_type == "missing_evidence_link":
+            return f"{self.file}:{self.line_number}: 缺少证据文件链接: {self.matched_text}"
+        else:  # mismatched_evidence_link
+            return f"{self.file}:{self.line_number}: 证据链接编号不匹配: {self.matched_text}"
 
 
 # ============================================================================
@@ -105,10 +109,17 @@ CODE_BLOCK_PATTERN = re.compile(r"^(`{3}|~{3})")
 REGRESSION_REQUIRED_HEADINGS = [
     "## 执行信息",
     "## 最小门禁命令块",
+    "## 验收证据",
 ]
 
 # H2 标题模式
 H2_HEADING_PATTERN = re.compile(r"^##\s+(.+)$")
+
+# 从文件名提取迭代编号的模式
+ITERATION_NUMBER_PATTERN = re.compile(r"iteration_(\d+)_regression\.md$")
+
+# Evidence 链接模式（匹配 evidence/iteration_<N>_evidence.json）
+EVIDENCE_LINK_PATTERN = re.compile(r"evidence/iteration_(\d+)_evidence\.json")
 
 
 # ============================================================================
@@ -283,9 +294,75 @@ def scan_file_for_required_headings(
             )
 
 
+def scan_file_for_evidence_link(file_path: Path) -> Iterator[PlaceholderViolation]:
+    """
+    扫描 regression 文件是否包含正确的 evidence 链接。
+
+    检查规则：
+    1. regression 文件必须包含 evidence/iteration_<N>_evidence.json 的链接
+    2. 链接中的迭代编号 <N> 必须与文件名中的迭代编号匹配
+
+    仅对 regression 文件执行此检查。
+
+    Args:
+        file_path: 要扫描的文件路径
+
+    Yields:
+        PlaceholderViolation 对象
+    """
+    # 仅对 regression 文件检查
+    if "_regression.md" not in file_path.name:
+        return
+
+    # 从文件名提取迭代编号
+    filename_match = ITERATION_NUMBER_PATTERN.search(file_path.name)
+    if not filename_match:
+        return  # 文件名格式不匹配，跳过
+
+    expected_iteration_number = filename_match.group(1)
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, PermissionError) as e:
+        print(f"[WARN] 无法读取文件 {file_path}: {e}", file=sys.stderr)
+        return
+
+    # 查找所有 evidence 链接
+    evidence_links = EVIDENCE_LINK_PATTERN.findall(content)
+
+    if not evidence_links:
+        # 缺少 evidence 链接
+        yield PlaceholderViolation(
+            file=file_path,
+            line_number=0,
+            line_content="",
+            violation_type="missing_evidence_link",
+            matched_text=f"evidence/iteration_{expected_iteration_number}_evidence.json",
+        )
+        return
+
+    # 检查是否有编号匹配的链接
+    has_matching_link = any(num == expected_iteration_number for num in evidence_links)
+
+    if not has_matching_link:
+        # 有链接但编号不匹配
+        found_numbers = sorted(set(evidence_links))
+        yield PlaceholderViolation(
+            file=file_path,
+            line_number=0,
+            line_content="",
+            violation_type="mismatched_evidence_link",
+            matched_text=(
+                f"期望 iteration_{expected_iteration_number}_evidence.json，"
+                f"但找到 iteration_{'、'.join(found_numbers)}_evidence.json"
+            ),
+        )
+
+
 def scan_file(
     file_path: Path,
     check_required_headings: bool = True,
+    check_evidence_link: bool = True,
 ) -> List[PlaceholderViolation]:
     """
     扫描单个文件的所有违规。
@@ -293,6 +370,7 @@ def scan_file(
     Args:
         file_path: 要扫描的文件路径
         check_required_headings: 是否检查必需标题（默认 True）
+        check_evidence_link: 是否检查证据链接（默认 True）
 
     Returns:
         违规列表
@@ -309,6 +387,10 @@ def scan_file(
     if check_required_headings:
         violations.extend(scan_file_for_required_headings(file_path))
 
+    # 检测 evidence 链接（仅 regression 文件）
+    if check_evidence_link:
+        violations.extend(scan_file_for_evidence_link(file_path))
+
     return violations
 
 
@@ -321,6 +403,7 @@ def run_check(
     verbose: bool = False,
     project_root: Optional[Path] = None,
     check_required_headings: bool = True,
+    check_evidence_link: bool = True,
 ) -> tuple[List[PlaceholderViolation], int]:
     """
     执行模板占位符检查。
@@ -329,6 +412,7 @@ def run_check(
         verbose: 是否显示详细输出
         project_root: 项目根目录（None 则自动检测）
         check_required_headings: 是否检查必需标题（默认 True）
+        check_evidence_link: 是否检查证据链接（默认 True）
 
     Returns:
         (违规列表, 总扫描文件数)
@@ -357,6 +441,7 @@ def run_check(
         file_violations = scan_file(
             file_path,
             check_required_headings=check_required_headings,
+            check_evidence_link=check_evidence_link,
         )
         violations.extend(file_violations)
 
@@ -407,11 +492,21 @@ def print_report(
     placeholder_count = sum(1 for v in violations if v.violation_type == "placeholder")
     instruction_count = sum(1 for v in violations if v.violation_type == "usage_instruction")
     heading_count = sum(1 for v in violations if v.violation_type == "missing_heading")
+    missing_evidence_count = sum(
+        1 for v in violations if v.violation_type == "missing_evidence_link"
+    )
+    mismatched_evidence_count = sum(
+        1 for v in violations if v.violation_type == "mismatched_evidence_link"
+    )
     print(f"  - 模板占位符:  {placeholder_count}")
     print(f"  - 使用说明:    {instruction_count}")
     print(f"  - 缺少标题:    {heading_count}")
-    if warn_only_headings and heading_count > 0:
-        print("    (--warn-only 模式: 标准标题检查不阻断)")
+    print(f"  - 缺少证据链接: {missing_evidence_count}")
+    print(f"  - 证据链接不匹配: {mismatched_evidence_count}")
+    if warn_only_headings:
+        warn_only_count = heading_count + missing_evidence_count + mismatched_evidence_count
+        if warn_only_count > 0:
+            print("    (--warn-only 模式: 标准标题和证据链接检查不阻断)")
     print()
 
     if violations:
@@ -431,6 +526,10 @@ def print_report(
             placeholders = [v for v in vlist if v.violation_type == "placeholder"]
             instructions = [v for v in vlist if v.violation_type == "usage_instruction"]
             missing_headings = [v for v in vlist if v.violation_type == "missing_heading"]
+            missing_evidence = [v for v in vlist if v.violation_type == "missing_evidence_link"]
+            mismatched_evidence = [
+                v for v in vlist if v.violation_type == "mismatched_evidence_link"
+            ]
 
             if instructions:
                 print("  模板使用说明（应移除）:")
@@ -452,6 +551,18 @@ def print_report(
                 for v in missing_headings:
                     print(f"    - {v.matched_text}")
 
+            if missing_evidence:
+                mode_indicator = " [WARN]" if warn_only_headings else ""
+                print(f"  缺少证据文件链接{mode_indicator}:")
+                for v in missing_evidence:
+                    print(f"    - 应添加: {v.matched_text}")
+
+            if mismatched_evidence:
+                mode_indicator = " [WARN]" if warn_only_headings else ""
+                print(f"  证据链接编号不匹配{mode_indicator}:")
+                for v in mismatched_evidence:
+                    print(f"    - {v.matched_text}")
+
         print()
         print("-" * 70)
         print()
@@ -470,6 +581,16 @@ def print_report(
         print("     确保 regression 文件包含以下标准标题:")
         for heading in REGRESSION_REQUIRED_HEADINGS:
             print(f"       - {heading}")
+        print()
+        print("  4. 缺少证据文件链接 (regression 文件):")
+        print("     在「## 验收证据」段落添加证据文件链接:")
+        print("     - 格式: [iteration_N_evidence.json](evidence/iteration_N_evidence.json)")
+        print("     - N 必须与文件名中的迭代编号一致")
+        print("     - 使用 record_iteration_evidence.py 生成证据文件")
+        print()
+        print("  5. 证据链接编号不匹配:")
+        print("     检查 evidence/iteration_N_evidence.json 链接中的 N")
+        print("     确保与文件名 iteration_N_regression.md 中的 N 一致")
         print()
         print("  参考模板:")
         print("     - docs/acceptance/_templates/iteration_plan.template.md")
@@ -539,17 +660,24 @@ def main() -> int:
 
     # 计算阻断性违规
     blocking_violations = violations
+    # --warn-only 模式下不阻断的违规类型
+    warn_only_types = {"missing_heading", "missing_evidence_link", "mismatched_evidence_link"}
     if args.warn_only:
-        # --warn-only 模式下，标准标题问题不阻断
-        blocking_violations = [
-            v for v in violations if v.violation_type != "missing_heading"
-        ]
-        heading_warnings = [
-            v for v in violations if v.violation_type == "missing_heading"
-        ]
-        if heading_warnings:
+        # --warn-only 模式下，标准标题和证据链接问题不阻断
+        blocking_violations = [v for v in violations if v.violation_type not in warn_only_types]
+        warn_violations = [v for v in violations if v.violation_type in warn_only_types]
+        if warn_violations:
             print()
-            print(f"[WARN] 标准标题警告: {len(heading_warnings)} 条（不阻断）")
+            heading_count = sum(1 for v in warn_violations if v.violation_type == "missing_heading")
+            evidence_count = sum(
+                1
+                for v in warn_violations
+                if v.violation_type in ("missing_evidence_link", "mismatched_evidence_link")
+            )
+            if heading_count > 0:
+                print(f"[WARN] 标准标题警告: {heading_count} 条（不阻断）")
+            if evidence_count > 0:
+                print(f"[WARN] 证据链接警告: {evidence_count} 条（不阻断）")
 
     if blocking_violations:
         print()

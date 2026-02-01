@@ -264,7 +264,8 @@ class TestLastUpdatedNotUpdated:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        # 动态获取类以确保使用被 mock 后的模块
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         assert result.success is False
@@ -325,7 +326,8 @@ class TestVersionNotInDoc:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        # 动态获取类以确保使用被 mock 后的模块
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         assert result.success is True
@@ -364,7 +366,8 @@ class TestMakefileCIRelatedChange:
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
         monkeypatch.setattr(module, "get_file_diff_content", lambda *args: ci_related_diff)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        # 动态获取类以确保使用被 mock 后的模块
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=["Makefile"])
 
         # 应该触发版本检查，且因为版本未更新而失败
@@ -425,7 +428,8 @@ class TestMakefileCIRelatedChange:
             module, "get_file_diff_content", lambda *args: diff_with_workflow_contract
         )
 
-        checker = WorkflowContractVersionChecker(project_root)
+        # 动态获取类以确保使用被 mock 后的模块
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=["Makefile"])
 
         assert "Makefile" in result.changed_critical_files
@@ -557,7 +561,8 @@ class TestNewFileScenario:
         # 旧文件不存在，返回 None
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: None)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        # 动态获取类以确保使用被 mock 后的模块
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         # 新文件视为已更新
@@ -680,7 +685,8 @@ class TestTriggerReasons:
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
         monkeypatch.setattr(module, "get_file_diff_content", lambda *args: ci_related_diff)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        # 动态获取类以确保使用被 mock 后的模块
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=["Makefile"])
 
         # 验证 Makefile 在 trigger_reasons 中

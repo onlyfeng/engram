@@ -1605,3 +1605,577 @@ class TestErrorTypesCompleteness:
             if not k.startswith("_") and isinstance(v, str)
         }
         assert class_attrs == DOCS_SYNC_ERROR_TYPES
+
+
+# ============================================================================
+# Test: --write 功能（update_document）
+# ============================================================================
+
+
+class TestUpdateDocumentWriteMode:
+    """测试 --write 功能：update_document 函数的文档更新能力"""
+
+    def test_write_updates_block_content_correctly(self) -> None:
+        """--write 后文档块内容应与 renderer 输出一致"""
+        from scripts.ci.render_workflow_contract_docs import update_document
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+        }
+        # 创建带有 markers 但内容过时的文档
+        doc = """# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `old-job` | Old Job |  |
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        # 使用渲染器生成期望的块内容
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_contract_blocks()
+
+        # 只更新 CI_JOB_TABLE 块
+        ci_job_block = {"CI_JOB_TABLE": blocks["CI_JOB_TABLE"]}
+
+        # 执行 update_document（非 dry_run）
+        result = update_document(doc_path, ci_job_block, dry_run=False)
+
+        # 验证更新成功
+        assert result.success is True
+        assert "CI_JOB_TABLE" in result.updated_blocks
+        assert len(result.missing_markers) == 0
+
+        # 验证文件内容已更新
+        updated_content = doc_path.read_text(encoding="utf-8")
+
+        # 提取更新后的块内容
+        actual_content, _, _ = extract_block_from_content(updated_content, "CI_JOB_TABLE")
+
+        # 验证块内容与渲染器输出一致
+        expected_content = blocks["CI_JOB_TABLE"].content
+        assert actual_content is not None
+        assert actual_content.strip() == expected_content.strip()
+
+    def test_write_dry_run_does_not_modify_file(self) -> None:
+        """dry_run=True 时不应修改文件"""
+        from scripts.ci.render_workflow_contract_docs import update_document
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        original_doc = """# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `old-job` | Old Job |  |
+<!-- END:CI_JOB_TABLE -->
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, original_doc)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_contract_blocks()
+
+        # 执行 dry_run
+        result = update_document(doc_path, {"CI_JOB_TABLE": blocks["CI_JOB_TABLE"]}, dry_run=True)
+
+        # 验证有更新（但未写入）
+        assert result.success is True
+        assert "CI_JOB_TABLE" in result.updated_blocks
+
+        # 验证文件内容未改变
+        current_content = doc_path.read_text(encoding="utf-8")
+        assert current_content == original_doc
+
+    def test_write_multiple_blocks_at_once(self) -> None:
+        """同时更新多个块"""
+        from scripts.ci.render_workflow_contract_docs import update_document
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "job_names": ["Test"],
+            },
+            "frozen_job_names": {"allowlist": ["Frozen Job A", "Frozen Job B"]},
+        }
+        doc = """# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Old content |
+<!-- END:CI_JOB_TABLE -->
+
+<!-- BEGIN:FROZEN_JOB_NAMES_TABLE -->
+| Old frozen jobs |
+<!-- END:FROZEN_JOB_NAMES_TABLE -->
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_contract_blocks()
+
+        # 更新两个块
+        blocks_to_update = {
+            "CI_JOB_TABLE": blocks["CI_JOB_TABLE"],
+            "FROZEN_JOB_NAMES_TABLE": blocks["FROZEN_JOB_NAMES_TABLE"],
+        }
+        result = update_document(doc_path, blocks_to_update, dry_run=False)
+
+        # 验证两个块都已更新
+        assert result.success is True
+        assert "CI_JOB_TABLE" in result.updated_blocks
+        assert "FROZEN_JOB_NAMES_TABLE" in result.updated_blocks
+
+        # 验证内容正确
+        updated_content = doc_path.read_text(encoding="utf-8")
+        ci_content, _, _ = extract_block_from_content(updated_content, "CI_JOB_TABLE")
+        frozen_content, _, _ = extract_block_from_content(updated_content, "FROZEN_JOB_NAMES_TABLE")
+
+        assert ci_content is not None
+        assert ci_content.strip() == blocks["CI_JOB_TABLE"].content.strip()
+        assert frozen_content is not None
+        assert frozen_content.strip() == blocks["FROZEN_JOB_NAMES_TABLE"].content.strip()
+
+    def test_write_unchanged_block_not_in_updated_list(self) -> None:
+        """内容未变化的块不应出现在 updated_blocks 列表中"""
+        from scripts.ci.render_workflow_contract_docs import update_document
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+
+        # 使用渲染器先生成正确的内容
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        expected_block = renderer.render_ci_job_table()
+
+        # 创建已经是最新内容的文档
+        doc = f"""# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+{expected_block.content}
+<!-- END:CI_JOB_TABLE -->
+
+## SemVer Policy
+
+版本策略
+"""
+        doc_path = temp_dir / "contract.md"
+        doc_path.write_text(doc, encoding="utf-8")
+
+        # 执行更新
+        result = update_document(doc_path, {"CI_JOB_TABLE": expected_block}, dry_run=False)
+
+        # 验证未变化的块在 unchanged_blocks 中
+        assert result.success is True
+        assert "CI_JOB_TABLE" in result.unchanged_blocks
+        assert "CI_JOB_TABLE" not in result.updated_blocks
+
+
+# ============================================================================
+# Test: 异常路径（Marker 错误场景补充）
+# ============================================================================
+
+
+class TestMarkerErrorScenarios:
+    """测试 marker 错误场景的完整覆盖"""
+
+    def test_missing_begin_marker_only(self) -> None:
+        """当只有 END marker 缺少 BEGIN marker 时，应报 unpaired 错误"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        # 只有 END marker，没有 BEGIN marker
+        doc = """# Workflow Contract
+
+Some content
+
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 应该有 unpaired marker 错误
+        unpaired_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED
+        ]
+        assert len(unpaired_errors) >= 1
+        # 错误应该指出缺少 BEGIN marker
+        assert any("BEGIN" in e.message for e in unpaired_errors)
+
+    def test_duplicate_end_marker_error(self) -> None:
+        """当存在重复的 END marker 时，应报错"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        doc = """# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name |
+|--------|----------|
+<!-- END:CI_JOB_TABLE -->
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 应该有重复 marker 错误
+        dup_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE
+        ]
+        assert len(dup_errors) >= 1
+
+    def test_markers_in_wrong_order_error(self) -> None:
+        """当 END marker 在 BEGIN marker 之前时，应报错"""
+        from scripts.ci.render_workflow_contract_docs import replace_block_in_content
+
+        content = """# Workflow Contract
+
+<!-- END:TEST_BLOCK -->
+Some content
+<!-- BEGIN:TEST_BLOCK -->
+"""
+        result, error = replace_block_in_content(content, "TEST_BLOCK", "new content")
+
+        # 应该返回错误
+        assert result is None
+        assert error is not None
+        assert "before BEGIN" in error
+
+    def test_update_document_missing_markers_returns_error(self) -> None:
+        """update_document 在缺少 markers 时应返回错误"""
+        from scripts.ci.render_workflow_contract_docs import (
+            RenderedBlock,
+            update_document,
+        )
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": [], "job_names": []},
+        }
+        # 文档中没有任何 markers
+        doc = """# Workflow Contract
+
+No markers here.
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        # 尝试更新一个不存在 markers 的块
+        fake_block = RenderedBlock(
+            name="NONEXISTENT_BLOCK",
+            content="Some content",
+            begin_marker="<!-- BEGIN:NONEXISTENT_BLOCK -->",
+            end_marker="<!-- END:NONEXISTENT_BLOCK -->",
+        )
+
+        result = update_document(doc_path, {"NONEXISTENT_BLOCK": fake_block}, dry_run=False)
+
+        # 应该失败，并报告缺少 markers
+        assert result.success is False
+        assert "NONEXISTENT_BLOCK" in result.missing_markers
+
+    def test_extract_block_returns_special_codes_for_duplicates(self) -> None:
+        """extract_block_from_content 对重复 markers 应返回特殊错误码"""
+        # 重复 BEGIN marker
+        content_dup_begin = """
+<!-- BEGIN:TEST -->
+content
+<!-- BEGIN:TEST -->
+more content
+<!-- END:TEST -->
+"""
+        block, begin, end = extract_block_from_content(content_dup_begin, "TEST")
+        assert block is None
+        assert begin == -2  # 特殊码：重复 BEGIN
+
+        # 重复 END marker
+        content_dup_end = """
+<!-- BEGIN:TEST -->
+content
+<!-- END:TEST -->
+<!-- END:TEST -->
+"""
+        block, begin, end = extract_block_from_content(content_dup_end, "TEST")
+        assert block is None
+        assert begin == -3  # 特殊码：重复 END
+
+
+# ============================================================================
+# Test: 同时跑两个 Checker 确认 marker 模式通过
+# ============================================================================
+
+
+class TestBothCheckersMarkerModePass:
+    """测试同时跑 WorkflowContractDocsSyncChecker 和 WorkflowContractCouplingMapSyncChecker"""
+
+    def test_both_checkers_pass_with_correct_markers(self) -> None:
+        """当文档包含正确的 markers 和内容时，两个 Checker 都应通过"""
+        from scripts.ci.check_workflow_contract_coupling_map_sync import (
+            WorkflowContractCouplingMapSyncChecker,
+        )
+
+        # 创建统一的 contract
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "frozen_step_text": {"allowlist": ["Run tests"]},
+            "make": {"targets_required": ["ci", "lint"]},
+        }
+
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        # 使用渲染器生成正确的块内容
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        contract_blocks = renderer.render_contract_blocks()
+        coupling_blocks = renderer.render_coupling_map_blocks()
+
+        # 创建 contract.md（包含 markers）
+        contract_doc = f"""# Workflow Contract
+
+Version: 1.0.0
+
+### 2.1 CI Workflow (`ci.yml`)
+
+<!-- BEGIN:CI_JOB_TABLE -->
+{contract_blocks["CI_JOB_TABLE"].content}
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+| Step Name |
+|-----------|
+| `Run tests` |
+
+### Frozen Job Names
+
+| Job Name |
+|----------|
+| `Test Job` |
+
+## Make Targets
+
+targets_required:
+- ci
+- lint
+
+## SemVer Policy
+
+版本策略说明
+"""
+        contract_doc_path = temp_dir / "contract.md"
+        contract_doc_path.write_text(contract_doc, encoding="utf-8")
+
+        # 创建 coupling_map.md（包含 markers）
+        coupling_map_doc = f"""# Coupling Map
+
+## CI Jobs
+
+<!-- BEGIN:CI_JOBS_LIST -->
+{coupling_blocks["CI_JOBS_LIST"].content}
+<!-- END:CI_JOBS_LIST -->
+
+## Make Targets
+
+| Target | 说明 |
+|--------|------|
+| `ci` | CI target |
+| `lint` | Lint target |
+"""
+        coupling_map_path = temp_dir / "coupling_map.md"
+        coupling_map_path.write_text(coupling_map_doc, encoding="utf-8")
+
+        # 运行 WorkflowContractDocsSyncChecker
+        docs_checker = WorkflowContractDocsSyncChecker(contract_path, contract_doc_path)
+        docs_result = docs_checker.check()
+
+        # 运行 WorkflowContractCouplingMapSyncChecker
+        coupling_checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        coupling_result = coupling_checker.check()
+
+        # 验证两个 checker 都使用了 block mode
+        assert docs_result.block_mode_used is True
+        assert coupling_result.block_mode_used is True
+
+        # 验证两个 checker 都通过（无 block 相关错误）
+        docs_block_errors = [e for e in docs_result.errors if e.category == "block"]
+        coupling_block_errors = [e for e in coupling_result.errors if e.category == "block"]
+
+        assert len(docs_block_errors) == 0, f"Docs checker block errors: {docs_block_errors}"
+        assert len(coupling_block_errors) == 0, (
+            f"Coupling checker block errors: {coupling_block_errors}"
+        )
+
+        # 验证检查了预期的块
+        assert "CI_JOB_TABLE" in docs_result.checked_blocks
+        assert "CI_JOBS_LIST" in coupling_result.checked_blocks
+
+    def test_both_checkers_detect_content_mismatch(self) -> None:
+        """当块内容不匹配时，两个 Checker 都应检测到"""
+        from scripts.ci.check_workflow_contract_coupling_map_sync import (
+            CouplingMapSyncErrorTypes,
+            WorkflowContractCouplingMapSyncChecker,
+        )
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+        }
+
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        # 创建包含错误内容的 contract.md
+        contract_doc = """# Workflow Contract
+
+Version: 1.0.0
+
+### 2.1 CI Workflow (`ci.yml`)
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `wrong` | Wrong Job |  |
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略说明
+"""
+        contract_doc_path = temp_dir / "contract.md"
+        contract_doc_path.write_text(contract_doc, encoding="utf-8")
+
+        # 创建包含错误内容的 coupling_map.md
+        coupling_map_doc = """# Coupling Map
+
+## CI Jobs
+
+<!-- BEGIN:CI_JOBS_LIST -->
+| Job ID | Job Name |
+|--------|----------|
+| `wrong` | Wrong Job |
+<!-- END:CI_JOBS_LIST -->
+"""
+        coupling_map_path = temp_dir / "coupling_map.md"
+        coupling_map_path.write_text(coupling_map_doc, encoding="utf-8")
+
+        # 运行两个 checker
+        docs_checker = WorkflowContractDocsSyncChecker(contract_path, contract_doc_path)
+        docs_result = docs_checker.check()
+
+        coupling_checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        coupling_result = coupling_checker.check()
+
+        # 验证两个 checker 都检测到 content mismatch
+        docs_mismatch = [
+            e
+            for e in docs_result.errors
+            if e.error_type == DocsSyncErrorTypes.BLOCK_CONTENT_MISMATCH
+        ]
+        coupling_mismatch = [
+            e
+            for e in coupling_result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_CONTENT_MISMATCH
+        ]
+
+        assert len(docs_mismatch) >= 1, "Docs checker should detect content mismatch"
+        assert len(coupling_mismatch) >= 1, "Coupling checker should detect content mismatch"
+
+        # 验证都提供了 diff
+        assert docs_mismatch[0].diff is not None
+        assert coupling_mismatch[0].diff is not None

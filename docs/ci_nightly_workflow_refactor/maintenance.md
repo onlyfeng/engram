@@ -391,6 +391,174 @@ some-conditional-job:
 - 任何 workflow 结构性变更都需同步更新
 - 版本控制章节记录变更历史
 
+### 2.3 受控块规范
+
+本节定义由 `scripts/ci/render_workflow_contract_docs.py` 自动渲染的受控块（Controlled Blocks）的覆盖范围、手写边界和维护规则。
+
+#### 2.3.1 受控块设计原则
+
+**受控块仅覆盖列表/表格型内容**：
+- Job ID/Name 对照表
+- Frozen allowlist 表
+- Make targets 表
+- Labels 表
+
+**以下内容保留手写，不纳入受控块**：
+- 策略解释（如为什么选择 `--strict` 模式）
+- 示例代码（如 ci.yml 片段、JSON 配置示例）
+- Runbook 和操作指南
+- 叙述性章节和注意事项
+
+#### 2.3.2 受控块名称与落点映射
+
+**contract.md 受控块**（来源：`ContractBlockNames`）：
+
+| Block Name | 落点章节 | 渲染内容 |
+|------------|----------|----------|
+| `CI_JOB_TABLE` | 第 2.1 章 CI Workflow Job 对照表 | CI job_ids/job_names/说明 对照表 |
+| `NIGHTLY_JOB_TABLE` | 第 2.2 章 Nightly Workflow Job 对照表 | Nightly job_ids/job_names/说明 对照表 |
+| `LABELS_TABLE` | 第 3 章 PR Label 列表与语义 | labels/workflow/语义 对照表 |
+| `FROZEN_JOB_NAMES_TABLE` | 第 5.1 章 Frozen Job Names | 冻结 Job Name / 原因 对照表 |
+| `FROZEN_STEP_NAMES_TABLE` | 第 5.2 章 Frozen Step Names | 冻结 Step Name / 冻结原因 对照表 |
+| `MAKE_TARGETS_TABLE` | 第 7 章 Make Targets 表 | Make Target / 用途 对照表 |
+
+**coupling_map.md 受控块**（来源：`CouplingMapBlockNames`）：
+
+| Block Name | 落点章节 | 渲染内容 |
+|------------|----------|----------|
+| `CI_JOBS_LIST` | 第 1.5 章其他 CI Jobs 或顶部摘要 | Job ID / Job Name 简表 |
+| `NIGHTLY_JOBS_LIST` | 第 2 章 Nightly Workflow Jobs | Job ID / Job Name 简表 |
+| `MAKE_TARGETS_LIST` | 第 3 章 Makefile Targets 清单 | Target / 说明 简表 |
+
+#### 2.3.3 受控块 Marker 格式
+
+受控块使用 HTML 注释作为 markers，格式如下：
+
+```html
+<!-- BEGIN:BLOCK_NAME -->
+... 渲染内容（由脚本自动生成）...
+<!-- END:BLOCK_NAME -->
+```
+
+**示例**（contract.md 第 2.1 章）：
+
+```markdown
+### 2.1 CI Workflow (`ci.yml`)
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `test` | Test (Python ${{ matrix.python-version }}) | 10 个必需步骤 |
+...
+<!-- END:CI_JOB_TABLE -->
+```
+
+#### 2.3.4 受控块维护门禁
+
+**任何涉及受控块的改动**，必须运行以下验证命令：
+
+```bash
+# 必需验证（受控块同步检查）
+make validate-workflows-strict              # 合约校验
+make check-workflow-contract-docs-sync      # 文档同步检查
+make check-workflow-contract-coupling-map-sync  # Coupling Map 同步检查
+make check-workflow-contract-doc-anchors    # 文档锚点检查
+make check-workflow-contract-version-policy # 版本策略检查
+```
+
+**一键验证命令**：
+
+```bash
+make validate-workflows-strict && \
+make check-workflow-contract-docs-sync && \
+make check-workflow-contract-coupling-map-sync && \
+make check-workflow-contract-doc-anchors && \
+make check-workflow-contract-version-policy
+```
+
+**或使用完整 CI 检查**：
+
+```bash
+make ci
+```
+
+#### 2.3.5 受控块渲染工具使用
+
+```bash
+# 渲染 contract.md 所有受控块
+python scripts/ci/render_workflow_contract_docs.py --target contract
+
+# 渲染 coupling_map.md 所有受控块
+python scripts/ci/render_workflow_contract_docs.py --target coupling_map
+
+# 渲染指定块（如 CI_JOB_TABLE）
+python scripts/ci/render_workflow_contract_docs.py --block CI_JOB_TABLE
+
+# 输出包含 markers 的完整块
+python scripts/ci/render_workflow_contract_docs.py --block CI_JOB_TABLE --with-markers
+
+# JSON 格式输出（用于脚本处理）
+python scripts/ci/render_workflow_contract_docs.py --json
+```
+
+#### 2.3.6 如何更新受控区块（SOP）
+
+当 `workflow_contract.v1.json` 中的数据发生变更（如新增 job、修改 frozen allowlist）时，受控区块会自动与 SSOT 产生差异。按以下步骤更新：
+
+**Step 1: 检测当前差异**
+
+```bash
+# 检查 contract.md 受控块同步状态
+PYTHONPATH="." python scripts/ci/check_workflow_contract_docs_sync.py --verbose
+
+# 检查 coupling_map.md 受控块同步状态
+PYTHONPATH="." python scripts/ci/check_workflow_contract_coupling_map_sync.py --verbose
+```
+
+如果输出中显示 `BLOCK_CONTENT_MISMATCH` 错误，表示需要更新文档中的受控块。
+
+**Step 2: 生成新的块内容**
+
+```bash
+# 查看特定块的期望内容
+PYTHONPATH="." python scripts/ci/render_workflow_contract_docs.py --block CI_JOB_TABLE
+
+# 查看带 markers 的完整块（可直接复制粘贴）
+PYTHONPATH="." python scripts/ci/render_workflow_contract_docs.py --block CI_JOB_TABLE --with-markers
+```
+
+**Step 3: 更新文档**
+
+方式一（推荐）：复制粘贴
+1. 运行渲染器获取期望内容
+2. 在文档中找到对应的 `<!-- BEGIN:BLOCK_NAME -->` 和 `<!-- END:BLOCK_NAME -->` 区域
+3. 替换中间的内容
+
+方式二：手动对照修改
+1. 根据错误输出的 diff 信息，手动修改差异行
+
+**Step 4: 验证更新**
+
+```bash
+# 必须全部通过才算完成
+make check-workflow-contract-docs-sync
+make check-workflow-contract-coupling-map-sync
+
+# 运行受控块测试
+pytest tests/ci/test_workflow_contract_docs_generated_blocks.py -v
+```
+
+**常见场景快速指引**：
+
+| 变更类型 | 受影响的块 | 需要更新的文档 |
+|----------|------------|----------------|
+| 新增 CI job | `CI_JOB_TABLE`, `CI_JOBS_LIST` | contract.md, coupling_map.md |
+| 新增 Nightly job | `NIGHTLY_JOB_TABLE`, `NIGHTLY_JOBS_LIST` | contract.md, coupling_map.md |
+| 修改 frozen_job_names | `FROZEN_JOB_NAMES_TABLE` | contract.md |
+| 修改 frozen_step_text | `FROZEN_STEP_NAMES_TABLE` | contract.md |
+| 新增 make.targets_required | `MAKE_TARGETS_TABLE`, `MAKE_TARGETS_LIST` | contract.md, coupling_map.md |
+| 新增/修改 labels | `LABELS_TABLE` | contract.md |
+
 ---
 
 ## 3. 验证流程
@@ -1308,6 +1476,8 @@ make check-workflow-contract-version-policy
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.8 | 2026-02-02 | 新增 2.3.6 节"如何更新受控区块（SOP）"：定义受控块更新的完整步骤（检测差异→生成内容→更新文档→验证）、常见场景快速指引表 |
+| v2.7 | 2026-02-02 | 新增 2.3 节"受控块规范"：定义受控块覆盖范围（列表/表格）、手写边界（策略/示例/runbook）、Block Name 与落点映射表、Marker 格式、维护门禁命令 |
 | v2.6 | 2026-02-02 | 新增第 9 章"常见场景最小演练"：场景化操作速查表、辅助工具使用指南、常见失败与修复路径速查、场景演练示例 |
 | v2.5 | 2026-02-02 | 新增 Coupling Map 同步检查：1.2/1.3/1.7 节 checklist 添加 coupling_map.md 同步要求；0.2 节添加 `make check-workflow-contract-coupling-map-sync` 验证命令 |
 | v2.4 | 2026-02-02 | 新增 7.6 节"智能更新建议工具"：介绍 `suggest_workflow_contract_updates.py` 脚本的使用方法、输出格式、建议优先级 |

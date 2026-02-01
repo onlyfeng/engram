@@ -1,8 +1,9 @@
 {
   "$schema": "workflow_contract.v1.schema.json",
-  "version": "2.22.0",
+  "version": "2.22.1",
   "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
   "last_updated": "2026-02-02",
+  "_changelog_v2.22.1": "docs: enable controlled blocks for contract.md/coupling_map.md",
   "_changelog_v2.22.0": "新增 ci-test-isolation job 到 CI workflow 合约：CI 测试隔离检查；新增 make.targets_required: 'check-ci-test-isolation'；修复 MAKE_TARGET_IGNORE_LIST 添加 'targets'（echo 中的 false positive）",
   "_changelog_v2.21.0": "新增 workflow make targets 一致性检查：workflow-contract job required_steps 添加 'Check workflow make targets consistency'；make.targets_required 添加 'check-workflow-make-targets-consistency'",
   "_changelog_v2.20.0": "新增 workflow-contract job required_steps：'Check workflow contract internal consistency'；新增 make.targets_required：'check-workflow-contract-internal-consistency'",

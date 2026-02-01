@@ -22,6 +22,12 @@ Workflow Contract 受控块渲染器
 
     # 渲染指定块
     python scripts/ci/render_workflow_contract_docs.py --block CI_JOB_TABLE
+
+    # 更新文档中的受控块（就地写入）
+    python scripts/ci/render_workflow_contract_docs.py --write --target contract
+
+    # 更新所有文档
+    python scripts/ci/render_workflow_contract_docs.py --write --target all
 """
 
 from __future__ import annotations
@@ -40,6 +46,10 @@ from scripts.ci.workflow_contract_common import discover_workflow_keys
 # ============================================================================
 
 DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
+
+# 文档路径
+DEFAULT_CONTRACT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
+DEFAULT_COUPLING_MAP_DOC_PATH = "docs/ci_nightly_workflow_refactor/coupling_map.md"
 
 # Marker 格式
 MARKER_BEGIN_FMT = "<!-- BEGIN:{block_name} -->"
@@ -489,6 +499,206 @@ def find_all_markers(content: str) -> list[tuple[str, str, int]]:
 
 
 # ============================================================================
+# Document Update Utilities
+# ============================================================================
+
+
+@dataclass
+class UpdateResult:
+    """文档更新结果"""
+
+    doc_path: str
+    updated_blocks: list[str]
+    missing_markers: list[str]
+    unchanged_blocks: list[str]
+    success: bool
+    error_message: str | None = None
+
+
+def replace_block_in_content(
+    content: str,
+    block_name: str,
+    new_content: str,
+) -> tuple[str | None, str | None]:
+    """替换文档中指定块的内容
+
+    Args:
+        content: 原文档内容
+        block_name: 块名称
+        new_content: 新的块内容（不包含 markers）
+
+    Returns:
+        (更新后的内容, 错误信息)
+        如果成功，错误信息为 None
+        如果失败，更新后的内容为 None
+    """
+    begin_marker = MARKER_BEGIN_FMT.format(block_name=block_name)
+    end_marker = MARKER_END_FMT.format(block_name=block_name)
+
+    lines = content.split("\n")
+    begin_line = -1
+    end_line = -1
+
+    for i, line in enumerate(lines):
+        if begin_marker in line:
+            if begin_line != -1:
+                return None, f"Duplicate BEGIN marker for block '{block_name}'"
+            begin_line = i
+        elif end_marker in line:
+            if end_line != -1:
+                return None, f"Duplicate END marker for block '{block_name}'"
+            end_line = i
+
+    if begin_line == -1 and end_line == -1:
+        return None, f"Missing markers for block '{block_name}'"
+
+    if begin_line == -1:
+        return None, f"Missing BEGIN marker for block '{block_name}'"
+
+    if end_line == -1:
+        return None, f"Missing END marker for block '{block_name}'"
+
+    if end_line <= begin_line:
+        return None, f"END marker appears before BEGIN marker for block '{block_name}'"
+
+    # 构建新内容：保留 markers 所在行，替换中间内容
+    new_lines = (
+        lines[: begin_line + 1]  # 包含 BEGIN marker
+        + [new_content]  # 新内容
+        + lines[end_line:]  # 包含 END marker 及之后
+    )
+
+    return "\n".join(new_lines), None
+
+
+def update_document(
+    doc_path: Path,
+    blocks: dict[str, RenderedBlock],
+    dry_run: bool = False,
+) -> UpdateResult:
+    """更新文档中的受控块
+
+    Args:
+        doc_path: 文档路径
+        blocks: 要更新的块 {block_name: RenderedBlock}
+        dry_run: 是否只检查不写入
+
+    Returns:
+        UpdateResult
+    """
+    if not doc_path.exists():
+        return UpdateResult(
+            doc_path=str(doc_path),
+            updated_blocks=[],
+            missing_markers=[],
+            unchanged_blocks=[],
+            success=False,
+            error_message=f"Document not found: {doc_path}",
+        )
+
+    try:
+        content = doc_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return UpdateResult(
+            doc_path=str(doc_path),
+            updated_blocks=[],
+            missing_markers=[],
+            unchanged_blocks=[],
+            success=False,
+            error_message=f"Failed to read document: {e}",
+        )
+
+    updated_blocks: list[str] = []
+    missing_markers: list[str] = []
+    unchanged_blocks: list[str] = []
+    current_content = content
+
+    for block_name, rendered_block in blocks.items():
+        # 检查当前块内容
+        existing_content, begin_line, end_line = extract_block_from_content(
+            current_content, block_name
+        )
+
+        if existing_content is None:
+            if begin_line == -1:
+                # markers 不存在
+                missing_markers.append(block_name)
+                continue
+            else:
+                # 其他错误（重复 marker 等）
+                missing_markers.append(block_name)
+                continue
+
+        # 比较内容（规范化换行符后比较）
+        existing_normalized = existing_content.strip()
+        new_normalized = rendered_block.content.strip()
+
+        if existing_normalized == new_normalized:
+            unchanged_blocks.append(block_name)
+            continue
+
+        # 执行替换
+        new_content, error = replace_block_in_content(
+            current_content,
+            block_name,
+            rendered_block.content,
+        )
+
+        if error:
+            missing_markers.append(block_name)
+            continue
+
+        current_content = new_content  # type: ignore
+        updated_blocks.append(block_name)
+
+    # 如果有缺失的 markers，返回失败
+    if missing_markers:
+        return UpdateResult(
+            doc_path=str(doc_path),
+            updated_blocks=updated_blocks,
+            missing_markers=missing_markers,
+            unchanged_blocks=unchanged_blocks,
+            success=False,
+            error_message=f"Missing markers for blocks: {', '.join(missing_markers)}",
+        )
+
+    # 写入文件（如果不是 dry_run 且有更新）
+    if updated_blocks and not dry_run:
+        try:
+            doc_path.write_text(current_content, encoding="utf-8")
+        except Exception as e:
+            return UpdateResult(
+                doc_path=str(doc_path),
+                updated_blocks=[],
+                missing_markers=[],
+                unchanged_blocks=unchanged_blocks,
+                success=False,
+                error_message=f"Failed to write document: {e}",
+            )
+
+    return UpdateResult(
+        doc_path=str(doc_path),
+        updated_blocks=updated_blocks,
+        missing_markers=missing_markers,
+        unchanged_blocks=unchanged_blocks,
+        success=True,
+    )
+
+
+def generate_marker_insertion_hint(block_name: str) -> str:
+    """生成 marker 插入提示"""
+    begin_marker = MARKER_BEGIN_FMT.format(block_name=block_name)
+    end_marker = MARKER_END_FMT.format(block_name=block_name)
+    return f"""
+To add markers for block '{block_name}', insert the following at the appropriate location in the document:
+
+{begin_marker}
+<!-- Content will be auto-generated here -->
+{end_marker}
+"""
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -527,6 +737,16 @@ def main() -> int:
         help="输出包含 markers 的完整块",
     )
     parser.add_argument(
+        "--write",
+        action="store_true",
+        help="更新文档中的受控块（就地写入）",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="与 --write 配合使用，只检查不写入",
+    )
+    parser.add_argument(
         "--project-root",
         type=str,
         default=None,
@@ -550,7 +770,11 @@ def main() -> int:
     if not renderer.load_contract():
         return 2
 
-    # 渲染块
+    # --write 模式：更新文档
+    if args.write:
+        return _handle_write_mode(args, project_root, renderer)
+
+    # 渲染块（非 --write 模式）
     if args.block:
         block = renderer.render_block(args.block)
         if block is None:
@@ -634,6 +858,88 @@ def main() -> int:
                 print()
 
     return 0
+
+
+def _handle_write_mode(
+    args: argparse.Namespace,
+    project_root: Path,
+    renderer: WorkflowContractDocsRenderer,
+) -> int:
+    """处理 --write 模式
+
+    Args:
+        args: 命令行参数
+        project_root: 项目根目录
+        renderer: 渲染器实例
+
+    Returns:
+        退出码
+    """
+    # 确定要更新的文档和块
+    docs_to_update: list[tuple[Path, dict[str, RenderedBlock]]] = []
+
+    if args.target in ("contract", "all"):
+        contract_doc_path = project_root / DEFAULT_CONTRACT_DOC_PATH
+        contract_blocks = renderer.render_contract_blocks()
+        docs_to_update.append((contract_doc_path, contract_blocks))
+
+    if args.target in ("coupling_map", "all"):
+        coupling_map_doc_path = project_root / DEFAULT_COUPLING_MAP_DOC_PATH
+        coupling_map_blocks = renderer.render_coupling_map_blocks()
+        docs_to_update.append((coupling_map_doc_path, coupling_map_blocks))
+
+    # 执行更新
+    all_results: list[UpdateResult] = []
+    has_error = False
+
+    for doc_path, blocks in docs_to_update:
+        result = update_document(doc_path, blocks, dry_run=args.dry_run)
+        all_results.append(result)
+
+        if not result.success:
+            has_error = True
+
+    # 输出结果
+    if args.json:
+        output = {
+            "success": not has_error,
+            "dry_run": args.dry_run,
+            "results": [
+                {
+                    "doc_path": r.doc_path,
+                    "success": r.success,
+                    "updated_blocks": r.updated_blocks,
+                    "unchanged_blocks": r.unchanged_blocks,
+                    "missing_markers": r.missing_markers,
+                    "error_message": r.error_message,
+                }
+                for r in all_results
+            ],
+        }
+        print(json.dumps(output, indent=2, ensure_ascii=False))
+    else:
+        mode_str = "(dry-run)" if args.dry_run else ""
+        for result in all_results:
+            print(f"\n{'='*60}")
+            print(f"Document: {result.doc_path} {mode_str}")
+            print(f"{'='*60}")
+
+            if result.success:
+                if result.updated_blocks:
+                    print(f"Updated blocks: {', '.join(result.updated_blocks)}")
+                if result.unchanged_blocks:
+                    print(f"Unchanged blocks: {', '.join(result.unchanged_blocks)}")
+                if not result.updated_blocks and not result.unchanged_blocks:
+                    print("No blocks found to update.")
+            else:
+                print(f"ERROR: {result.error_message}", file=sys.stderr)
+                if result.missing_markers:
+                    print("\nMissing markers for the following blocks:", file=sys.stderr)
+                    for block_name in result.missing_markers:
+                        hint = generate_marker_insertion_hint(block_name)
+                        print(hint, file=sys.stderr)
+
+    return 1 if has_error else 0
 
 
 if __name__ == "__main__":

@@ -4,6 +4,87 @@
 
 ---
 
+## 0. 摘要（受控）
+
+> 本节内容由 `workflow_contract.v1.json` 自动渲染，请勿手动修改。
+> 更新命令：`python -m scripts.ci.render_workflow_contract_docs --target coupling_map --with-markers`
+
+### CI Workflow Jobs 清单
+
+<!-- BEGIN:CI_JOBS_LIST -->
+| Job ID | Job Name |
+|--------|----------|
+| `test` | Test (Python ${{ matrix.python-version }}) |
+| `lint` | Lint |
+| `no-iteration-tracked` | No .iteration/ Tracked Files |
+| `env-var-consistency` | Environment Variable Consistency |
+| `schema-validate` | Schema Validation |
+| `logbook-consistency` | Logbook Consistency Check |
+| `migration-sanity` | Migration Sanity Check |
+| `sql-safety` | SQL Migration Safety Check |
+| `gateway-di-boundaries` | Gateway DI Boundaries Check |
+| `scm-sync-consistency` | SCM Sync Consistency Check |
+| `gateway-error-reason-usage` | Gateway ErrorReason Usage Check |
+| `gateway-import-surface` | Gateway Import Surface Check |
+| `gateway-public-api-surface` | Gateway Public API Import Surface Check |
+| `gateway-correlation-id-single-source` | Gateway correlation_id Single Source Check |
+| `mcp-error-contract` | MCP Error Contract Check |
+| `iteration-docs-check` | Iteration Docs Check |
+| `ci-test-isolation` | CI Test Isolation Check |
+| `iteration-tools-test` | Iteration Tools Test |
+| `workflow-contract` | Workflow Contract Validation |
+<!-- END:CI_JOBS_LIST -->
+
+### Nightly Workflow Jobs 清单
+
+<!-- BEGIN:NIGHTLY_JOBS_LIST -->
+| Job ID | Job Name |
+|--------|----------|
+| `unified-stack-full` | Unified Stack Full Verification |
+| `iteration-audit` | Iteration Docs Audit |
+| `notify-results` | Notify Results |
+<!-- END:NIGHTLY_JOBS_LIST -->
+
+### 合约 Make Targets 清单
+
+<!-- BEGIN:MAKE_TARGETS_LIST -->
+| Target | 说明 |
+|--------|------|
+| `apply-openmemory-grants` | CI/workflow 必需 |
+| `apply-roles` | CI/workflow 必需 |
+| `check-ci-test-isolation` | CI/workflow 必需 |
+| `check-env-consistency` | CI/workflow 必需 |
+| `check-gateway-correlation-id-single-source` | CI/workflow 必需 |
+| `check-gateway-di-boundaries` | CI/workflow 必需 |
+| `check-gateway-error-reason-usage` | CI/workflow 必需 |
+| `check-gateway-import-surface` | CI/workflow 必需 |
+| `check-gateway-public-api-surface` | CI/workflow 必需 |
+| `check-iteration-docs` | CI/workflow 必需 |
+| `check-logbook-consistency` | CI/workflow 必需 |
+| `check-migration-sanity` | CI/workflow 必需 |
+| `check-schemas` | CI/workflow 必需 |
+| `check-scm-sync-consistency` | CI/workflow 必需 |
+| `check-workflow-contract-doc-anchors` | CI/workflow 必需 |
+| `check-workflow-contract-docs-sync` | CI/workflow 必需 |
+| `check-workflow-contract-internal-consistency` | CI/workflow 必需 |
+| `check-workflow-contract-version-policy` | CI/workflow 必需 |
+| `check-workflow-make-targets-consistency` | CI/workflow 必需 |
+| `ci` | CI/workflow 必需 |
+| `format` | CI/workflow 必需 |
+| `format-check` | CI/workflow 必需 |
+| `iteration-audit` | CI/workflow 必需 |
+| `lint` | CI/workflow 必需 |
+| `migrate-ddl` | CI/workflow 必需 |
+| `migrate-plan` | CI/workflow 必需 |
+| `typecheck` | CI/workflow 必需 |
+| `validate-workflows-strict` | CI/workflow 必需 |
+| `verify-permissions` | CI/workflow 必需 |
+| `verify-permissions-strict` | CI/workflow 必需 |
+| `verify-unified` | CI/workflow 必需 |
+<!-- END:MAKE_TARGETS_LIST -->
+
+---
+
 ## 1. CI Workflow Jobs 与产物映射
 
 ### 1.1 test job

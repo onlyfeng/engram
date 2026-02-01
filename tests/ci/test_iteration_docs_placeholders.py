@@ -19,12 +19,15 @@ from pathlib import Path
 import pytest
 
 from scripts.ci.check_iteration_docs_placeholders import (
+    EVIDENCE_LINK_PATTERN,
+    ITERATION_NUMBER_PATTERN,
     PLACEHOLDER_PATTERN,
     REGRESSION_REQUIRED_HEADINGS,
     PlaceholderViolation,
     get_iteration_files,
     run_check,
     scan_file,
+    scan_file_for_evidence_link,
     scan_file_for_placeholders,
     scan_file_for_required_headings,
     scan_file_for_usage_instructions,
@@ -573,11 +576,12 @@ class TestScanFileForRequiredHeadings:
 
         violations = list(scan_file_for_required_headings(filepath))
 
-        # 应该检测到缺少 "## 执行信息" 和 "## 最小门禁命令块"
-        assert len(violations) == 2
+        # 应该检测到缺少 "## 执行信息"、"## 最小门禁命令块" 和 "## 验收证据"
+        assert len(violations) == 3
         matched_texts = [v.matched_text for v in violations]
         assert "## 执行信息" in matched_texts
         assert "## 最小门禁命令块" in matched_texts
+        assert "## 验收证据" in matched_texts
 
     def test_no_violations_for_complete_regression(self, temp_project: Path):
         """测试完整的 regression 文件无违规"""
@@ -592,6 +596,10 @@ class TestScanFileForRequiredHeadings:
 ## 最小门禁命令块
 
 命令清单...
+
+## 验收证据
+
+- 证据文件链接
 
 ## 执行结果总览
 
@@ -625,6 +633,10 @@ class TestScanFileForRequiredHeadings:
 ## 执行信息
 
 执行信息内容...
+
+## 验收证据
+
+证据内容...
 
 ## 其他内容
 
@@ -699,8 +711,8 @@ class TestEdgeCases:
         filepath = temp_project / "docs" / "acceptance" / "iteration_51_regression.md"
         filepath.write_text(content, encoding="utf-8")
 
-        # 禁用标题检查，仅测试占位符和代码块跳过
-        violations = scan_file(filepath, check_required_headings=False)
+        # 禁用标题检查和 evidence 检查，仅测试占位符和代码块跳过
+        violations = scan_file(filepath, check_required_headings=False, check_evidence_link=False)
         # 代码块内的内容不应被检测
         assert len(violations) == 0
 
@@ -763,11 +775,11 @@ class TestEdgeCases:
         filepath = temp_project / "docs" / "acceptance" / "iteration_54_regression.md"
         filepath.write_text("# Iteration 54 Regression\n", encoding="utf-8")
 
-        violations = scan_file(filepath, check_required_headings=True)
+        violations = scan_file(filepath, check_required_headings=True, check_evidence_link=False)
 
-        # 应该检测到缺少两个标准标题
+        # 应该检测到缺少三个标准标题（执行信息、最小门禁命令块、验收证据）
         heading_violations = [v for v in violations if v.violation_type == "missing_heading"]
-        assert len(heading_violations) == 2
+        assert len(heading_violations) == 3
 
 
 # ============================================================================
@@ -793,13 +805,14 @@ class TestRunCheckWithHeadings:
         violations, total_files = run_check(
             project_root=temp_project,
             check_required_headings=True,
+            check_evidence_link=False,
         )
 
         assert total_files >= 1
 
-        # 应该检测到缺少的标准标题
+        # 应该检测到缺少的标准标题（3 个：执行信息、最小门禁命令块、验收证据）
         heading_violations = [v for v in violations if v.violation_type == "missing_heading"]
-        assert len(heading_violations) == 2
+        assert len(heading_violations) == 3
 
     def test_run_check_skip_headings_when_disabled(self, temp_project: Path):
         """测试禁用标题检查时不检测缺少的标题"""
@@ -816,6 +829,7 @@ class TestRunCheckWithHeadings:
         violations, total_files = run_check(
             project_root=temp_project,
             check_required_headings=False,
+            check_evidence_link=False,
         )
 
         assert total_files >= 1
@@ -838,14 +852,15 @@ class TestRunCheckWithHeadings:
         violations, _ = run_check(
             project_root=temp_project,
             check_required_headings=True,
+            check_evidence_link=False,
         )
 
-        # 应该同时检测到占位符和标题缺失
+        # 应该同时检测到占位符和标题缺失（3 个标题）
         placeholder_violations = [v for v in violations if v.violation_type == "placeholder"]
         heading_violations = [v for v in violations if v.violation_type == "missing_heading"]
 
         assert len(placeholder_violations) >= 1
-        assert len(heading_violations) == 2
+        assert len(heading_violations) == 3
 
 
 # ============================================================================
@@ -892,3 +907,283 @@ class TestPlaceholderViolationMissingHeading:
         assert "缺少标准标题" in str_repr
         assert "## 执行信息" in str_repr
         assert ":0:" in str_repr
+
+
+# ============================================================================
+# Evidence 链接检查测试
+# ============================================================================
+
+
+class TestIterationNumberPattern:
+    """ITERATION_NUMBER_PATTERN 正则表达式测试"""
+
+    def test_matches_standard_filename(self):
+        """测试匹配标准文件名"""
+        match = ITERATION_NUMBER_PATTERN.search("iteration_13_regression.md")
+        assert match is not None
+        assert match.group(1) == "13"
+
+    def test_matches_various_numbers(self):
+        """测试匹配各种迭代编号"""
+        test_cases = [
+            ("iteration_1_regression.md", "1"),
+            ("iteration_99_regression.md", "99"),
+            ("iteration_100_regression.md", "100"),
+        ]
+        for filename, expected_num in test_cases:
+            match = ITERATION_NUMBER_PATTERN.search(filename)
+            assert match is not None, f"应匹配: {filename}"
+            assert match.group(1) == expected_num
+
+    def test_no_match_for_plan_files(self):
+        """测试不匹配 plan 文件"""
+        assert ITERATION_NUMBER_PATTERN.search("iteration_13_plan.md") is None
+
+    def test_no_match_for_other_files(self):
+        """测试不匹配其他文件"""
+        test_cases = [
+            "iteration_regression.md",  # 缺少编号
+            "iteration_13.md",  # 缺少 _regression
+            "iteration_abc_regression.md",  # 编号不是数字
+        ]
+        for filename in test_cases:
+            assert ITERATION_NUMBER_PATTERN.search(filename) is None, f"不应匹配: {filename}"
+
+
+class TestEvidenceLinkPattern:
+    """EVIDENCE_LINK_PATTERN 正则表达式测试"""
+
+    def test_matches_evidence_link(self):
+        """测试匹配 evidence 链接"""
+        test_cases = [
+            ("evidence/iteration_13_evidence.json", "13"),
+            ("evidence/iteration_1_evidence.json", "1"),
+            ("evidence/iteration_99_evidence.json", "99"),
+        ]
+        for link, expected_num in test_cases:
+            match = EVIDENCE_LINK_PATTERN.search(link)
+            assert match is not None, f"应匹配: {link}"
+            assert match.group(1) == expected_num
+
+    def test_matches_in_markdown_link(self):
+        """测试在 Markdown 链接中匹配"""
+        text = "[iteration_13_evidence.json](evidence/iteration_13_evidence.json)"
+        match = EVIDENCE_LINK_PATTERN.search(text)
+        assert match is not None
+        assert match.group(1) == "13"
+
+    def test_no_match_for_wrong_format(self):
+        """测试不匹配错误格式"""
+        test_cases = [
+            "evidence/iteration_13.json",  # 缺少 _evidence
+            "iteration_13_evidence.json",  # 缺少 evidence/
+            "evidence/iteration_abc_evidence.json",  # 编号不是数字
+        ]
+        for link in test_cases:
+            assert EVIDENCE_LINK_PATTERN.search(link) is None, f"不应匹配: {link}"
+
+
+class TestScanFileForEvidenceLink:
+    """scan_file_for_evidence_link 函数测试"""
+
+    def test_detects_missing_evidence_link(self, temp_project: Path):
+        """测试检测缺少的 evidence 链接"""
+        content = """# Iteration 13 Regression
+
+## 执行信息
+
+执行信息内容...
+
+## 最小门禁命令块
+
+命令内容...
+
+## 验收证据
+
+这里没有 evidence 链接。
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_13_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_evidence_link(filepath))
+
+        assert len(violations) == 1
+        assert violations[0].violation_type == "missing_evidence_link"
+        assert "iteration_13_evidence.json" in violations[0].matched_text
+
+    def test_detects_mismatched_evidence_link(self, temp_project: Path):
+        """测试检测编号不匹配的 evidence 链接"""
+        content = """# Iteration 13 Regression
+
+## 验收证据
+
+- **证据文件**: [iteration_12_evidence.json](evidence/iteration_12_evidence.json)
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_13_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_evidence_link(filepath))
+
+        assert len(violations) == 1
+        assert violations[0].violation_type == "mismatched_evidence_link"
+        assert "12" in violations[0].matched_text
+        assert "13" in violations[0].matched_text
+
+    def test_no_violation_for_correct_link(self, temp_project: Path):
+        """测试正确的 evidence 链接无违规"""
+        content = """# Iteration 13 Regression
+
+## 验收证据
+
+- **证据文件**: [iteration_13_evidence.json](evidence/iteration_13_evidence.json)
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_13_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_evidence_link(filepath))
+        assert len(violations) == 0
+
+    def test_skips_plan_files(self, temp_project: Path):
+        """测试不检查 plan 文件"""
+        content = """# Iteration 13 Plan
+
+没有 evidence 链接，但 plan 文件不需要检查。
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_13_plan.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_evidence_link(filepath))
+        assert len(violations) == 0
+
+    def test_accepts_link_in_various_formats(self, temp_project: Path):
+        """测试接受各种格式的链接"""
+        # 链接可以在表格中、列表中或普通文本中
+        content = """# Iteration 13 Regression
+
+## 验收证据
+
+| 项目 | 值 |
+|------|-----|
+| **证据文件** | [`iteration_13_evidence.json`](evidence/iteration_13_evidence.json) |
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_13_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_evidence_link(filepath))
+        assert len(violations) == 0
+
+
+class TestPlaceholderViolationEvidenceTypes:
+    """PlaceholderViolation 数据类 evidence 相关类型测试"""
+
+    def test_str_format_missing_evidence_link(self):
+        """测试缺少 evidence 链接违规的字符串格式"""
+        violation = PlaceholderViolation(
+            file=Path("docs/acceptance/iteration_13_regression.md"),
+            line_number=0,
+            line_content="",
+            violation_type="missing_evidence_link",
+            matched_text="evidence/iteration_13_evidence.json",
+        )
+
+        str_repr = str(violation)
+        assert "缺少证据文件链接" in str_repr
+        assert "iteration_13_evidence.json" in str_repr
+
+    def test_str_format_mismatched_evidence_link(self):
+        """测试 evidence 链接不匹配违规的字符串格式"""
+        violation = PlaceholderViolation(
+            file=Path("docs/acceptance/iteration_13_regression.md"),
+            line_number=0,
+            line_content="",
+            violation_type="mismatched_evidence_link",
+            matched_text="期望 iteration_13_evidence.json，但找到 iteration_12_evidence.json",
+        )
+
+        str_repr = str(violation)
+        assert "证据链接编号不匹配" in str_repr
+
+
+class TestRegressionRequiredHeadingsIncludesEvidence:
+    """测试 REGRESSION_REQUIRED_HEADINGS 包含验收证据"""
+
+    def test_includes_evidence_heading(self):
+        """测试常量包含验收证据标题"""
+        assert "## 验收证据" in REGRESSION_REQUIRED_HEADINGS
+
+    def test_has_three_required_headings(self):
+        """测试常量有三个必需标题"""
+        assert len(REGRESSION_REQUIRED_HEADINGS) == 3
+        assert "## 执行信息" in REGRESSION_REQUIRED_HEADINGS
+        assert "## 最小门禁命令块" in REGRESSION_REQUIRED_HEADINGS
+        assert "## 验收证据" in REGRESSION_REQUIRED_HEADINGS
+
+
+class TestRunCheckWithEvidenceLink:
+    """run_check 函数与 evidence 链接检查集成测试"""
+
+    def test_run_check_detects_missing_evidence_link(self, temp_project: Path):
+        """测试 run_check 检测缺少的 evidence 链接"""
+        content = """# Iteration 40 Regression
+
+## 执行信息
+
+内容...
+
+## 最小门禁命令块
+
+命令...
+
+## 验收证据
+
+没有链接。
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_40_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations, total_files = run_check(
+            project_root=temp_project,
+            check_required_headings=True,
+            check_evidence_link=True,
+        )
+
+        assert total_files >= 1
+
+        # 应该检测到缺少 evidence 链接
+        evidence_violations = [v for v in violations if v.violation_type == "missing_evidence_link"]
+        assert len(evidence_violations) == 1
+
+    def test_run_check_skip_evidence_when_disabled(self, temp_project: Path):
+        """测试禁用 evidence 检查时不检测"""
+        content = """# Iteration 41 Regression
+
+## 执行信息
+
+内容...
+
+## 最小门禁命令块
+
+命令...
+
+## 验收证据
+
+没有链接。
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_41_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations, total_files = run_check(
+            project_root=temp_project,
+            check_required_headings=True,
+            check_evidence_link=False,
+        )
+
+        assert total_files >= 1
+
+        # 不应该检测到 evidence 违规
+        evidence_violations = [
+            v
+            for v in violations
+            if v.violation_type in ("missing_evidence_link", "mismatched_evidence_link")
+        ]
+        assert len(evidence_violations) == 0

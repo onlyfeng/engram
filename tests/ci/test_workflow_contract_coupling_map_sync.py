@@ -961,3 +961,449 @@ class TestNewErrorTypesCompleteness:
             if not k.startswith("_") and isinstance(v, str)
         }
         assert class_attrs == COUPLING_MAP_SYNC_ERROR_TYPES
+
+
+# ============================================================================
+# Test: --write 功能（update_document for coupling_map）
+# ============================================================================
+
+
+class TestUpdateCouplingMapWriteMode:
+    """测试 --write 功能：update_document 函数对 coupling_map.md 的更新能力"""
+
+    def test_write_updates_coupling_map_block_correctly(self) -> None:
+        """--write 后 coupling_map 块内容应与 renderer 输出一致"""
+        from scripts.ci.render_workflow_contract_docs import (
+            extract_block_from_content,
+            update_document,
+        )
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint", "build"],
+                "job_names": ["Test Job", "Lint Job", "Build Job"],
+            },
+        }
+        # 创建带有 markers 但内容过时的 coupling_map
+        coupling_map = """# Coupling Map
+
+## CI Jobs
+
+<!-- BEGIN:CI_JOBS_LIST -->
+| Job ID | Job Name |
+|--------|----------|
+| `old-job` | Old Job |
+<!-- END:CI_JOBS_LIST -->
+
+## Other Section
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        # 使用渲染器生成期望的块内容
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_coupling_map_blocks()
+
+        # 只更新 CI_JOBS_LIST 块
+        ci_jobs_block = {"CI_JOBS_LIST": blocks["CI_JOBS_LIST"]}
+
+        # 执行 update_document（非 dry_run）
+        result = update_document(coupling_map_path, ci_jobs_block, dry_run=False)
+
+        # 验证更新成功
+        assert result.success is True
+        assert "CI_JOBS_LIST" in result.updated_blocks
+        assert len(result.missing_markers) == 0
+
+        # 验证文件内容已更新
+        updated_content = coupling_map_path.read_text(encoding="utf-8")
+
+        # 提取更新后的块内容
+        actual_content, _, _ = extract_block_from_content(updated_content, "CI_JOBS_LIST")
+
+        # 验证块内容与渲染器输出一致
+        expected_content = blocks["CI_JOBS_LIST"].content
+        assert actual_content is not None
+        assert actual_content.strip() == expected_content.strip()
+
+    def test_write_multiple_coupling_map_blocks(self) -> None:
+        """同时更新多个 coupling_map 块"""
+        from scripts.ci.render_workflow_contract_docs import (
+            extract_block_from_content,
+            update_document,
+        )
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "job_names": ["Test"],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["nightly-test"],
+                "job_names": ["Nightly Test"],
+            },
+            "make": {
+                "targets_required": ["ci", "lint"],
+            },
+        }
+        coupling_map = """# Coupling Map
+
+## CI Jobs
+
+<!-- BEGIN:CI_JOBS_LIST -->
+| Old CI content |
+<!-- END:CI_JOBS_LIST -->
+
+## Nightly Jobs
+
+<!-- BEGIN:NIGHTLY_JOBS_LIST -->
+| Old Nightly content |
+<!-- END:NIGHTLY_JOBS_LIST -->
+
+## Make Targets
+
+<!-- BEGIN:MAKE_TARGETS_LIST -->
+| Old Make content |
+<!-- END:MAKE_TARGETS_LIST -->
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_coupling_map_blocks()
+
+        # 更新所有 coupling_map 块
+        result = update_document(coupling_map_path, blocks, dry_run=False)
+
+        # 验证所有块都已更新
+        assert result.success is True
+        assert "CI_JOBS_LIST" in result.updated_blocks
+        assert "NIGHTLY_JOBS_LIST" in result.updated_blocks
+        assert "MAKE_TARGETS_LIST" in result.updated_blocks
+
+        # 验证内容正确
+        updated_content = coupling_map_path.read_text(encoding="utf-8")
+        for block_name, expected_block in blocks.items():
+            actual_content, _, _ = extract_block_from_content(updated_content, block_name)
+            assert actual_content is not None
+            assert actual_content.strip() == expected_block.content.strip()
+
+    def test_checker_passes_after_write(self) -> None:
+        """update_document 更新后，Checker 应通过"""
+        from scripts.ci.render_workflow_contract_docs import update_document
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+        }
+        # 创建带有 markers 但内容错误的 coupling_map
+        coupling_map = """# Coupling Map
+
+## CI Jobs
+
+<!-- BEGIN:CI_JOBS_LIST -->
+| Job ID | Job Name |
+|--------|----------|
+| `wrong` | Wrong |
+<!-- END:CI_JOBS_LIST -->
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        # 先验证 checker 会失败
+        checker_before = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result_before = checker_before.check()
+        mismatch_before = [
+            e
+            for e in result_before.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_CONTENT_MISMATCH
+        ]
+        assert len(mismatch_before) >= 1, "Should have content mismatch before update"
+
+        # 执行 update_document
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_coupling_map_blocks()
+        update_document(coupling_map_path, {"CI_JOBS_LIST": blocks["CI_JOBS_LIST"]}, dry_run=False)
+
+        # 验证 checker 现在通过
+        checker_after = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result_after = checker_after.check()
+        mismatch_after = [
+            e
+            for e in result_after.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_CONTENT_MISMATCH
+        ]
+        assert len(mismatch_after) == 0, "Should have no content mismatch after update"
+
+
+# ============================================================================
+# Test: 异常路径（Marker 错误场景补充）
+# ============================================================================
+
+
+class TestCouplingMapMarkerErrorScenarios:
+    """测试 coupling_map marker 错误场景的完整覆盖"""
+
+    def test_missing_begin_marker_only(self) -> None:
+        """当只有 END marker 缺少 BEGIN marker 时，应报 unpaired 错误"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        # 只有 END marker，没有 BEGIN marker
+        coupling_map = """# Coupling Map
+
+Some content
+
+<!-- END:CI_JOBS_LIST -->
+
+## Other Section
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
+        # 应该有 unpaired marker 错误
+        unpaired_errors = [
+            e
+            for e in result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_MARKER_UNPAIRED
+        ]
+        assert len(unpaired_errors) >= 1
+        # 错误应该指出缺少 BEGIN marker
+        assert any("BEGIN" in e.message for e in unpaired_errors)
+
+    def test_duplicate_end_marker_in_coupling_map(self) -> None:
+        """coupling_map 中存在重复的 END marker 时，应报错"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        coupling_map = """# Coupling Map
+
+<!-- BEGIN:CI_JOBS_LIST -->
+| Job ID | Job Name |
+|--------|----------|
+<!-- END:CI_JOBS_LIST -->
+<!-- END:CI_JOBS_LIST -->
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
+        # 应该有重复 marker 错误
+        dup_errors = [
+            e
+            for e in result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_MARKER_DUPLICATE
+        ]
+        assert len(dup_errors) >= 1
+
+    def test_all_three_coupling_map_blocks_with_markers(self) -> None:
+        """测试所有三个 coupling_map 块都有正确的 markers 时通过"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "job_names": ["Test"],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["nightly-job"],
+                "job_names": ["Nightly Job"],
+            },
+            "make": {
+                "targets_required": ["ci"],
+            },
+        }
+
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        # 使用渲染器生成正确的块内容
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_coupling_map_blocks()
+
+        # 创建包含所有正确 markers 的 coupling_map
+        coupling_map = f"""# Coupling Map
+
+## CI Jobs
+
+<!-- BEGIN:CI_JOBS_LIST -->
+{blocks["CI_JOBS_LIST"].content}
+<!-- END:CI_JOBS_LIST -->
+
+## Nightly Jobs
+
+<!-- BEGIN:NIGHTLY_JOBS_LIST -->
+{blocks["NIGHTLY_JOBS_LIST"].content}
+<!-- END:NIGHTLY_JOBS_LIST -->
+
+## Make Targets
+
+<!-- BEGIN:MAKE_TARGETS_LIST -->
+{blocks["MAKE_TARGETS_LIST"].content}
+<!-- END:MAKE_TARGETS_LIST -->
+"""
+        coupling_map_path = temp_dir / "coupling_map.md"
+        coupling_map_path.write_text(coupling_map, encoding="utf-8")
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
+        # 验证 block mode 已使用
+        assert result.block_mode_used is True
+
+        # 验证所有三个块都被检查
+        assert "CI_JOBS_LIST" in result.checked_blocks
+        assert "NIGHTLY_JOBS_LIST" in result.checked_blocks
+        assert "MAKE_TARGETS_LIST" in result.checked_blocks
+
+        # 验证无 block 相关错误
+        block_errors = [e for e in result.errors if e.category == "block"]
+        assert len(block_errors) == 0
+
+
+# ============================================================================
+# Test: 同时跑两个 Checker（从 coupling_map 角度）
+# ============================================================================
+
+
+class TestBothCheckersFromCouplingMapPerspective:
+    """从 coupling_map 角度测试同时跑两个 Checker"""
+
+    def test_checkers_share_same_renderer_output(self) -> None:
+        """验证两个 Checker 使用相同的渲染器产生一致的输出"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["nightly-verify"],
+                "job_names": ["Nightly Verify"],
+            },
+            "make": {
+                "targets_required": ["ci", "lint", "test"],
+            },
+        }
+
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        # 创建两个独立的渲染器实例
+        renderer1 = WorkflowContractDocsRenderer(contract_path)
+        renderer1.load_contract()
+
+        renderer2 = WorkflowContractDocsRenderer(contract_path)
+        renderer2.load_contract()
+
+        # 渲染 contract blocks
+        contract_blocks1 = renderer1.render_contract_blocks()
+        contract_blocks2 = renderer2.render_contract_blocks()
+
+        # 渲染 coupling_map blocks
+        coupling_blocks1 = renderer1.render_coupling_map_blocks()
+        coupling_blocks2 = renderer2.render_coupling_map_blocks()
+
+        # 验证两次渲染结果一致（确定性）
+        for block_name in contract_blocks1:
+            assert contract_blocks1[block_name].content == contract_blocks2[block_name].content
+
+        for block_name in coupling_blocks1:
+            assert coupling_blocks1[block_name].content == coupling_blocks2[block_name].content
+
+    def test_both_checkers_detect_same_block_errors(self) -> None:
+        """两个 Checker 对相同类型的 marker 错误应产生一致的检测结果"""
+        from scripts.ci.check_workflow_contract_docs_sync import (
+            DocsSyncErrorTypes,
+            WorkflowContractDocsSyncChecker,
+        )
+
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        # 创建缺少 END marker 的 contract.md
+        contract_doc = """# Workflow Contract
+
+Version: 1.0.0
+
+### 2.1 CI Workflow (`ci.yml`)
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name |
+|--------|----------|
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_doc_path = temp_dir / "contract.md"
+        contract_doc_path.write_text(contract_doc, encoding="utf-8")
+
+        # 创建缺少 END marker 的 coupling_map.md
+        coupling_map = """# Coupling Map
+
+<!-- BEGIN:CI_JOBS_LIST -->
+| Job ID | Job Name |
+|--------|----------|
+"""
+        coupling_map_path = temp_dir / "coupling_map.md"
+        coupling_map_path.write_text(coupling_map, encoding="utf-8")
+
+        # 运行两个 checker
+        docs_checker = WorkflowContractDocsSyncChecker(contract_path, contract_doc_path)
+        docs_result = docs_checker.check()
+
+        coupling_checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        coupling_result = coupling_checker.check()
+
+        # 验证两个 checker 都检测到 unpaired marker 错误
+        docs_unpaired = [
+            e
+            for e in docs_result.errors
+            if e.error_type == DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED
+        ]
+        coupling_unpaired = [
+            e
+            for e in coupling_result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_MARKER_UNPAIRED
+        ]
+
+        assert len(docs_unpaired) >= 1, "Docs checker should detect unpaired marker"
+        assert len(coupling_unpaired) >= 1, "Coupling checker should detect unpaired marker"
