@@ -38,7 +38,140 @@ except ImportError:
     HAS_JSONSCHEMA = False
     JsonSchemaValidationError = Exception  # type: ignore
 
-from workflow_contract_common import discover_workflow_keys
+from scripts.ci.workflow_contract_common import (
+    build_workflows_view,
+    discover_workflow_keys,
+    find_fuzzy_match,
+    normalize_artifact_path,
+)
+
+# ============================================================================
+# Error Types and Warning Types - 统一定义
+# ============================================================================
+#
+# 所有 error_type 和 warning_type 的统一定义，便于维护和测试覆盖。
+#
+# 版本策略：
+#   - 新增 error_type: Minor (0.X.0)
+#   - 弃用 error_type: Major (X.0.0) - 需提供迁移路径
+#   - 修改 error_type 含义: Major (X.0.0)
+#
+# 详见 docs/ci_nightly_workflow_refactor/contract.md 第 13 章
+#
+
+
+# ValidationError.error_type 集合
+class ErrorTypes:
+    """ValidationError 的 error_type 常量定义"""
+
+    # 文件/解析错误
+    CONTRACT_NOT_FOUND = "contract_not_found"
+    CONTRACT_PARSE_ERROR = "contract_parse_error"
+    SCHEMA_PARSE_ERROR = "schema_parse_error"
+    SCHEMA_ERROR = "schema_error"
+    WORKFLOW_NOT_FOUND = "workflow_not_found"
+    WORKFLOW_PARSE_ERROR = "workflow_parse_error"
+    MAKEFILE_NOT_FOUND = "makefile_not_found"
+
+    # Job 相关错误
+    MISSING_JOB = "missing_job"
+    MISSING_JOB_ID = "missing_job_id"
+    EXTRA_JOB_NOT_IN_CONTRACT = "extra_job_not_in_contract"
+    FROZEN_JOB_NAME_CHANGED = "frozen_job_name_changed"
+
+    # Step 相关错误
+    MISSING_STEP = "missing_step"
+    FROZEN_STEP_NAME_CHANGED = "frozen_step_name_changed"
+
+    # Output/Env 相关错误
+    MISSING_OUTPUT = "missing_output"
+    MISSING_ENV_VAR = "missing_env_var"
+
+    # Artifact 相关错误
+    MISSING_ARTIFACT_PATH = "missing_artifact_path"
+
+    # Makefile 相关错误
+    MISSING_MAKEFILE_TARGET = "missing_makefile_target"
+    UNDECLARED_MAKE_TARGET = "undeclared_make_target"
+
+    # Label 相关错误
+    LABEL_MISSING_IN_SCRIPT = "label_missing_in_script"
+    LABEL_MISSING_IN_CONTRACT = "label_missing_in_contract"
+
+    # Contract 内部一致性错误
+    CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH = "contract_job_ids_names_length_mismatch"
+    CONTRACT_JOB_IDS_DUPLICATE = "contract_job_ids_duplicate"
+    CONTRACT_REQUIRED_JOB_ID_DUPLICATE = "contract_required_job_id_duplicate"
+    CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS = "contract_required_job_not_in_job_ids"
+
+    # Contract Frozen 一致性错误（--require-frozen-consistency 模式）
+    CONTRACT_FROZEN_STEP_MISSING = "contract_frozen_step_missing"
+    CONTRACT_FROZEN_JOB_MISSING = "contract_frozen_job_missing"
+    UNFROZEN_REQUIRED_STEP = "unfrozen_required_step"
+    UNFROZEN_REQUIRED_JOB = "unfrozen_required_job"
+
+
+# ValidationWarning.warning_type 集合
+class WarningTypes:
+    """ValidationWarning 的 warning_type 常量定义"""
+
+    # Schema 相关警告
+    SCHEMA_SKIP = "schema_skip"
+
+    # Job 相关警告
+    JOB_NAME_CHANGED = "job_name_changed"
+    JOB_NAME_MISMATCH = "job_name_mismatch"
+    EXTRA_JOB_NOT_IN_CONTRACT = "extra_job_not_in_contract"
+
+    # Step 相关警告
+    STEP_NAME_CHANGED = "step_name_changed"
+    STEP_NAME_ALIAS_MATCHED = "step_name_alias_matched"  # Step found via alias mapping
+
+    # Frozen 相关警告（非 strict 模式）
+    UNFROZEN_REQUIRED_STEP = "unfrozen_required_step"
+    UNFROZEN_REQUIRED_JOB = "unfrozen_required_job"
+
+    # Label 相关警告
+    LABEL_SCRIPT_PARSE_WARNING = "label_script_parse_warning"
+
+
+# 严格模式下阻断 CI 的 error_type 集合
+# 这些错误会导致 validate-workflows-strict 失败
+CRITICAL_ERROR_TYPES = frozenset(
+    {
+        ErrorTypes.CONTRACT_NOT_FOUND,
+        ErrorTypes.CONTRACT_PARSE_ERROR,
+        ErrorTypes.SCHEMA_ERROR,
+        ErrorTypes.WORKFLOW_NOT_FOUND,
+        ErrorTypes.MISSING_JOB,
+        ErrorTypes.MISSING_JOB_ID,
+        ErrorTypes.MISSING_STEP,
+        ErrorTypes.FROZEN_STEP_NAME_CHANGED,
+        ErrorTypes.FROZEN_JOB_NAME_CHANGED,
+        ErrorTypes.MISSING_OUTPUT,
+        ErrorTypes.MISSING_ENV_VAR,
+        ErrorTypes.MISSING_ARTIFACT_PATH,
+        ErrorTypes.MISSING_MAKEFILE_TARGET,
+        ErrorTypes.UNDECLARED_MAKE_TARGET,
+        ErrorTypes.LABEL_MISSING_IN_SCRIPT,
+        ErrorTypes.LABEL_MISSING_IN_CONTRACT,
+        ErrorTypes.CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH,
+        ErrorTypes.CONTRACT_JOB_IDS_DUPLICATE,
+        ErrorTypes.CONTRACT_REQUIRED_JOB_ID_DUPLICATE,
+        ErrorTypes.CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS,
+    }
+)
+
+# --strict 模式下 WARNING 提升为 ERROR 的 warning_type 集合
+STRICT_PROMOTED_WARNING_TYPES = frozenset(
+    {
+        WarningTypes.JOB_NAME_CHANGED,
+        WarningTypes.JOB_NAME_MISMATCH,
+        WarningTypes.STEP_NAME_CHANGED,
+        WarningTypes.EXTRA_JOB_NOT_IN_CONTRACT,
+    }
+)
+
 
 # ============================================================================
 # Data Classes
@@ -94,6 +227,8 @@ MAKE_TARGET_IGNORE_LIST = {
     # Patterns with variables
     "deploy",  # May be called with different parameters
     # make -C subdirectory targets (handled separately)
+    # False positives from echo statements
+    "targets",  # From: echo "... make targets ..." (not an actual make call)
 }
 
 
@@ -311,16 +446,36 @@ def _is_glob_pattern(path: str) -> bool:
     return any(c in path for c in "*?[]")
 
 
+def _normalize_for_comparison(path: str) -> str:
+    """
+    标准化路径用于比较。
+
+    使用 workflow_contract_common.normalize_artifact_path 进行标准化，
+    但对于空路径返回空字符串而非抛出异常。
+
+    Args:
+        path: 要标准化的路径
+
+    Returns:
+        标准化后的路径
+    """
+    try:
+        return normalize_artifact_path(path, allow_empty=True)
+    except Exception:
+        return path
+
+
 def _path_matches(uploaded: str, required_path: str) -> bool:
     """
     检查上传路径是否匹配 required_path。
 
     匹配规则：
-    1. 如果 required_path 含有 glob 字符 (*?[])，使用 fnmatch.fnmatch
-    2. 如果 required_path 以 '/' 结尾，视为目录匹配：
+    1. 首先对两个路径进行标准化（统一分隔符、处理 ./、去除重复斜杠）
+    2. 如果 required_path 含有 glob 字符 (*?[])，使用 fnmatch.fnmatch
+    3. 如果 required_path 以 '/' 结尾，视为目录匹配：
        - uploaded 在该目录下（startswith）
        - 或者 uploaded + '/' == required_path（目录本身）
-    3. 否则做精确匹配
+    4. 否则做精确匹配
 
     Args:
         uploaded: 实际上传的路径
@@ -329,6 +484,14 @@ def _path_matches(uploaded: str, required_path: str) -> bool:
     Returns:
         如果匹配返回 True
     """
+    # 标准化路径
+    uploaded = _normalize_for_comparison(uploaded)
+    required_path = _normalize_for_comparison(required_path)
+
+    # 空路径不匹配
+    if not uploaded or not required_path:
+        return False
+
     # 规则 1: glob 模式匹配
     if _is_glob_pattern(required_path):
         return fnmatch.fnmatch(uploaded, required_path)
@@ -356,9 +519,10 @@ def check_artifact_path_coverage(
     检查 required_paths 是否被 upload steps 覆盖。
 
     匹配规则：
-    1. 如果 required_path 含有 glob 字符 (*?[])，使用 fnmatch.fnmatch
-    2. 如果 required_path 以 '/' 结尾，视为目录匹配
-    3. 否则做精确匹配
+    1. 首先对所有路径进行标准化（统一分隔符、处理 ./、去除重复斜杠）
+    2. 如果 required_path 含有 glob 字符 (*?[])，使用 fnmatch.fnmatch
+    3. 如果 required_path 以 '/' 结尾，视为目录匹配
+    4. 否则做精确匹配
 
     Args:
         upload_steps: extract_upload_artifact_paths 的返回结果
@@ -367,8 +531,9 @@ def check_artifact_path_coverage(
 
     Returns:
         Tuple of (covered_paths, missing_paths)
+        注意：返回的是原始 required_paths 中的路径，而非标准化后的路径
     """
-    # 收集所有上传的路径
+    # 收集所有上传的路径（标准化）
     all_uploaded_paths: set[str] = set()
 
     for step in upload_steps:
@@ -381,7 +546,9 @@ def check_artifact_path_coverage(
                 continue
 
         for path in step.get("paths", []):
-            all_uploaded_paths.add(path)
+            normalized = _normalize_for_comparison(path)
+            if normalized:  # 跳过空路径
+                all_uploaded_paths.add(normalized)
 
     covered = []
     missing = []
@@ -420,6 +587,7 @@ class WorkflowContractValidator:
         self.contract: dict[str, Any] = {}
         self.frozen_steps: set[str] = set()  # 冻结的 step name 集合
         self.frozen_job_names: set[str] = set()  # 冻结的 job name 集合
+        self.step_name_aliases: dict[str, list[str]] = {}  # canonical step -> aliases
         self.require_job_coverage = require_job_coverage  # extra jobs 检测策略
         self.result = ValidationResult(success=True)
 
@@ -449,6 +617,13 @@ class WorkflowContractValidator:
             # 加载 frozen_job_names.allowlist（如果存在）
             frozen_job_names_config = self.contract.get("frozen_job_names", {})
             self.frozen_job_names = set(frozen_job_names_config.get("allowlist", []))
+
+            # 加载 step_name_aliases（如果存在）
+            # 格式: { "canonical_step_name": ["alias1", "alias2", ...], ... }
+            step_name_aliases_config = self.contract.get("step_name_aliases", {})
+            self.step_name_aliases = {
+                k: v for k, v in step_name_aliases_config.items() if not k.startswith("_")
+            }
 
             return True
         except json.JSONDecodeError as e:
@@ -578,7 +753,9 @@ class WorkflowContractValidator:
             # 提供更详细的 additionalProperties 错误说明
             if error.absolute_path:
                 path_str = ".".join(str(p) for p in error.absolute_path)
-                return f"no additional properties allowed at '{path_str}' (use ^_ prefix for comments)"
+                return (
+                    f"no additional properties allowed at '{path_str}' (use ^_ prefix for comments)"
+                )
             return "no additional properties allowed (use ^_ prefix for comments)"
         elif error.validator == "minLength":
             return f"minimum length: {error.validator_value} characters"
@@ -709,6 +886,28 @@ class WorkflowContractValidator:
         # 检查 required steps
         for required_step in required_steps:
             if required_step not in actual_step_names:
+                # 首先检查是否通过 alias 映射能找到匹配
+                alias_match = self._find_alias_match(required_step, actual_step_names)
+                if alias_match:
+                    # 通过 alias 找到匹配：报告为 WARNING（step_name_alias_matched）
+                    self.result.warnings.append(
+                        ValidationWarning(
+                            workflow=workflow_name,
+                            file=workflow_file,
+                            warning_type="step_name_alias_matched",
+                            key=required_step,
+                            message=(
+                                f"Required step '{required_step}' not found by exact name in job '{job_id}', "
+                                f"but matched via alias '{alias_match}'. Consider updating the workflow "
+                                f"to use the canonical name, or add '{alias_match}' to step_name_aliases."
+                            ),
+                            old_value=required_step,
+                            new_value=alias_match,
+                            location=f"jobs.{job_id}.steps",
+                        )
+                    )
+                    continue  # alias 匹配成功，跳过后续检查
+
                 # 尝试模糊匹配（部分匹配）
                 fuzzy_match = self._find_fuzzy_match(required_step, actual_step_names)
 
@@ -726,14 +925,17 @@ class WorkflowContractValidator:
                                 key=required_step,
                                 message=(
                                     f"Frozen step '{required_step}' was renamed to '{fuzzy_match}' in job '{job_id}'. "
-                                    f"此 step 属于冻结文案，不能改名。如确需改名，请执行以下步骤:\n"
-                                f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
-                                f"     - frozen_step_text.allowlist: 添加新名称，移除旧名称\n"
-                                f"     - required_jobs[].required_steps: 如有引用，同步更新\n"
-                                f"  2. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
-                                f"     - 'Frozen Step Names' 节 (contract.md#52-frozen-step-names)\n"
-                                f"  3. 运行 make validate-workflows 验证\n"
-                                f"  4. 详见 maintenance.md#62-冻结-step-rename-标准流程"
+                                    f"此 step 属于冻结文案，不能改名。如确需改名，必须满足以下最小组合:\n"
+                                    f"  【必需步骤 - 缺一不可】\n"
+                                    f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
+                                    f"     - frozen_step_text.allowlist: 添加新名称，移除旧名称\n"
+                                    f"     - required_jobs[].required_steps: 如有引用，同步更新\n"
+                                    f"  2. 版本 bump（使用 bump_workflow_contract_version.py）:\n"
+                                    f"     - python scripts/ci/bump_workflow_contract_version.py minor --message \"Rename frozen step: {required_step} -> {fuzzy_match}\"\n"
+                                    f"  3. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
+                                    f"     - 'Frozen Step Names' 节 (contract.md#52-frozen-step-names)\n"
+                                    f"  4. 运行 make validate-workflows-strict 验证\n"
+                                    f"  详见 maintenance.md#62-冻结-step-rename-标准流程"
                                 ),
                                 expected=required_step,
                                 actual=fuzzy_match,
@@ -768,6 +970,7 @@ class WorkflowContractValidator:
                                 f"修复方法:\n"
                                 f"  方案 A：在 workflow 中添加此步骤（推荐，如果步骤属于核心验证/产物生成类）\n"
                                 f"  方案 B：从 contract 的 required_steps 中移除（仅当步骤确实不再需要时）\n"
+                                f"  方案 C：如果步骤名称已更改，添加 alias 映射到 step_name_aliases\n"
                                 f"参见 contract.md#55-required_steps-覆盖原则 了解覆盖策略"
                             ),
                             expected=required_step,
@@ -954,15 +1157,18 @@ class WorkflowContractValidator:
                                 key=job_id,
                                 message=(
                                     f"Frozen job name '{expected_name}' was changed to '{actual_name}' "
-                                    f"for job '{job_id}'. 此 job name 属于冻结文案，不能改名。如确需改名，请执行以下步骤:\n"
+                                    f"for job '{job_id}'. 此 job name 属于冻结文案，不能改名。如确需改名，必须满足以下最小组合:\n"
+                                    f"  【必需步骤 - 缺一不可】\n"
                                     f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
                                     f"     - frozen_job_names.allowlist: 添加新名称，移除旧名称\n"
                                     f"     - job_names[]: 同步更新对应位置\n"
-                                    f"  2. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
+                                    f"  2. 版本 bump（使用 bump_workflow_contract_version.py）:\n"
+                                    f"     - python scripts/ci/bump_workflow_contract_version.py minor --message \"Rename frozen job: {expected_name} -> {actual_name}\"\n"
+                                    f"  3. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
                                     f"     - 'Job ID 与 Job Name 对照表' 节 (contract.md#2-job-id-与-job-name-对照表)\n"
                                     f"     - 'Frozen Job Names' 节 (contract.md#51-frozen-job-names)\n"
-                                    f"  3. 运行 make validate-workflows 验证\n"
-                                    f"  4. 详见 maintenance.md#62-冻结-step-rename-标准流程"
+                                    f"  4. 运行 make validate-workflows-strict 验证\n"
+                                    f"  详见 maintenance.md#62-冻结-step-rename-标准流程"
                                 ),
                                 expected=expected_name,
                                 actual=actual_name,
@@ -1128,12 +1334,8 @@ class WorkflowContractValidator:
         """
         all_consistent = True
 
-        # 获取所有 workflow 定义
-        workflows = self.contract.get("workflows", {})
-        if not workflows:
-            # v1.1+ 格式：使用 discover_workflow_keys 动态发现
-            for key in discover_workflow_keys(self.contract):
-                workflows[key] = self.contract[key]
+        # 获取所有 workflow 定义（兼容 v1.0 和 v1.1+ 格式）
+        workflows = build_workflows_view(self.contract)
 
         for workflow_name, workflow_def in workflows.items():
             job_ids = workflow_def.get("job_ids", [])
@@ -1273,15 +1475,8 @@ class WorkflowContractValidator:
         """
         all_consistent = True
 
-        # 获取所有 workflow 定义
-        # 支持两种合约格式：
-        # 1. v1.0: {"workflows": {"ci": {...}, "nightly": {...}}}
-        # 2. v1.1+: {"ci": {...}, "nightly": {...}} (无 workflows 包装)
-        workflows = self.contract.get("workflows", {})
-        if not workflows:
-            # v1.1+ 格式：使用 discover_workflow_keys 动态发现
-            for key in discover_workflow_keys(self.contract):
-                workflows[key] = self.contract[key]
+        # 获取所有 workflow 定义（兼容 v1.0 和 v1.1+ 格式）
+        workflows = build_workflows_view(self.contract)
 
         # 检查 1: required_steps 是否都在 frozen_step_text.allowlist 中
         for workflow_name, workflow_def in workflows.items():
@@ -1298,10 +1493,10 @@ class WorkflowContractValidator:
                                 message=(
                                     f"Required step '{step}' in job '{job_id}' (workflow '{workflow_name}') "
                                     f"is not in frozen_step_text.allowlist. 修复方法:\n"
-                                f"  1. 如果此 step 需要冻结保护（被外部系统引用如 artifact 名称），请将其添加到 frozen_step_text.allowlist\n"
-                                f"  2. 同步更新 contract.md 'Frozen Step Names' 节 (contract.md#52-frozen-step-names)\n"
-                                f"  3. 运行 make validate-workflows 验证\n"
-                                f"注意：并非所有 required_steps 都需要冻结，参见 contract.md#55-required_steps-覆盖原则"
+                                    f"  1. 如果此 step 需要冻结保护（被外部系统引用如 artifact 名称），请将其添加到 frozen_step_text.allowlist\n"
+                                    f"  2. 同步更新 contract.md 'Frozen Step Names' 节 (contract.md#52-frozen-step-names)\n"
+                                    f"  3. 运行 make validate-workflows 验证\n"
+                                    f"注意：并非所有 required_steps 都需要冻结，参见 contract.md#55-required_steps-覆盖原则"
                                 ),
                                 location=f"{workflow_name}.required_jobs[{job_id}].required_steps",
                             )
@@ -1366,7 +1561,40 @@ class WorkflowContractValidator:
         return all_consistent
 
     def validate(self) -> ValidationResult:
-        """执行全部验证"""
+        """执行全部验证
+
+        ============================================================================
+        Phase 2 扩展点：纳入 release.yml
+        ============================================================================
+
+        本脚本使用 discover_workflow_keys() 动态发现 workflow 定义，无需硬编码。
+        当 release.yml 纳入合约时，只需在 workflow_contract.v1.json 中添加 release
+        字段定义即可自动被本脚本发现和校验。
+
+        纳入 release.yml 时的同步 Checklist（本脚本无需代码修改）：
+
+        1. [workflow_contract.v1.json] 添加 release 字段（必需）：
+           - file: ".github/workflows/release.yml"
+           - job_ids / job_names
+           - required_jobs[].required_steps
+           - artifact_archive.required_artifact_paths
+
+        2. [workflow_contract.v1.json] 更新 frozen allowlist（如需冻结）：
+           - frozen_job_names.allowlist: 添加 release 核心 job names
+           - frozen_step_text.allowlist: 添加 release 核心 step names
+
+        3. [workflow_contract.v1.json] 更新 make.targets_required（如有）：
+           - 添加 release 专用 make targets（如 release-build）
+
+        4. [本脚本] 无需修改 - 自动发现并校验 release workflow
+
+        5. [验证] 运行以下命令确认 release 被正确校验：
+           python scripts/ci/validate_workflows.py --json | jq '.validated_workflows'
+           # 预期输出应包含 "release"
+
+        详见 contract.md 2.4.3 节迁移 Checklist
+        ============================================================================
+        """
         if not self.load_contract():
             return self.result
 
@@ -1418,15 +1646,8 @@ class WorkflowContractValidator:
         # - docs/ci_nightly_workflow_refactor/contract.md 第 5.5 节（required_steps 覆盖原则）
         # - docs/ci_nightly_workflow_refactor/maintenance.md 第 3.1 节
 
-        # 支持两种合约格式：
-        # 1. v1.0: {"workflows": {"ci": {...}, "nightly": {...}}}
-        # 2. v1.1+: {"ci": {...}, "nightly": {...}} (无 workflows 包装)
-        workflows = self.contract.get("workflows", {})
-
-        if not workflows:
-            # v1.1+ 格式：使用 discover_workflow_keys 动态发现
-            for key in discover_workflow_keys(self.contract):
-                workflows[key] = self.contract[key]
+        # 获取所有 workflow 定义（兼容 v1.0 和 v1.1+ 格式）
+        workflows = build_workflows_view(self.contract)
 
         for workflow_name, workflow_contract in workflows.items():
             self.validate_workflow(workflow_name, workflow_contract)
@@ -1558,30 +1779,90 @@ class WorkflowContractValidator:
 
         return all_consistent
 
-    def _find_fuzzy_match(self, target: str, candidates: list[str]) -> Optional[str]:
-        """模糊匹配 step name"""
-        target_lower = target.lower()
+    def _find_alias_match(self, canonical_step: str, actual_step_names: list[str]) -> Optional[str]:
+        """
+        检查 canonical_step 是否有 alias 匹配到 actual_step_names 中的某个步骤。
 
-        # 完全匹配（忽略大小写）
-        for candidate in candidates:
-            if candidate.lower() == target_lower:
-                return candidate
+        此方法实现 Step Name 匹配优先级中的 ALIAS 级别匹配（优先级 2）。
+        在 EXACT 匹配失败后、FUZZY 匹配之前调用。
 
-        # 包含匹配
-        for candidate in candidates:
-            if target_lower in candidate.lower() or candidate.lower() in target_lower:
-                return candidate
+        Alias 生命周期与冻结项交互
+        ============================================================================
 
-        # 词语匹配（主要词语相同）
-        target_words = set(target_lower.split())
-        for candidate in candidates:
-            candidate_words = set(candidate.lower().split())
-            # 至少 50% 词语重叠
-            overlap = len(target_words & candidate_words)
-            if overlap >= len(target_words) * 0.5:
-                return candidate
+        1. **Alias 允许窗口**:
+           - step_name_aliases 用于在 step 重命名的过渡期内同时接受新旧名称
+           - 典型场景: workflow 中使用旧名称，contract 已更新为新名称（canonical）
+           - 推荐在 2-3 个迭代周期后移除旧别名，强制更新 workflow
+
+        2. **与冻结项的交互规则**:
+           - 无论 canonical_step 是否在 frozen_step_text.allowlist 中，
+             通过 alias 匹配时**始终**产生 step_name_alias_matched WARNING
+           - 这是因为 alias 匹配表示 workflow 使用了"过时"的名称，应当更新
+
+        3. **Alias vs Frozen 的设计哲学**:
+           - frozen_step_text: 保护 step name 不被意外改名（CI 阻断）
+           - step_name_aliases: 在改名后提供兼容窗口（非阻断）
+           - 两者互补：frozen 保护关键 step，alias 辅助迁移
+
+        4. **最佳实践**:
+           - 添加 alias 时同时在 alias 列表中添加 _ttl 注释记录预期移除时间
+           - 例如: "step_name_aliases": {"New Name": ["Old Name"],
+                   "_ttl_Old_Name": "Remove after iteration 15"}
+
+        文档锚点:
+            - contract.md#56-step-name-aliases-别名映射
+            - maintenance.md#62-冻结-step-rename-标准流程
+
+        Args:
+            canonical_step: 合约中定义的 canonical step name（required_steps 中的名称）
+            actual_step_names: workflow 中实际存在的 step names 列表
+
+        Returns:
+            匹配到的 alias step name，如果没有匹配则返回 None
+        """
+        # 获取该 canonical step 的所有 aliases
+        aliases = self.step_name_aliases.get(canonical_step, [])
+        if not aliases:
+            return None
+
+        # 检查是否有 alias 在实际步骤中
+        # 同分冲突处理: 返回 aliases 列表中第一个匹配到的（按配置顺序）
+        for alias in aliases:
+            if alias in actual_step_names:
+                return alias
 
         return None
+
+    def _find_fuzzy_match(self, target: str, candidates: list[str]) -> Optional[str]:
+        """模糊匹配 step name
+
+        此方法实现 Step Name 匹配优先级中的 FUZZY 级别匹配（优先级 3）。
+        在 EXACT 和 ALIAS 匹配都失败后调用。
+
+        委托给 workflow_contract_common.find_fuzzy_match() 实现。
+        详细的匹配策略、阈值和同分冲突处理规则参见该函数文档。
+
+        与冻结项的交互
+        ============================================================================
+
+        当 fuzzy 匹配成功时，根据 canonical_step 是否在 frozen_step_text 中：
+        - 在 frozen_step_text 中: 产生 frozen_step_name_changed ERROR（阻断 CI）
+        - 不在 frozen_step_text 中: 产生 step_name_changed WARNING（不阻断）
+
+        这确保了冻结项的严格保护，同时允许非冻结项的灵活改名。
+
+        文档锚点:
+            - contract.md#562-匹配行为
+            - contract.md#52-frozen-step-names
+
+        Args:
+            target: 要查找的目标名称（来自 contract 的 required_step）
+            candidates: 候选名称列表（来自 workflow 的实际 step names）
+
+        Returns:
+            匹配到的候选名称，未匹配返回 None
+        """
+        return find_fuzzy_match(target, candidates)
 
     def validate_makefile_targets(self) -> bool:
         """

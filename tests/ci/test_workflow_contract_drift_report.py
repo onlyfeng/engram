@@ -9,22 +9,25 @@ Tests for workflow_contract_drift_report.py
 from __future__ import annotations
 
 import json
-
-# 导入被测模块
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-from workflow_contract_drift_report import (
+from scripts.ci.workflow_contract_drift_report import (
+    DEFAULT_DRIFT_SEVERITY,
+    DRIFT_REPORT_SCHEMA_VERSION,
+    DRIFT_SEVERITY_MAP,
+    DriftCategories,
     DriftItem,
     DriftReport,
+    DriftSeverities,
+    DriftTypes,
     WorkflowContractDriftAnalyzer,
     format_json_output,
     format_markdown_output,
+    get_drift_severity,
 )
 
 # ============================================================================
@@ -59,6 +62,216 @@ def write_workflow(workspace: Path, name: str, workflow: dict[str, Any]) -> Path
     with open(workflow_path, "w", encoding="utf-8") as f:
         yaml.dump(workflow, f)
     return workflow_path
+
+
+# ============================================================================
+# Test Cases for get_drift_severity and DRIFT_SEVERITY_MAP
+# ============================================================================
+
+
+class TestGetDriftSeverity:
+    """get_drift_severity 和 DRIFT_SEVERITY_MAP 测试"""
+
+    def test_known_combination_returns_mapped_severity(self) -> None:
+        """验证已知组合返回 map 中定义的 severity"""
+        # job_id + removed -> error
+        assert (
+            get_drift_severity(DriftCategories.JOB_ID, DriftTypes.REMOVED) == DriftSeverities.ERROR
+        )
+        # job_id + added -> warning
+        assert (
+            get_drift_severity(DriftCategories.JOB_ID, DriftTypes.ADDED) == DriftSeverities.WARNING
+        )
+        # artifact_path + added -> info
+        assert (
+            get_drift_severity(DriftCategories.ARTIFACT_PATH, DriftTypes.ADDED)
+            == DriftSeverities.INFO
+        )
+        # step + removed -> error
+        assert get_drift_severity(DriftCategories.STEP, DriftTypes.REMOVED) == DriftSeverities.ERROR
+
+    def test_unknown_combination_returns_default_severity(self) -> None:
+        """验证未知组合返回默认 severity (warning)"""
+        # env_var + added 不在 map 中
+        assert (DriftCategories.ENV_VAR, DriftTypes.ADDED) not in DRIFT_SEVERITY_MAP
+        assert (
+            get_drift_severity(DriftCategories.ENV_VAR, DriftTypes.ADDED) == DEFAULT_DRIFT_SEVERITY
+        )
+        assert (
+            get_drift_severity(DriftCategories.ENV_VAR, DriftTypes.ADDED) == DriftSeverities.WARNING
+        )
+
+        # step + added 不在 map 中
+        assert (DriftCategories.STEP, DriftTypes.ADDED) not in DRIFT_SEVERITY_MAP
+        assert get_drift_severity(DriftCategories.STEP, DriftTypes.ADDED) == DriftSeverities.WARNING
+
+        # workflow + added 不在 map 中
+        assert (DriftCategories.WORKFLOW, DriftTypes.ADDED) not in DRIFT_SEVERITY_MAP
+        assert (
+            get_drift_severity(DriftCategories.WORKFLOW, DriftTypes.ADDED)
+            == DriftSeverities.WARNING
+        )
+
+    def test_default_severity_is_warning(self) -> None:
+        """验证默认 severity 是 warning"""
+        assert DEFAULT_DRIFT_SEVERITY == DriftSeverities.WARNING
+
+    def test_severity_map_completeness_for_critical_combinations(self) -> None:
+        """验证关键组合在 map 中有定义"""
+        # 所有 removed 类型都应该定义
+        critical_removed = [
+            (DriftCategories.JOB_ID, DriftTypes.REMOVED),
+            (DriftCategories.STEP, DriftTypes.REMOVED),
+            (DriftCategories.ENV_VAR, DriftTypes.REMOVED),
+            (DriftCategories.ARTIFACT_PATH, DriftTypes.REMOVED),
+            (DriftCategories.MAKE_TARGET, DriftTypes.REMOVED),
+            (DriftCategories.LABEL, DriftTypes.REMOVED),
+            (DriftCategories.WORKFLOW, DriftTypes.REMOVED),
+        ]
+        for combo in critical_removed:
+            assert combo in DRIFT_SEVERITY_MAP, f"{combo} should be in DRIFT_SEVERITY_MAP"
+
+    def test_mapped_severity_not_downgraded(self) -> None:
+        """验证 map 中定义的 severity 不会被降级为更低优先级"""
+        # 验证所有 removed 类型的 severity 都是 error（不会降级为 warning/info）
+        error_combos = [
+            (DriftCategories.JOB_ID, DriftTypes.REMOVED),
+            (DriftCategories.STEP, DriftTypes.REMOVED),
+            (DriftCategories.ENV_VAR, DriftTypes.REMOVED),
+            (DriftCategories.ARTIFACT_PATH, DriftTypes.REMOVED),
+            (DriftCategories.LABEL, DriftTypes.REMOVED),
+            (DriftCategories.WORKFLOW, DriftTypes.REMOVED),
+        ]
+        for combo in error_combos:
+            severity = DRIFT_SEVERITY_MAP.get(combo)
+            assert severity == DriftSeverities.ERROR, (
+                f"{combo} should have severity 'error', got '{severity}'"
+            )
+
+
+class TestMakeDriftItemHelper:
+    """_make_drift_item helper 方法测试"""
+
+    def test_severity_from_map_when_not_overridden(self, temp_workspace: Path) -> None:
+        """验证未显式覆盖时从 map 推导 severity"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": []},
+        }
+        write_contract(temp_workspace, contract)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+
+        # 测试 job_id + removed -> error
+        item = analyzer._make_drift_item(
+            category=DriftCategories.JOB_ID,
+            drift_type=DriftTypes.REMOVED,
+            workflow="ci",
+            key="test_job",
+        )
+        assert item.severity == DriftSeverities.ERROR
+
+        # 测试 job_id + added -> warning
+        item = analyzer._make_drift_item(
+            category=DriftCategories.JOB_ID,
+            drift_type=DriftTypes.ADDED,
+            workflow="ci",
+            key="test_job",
+        )
+        assert item.severity == DriftSeverities.WARNING
+
+        # 测试 artifact_path + added -> info
+        item = analyzer._make_drift_item(
+            category=DriftCategories.ARTIFACT_PATH,
+            drift_type=DriftTypes.ADDED,
+            workflow="ci",
+            key="coverage.xml",
+        )
+        assert item.severity == DriftSeverities.INFO
+
+    def test_severity_defaults_to_warning_for_unknown_combo(self, temp_workspace: Path) -> None:
+        """验证未知组合默认使用 warning"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": []},
+        }
+        write_contract(temp_workspace, contract)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+
+        # env_var + added 不在 map 中，应返回默认 warning
+        item = analyzer._make_drift_item(
+            category=DriftCategories.ENV_VAR,
+            drift_type=DriftTypes.ADDED,
+            workflow="ci",
+            key="NEW_VAR",
+        )
+        assert item.severity == DriftSeverities.WARNING
+
+    def test_explicit_severity_override(self, temp_workspace: Path) -> None:
+        """验证显式指定 severity 可以覆盖 map 中的值"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": []},
+        }
+        write_contract(temp_workspace, contract)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+
+        # job_id + removed 在 map 中是 error，但显式指定为 info
+        item = analyzer._make_drift_item(
+            category=DriftCategories.JOB_ID,
+            drift_type=DriftTypes.REMOVED,
+            workflow="ci",
+            key="test_job",
+            severity=DriftSeverities.INFO,
+        )
+        assert item.severity == DriftSeverities.INFO
+
+    def test_all_drift_item_fields_populated(self, temp_workspace: Path) -> None:
+        """验证 helper 创建的 DriftItem 所有字段正确填充"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": []},
+        }
+        write_contract(temp_workspace, contract)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+
+        item = analyzer._make_drift_item(
+            category=DriftCategories.STEP,
+            drift_type=DriftTypes.CHANGED,
+            workflow="ci",
+            key="lint/Check code",
+            contract_value="Check code",
+            actual_value="Run check",
+            location="jobs.lint.steps",
+        )
+
+        assert item.drift_type == DriftTypes.CHANGED
+        assert item.category == DriftCategories.STEP
+        assert item.workflow == "ci"
+        assert item.key == "lint/Check code"
+        assert item.contract_value == "Check code"
+        assert item.actual_value == "Run check"
+        assert item.location == "jobs.lint.steps"
+        assert item.severity == DriftSeverities.WARNING  # from map
 
 
 # ============================================================================
@@ -885,6 +1098,121 @@ class TestFormatMarkdownOutput:
 # ============================================================================
 
 
+class TestArtifactPathNormalization:
+    """artifact_path 标准化测试"""
+
+    def test_normalize_path_for_comparison(self, temp_workspace: Path) -> None:
+        """测试 _normalize_path_for_comparison 方法"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": []},
+        }
+        write_contract(temp_workspace, contract)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+
+        # 测试基本标准化
+        assert analyzer._normalize_path_for_comparison("./artifacts/") == "artifacts/"
+        assert analyzer._normalize_path_for_comparison("a\\b\\c") == "a/b/c"
+        assert analyzer._normalize_path_for_comparison("a//b//") == "a/b/"
+
+    def test_equivalent_paths_no_drift(self, temp_workspace: Path) -> None:
+        """测试等价路径不报告 drift"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "artifact_archive": {
+                    "required_artifact_paths": ["artifacts/results.json"],
+                },
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        # 使用 ./ 前缀的等价路径
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {
+                            "name": "Upload",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "results",
+                                "path": "./artifacts/results.json",  # 等价路径
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        # 不应报告 artifact_path drift（路径等价）
+        artifact_items = [i for i in report.drift_items if i.category == "artifact_path"]
+        assert len(artifact_items) == 0
+
+    def test_windows_separator_paths_equivalent(self, temp_workspace: Path) -> None:
+        """测试 Windows 分隔符路径被正确处理"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "artifact_archive": {
+                    "required_artifact_paths": ["artifacts/results.json"],
+                },
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        # 使用 Windows 分隔符
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {
+                            "name": "Upload",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "results",
+                                "path": "artifacts\\results.json",
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        # 不应报告 artifact_path drift
+        artifact_items = [i for i in report.drift_items if i.category == "artifact_path"]
+        assert len(artifact_items) == 0
+
+
 class TestArtifactPathDrift:
     """artifact_path drift 测试"""
 
@@ -1247,6 +1575,828 @@ def main():
 # ============================================================================
 # Integration Tests
 # ============================================================================
+
+
+# ============================================================================
+# Test Cases for Step Rename Drift (for suggest_workflow_contract_updates.py)
+# ============================================================================
+
+
+class TestStepRenameDrift:
+    """Step rename drift 分类测试
+
+    确保 drift report 的 step rename 输出稳定，可用于 suggest_workflow_contract_updates.py
+    建议工具生成合约更新建议。
+
+    覆盖场景：
+    1. step changed (fuzzy match) - DriftTypes.CHANGED
+    2. step removed (no match) - DriftTypes.REMOVED
+    3. 多个 step 同时有 changed 和 removed
+    4. JSON/Markdown 输出中的 step changed 分类是否稳定
+    """
+
+    def test_step_changed_drift_category(self, temp_workspace: Path) -> None:
+        """测试：step changed drift 的 category 是 'step'"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["lint"],
+                "required_jobs": [
+                    {
+                        "id": "lint",
+                        "required_steps": ["Run lint check"],
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        # step 名称变化但可以 fuzzy 匹配
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "lint": {
+                    "name": "Lint",
+                    "steps": [
+                        {"name": "Run lint check (v2)"},  # changed
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        assert report.has_drift is True
+        changed_items = [
+            i
+            for i in report.drift_items
+            if i.drift_type == DriftTypes.CHANGED and i.category == DriftCategories.STEP
+        ]
+        assert len(changed_items) == 1
+        assert changed_items[0].contract_value == "Run lint check"
+        assert changed_items[0].actual_value == "Run lint check (v2)"
+        assert changed_items[0].severity == DriftSeverities.WARNING
+
+    def test_step_removed_drift_category(self, temp_workspace: Path) -> None:
+        """测试：step removed drift 的 category 是 'step'"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["lint"],
+                "required_jobs": [
+                    {
+                        "id": "lint",
+                        "required_steps": ["Run special validation"],  # 完全不存在
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "lint": {
+                    "name": "Lint",
+                    "steps": [
+                        {"name": "Checkout"},
+                        {"name": "Build"},
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        assert report.has_drift is True
+        removed_items = [
+            i
+            for i in report.drift_items
+            if i.drift_type == DriftTypes.REMOVED and i.category == DriftCategories.STEP
+        ]
+        assert len(removed_items) == 1
+        assert removed_items[0].contract_value == "Run special validation"
+        assert removed_items[0].severity == DriftSeverities.ERROR
+
+    def test_multiple_steps_mixed_drift_types(self, temp_workspace: Path) -> None:
+        """测试：多个 step 同时有 changed 和 removed drift"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "required_jobs": [
+                    {
+                        "id": "test",
+                        "required_steps": [
+                            "Checkout",  # exact match
+                            "Run unit tests",  # changed
+                            "Upload coverage",  # removed
+                        ],
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {"name": "Checkout"},
+                        {"name": "Run unit tests (pytest)"},  # fuzzy match -> changed
+                        # "Upload coverage" 完全不存在 -> removed
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        assert report.has_drift is True
+
+        # 验证 changed drift
+        changed_items = [
+            i
+            for i in report.drift_items
+            if i.drift_type == DriftTypes.CHANGED and i.category == DriftCategories.STEP
+        ]
+        assert len(changed_items) == 1
+        assert "Run unit tests" in changed_items[0].contract_value
+
+        # 验证 removed drift
+        removed_items = [
+            i
+            for i in report.drift_items
+            if i.drift_type == DriftTypes.REMOVED and i.category == DriftCategories.STEP
+        ]
+        assert len(removed_items) == 1
+        assert "Upload coverage" in removed_items[0].contract_value
+
+    def test_step_drift_json_output_stability(self, temp_workspace: Path) -> None:
+        """测试：step drift JSON 输出的字段稳定性（用于建议工具）"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["lint"],
+                "required_jobs": [
+                    {
+                        "id": "lint",
+                        "required_steps": ["Run lint check"],
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "lint": {
+                    "name": "Lint",
+                    "steps": [
+                        {"name": "Run lint check (v2)"},
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        # 验证 JSON 输出
+        import json
+
+        output = format_json_output(report)
+        data = json.loads(output)
+
+        # 验证必需字段存在（建议工具依赖这些字段）
+        assert "drift_items" in data
+        assert len(data["drift_items"]) >= 1
+
+        step_item = [i for i in data["drift_items"] if i["category"] == "step"][0]
+
+        # 建议工具需要的字段
+        assert "drift_type" in step_item
+        assert "category" in step_item
+        assert "workflow" in step_item
+        assert "key" in step_item
+        assert "contract_value" in step_item
+        assert "actual_value" in step_item
+        assert "severity" in step_item
+
+        # 验证值的稳定性
+        assert step_item["drift_type"] == "changed"
+        assert step_item["category"] == "step"
+        assert step_item["contract_value"] == "Run lint check"
+        assert step_item["actual_value"] == "Run lint check (v2)"
+
+    def test_step_drift_markdown_output_includes_step_section(self, temp_workspace: Path) -> None:
+        """测试：step drift Markdown 输出包含在 Drift Details 中"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["lint"],
+                "required_jobs": [
+                    {
+                        "id": "lint",
+                        "required_steps": ["Run lint check"],
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "lint": {
+                    "name": "Lint",
+                    "steps": [
+                        {"name": "Run lint check (v2)"},
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        # 验证 Markdown 输出
+        output = format_markdown_output(report)
+
+        # 验证包含关键元素
+        assert "## Drift Details" in output
+        assert "### ci" in output
+        assert "step" in output.lower()
+        assert "changed" in output.lower()
+        assert "Run lint check" in output
+
+    def test_step_drift_summary_aggregation(self, temp_workspace: Path) -> None:
+        """测试：step drift summary 聚合（用于快速统计）"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "required_jobs": [
+                    {
+                        "id": "test",
+                        "required_steps": [
+                            "Run unit tests",  # changed
+                            "Run integration tests",  # changed
+                            "Upload special coverage report",  # removed (no fuzzy match)
+                        ],
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {"name": "Run unit tests (pytest)"},  # fuzzy match -> changed
+                        {"name": "Run integration tests (docker)"},  # fuzzy match -> changed
+                        # "Upload special coverage report" 无匹配 -> removed
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        # 验证 summary 聚合
+        assert report.summary.get("step_changed", 0) == 2
+        assert report.summary.get("step_removed", 0) == 1
+
+
+# ============================================================================
+# Test Cases for Output Stability (Schema v1.0.0)
+# ============================================================================
+
+
+class TestOutputStability:
+    """输出稳定性测试
+
+    确保相同输入产生相同输出，字段顺序稳定，适用于下游消费者。
+    """
+
+    def test_schema_version_present_in_output(self) -> None:
+        """验证输出包含 schema_version 字段"""
+        report = DriftReport()
+        report.contract_version = "1.0.0"
+        report.contract_last_updated = "2026-02-01"
+        report.report_generated_at = "2026-02-02T10:00:00Z"
+        report.workflows_checked = ["ci"]
+
+        output = format_json_output(report)
+        data = json.loads(output)
+
+        assert "schema_version" in data
+        assert data["schema_version"] == DRIFT_REPORT_SCHEMA_VERSION
+
+    def test_drift_items_sorted_by_workflow_category_type_key(self) -> None:
+        """验证 drift_items 按 (workflow, category, drift_type, key) 排序"""
+        report = DriftReport()
+        report.contract_version = "1.0.0"
+
+        # 以乱序添加 drift items
+        report.add_drift(
+            DriftItem(drift_type="added", category="job_id", workflow="nightly", key="z_job")
+        )
+        report.add_drift(
+            DriftItem(drift_type="removed", category="step", workflow="ci", key="lint/a_step")
+        )
+        report.add_drift(
+            DriftItem(drift_type="added", category="job_id", workflow="ci", key="b_job")
+        )
+        report.add_drift(
+            DriftItem(drift_type="removed", category="job_id", workflow="ci", key="a_job")
+        )
+        report.add_drift(
+            DriftItem(drift_type="changed", category="job_name", workflow="ci", key="lint")
+        )
+
+        output = format_json_output(report)
+        data = json.loads(output)
+
+        # 验证排序：(workflow, category, drift_type, key)
+        items = data["drift_items"]
+        assert len(items) == 5
+
+        # ci workflow 应该在 nightly 之前
+        assert items[0]["workflow"] == "ci"
+        assert items[4]["workflow"] == "nightly"
+
+        # ci 内部按 category 排序：job_id < job_name < step
+        ci_items = [i for i in items if i["workflow"] == "ci"]
+        categories = [i["category"] for i in ci_items]
+        assert categories == sorted(categories)
+
+    def test_summary_keys_sorted_alphabetically(self) -> None:
+        """验证 summary keys 按字母序排序"""
+        report = DriftReport()
+        report.contract_version = "1.0.0"
+
+        # 以乱序添加不同类型的 drift
+        report.add_drift(DriftItem(drift_type="added", category="step", workflow="ci", key="s1"))
+        report.add_drift(
+            DriftItem(drift_type="removed", category="artifact_path", workflow="ci", key="a1")
+        )
+        report.add_drift(
+            DriftItem(drift_type="changed", category="job_name", workflow="ci", key="j1")
+        )
+
+        output = format_json_output(report)
+        data = json.loads(output)
+
+        # 验证 summary keys 排序
+        summary_keys = list(data["summary"].keys())
+        assert summary_keys == sorted(summary_keys)
+
+    def test_workflows_checked_sorted_alphabetically(self) -> None:
+        """验证 workflows_checked 按字母序排序"""
+        report = DriftReport()
+        report.contract_version = "1.0.0"
+        report.workflows_checked = ["nightly", "ci", "release", "alpha"]
+
+        output = format_json_output(report)
+        data = json.loads(output)
+
+        assert data["workflows_checked"] == ["alpha", "ci", "nightly", "release"]
+
+    def test_same_input_produces_same_output(self, temp_workspace: Path) -> None:
+        """验证相同输入多次执行产生相同输出（除时间戳外）"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["lint", "test"],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "lint": {"name": "Lint", "steps": []},
+                "test": {"name": "Test", "steps": []},
+                "deploy": {"name": "Deploy", "steps": []},
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        # 执行两次分析
+        analyzer1 = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report1 = analyzer1.analyze()
+        output1 = format_json_output(report1)
+        data1 = json.loads(output1)
+
+        analyzer2 = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report2 = analyzer2.analyze()
+        output2 = format_json_output(report2)
+        data2 = json.loads(output2)
+
+        # 移除时间戳后比较
+        del data1["report_generated_at"]
+        del data2["report_generated_at"]
+
+        assert data1 == data2
+
+    def test_output_field_order_alphabetical(self) -> None:
+        """验证顶层字段按字母序排列"""
+        report = DriftReport()
+        report.contract_version = "1.0.0"
+        report.contract_last_updated = "2026-02-01"
+        report.report_generated_at = "2026-02-02T10:00:00Z"
+        report.workflows_checked = ["ci"]
+
+        output = format_json_output(report)
+        data = json.loads(output)
+
+        # 获取字段顺序
+        actual_keys = list(data.keys())
+        expected_keys = sorted(actual_keys)
+
+        assert actual_keys == expected_keys, (
+            f"Fields not in alphabetical order: {actual_keys} vs {expected_keys}"
+        )
+
+
+class TestRenameClassificationStability:
+    """Rename 归类稳定性测试
+
+    确保 step rename 的检测和分类是稳定的，不会因为输入顺序变化而改变。
+    """
+
+    def test_step_rename_fuzzy_match_stable(self, temp_workspace: Path) -> None:
+        """验证 step rename 通过 fuzzy match 检测的稳定性"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["lint"],
+                "required_jobs": [
+                    {
+                        "id": "lint",
+                        "required_steps": ["Run lint check"],
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        # 多个候选 step，其中一个是 fuzzy match
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "lint": {
+                    "name": "Lint",
+                    "steps": [
+                        {"name": "Setup"},
+                        {"name": "Run lint check (v2)"},  # fuzzy match
+                        {"name": "Cleanup"},
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        # 执行多次分析，验证结果稳定
+        results = []
+        for _ in range(3):
+            analyzer = WorkflowContractDriftAnalyzer(
+                contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+                workspace_root=temp_workspace,
+            )
+            report = analyzer.analyze()
+            output = format_json_output(report)
+            data = json.loads(output)
+            results.append(data)
+
+        # 所有结果应该相同（除时间戳）
+        for i, result in enumerate(results):
+            del result["report_generated_at"]
+        assert results[0] == results[1] == results[2]
+
+        # 验证检测到的是 changed（fuzzy match），不是 removed
+        changed_items = [
+            i
+            for i in results[0]["drift_items"]
+            if i["drift_type"] == "changed" and i["category"] == "step"
+        ]
+        assert len(changed_items) == 1
+        assert changed_items[0]["contract_value"] == "Run lint check"
+        assert changed_items[0]["actual_value"] == "Run lint check (v2)"
+
+    def test_step_rename_classification_consistent(self, temp_workspace: Path) -> None:
+        """验证多个 step rename 分类的一致性"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "required_jobs": [
+                    {
+                        "id": "test",
+                        "required_steps": [
+                            "Run unit tests",
+                            "Run integration tests",
+                            "Upload test results",  # 没有 fuzzy match，应该是 removed
+                        ],
+                    }
+                ],
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {"name": "Run unit tests (pytest)"},  # fuzzy match
+                        {"name": "Run integration tests (docker)"},  # fuzzy match
+                        {"name": "Generate report"},  # 不匹配任何
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+        output = format_json_output(report)
+        data = json.loads(output)
+
+        # 验证分类：2 个 changed（fuzzy match），1 个 removed
+        step_items = [i for i in data["drift_items"] if i["category"] == "step"]
+        changed_items = [i for i in step_items if i["drift_type"] == "changed"]
+        removed_items = [i for i in step_items if i["drift_type"] == "removed"]
+
+        assert len(changed_items) == 2
+        assert len(removed_items) == 1
+        assert removed_items[0]["contract_value"] == "Upload test results"
+
+
+class TestArtifactPathNormalizationNoDrift:
+    """Artifact path 规范化不产生虚假 drift 测试
+
+    确保不同格式但等价的 artifact path 不会被误报为 drift。
+    """
+
+    def test_dotslash_prefix_equivalent(self, temp_workspace: Path) -> None:
+        """验证 ./ 前缀路径与无前缀路径等价"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "artifact_archive": {
+                    "required_artifact_paths": ["artifacts/results.json"],
+                },
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {
+                            "name": "Upload",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "results",
+                                "path": "./artifacts/results.json",
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        artifact_drifts = [i for i in report.drift_items if i.category == "artifact_path"]
+        assert len(artifact_drifts) == 0
+
+    def test_double_slash_normalized(self, temp_workspace: Path) -> None:
+        """验证双斜杠路径被正确规范化"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "artifact_archive": {
+                    "required_artifact_paths": ["artifacts/subdir/results.json"],
+                },
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {
+                            "name": "Upload",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "results",
+                                "path": "artifacts//subdir//results.json",
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        artifact_drifts = [i for i in report.drift_items if i.category == "artifact_path"]
+        assert len(artifact_drifts) == 0
+
+    def test_windows_backslash_normalized(self, temp_workspace: Path) -> None:
+        """验证 Windows 反斜杠路径被正确规范化"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "artifact_archive": {
+                    "required_artifact_paths": ["artifacts/results.json"],
+                },
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {
+                            "name": "Upload",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "results",
+                                "path": "artifacts\\results.json",
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        artifact_drifts = [i for i in report.drift_items if i.category == "artifact_path"]
+        assert len(artifact_drifts) == 0
+
+    def test_mixed_path_formats_no_false_drift(self, temp_workspace: Path) -> None:
+        """验证混合路径格式不产生虚假 drift"""
+        contract = {
+            "version": "1.0.0",
+            "last_updated": "2026-02-01",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test"],
+                "artifact_archive": {
+                    "required_artifact_paths": [
+                        "coverage/",
+                        "reports/junit.xml",
+                        "logs/output.log",
+                    ],
+                },
+            },
+        }
+        write_contract(temp_workspace, contract)
+
+        workflow = {
+            "name": "CI",
+            "jobs": {
+                "test": {
+                    "name": "Test",
+                    "steps": [
+                        {
+                            "name": "Upload coverage",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "coverage",
+                                "path": "./coverage/",  # ./ 前缀
+                            },
+                        },
+                        {
+                            "name": "Upload reports",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "reports",
+                                "path": "reports//junit.xml",  # 双斜杠
+                            },
+                        },
+                        {
+                            "name": "Upload logs",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {
+                                "name": "logs",
+                                "path": "logs\\output.log",  # 反斜杠
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        write_workflow(temp_workspace, "ci", workflow)
+
+        analyzer = WorkflowContractDriftAnalyzer(
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            workspace_root=temp_workspace,
+        )
+        report = analyzer.analyze()
+
+        artifact_drifts = [i for i in report.drift_items if i.category == "artifact_path"]
+        assert len(artifact_drifts) == 0, f"Unexpected artifact drifts: {artifact_drifts}"
 
 
 class TestIntegration:

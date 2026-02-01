@@ -5,21 +5,27 @@ Workflow Contract 版本策略检查脚本
 当关键文件变更时，强制要求：
 1. workflow_contract.v1.json 的 version 字段已更新
 2. workflow_contract.v1.json 的 last_updated 字段已更新
-3. contract.md 版本控制表（第 13 章）包含该版本
+3. contract.md 版本控制表（第 14 章）包含该版本
 
-关键文件（变更时触发版本更新检查）：
-- .github/workflows/ci.yml
-- .github/workflows/nightly.yml
-- scripts/ci/workflow_contract.v1.json
-- Makefile（仅当变更涉及 workflow/CI 相关目标时）
-- docs/ci_nightly_workflow_refactor/*.md
+关键文件规则（统一定义，详见 CRITICAL_*_RULES）：
 
-工具脚本关键文件（变更影响合约执行逻辑）：
-- scripts/ci/validate_workflows.py
-- scripts/ci/workflow_contract.v1.schema.json
-- scripts/ci/check_workflow_contract_docs_sync.py
-- scripts/ci/workflow_contract_drift_report.py
-- scripts/ci/generate_workflow_contract_snapshot.py
+  [workflow_core] Phase 1 Workflow 文件：
+    - .github/workflows/ci.yml
+    - .github/workflows/nightly.yml
+    注：Phase 1 仅支持 ci/nightly，扩展时修改 CRITICAL_WORKFLOW_RULES。
+
+  [contract_definition] 合约定义文件：
+    - scripts/ci/workflow_contract.v*.json
+    - docs/ci_nightly_workflow_refactor/*.md
+
+  [tooling] 工具脚本（变更影响合约执行逻辑）：
+    - scripts/ci/validate_workflows.py
+    - scripts/ci/workflow_contract.v*.schema.json
+    - scripts/ci/check_workflow_contract_docs_sync.py
+    - scripts/ci/workflow_contract_drift_report.py
+    - scripts/ci/generate_workflow_contract_snapshot.py
+
+  [special] Makefile（仅当变更涉及 workflow/CI 相关目标时触发）
 
 使用方式：
     # 基于 git diff 检测变更（默认比较 HEAD~1）
@@ -34,7 +40,7 @@ Workflow Contract 版本策略检查脚本
     # 指定变更文件列表（用于测试或 CI 集成）
     python scripts/ci/check_workflow_contract_version_policy.py --changed-files file1.yml file2.json
 
-    # JSON 输出
+    # JSON 输出（包含 trigger_reasons 字段）
     python scripts/ci/check_workflow_contract_version_policy.py --json
 
 退出码：
@@ -62,34 +68,174 @@ from typing import Any
 DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
 DEFAULT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
 
-# 关键文件列表：这些文件变更时需要检查版本策略
-CRITICAL_FILES = [
-    ".github/workflows/ci.yml",
-    ".github/workflows/nightly.yml",
-    "scripts/ci/workflow_contract.v1.json",
+
+# ============================================================================
+# Error Types - 统一定义
+# ============================================================================
+#
+# 所有 error_type 的统一定义，便于维护和测试覆盖。
+#
+# 版本策略：
+#   - 新增 error_type: Minor (0.X.0)
+#   - 弃用 error_type: Major (X.0.0) - 需提供迁移路径
+#   - 修改 error_type 含义: Major (X.0.0)
+#
+# 详见 docs/ci_nightly_workflow_refactor/contract.md 第 13 章
+#
+
+
+class VersionPolicyErrorTypes:
+    """版本策略校验的 error_type 常量定义"""
+
+    # 文件/解析错误
+    CONTRACT_NOT_FOUND = "contract_not_found"
+    CONTRACT_PARSE_ERROR = "contract_parse_error"
+    DOC_NOT_FOUND = "doc_not_found"
+    DOC_READ_ERROR = "doc_read_error"
+
+    # 版本策略错误
+    VERSION_NOT_UPDATED = "version_not_updated"
+    LAST_UPDATED_NOT_UPDATED = "last_updated_not_updated"
+    VERSION_NOT_IN_DOC = "version_not_in_doc"
+
+
+# 导出所有 error_type 的集合（用于测试覆盖检查）
+VERSION_POLICY_ERROR_TYPES = frozenset(
+    {
+        VersionPolicyErrorTypes.CONTRACT_NOT_FOUND,
+        VersionPolicyErrorTypes.CONTRACT_PARSE_ERROR,
+        VersionPolicyErrorTypes.DOC_NOT_FOUND,
+        VersionPolicyErrorTypes.DOC_READ_ERROR,
+        VersionPolicyErrorTypes.VERSION_NOT_UPDATED,
+        VersionPolicyErrorTypes.LAST_UPDATED_NOT_UPDATED,
+        VersionPolicyErrorTypes.VERSION_NOT_IN_DOC,
+    }
+)
+
+# 文件错误集合（exit code = 2）
+VERSION_POLICY_FILE_ERROR_TYPES = frozenset(
+    {
+        VersionPolicyErrorTypes.CONTRACT_NOT_FOUND,
+        VersionPolicyErrorTypes.CONTRACT_PARSE_ERROR,
+        VersionPolicyErrorTypes.DOC_NOT_FOUND,
+        VersionPolicyErrorTypes.DOC_READ_ERROR,
+    }
+)
+
+
+# ============================================================================
+# Critical File Rules - 统一定义
+# ============================================================================
+#
+# 每条规则包含：
+#   - pattern: 正则表达式模式
+#   - description: 规则描述（用于 trigger_reasons）
+#   - category: 分类（workflow_core | contract_definition | contract_docs | tooling）
+#
+# Phase 1 范围说明：
+#   当前仅覆盖 ci.yml 和 nightly.yml。release.yml 将在 Phase 2 引入。
+#   可通过扩展 CRITICAL_WORKFLOW_RULES 支持更多 workflow 文件。
+#
+
+
+@dataclass
+class CriticalFileRule:
+    """关键文件规则定义"""
+
+    pattern: str
+    description: str
+    category: str
+
+    def matches(self, file_path: str) -> bool:
+        """检查文件路径是否匹配此规则"""
+        return bool(re.match(self.pattern, file_path))
+
+
+# Phase 1 Workflow 核心文件规则
+# 注意：当前仅支持 ci/nightly，扩展时修改此列表的正则表达式
+#
+# ============================================================================
+# Phase 2 扩展点：纳入 release.yml
+# ============================================================================
+#
+# 当需要将 release.yml 纳入合约版本策略检查时，按以下步骤扩展：
+#
+# 1. 修改下方 pattern 正则表达式：
+#    - 当前: r"^\.github/workflows/(ci|nightly)\.yml$"
+#    - Phase 2: r"^\.github/workflows/(ci|nightly|release)\.yml$"
+#
+# 2. 更新 description 字段：
+#    - Phase 2: "Phase 2 workflow 文件（ci.yml/nightly.yml/release.yml）"
+#
+# 3. 同步更新其他脚本（参见 contract.md 2.4.3 节迁移 Checklist）：
+#    - check_workflow_contract_docs_sync.py: 扩展 WORKFLOW_DOC_ANCHORS
+#    - workflow_contract.v1.json: 添加 release 字段定义
+#    - contract.md: 更新 2.3 节为正式章节
+#
+# 4. 版本策略影响：
+#    - 扩展 workflow 范围属于 Minor (0.X.0) 变更
+#    - 需同步更新 workflow_contract.v1.json 的 version 字段
+#
+# ============================================================================
+CRITICAL_WORKFLOW_RULES: list[CriticalFileRule] = [
+    CriticalFileRule(
+        pattern=r"^\.github/workflows/(ci|nightly)\.yml$",
+        description="Phase 1 workflow 文件（ci.yml/nightly.yml）",
+        category="workflow_core",
+    ),
 ]
 
-# 扩展关键文件模式（使用 glob 匹配）
-CRITICAL_FILE_PATTERNS = [
-    r"^\.github/workflows/(ci|nightly)\.yml$",
-    r"^scripts/ci/workflow_contract\.v\d+\.json$",
-    r"^docs/ci_nightly_workflow_refactor/.*\.md$",
+# 合约定义文件规则
+CRITICAL_CONTRACT_RULES: list[CriticalFileRule] = [
+    CriticalFileRule(
+        pattern=r"^scripts/ci/workflow_contract\.v\d+\.json$",
+        description="合约定义 JSON 文件",
+        category="contract_definition",
+    ),
+    CriticalFileRule(
+        pattern=r"^docs/ci_nightly_workflow_refactor/.*\.md$",
+        description="合约文档（docs/ci_nightly_workflow_refactor/）",
+        category="contract_docs",
+    ),
 ]
 
-# 工具脚本关键文件模式（变更时需要更新 contract 版本）
-# - 校验脚本变更影响合约执行逻辑
-# - Schema 变更影响合约校验规则
+# 工具脚本关键文件规则
 # 版本策略：
 #   Major: 校验逻辑不兼容变更（如删除校验规则、修改错误码含义）
 #   Minor: 新增校验功能、新增错误类型
 #   Patch: 修复 bug、优化性能、完善错误提示
-CRITICAL_TOOLING_PATTERNS = [
-    r"^scripts/ci/validate_workflows\.py$",  # 合约校验器核心脚本
-    r"^scripts/ci/workflow_contract\.v\d+\.schema\.json$",  # 合约 JSON Schema
-    r"^scripts/ci/check_workflow_contract_docs_sync\.py$",  # 文档同步校验脚本
-    r"^scripts/ci/workflow_contract_drift_report\.py$",  # 漂移报告生成脚本
-    r"^scripts/ci/generate_workflow_contract_snapshot\.py$",  # 快照生成脚本
+CRITICAL_TOOLING_RULES: list[CriticalFileRule] = [
+    CriticalFileRule(
+        pattern=r"^scripts/ci/validate_workflows\.py$",
+        description="合约校验器核心脚本",
+        category="tooling",
+    ),
+    CriticalFileRule(
+        pattern=r"^scripts/ci/workflow_contract\.v\d+\.schema\.json$",
+        description="合约 JSON Schema",
+        category="tooling",
+    ),
+    CriticalFileRule(
+        pattern=r"^scripts/ci/check_workflow_contract_docs_sync\.py$",
+        description="文档同步校验脚本",
+        category="tooling",
+    ),
+    CriticalFileRule(
+        pattern=r"^scripts/ci/workflow_contract_drift_report\.py$",
+        description="漂移报告生成脚本",
+        category="tooling",
+    ),
+    CriticalFileRule(
+        pattern=r"^scripts/ci/generate_workflow_contract_snapshot\.py$",
+        description="快照生成脚本",
+        category="tooling",
+    ),
 ]
+
+# 所有关键文件规则（合并）
+ALL_CRITICAL_RULES: list[CriticalFileRule] = (
+    CRITICAL_WORKFLOW_RULES + CRITICAL_CONTRACT_RULES + CRITICAL_TOOLING_RULES
+)
 
 # Makefile 中与 workflow/CI 相关的目标关键字
 # 只有当 Makefile 变更涉及这些关键字时才触发版本检查
@@ -99,6 +245,9 @@ MAKEFILE_CI_KEYWORDS = [
     "ci:",
     "workflow-contract",
 ]
+
+# Makefile 规则描述（用于 trigger_reasons）
+MAKEFILE_RULE_DESCRIPTION = "Makefile CI/workflow 相关目标变更"
 
 
 # ============================================================================
@@ -123,6 +272,7 @@ class VersionCheckResult:
     errors: list[VersionError] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     changed_critical_files: list[str] = field(default_factory=list)
+    trigger_reasons: dict[str, str] = field(default_factory=dict)
     contract_version: str = ""
     contract_last_updated: str = ""
     doc_versions: list[str] = field(default_factory=list)
@@ -138,6 +288,10 @@ class VersionCheckResult:
     def add_warning(self, warning: str) -> None:
         """添加警告"""
         self.warnings.append(warning)
+
+    def add_trigger_reason(self, file_path: str, reason: str) -> None:
+        """添加触发原因"""
+        self.trigger_reasons[file_path] = reason
 
 
 # ============================================================================
@@ -256,8 +410,320 @@ def get_old_file_content(file_path: str, base: str = "HEAD~1") -> str | None:
 
 
 # ============================================================================
+# Rule Groups - 统一分组定义（便于测试和维护）
+# ============================================================================
+#
+# 按关键性分组，便于单独测试每个组的触发行为：
+#   - WORKFLOW_PATTERNS: Phase 1 workflow 文件，任何变更必须 bump
+#   - TOOLING_PATTERNS: 关键校验器脚本，变更影响合约执行逻辑
+#   - CONTRACT_PATTERNS: 合约定义文件（JSON 和文档）
+#   - NON_CRITICAL_DOC_PATTERNS: 非关键文档（不触发 bump）
+#
+
+
+class RuleGroups:
+    """规则分组常量定义（便于测试导入）"""
+
+    # Phase 1 workflow 文件（必须触发）
+    WORKFLOW_FILES = frozenset(
+        {
+            ".github/workflows/ci.yml",
+            ".github/workflows/nightly.yml",
+        }
+    )
+
+    # 关键工具脚本（必须触发）
+    CRITICAL_TOOLING_SCRIPTS = frozenset(
+        {
+            "scripts/ci/validate_workflows.py",
+            "scripts/ci/check_workflow_contract_docs_sync.py",
+            "scripts/ci/workflow_contract_drift_report.py",
+            "scripts/ci/generate_workflow_contract_snapshot.py",
+        }
+    )
+
+    # 关键工具脚本模式（正则匹配）
+    CRITICAL_TOOLING_PATTERNS = [
+        r"^scripts/ci/workflow_contract\.v\d+\.schema\.json$",
+    ]
+
+    # 非关键文档路径前缀（不触发）
+    NON_CRITICAL_DOC_PREFIXES = [
+        "docs/architecture/",
+        "docs/dev/",
+        "docs/guides/",
+        "docs/legacy/",
+        "docs/logbook/",
+        "docs/openmemory/",
+        "docs/reference/",
+        "docs/seekdb/",
+        "docs/gateway/",
+        "docs/acceptance/",
+    ]
+
+    # Makefile CI 相关关键字（用于识别 CI 相关变更）
+    MAKEFILE_CI_TARGET_KEYWORDS = [
+        "validate-workflows",
+        "check-workflow",
+        "ci:",
+        "workflow-contract",
+    ]
+
+
+# ============================================================================
+# Pure Functions - 可测试纯函数接口
+# ============================================================================
+#
+# 这些函数接受输入数据（changed_files, old_content, new_content）
+# 并返回结果，不依赖外部状态或 git 操作，便于单元测试。
+#
+
+
+@dataclass
+class VersionPolicyViolation:
+    """版本策略违规项"""
+
+    error_type: str
+    message: str
+    suggestion: str
+
+
+@dataclass
+class VersionPolicyCheckInput:
+    """版本策略检查输入"""
+
+    changed_files: list[str]
+    old_contract_content: str | None  # 旧版本 contract JSON 内容
+    new_contract_content: str  # 新版本 contract JSON 内容
+    doc_content: str  # contract.md 文档内容
+    makefile_diff: str | None = None  # Makefile diff 内容（可选）
+
+
+@dataclass
+class VersionPolicyCheckOutput:
+    """版本策略检查输出"""
+
+    critical_files: list[str]  # 触发检查的关键文件
+    trigger_reasons: dict[str, str]  # 每个关键文件的触发原因
+    violations: list[VersionPolicyViolation]  # 违规项列表
+    version_updated: bool  # version 是否已更新
+    last_updated_updated: bool  # last_updated 是否已更新
+    version_in_doc: bool  # 版本是否在文档中
+
+
+def check_version_policy_pure(
+    input_data: VersionPolicyCheckInput,
+) -> VersionPolicyCheckOutput:
+    """纯函数：检查版本策略违规
+
+    此函数不依赖 git 操作或文件系统，仅基于输入数据进行检查，
+    适合单元测试直接调用。
+
+    Args:
+        input_data: 版本策略检查输入
+
+    Returns:
+        版本策略检查输出
+    """
+    violations: list[VersionPolicyViolation] = []
+
+    # 1. 过滤关键文件并获取触发原因
+    critical_files, trigger_reasons = filter_critical_files_with_reasons(
+        input_data.changed_files, input_data.makefile_diff
+    )
+
+    # 如果没有关键文件变更，直接返回空结果
+    if not critical_files:
+        return VersionPolicyCheckOutput(
+            critical_files=[],
+            trigger_reasons={},
+            violations=[],
+            version_updated=False,
+            last_updated_updated=False,
+            version_in_doc=False,
+        )
+
+    # 2. 解析 contract JSON
+    try:
+        new_contract = json.loads(input_data.new_contract_content)
+    except json.JSONDecodeError as e:
+        violations.append(
+            VersionPolicyViolation(
+                error_type=VersionPolicyErrorTypes.CONTRACT_PARSE_ERROR,
+                message=f"Failed to parse new contract JSON: {e}",
+                suggestion="Fix JSON syntax in workflow_contract.v1.json",
+            )
+        )
+        return VersionPolicyCheckOutput(
+            critical_files=critical_files,
+            trigger_reasons=trigger_reasons,
+            violations=violations,
+            version_updated=False,
+            last_updated_updated=False,
+            version_in_doc=False,
+        )
+
+    new_version = new_contract.get("version", "")
+    new_last_updated = new_contract.get("last_updated", "")
+
+    # 3. 检查版本是否更新
+    version_updated = False
+    last_updated_updated = False
+
+    if input_data.old_contract_content is None:
+        # 新文件，视为已更新
+        version_updated = True
+        last_updated_updated = True
+    else:
+        try:
+            old_contract = json.loads(input_data.old_contract_content)
+            old_version = old_contract.get("version", "")
+            old_last_updated = old_contract.get("last_updated", "")
+
+            version_updated = is_version_updated(old_version, new_version)
+            last_updated_updated = new_last_updated != old_last_updated
+        except json.JSONDecodeError:
+            # 旧文件无法解析，视为已更新
+            version_updated = True
+            last_updated_updated = True
+
+    # 4. 检查版本是否在文档中
+    version_in_doc = _check_version_in_doc_content(input_data.doc_content, new_version)
+
+    # 5. 生成违规项
+    if not version_updated:
+        violations.append(
+            VersionPolicyViolation(
+                error_type=VersionPolicyErrorTypes.VERSION_NOT_UPDATED,
+                message=(
+                    f"Critical files changed but 'version' field not updated in "
+                    f"workflow_contract.v1.json (current: {new_version})"
+                ),
+                suggestion=(
+                    "Update 'version' field according to SemVer policy: "
+                    "Major for breaking changes, Minor for new features, Patch for fixes"
+                ),
+            )
+        )
+
+    if not last_updated_updated:
+        violations.append(
+            VersionPolicyViolation(
+                error_type=VersionPolicyErrorTypes.LAST_UPDATED_NOT_UPDATED,
+                message=(
+                    f"Critical files changed but 'last_updated' field not updated in "
+                    f"workflow_contract.v1.json (current: {new_last_updated})"
+                ),
+                suggestion=f"Update 'last_updated' to today's date: {date.today().isoformat()}",
+            )
+        )
+
+    if not version_in_doc:
+        violations.append(
+            VersionPolicyViolation(
+                error_type=VersionPolicyErrorTypes.VERSION_NOT_IN_DOC,
+                message=(
+                    f"Version '{new_version}' not found in "
+                    f"contract.md version control table (Section 13)"
+                ),
+                suggestion=(
+                    "Add a new row to the version control table in contract.md:\n"
+                    f"| v{new_version} | {date.today().isoformat()} | <变更说明> |"
+                ),
+            )
+        )
+
+    return VersionPolicyCheckOutput(
+        critical_files=critical_files,
+        trigger_reasons=trigger_reasons,
+        violations=violations,
+        version_updated=version_updated,
+        last_updated_updated=last_updated_updated,
+        version_in_doc=version_in_doc,
+    )
+
+
+def is_workflow_file(file_path: str) -> bool:
+    """检查文件是否为 Phase 1 workflow 文件
+
+    Args:
+        file_path: 文件路径
+
+    Returns:
+        是否为 workflow 文件
+    """
+    return file_path in RuleGroups.WORKFLOW_FILES
+
+
+def is_critical_tooling_script(file_path: str) -> bool:
+    """检查文件是否为关键工具脚本
+
+    Args:
+        file_path: 文件路径
+
+    Returns:
+        是否为关键工具脚本
+    """
+    if file_path in RuleGroups.CRITICAL_TOOLING_SCRIPTS:
+        return True
+    for pattern in RuleGroups.CRITICAL_TOOLING_PATTERNS:
+        if re.match(pattern, file_path):
+            return True
+    return False
+
+
+def is_non_critical_doc(file_path: str) -> bool:
+    """检查文件是否为非关键文档（不触发版本检查）
+
+    Args:
+        file_path: 文件路径
+
+    Returns:
+        是否为非关键文档
+    """
+    for prefix in RuleGroups.NON_CRITICAL_DOC_PREFIXES:
+        if file_path.startswith(prefix):
+            return True
+    return False
+
+
+def _check_version_in_doc_content(doc_content: str, version: str) -> bool:
+    """检查版本是否在文档版本控制表中（内部辅助函数）
+
+    Args:
+        doc_content: 文档内容
+        version: 版本号
+
+    Returns:
+        版本是否在文档中
+    """
+    # 匹配版本控制表中的版本号
+    # 格式：| v2.7.1 | 或 | 2.7.1 |
+    pattern = r"\|\s*v?(\d+\.\d+\.\d+)\s*\|"
+    matches = re.findall(pattern, doc_content)
+    # 支持 v2.7.1 和 2.7.1 两种格式
+    version_normalized = version.lstrip("v")
+    return version_normalized in matches
+
+
+# ============================================================================
 # File Pattern Matching
 # ============================================================================
+
+
+def get_matching_rule(file_path: str) -> CriticalFileRule | None:
+    """获取匹配文件路径的规则
+
+    Args:
+        file_path: 文件路径
+
+    Returns:
+        匹配的规则，如果不匹配则返回 None
+    """
+    for rule in ALL_CRITICAL_RULES:
+        if rule.matches(file_path):
+            return rule
+    return None
 
 
 def is_critical_file(file_path: str) -> bool:
@@ -269,21 +735,7 @@ def is_critical_file(file_path: str) -> bool:
     Returns:
         是否为关键文件
     """
-    # 精确匹配
-    if file_path in CRITICAL_FILES:
-        return True
-
-    # 模式匹配（核心合约文件）
-    for pattern in CRITICAL_FILE_PATTERNS:
-        if re.match(pattern, file_path):
-            return True
-
-    # 模式匹配（工具脚本文件）
-    for pattern in CRITICAL_TOOLING_PATTERNS:
-        if re.match(pattern, file_path):
-            return True
-
-    return False
+    return get_matching_rule(file_path) is not None
 
 
 def is_makefile_ci_related_change(diff_content: str) -> bool:
@@ -305,11 +757,43 @@ def is_makefile_ci_related_change(diff_content: str) -> bool:
     return False
 
 
+def filter_critical_files_with_reasons(
+    changed_files: list[str],
+    makefile_diff: str | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    """过滤出关键文件列表并记录触发原因
+
+    Args:
+        changed_files: 所有变更文件列表
+        makefile_diff: Makefile 的 diff 内容（可选）
+
+    Returns:
+        (关键文件列表, 触发原因字典)
+    """
+    critical: list[str] = []
+    reasons: dict[str, str] = {}
+
+    for file_path in changed_files:
+        # Makefile 特殊处理：只有 CI 相关变更才算关键
+        if file_path == "Makefile":
+            if makefile_diff and is_makefile_ci_related_change(makefile_diff):
+                critical.append(file_path)
+                reasons[file_path] = MAKEFILE_RULE_DESCRIPTION
+            continue
+
+        rule = get_matching_rule(file_path)
+        if rule is not None:
+            critical.append(file_path)
+            reasons[file_path] = rule.description
+
+    return critical, reasons
+
+
 def filter_critical_files(
     changed_files: list[str],
     makefile_diff: str | None = None,
 ) -> list[str]:
-    """过滤出关键文件列表
+    """过滤出关键文件列表（向后兼容）
 
     Args:
         changed_files: 所有变更文件列表
@@ -318,18 +802,7 @@ def filter_critical_files(
     Returns:
         关键文件列表
     """
-    critical: list[str] = []
-
-    for file_path in changed_files:
-        # Makefile 特殊处理：只有 CI 相关变更才算关键
-        if file_path == "Makefile":
-            if makefile_diff and is_makefile_ci_related_change(makefile_diff):
-                critical.append(file_path)
-            continue
-
-        if is_critical_file(file_path):
-            critical.append(file_path)
-
+    critical, _ = filter_critical_files_with_reasons(changed_files, makefile_diff)
     return critical
 
 
@@ -624,18 +1097,22 @@ class WorkflowContractVersionChecker:
                 print(f"  - {f}")
             print()
 
-        # 2. 过滤关键文件
+        # 2. 过滤关键文件并获取触发原因
         makefile_diff = None
         if "Makefile" in changed_files:
             makefile_diff = get_file_diff_content("Makefile", base)
 
-        critical_files = filter_critical_files(changed_files, makefile_diff)
+        critical_files, trigger_reasons = filter_critical_files_with_reasons(
+            changed_files, makefile_diff
+        )
         self.result.changed_critical_files = critical_files
+        self.result.trigger_reasons = trigger_reasons
 
         if self.verbose:
             print(f"Critical files ({len(critical_files)}):")
             for f in critical_files:
-                print(f"  - {f}")
+                reason = trigger_reasons.get(f, "unknown")
+                print(f"  - {f} ({reason})")
             print()
 
         # 3. 如果没有关键文件变更，直接通过
@@ -744,7 +1221,11 @@ def format_text_output(result: VersionCheckResult) -> str:
     lines.append(f"  - Critical files changed: {len(result.changed_critical_files)}")
     if result.changed_critical_files:
         for f in result.changed_critical_files:
-            lines.append(f"      - {f}")
+            reason = result.trigger_reasons.get(f, "")
+            if reason:
+                lines.append(f"      - {f} ({reason})")
+            else:
+                lines.append(f"      - {f}")
     lines.append(f"  - Contract version: {result.contract_version or '(not loaded)'}")
     lines.append(f"  - Contract last_updated: {result.contract_last_updated or '(not loaded)'}")
     lines.append(f"  - Version updated: {'Yes' if result.version_updated else 'No'}")
@@ -777,6 +1258,7 @@ def format_json_output(result: VersionCheckResult) -> str:
         "error_count": len(result.errors),
         "warning_count": len(result.warnings),
         "changed_critical_files": result.changed_critical_files,
+        "trigger_reasons": result.trigger_reasons,
         "contract_version": result.contract_version,
         "contract_last_updated": result.contract_last_updated,
         "doc_versions": result.doc_versions,
@@ -806,29 +1288,36 @@ def main() -> int:
         description="检查 workflow contract 版本策略：关键文件变更时强制版本更新",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-关键文件列表：
-  - .github/workflows/ci.yml
-  - .github/workflows/nightly.yml
-  - scripts/ci/workflow_contract.v1.json
-  - docs/ci_nightly_workflow_refactor/*.md
-  - Makefile（仅 CI 相关变更）
+关键文件规则（按类别）：
 
-工具脚本关键文件（变更影响合约执行逻辑）：
-  - scripts/ci/validate_workflows.py
-  - scripts/ci/workflow_contract.v1.schema.json
-  - scripts/ci/check_workflow_contract_docs_sync.py
-  - scripts/ci/workflow_contract_drift_report.py
-  - scripts/ci/generate_workflow_contract_snapshot.py
+  [workflow_core] Phase 1 Workflow 文件（扩展时修改 CRITICAL_WORKFLOW_RULES）：
+    - .github/workflows/ci.yml
+    - .github/workflows/nightly.yml
+
+  [contract_definition] 合约定义文件：
+    - scripts/ci/workflow_contract.v*.json
+    - docs/ci_nightly_workflow_refactor/*.md
+
+  [tooling] 工具脚本（变更影响合约执行逻辑）：
+    - scripts/ci/validate_workflows.py
+    - scripts/ci/workflow_contract.v*.schema.json
+    - scripts/ci/check_workflow_contract_docs_sync.py
+    - scripts/ci/workflow_contract_drift_report.py
+    - scripts/ci/generate_workflow_contract_snapshot.py
+
+  [special] Makefile（仅 CI 相关变更触发）
 
 版本策略要求：
   1. workflow_contract.v1.json 的 version 字段必须更新
   2. workflow_contract.v1.json 的 last_updated 字段必须更新
-  3. contract.md 版本控制表必须包含新版本
+  3. contract.md 版本控制表（第 14 章）必须包含新版本
 
-工具脚本版本策略建议：
-  - Major: 校验逻辑不兼容变更（如删除校验规则、修改错误码含义）
-  - Minor: 新增校验功能、新增错误类型
-  - Patch: 修复 bug、优化性能、完善错误提示
+版本升级建议：
+  - Major: 不兼容变更（如删除校验规则、修改错误码含义）
+  - Minor: 新增功能（新增校验规则、新增错误类型）
+  - Patch: 修复/优化（修复 bug、优化性能、完善错误提示）
+
+JSON 输出包含 trigger_reasons 字段，说明每个关键文件触发检查的原因。
         """,
     )
     parser.add_argument(
@@ -920,7 +1409,8 @@ def main() -> int:
         file_errors = [
             e
             for e in result.errors
-            if e.error_type in ("contract_not_found", "doc_not_found", "contract_parse_error", "doc_read_error")
+            if e.error_type
+            in ("contract_not_found", "doc_not_found", "contract_parse_error", "doc_read_error")
         ]
         if file_errors:
             return 2

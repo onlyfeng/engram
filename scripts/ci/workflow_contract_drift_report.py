@@ -35,20 +35,185 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+# ============================================================================
+# Output Schema Definition
+# ============================================================================
+#
+# Drift Report 输出 schema 定义
+#
+# 版本策略：
+#   - DRIFT_REPORT_SCHEMA_VERSION: 输出 schema 版本号
+#   - 新增字段: Minor 版本升级 (1.x.0)
+#   - 移除字段: Major 版本升级 (x.0.0)，需提供迁移路径
+#   - 字段语义变更: Major 版本升级 (x.0.0)
+#
+# 字段稳定性保证：
+#   - 所有输出字段按字母序排序，确保相同输入产生相同输出
+#   - drift_items 按 (workflow, category, drift_type, key) 排序
+#   - summary keys 按字母序排序
+#
+# 依赖此输出的下游消费者：
+#   - suggest_workflow_contract_updates.py (建议工具)
+#   - CI 报告生成脚本
+#   - 外部监控/分析工具
+#
+
+DRIFT_REPORT_SCHEMA_VERSION = "1.0.0"
+"""
+Drift Report 输出 schema 版本号
+
+输出字段（按字母序）：
+- contract_last_updated: str - 合约最后更新时间
+- contract_version: str - 合约版本号
+- drift_count: int - drift 项数量
+- drift_items: list[dict] - drift 项列表（按 workflow/category/drift_type/key 排序）
+- has_drift: bool - 是否存在 drift
+- report_generated_at: str - 报告生成时间（ISO 8601 UTC）
+- schema_version: str - 输出 schema 版本号
+- summary: dict[str, int] - 按 category_drift_type 分组的计数（keys 按字母序）
+- workflows_checked: list[str] - 已检查的 workflow 列表（按字母序）
+
+drift_items 每项字段（按字母序）：
+- actual_value: str | None - 实际值
+- category: str - drift 分类
+- contract_value: str | None - 合约值
+- drift_type: str - drift 类型
+- key: str - drift 项标识
+- location: str | None - 位置信息
+- severity: str - 严重程度
+- workflow: str - workflow 名称
+"""
+
 # 复用 validate_workflows.py 中的 artifact path 和 make target 提取逻辑
-from validate_workflows import (
+from scripts.ci.validate_workflows import (
     check_artifact_path_coverage,
     extract_upload_artifact_paths,
     extract_workflow_make_calls,
     parse_makefile_targets,
 )
-from workflow_contract_common import discover_workflow_keys
+from scripts.ci.workflow_contract_common import (
+    discover_workflow_keys,
+    find_fuzzy_match,
+    normalize_artifact_path,
+)
+
+# ============================================================================
+# Drift Types, Categories, Severities - 统一定义
+# ============================================================================
+#
+# 所有 drift 相关常量的统一定义，便于维护和测试覆盖。
+#
+# 版本策略：
+#   - 新增 drift_type/category: Minor (0.X.0)
+#   - 弃用 drift_type/category: Major (X.0.0) - 需提供迁移路径
+#   - 修改 drift_type/category 含义: Major (X.0.0)
+#
+# 详见 docs/ci_nightly_workflow_refactor/contract.md 第 13 章
+#
+
+
+class DriftTypes:
+    """Drift 类型常量定义"""
+
+    ADDED = "added"      # 实际存在但合约未声明
+    REMOVED = "removed"  # 合约声明但实际不存在
+    CHANGED = "changed"  # 存在但值/名称不同
+
+
+class DriftCategories:
+    """Drift 分类常量定义"""
+
+    WORKFLOW = "workflow"        # workflow 文件级别
+    JOB_ID = "job_id"            # Job ID
+    JOB_NAME = "job_name"        # Job Name
+    STEP = "step"                # Step Name
+    ENV_VAR = "env_var"          # 环境变量
+    ARTIFACT_PATH = "artifact_path"  # Artifact 路径
+    MAKE_TARGET = "make_target"  # Makefile Target
+    LABEL = "label"              # PR Label
+
+
+class DriftSeverities:
+    """Drift 严重程度常量定义"""
+
+    INFO = "info"        # 信息性提示（如新增了合约未要求的项）
+    WARNING = "warning"  # 警告（如名称变更）
+    ERROR = "error"      # 错误（如必需项缺失）
+
+
+# 导出所有常量的集合（用于测试覆盖检查）
+DRIFT_TYPES = frozenset({
+    DriftTypes.ADDED,
+    DriftTypes.REMOVED,
+    DriftTypes.CHANGED,
+})
+
+DRIFT_CATEGORIES = frozenset({
+    DriftCategories.WORKFLOW,
+    DriftCategories.JOB_ID,
+    DriftCategories.JOB_NAME,
+    DriftCategories.STEP,
+    DriftCategories.ENV_VAR,
+    DriftCategories.ARTIFACT_PATH,
+    DriftCategories.MAKE_TARGET,
+    DriftCategories.LABEL,
+})
+
+DRIFT_SEVERITIES = frozenset({
+    DriftSeverities.INFO,
+    DriftSeverities.WARNING,
+    DriftSeverities.ERROR,
+})
+
+# Severity 映射：各 category + drift_type 组合的默认严重程度
+# 格式: (category, drift_type) -> severity
+DRIFT_SEVERITY_MAP = {
+    # job_id: removed 是错误，added 是警告
+    (DriftCategories.JOB_ID, DriftTypes.REMOVED): DriftSeverities.ERROR,
+    (DriftCategories.JOB_ID, DriftTypes.ADDED): DriftSeverities.WARNING,
+    # job_name: changed 是警告
+    (DriftCategories.JOB_NAME, DriftTypes.CHANGED): DriftSeverities.WARNING,
+    # step: removed 是错误，changed 是警告
+    (DriftCategories.STEP, DriftTypes.REMOVED): DriftSeverities.ERROR,
+    (DriftCategories.STEP, DriftTypes.CHANGED): DriftSeverities.WARNING,
+    # env_var: removed 是错误
+    (DriftCategories.ENV_VAR, DriftTypes.REMOVED): DriftSeverities.ERROR,
+    # artifact_path: removed 是错误，added 是信息
+    (DriftCategories.ARTIFACT_PATH, DriftTypes.REMOVED): DriftSeverities.ERROR,
+    (DriftCategories.ARTIFACT_PATH, DriftTypes.ADDED): DriftSeverities.INFO,
+    # make_target: removed 是错误，added 是警告
+    (DriftCategories.MAKE_TARGET, DriftTypes.REMOVED): DriftSeverities.ERROR,
+    (DriftCategories.MAKE_TARGET, DriftTypes.ADDED): DriftSeverities.WARNING,
+    # label: removed 是错误，added 是警告
+    (DriftCategories.LABEL, DriftTypes.REMOVED): DriftSeverities.ERROR,
+    (DriftCategories.LABEL, DriftTypes.ADDED): DriftSeverities.WARNING,
+    # workflow: removed 是错误
+    (DriftCategories.WORKFLOW, DriftTypes.REMOVED): DriftSeverities.ERROR,
+}
+
+
+# 默认 severity（当 category + drift_type 组合不在 DRIFT_SEVERITY_MAP 中时）
+DEFAULT_DRIFT_SEVERITY = DriftSeverities.WARNING
+
+
+def get_drift_severity(category: str, drift_type: str) -> str:
+    """从 DRIFT_SEVERITY_MAP 获取 severity，未定义时返回默认值
+
+    Args:
+        category: drift 分类（如 job_id, step 等）
+        drift_type: drift 类型（added, removed, changed）
+
+    Returns:
+        severity 字符串（info, warning, error）
+    """
+    return DRIFT_SEVERITY_MAP.get((category, drift_type), DEFAULT_DRIFT_SEVERITY)
+
 
 # ============================================================================
 # Data Classes
@@ -110,7 +275,51 @@ class WorkflowContractDriftAnalyzer:
         self.workflow_filter = workflow_filter
         self.contract: dict[str, Any] = {}
         self.report = DriftReport()
-        self.report.report_generated_at = datetime.now().isoformat()
+        # 使用 UTC 时间，格式为 ISO 8601 带 Z 后缀
+        self.report.report_generated_at = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    def _make_drift_item(
+        self,
+        category: str,
+        drift_type: str,
+        workflow: str,
+        key: str,
+        *,
+        contract_value: str | None = None,
+        actual_value: str | None = None,
+        location: str | None = None,
+        severity: str | None = None,
+    ) -> DriftItem:
+        """统一创建 DriftItem，自动从 DRIFT_SEVERITY_MAP 推导 severity
+
+        Args:
+            category: drift 分类（如 job_id, step 等）
+            drift_type: drift 类型（added, removed, changed）
+            workflow: workflow 名称
+            key: drift 项的 key
+            contract_value: 合约中的值（可选）
+            actual_value: 实际值（可选）
+            location: 位置信息（可选）
+            severity: 显式覆盖 severity（可选，不指定则从 map 推导）
+
+        Returns:
+            DriftItem 实例
+        """
+        resolved_severity = severity if severity is not None else get_drift_severity(
+            category, drift_type
+        )
+        return DriftItem(
+            drift_type=drift_type,
+            category=category,
+            workflow=workflow,
+            key=key,
+            contract_value=contract_value,
+            actual_value=actual_value,
+            location=location,
+            severity=resolved_severity,
+        )
 
     def load_contract(self) -> bool:
         """加载 contract JSON 文件"""
@@ -153,30 +362,26 @@ class WorkflowContractDriftAnalyzer:
         # 检查 contract 中有但实际不存在的 job_ids（removed）
         for job_id in contract_job_ids_set - actual_job_ids:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="removed",
-                    category="job_id",
+                self._make_drift_item(
+                    category=DriftCategories.JOB_ID,
+                    drift_type=DriftTypes.REMOVED,
                     workflow=workflow_key,
                     key=job_id,
                     contract_value=job_id,
-                    actual_value=None,
                     location=f"jobs.{job_id}",
-                    severity="error",
                 )
             )
 
         # 检查实际存在但 contract 中没有的 job_ids（added）
         for job_id in actual_job_ids - contract_job_ids_set:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="added",
-                    category="job_id",
+                self._make_drift_item(
+                    category=DriftCategories.JOB_ID,
+                    drift_type=DriftTypes.ADDED,
                     workflow=workflow_key,
                     key=job_id,
-                    contract_value=None,
                     actual_value=job_id,
                     location=f"jobs.{job_id}",
-                    severity="warning",
                 )
             )
 
@@ -201,15 +406,14 @@ class WorkflowContractDriftAnalyzer:
             actual_name = actual_jobs[job_id].get("name", "")
             if actual_name != expected_name:
                 self.report.add_drift(
-                    DriftItem(
-                        drift_type="changed",
-                        category="job_name",
+                    self._make_drift_item(
+                        category=DriftCategories.JOB_NAME,
+                        drift_type=DriftTypes.CHANGED,
                         workflow=workflow_key,
                         key=job_id,
                         contract_value=expected_name,
                         actual_value=actual_name,
                         location=f"jobs.{job_id}.name",
-                        severity="warning",
                     )
                 )
 
@@ -237,28 +441,25 @@ class WorkflowContractDriftAnalyzer:
 
                     if fuzzy_match:
                         self.report.add_drift(
-                            DriftItem(
-                                drift_type="changed",
-                                category="step",
+                            self._make_drift_item(
+                                category=DriftCategories.STEP,
+                                drift_type=DriftTypes.CHANGED,
                                 workflow=workflow_key,
                                 key=f"{job_id}/{required_step}",
                                 contract_value=required_step,
                                 actual_value=fuzzy_match,
                                 location=f"jobs.{job_id}.steps",
-                                severity="warning",
                             )
                         )
                     else:
                         self.report.add_drift(
-                            DriftItem(
-                                drift_type="removed",
-                                category="step",
+                            self._make_drift_item(
+                                category=DriftCategories.STEP,
+                                drift_type=DriftTypes.REMOVED,
                                 workflow=workflow_key,
                                 key=f"{job_id}/{required_step}",
                                 contract_value=required_step,
-                                actual_value=None,
                                 location=f"jobs.{job_id}.steps",
-                                severity="error",
                             )
                         )
 
@@ -274,17 +475,29 @@ class WorkflowContractDriftAnalyzer:
         for required_var in required_env_vars:
             if required_var not in actual_env:
                 self.report.add_drift(
-                    DriftItem(
-                        drift_type="removed",
-                        category="env_var",
+                    self._make_drift_item(
+                        category=DriftCategories.ENV_VAR,
+                        drift_type=DriftTypes.REMOVED,
                         workflow=workflow_key,
                         key=required_var,
                         contract_value=required_var,
-                        actual_value=None,
                         location="env",
-                        severity="error",
                     )
                 )
+
+    def _normalize_path_for_comparison(self, path: str) -> str:
+        """标准化路径用于比较
+
+        Args:
+            path: 要标准化的路径
+
+        Returns:
+            标准化后的路径，如果出错则返回原路径
+        """
+        try:
+            return normalize_artifact_path(path, allow_empty=True)
+        except Exception:
+            return path
 
     def analyze_artifact_paths(
         self,
@@ -296,6 +509,11 @@ class WorkflowContractDriftAnalyzer:
 
         比较 contract 中定义的 required_artifact_paths 与实际 workflow 中
         upload-artifact 步骤上传的路径。
+
+        路径比较前会进行标准化处理：
+        - 统一分隔符（反斜杠转正斜杠）
+        - 处理 ./ 前缀
+        - 去除重复斜杠
 
         Args:
             workflow_key: workflow 名称
@@ -311,8 +529,9 @@ class WorkflowContractDriftAnalyzer:
         # 提取所有 upload-artifact 步骤的路径
         upload_steps = extract_upload_artifact_paths(workflow_data)
 
-        # 收集实际上传的路径
+        # 收集实际上传的路径（标准化）
         actual_paths: set[str] = set()
+        actual_paths_original: dict[str, str] = {}  # normalized -> original
         for step in upload_steps:
             # 如果有 step name 过滤器，只检查匹配的 step
             if step_name_filter:
@@ -322,7 +541,10 @@ class WorkflowContractDriftAnalyzer:
                 ):
                     continue
             for path in step.get("paths", []):
-                actual_paths.add(path)
+                normalized = self._normalize_path_for_comparison(path)
+                if normalized:
+                    actual_paths.add(normalized)
+                    actual_paths_original[normalized] = path
 
         # 检查覆盖情况
         covered, missing = check_artifact_path_coverage(
@@ -332,33 +554,42 @@ class WorkflowContractDriftAnalyzer:
         # 报告缺失的 artifact paths (removed)
         for missing_path in missing:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="removed",
-                    category="artifact_path",
+                self._make_drift_item(
+                    category=DriftCategories.ARTIFACT_PATH,
+                    drift_type=DriftTypes.REMOVED,
                     workflow=workflow_key,
                     key=missing_path,
                     contract_value=missing_path,
-                    actual_value=None,
                     location="artifact_archive.required_artifact_paths",
-                    severity="error",
                 )
             )
 
         # 检查实际上传但 contract 中未要求的路径 (added)
-        required_set = set(required_paths)
+        # 标准化 required_paths 用于比较
+        required_set_normalized: set[str] = set()
+        for rp in required_paths:
+            required_set_normalized.add(self._normalize_path_for_comparison(rp))
+
+        covered_normalized: set[str] = set()
+        for cp in covered:
+            covered_normalized.add(self._normalize_path_for_comparison(cp))
+
         for actual_path in actual_paths:
             # 只报告完全不在 required_paths 中的路径
-            if actual_path not in required_set and actual_path not in covered:
+            if (
+                actual_path not in required_set_normalized
+                and actual_path not in covered_normalized
+            ):
+                # 使用原始路径作为 key
+                original_path = actual_paths_original.get(actual_path, actual_path)
                 self.report.add_drift(
-                    DriftItem(
-                        drift_type="added",
-                        category="artifact_path",
+                    self._make_drift_item(
+                        category=DriftCategories.ARTIFACT_PATH,
+                        drift_type=DriftTypes.ADDED,
                         workflow=workflow_key,
-                        key=actual_path,
-                        contract_value=None,
-                        actual_value=actual_path,
+                        key=original_path,
+                        actual_value=original_path,
                         location="upload-artifact.with.path",
-                        severity="info",
                     )
                 )
 
@@ -396,30 +627,26 @@ class WorkflowContractDriftAnalyzer:
         # 检查 contract 中要求但 workflow 未调用的 targets (removed)
         for target in targets_required - actual_targets:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="removed",
-                    category="make_target",
+                self._make_drift_item(
+                    category=DriftCategories.MAKE_TARGET,
+                    drift_type=DriftTypes.REMOVED,
                     workflow=workflow_key,
                     key=target,
                     contract_value=target,
-                    actual_value=None,
                     location="make.targets_required",
-                    severity="warning",
                 )
             )
 
         # 检查 workflow 中调用但 contract 未要求的 targets (added)
         for target in actual_targets - targets_required:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="added",
-                    category="make_target",
+                self._make_drift_item(
+                    category=DriftCategories.MAKE_TARGET,
+                    drift_type=DriftTypes.ADDED,
                     workflow=workflow_key,
                     key=target,
-                    contract_value=None,
                     actual_value=target,
                     location=f"jobs.*.steps.run (make {target})",
-                    severity="warning",
                 )
             )
 
@@ -452,30 +679,26 @@ class WorkflowContractDriftAnalyzer:
         # 检查 contract 中有但脚本中没有的 labels (removed from script)
         for label in contract_labels_set - script_labels:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="removed",
-                    category="label",
+                self._make_drift_item(
+                    category=DriftCategories.LABEL,
+                    drift_type=DriftTypes.REMOVED,
                     workflow=workflow_key,
                     key=label,
                     contract_value=label,
-                    actual_value=None,
                     location="gh_pr_labels_to_outputs.py LABEL_*",
-                    severity="error",
                 )
             )
 
         # 检查脚本中有但 contract 中没有的 labels (added in script)
         for label in script_labels - contract_labels_set:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="added",
-                    category="label",
+                self._make_drift_item(
+                    category=DriftCategories.LABEL,
+                    drift_type=DriftTypes.ADDED,
                     workflow=workflow_key,
                     key=label,
-                    contract_value=None,
                     actual_value=label,
                     location="gh_pr_labels_to_outputs.py LABEL_*",
-                    severity="warning",
                 )
             )
 
@@ -520,23 +743,11 @@ class WorkflowContractDriftAnalyzer:
             return None
 
     def _find_fuzzy_match(self, target: str, candidates: list[str]) -> str | None:
-        """模糊匹配 step name"""
-        target_lower = target.lower()
+        """模糊匹配 step name
 
-        # 包含匹配
-        for candidate in candidates:
-            if target_lower in candidate.lower() or candidate.lower() in target_lower:
-                return candidate
-
-        # 词语匹配
-        target_words = set(target_lower.split())
-        for candidate in candidates:
-            candidate_words = set(candidate.lower().split())
-            overlap = len(target_words & candidate_words)
-            if overlap >= len(target_words) * 0.5:
-                return candidate
-
-        return None
+        委托给 workflow_contract_common.find_fuzzy_match() 实现。
+        """
+        return find_fuzzy_match(target, candidates)
 
     def analyze_workflow(self, workflow_key: str, workflow_contract: dict[str, Any]) -> None:
         """分析单个 workflow 的 drift"""
@@ -549,15 +760,13 @@ class WorkflowContractDriftAnalyzer:
 
         if workflow_data is None:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="removed",
-                    category="workflow",
+                self._make_drift_item(
+                    category=DriftCategories.WORKFLOW,
+                    drift_type=DriftTypes.REMOVED,
                     workflow=workflow_key,
                     key=workflow_file,
                     contract_value=workflow_file,
-                    actual_value=None,
                     location=workflow_file,
-                    severity="error",
                 )
             )
             return
@@ -641,15 +850,13 @@ class WorkflowContractDriftAnalyzer:
         for target in targets_required:
             if target not in makefile_targets:
                 self.report.add_drift(
-                    DriftItem(
-                        drift_type="removed",
-                        category="make_target",
+                    self._make_drift_item(
+                        category=DriftCategories.MAKE_TARGET,
+                        drift_type=DriftTypes.REMOVED,
                         workflow="(global)",
                         key=target,
                         contract_value=target,
-                        actual_value=None,
                         location="Makefile",
-                        severity="error",
                     )
                 )
 
@@ -669,15 +876,13 @@ class WorkflowContractDriftAnalyzer:
         # 检查 workflow 中调用但 contract 未要求的 targets (added)
         for target in all_workflow_targets - targets_required:
             self.report.add_drift(
-                DriftItem(
-                    drift_type="added",
-                    category="make_target",
+                self._make_drift_item(
+                    category=DriftCategories.MAKE_TARGET,
+                    drift_type=DriftTypes.ADDED,
                     workflow="(global)",
                     key=target,
-                    contract_value=None,
                     actual_value=target,
                     location="workflows/*.yml",
-                    severity="warning",
                 )
             )
 
@@ -688,30 +893,57 @@ class WorkflowContractDriftAnalyzer:
 
 
 def format_json_output(report: DriftReport) -> str:
-    """格式化 JSON 输出"""
+    """格式化 JSON 输出
+
+    输出格式遵循 DRIFT_REPORT_SCHEMA_VERSION 定义的 schema。
+
+    字段稳定性保证：
+    - 顶层字段按字母序排序
+    - drift_items 按 (workflow, category, drift_type, key) 排序
+    - drift_items 内部字段按字母序排序
+    - summary keys 按字母序排序
+    - workflows_checked 按字母序排序
+
+    Returns:
+        格式化的 JSON 字符串
+    """
+    # 对 drift_items 按 (workflow, category, drift_type, key) 排序
+    sorted_items = sorted(
+        report.drift_items,
+        key=lambda item: (item.workflow, item.category, item.drift_type, item.key),
+    )
+
+    # 对 summary keys 排序
+    sorted_summary = dict(sorted(report.summary.items()))
+
+    # 对 workflows_checked 排序
+    sorted_workflows = sorted(report.workflows_checked)
+
+    # 构建输出（字段按字母序）
     output = {
-        "has_drift": report.has_drift,
-        "contract_version": report.contract_version,
         "contract_last_updated": report.contract_last_updated,
-        "report_generated_at": report.report_generated_at,
-        "workflows_checked": report.workflows_checked,
-        "summary": report.summary,
+        "contract_version": report.contract_version,
         "drift_count": len(report.drift_items),
         "drift_items": [
             {
-                "drift_type": item.drift_type,
-                "category": item.category,
-                "workflow": item.workflow,
-                "key": item.key,
-                "contract_value": item.contract_value,
                 "actual_value": item.actual_value,
+                "category": item.category,
+                "contract_value": item.contract_value,
+                "drift_type": item.drift_type,
+                "key": item.key,
                 "location": item.location,
                 "severity": item.severity,
+                "workflow": item.workflow,
             }
-            for item in report.drift_items
+            for item in sorted_items
         ],
+        "has_drift": report.has_drift,
+        "report_generated_at": report.report_generated_at,
+        "schema_version": DRIFT_REPORT_SCHEMA_VERSION,
+        "summary": sorted_summary,
+        "workflows_checked": sorted_workflows,
     }
-    return json.dumps(output, indent=2, ensure_ascii=False)
+    return json.dumps(output, indent=2, ensure_ascii=False, sort_keys=False)
 
 
 def format_markdown_output(report: DriftReport) -> str:

@@ -63,10 +63,11 @@
 
 **产物上传**：
 
-| Artifact 名称 | 文件路径 | 保留天数 |
-|--------------|----------|----------|
-| `workflow-contract-validation` | `artifacts/workflow_contract_validation.json` | 14 |
-| `workflow-contract-docs-sync` | `artifacts/workflow_contract_docs_sync.json` | 14 |
+| Artifact 名称 | 文件路径 | 保留天数 | 分级 |
+|--------------|----------|----------|------|
+| `workflow-contract-validation` | `artifacts/workflow_contract_validation.json` | 14 | Core |
+| `workflow-contract-docs-sync` | `artifacts/workflow_contract_docs_sync.json` | 14 | Core |
+| `workflow-contract-drift` | `artifacts/workflow_contract_drift.json`, `artifacts/workflow_contract_drift.md` | 14 | **Optional**（使用 `if-no-files-found: ignore`） |
 
 ### 1.5 其他 CI Jobs
 
@@ -80,7 +81,12 @@
 | `gateway-di-boundaries` | Gateway DI Boundaries Check | Gateway DI 边界检查 |
 | `scm-sync-consistency` | SCM Sync Consistency Check | SCM Sync 一致性检查 |
 | `gateway-error-reason-usage` | Gateway ErrorReason Usage Check | Gateway ErrorReason 使用规范检查 |
+| `gateway-import-surface` | Gateway Import Surface Check | Gateway `__init__.py` 懒加载策略检查（禁止 eager-import） |
+| `gateway-public-api-surface` | Gateway Public API Import Surface Check | Gateway Public API 导入表面检查（`__all__` 与实际导出一致性） |
+| `gateway-correlation-id-single-source` | Gateway correlation_id Single Source Check | Gateway `correlation_id` 单一来源检查（SSOT 模块） |
+| `mcp-error-contract` | MCP Error Contract Check | MCP JSON-RPC 错误码合约与文档同步检查 |
 | `iteration-docs-check` | Iteration Docs Check | 迭代文档检查 |
+| `iteration-tools-test` | Iteration Tools Test | 迭代工具脚本测试（无需数据库依赖） |
 
 ---
 
@@ -130,13 +136,26 @@
 | `skip_degradation` | boolean | false | 跳过降级测试（调试用） |
 | `profile` | choice | full | 验证 Profile（full/standard/http_only） |
 
-### 2.2 notify-results job
+### 2.2 iteration-audit job
+
+| 属性 | 值 |
+|------|-----|
+| Job ID | `iteration-audit` |
+| Job Name | `Iteration Docs Audit` |
+
+**执行步骤**：
+- `Checkout repository`
+- `Set up Python`
+- `Run iteration-audit`
+- `Upload iteration audit report`
+
+### 2.3 notify-results job
 
 | 属性 | 值 |
 |------|-----|
 | Job ID | `notify-results` |
 | Job Name | `Notify Results` |
-| 依赖 | `unified-stack-full` |
+| 依赖 | `unified-stack-full`, `iteration-audit` |
 
 ---
 
@@ -157,6 +176,10 @@
 | `check-migration-sanity` | SQL 迁移文件存在性检查 | migration-sanity job |
 | `check-scm-sync-consistency` | SCM Sync 一致性检查 | scm-sync-consistency job |
 | `check-gateway-error-reason-usage` | Gateway ErrorReason 使用规范检查 | gateway-error-reason-usage job |
+| `check-gateway-import-surface` | Gateway `__init__.py` 懒加载策略检查 | gateway-import-surface job |
+| `check-gateway-public-api-surface` | Gateway Public API 导入表面检查 | gateway-public-api-surface job |
+| `check-gateway-correlation-id-single-source` | Gateway `correlation_id` 单一来源检查 | gateway-correlation-id-single-source job |
+| `check-mcp-error-contract` | MCP JSON-RPC 错误码合约检查 | mcp-error-contract job |
 
 ### 3.2 Nightly 使用的核心目标
 
@@ -167,6 +190,7 @@
 | `migrate-ddl` | 执行 DDL 迁移 | 数据库初始化 |
 | `apply-roles` | 应用 Logbook 角色和权限 | 数据库初始化 |
 | `apply-openmemory-grants` | 应用 OpenMemory 权限 | 数据库初始化 |
+| `iteration-audit` | 迭代文档审计 | iteration-audit job |
 
 ### 3.3 测试相关目标
 
@@ -204,6 +228,7 @@
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.1 | 2026-02-02 | 补全缺失的 CI jobs（gateway-import-surface, gateway-public-api-surface, gateway-correlation-id-single-source, mcp-error-contract, iteration-tools-test）；新增 nightly iteration-audit job；补全相关 make targets |
 | v2.0 | 2026-02-02 | 重写为 Phase 1 重构后的新 workflow 结构；移除旧的 detect-changes 耦合映射；更新产物路径和环境变量 |
 | v1.1 | 2026-01-30 | 新增 Acceptance 产物归档路径章节 |
 | v1.0 | 2026-01-30 | 初始版本，记录耦合关系 |

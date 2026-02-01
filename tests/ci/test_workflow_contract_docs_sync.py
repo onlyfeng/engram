@@ -2,11 +2,13 @@
 """
 tests/ci/test_workflow_contract_docs_sync.py
 
-单元测试：check_workflow_contract_docs_sync.py 的新增检查功能
+单元测试：check_workflow_contract_docs_sync.py 的检查功能
 
 测试范围：
 1. frozen_job_names.allowlist 检查：验证 frozen job name 必须出现在文档的 Frozen Job Names 章节
 2. labels 检查：验证 ci.labels / nightly.labels 必须出现在文档的 PR Labels 章节
+3. 受控块检查（markers 模式）：验证 begin/end markers 和块内容比对
+4. 渲染稳定性：验证排序规则和空列表处理
 """
 
 from __future__ import annotations
@@ -18,9 +20,16 @@ from typing import Any
 
 # 导入被测模块
 from scripts.ci.check_workflow_contract_docs_sync import (
+    DOCS_SYNC_ERROR_TYPES,
     FROZEN_JOB_DOC_ANCHORS,
     LABELS_DOC_ANCHORS,
+    DocsSyncErrorTypes,
     WorkflowContractDocsSyncChecker,
+)
+from scripts.ci.render_workflow_contract_docs import (
+    WorkflowContractDocsRenderer,
+    extract_block_from_content,
+    find_all_markers,
 )
 
 # ============================================================================
@@ -618,14 +627,14 @@ targets_required 说明
 
 Version: 2.0.0
 
-## CI Workflow (ci.yml)
+## CI Workflow (`ci.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
 | `lint` | Lint Check |
 | `test` | Unit Tests |
 
-## Nightly Workflow (nightly.yml)
+## Nightly Workflow (`nightly.yml`)
 
 | Job ID | Job Name |
 |--------|----------|
@@ -1145,3 +1154,454 @@ class TestIntegrationWithRealFormat:
         label_errors = [e for e in result.errors if e.category == "label"]
         assert len(label_errors) == 0, f"Unexpected errors: {label_errors}"
         assert len(result.checked_labels) == 1
+
+
+# ============================================================================
+# Test: 受控块检查（Markers 模式）
+# ============================================================================
+
+
+class TestControlledBlocksMarkerMode:
+    """测试受控块检查（markers 模式）"""
+
+    def test_no_markers_uses_fallback_mode(self) -> None:
+        """当文档没有 markers 时，应使用回退模式（字符串匹配）"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        doc = """
+# Workflow Contract
+
+## CI Workflow (ci.yml)
+
+| Job ID | Job Name |
+|--------|----------|
+| `test` | Test |
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 没有 markers，不使用 block mode
+        assert result.block_mode_used is False
+        assert len(result.checked_blocks) == 0
+
+    def test_markers_present_enables_block_mode(self) -> None:
+        """当文档有 markers 时，应启用 block mode"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+            "frozen_job_names": {"allowlist": ["Test"]},
+        }
+        doc = """
+# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `test` | Test |  |
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+无
+
+## Frozen Job Names
+
+| Job Name |
+|----------|
+| `Test` |
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 有 markers，使用 block mode
+        assert result.block_mode_used is True
+        assert len(result.checked_blocks) > 0
+
+    def test_duplicate_begin_marker_error(self) -> None:
+        """当存在重复的 BEGIN marker 时，应报错"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        doc = """
+# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name |
+|--------|----------|
+<!-- BEGIN:CI_JOB_TABLE -->
+| `test` | Test |
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 应该有重复 marker 错误
+        dup_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE
+        ]
+        assert len(dup_errors) >= 1
+
+    def test_missing_end_marker_error(self) -> None:
+        """当缺少 END marker 时，应报错"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        doc = """
+# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name |
+|--------|----------|
+| `test` | Test |
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 应该有 unpaired marker 错误
+        unpaired_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED
+        ]
+        assert len(unpaired_errors) >= 1
+
+    def test_block_content_mismatch_provides_diff(self) -> None:
+        """当块内容不匹配时，应提供 diff 输出"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+        }
+        # 文档中的表格与渲染结果不匹配
+        doc = """
+# Workflow Contract
+
+<!-- BEGIN:CI_JOB_TABLE -->
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `test` | Wrong Name |  |
+<!-- END:CI_JOB_TABLE -->
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 应该有内容不匹配错误
+        mismatch_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.BLOCK_CONTENT_MISMATCH
+        ]
+        assert len(mismatch_errors) >= 1
+        # 应该包含 diff
+        assert mismatch_errors[0].diff is not None
+        assert "---" in mismatch_errors[0].diff  # unified diff 格式
+        # 应该包含期望块
+        assert mismatch_errors[0].expected_block is not None
+        assert "BEGIN:CI_JOB_TABLE" in mismatch_errors[0].expected_block
+
+
+# ============================================================================
+# Test: 渲染稳定性
+# ============================================================================
+
+
+class TestRenderingStability:
+    """测试渲染稳定性（排序规则、空列表处理）"""
+
+    def test_frozen_job_names_sorted_alphabetically(self) -> None:
+        """frozen_job_names 应按字母序排序"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": [], "job_names": []},
+            "frozen_job_names": {
+                "allowlist": ["Zebra Job", "Alpha Job", "Beta Job"],
+            },
+        }
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        block = renderer.render_frozen_job_names_table()
+
+        # 验证按字母序排序
+        lines = block.content.split("\n")
+        data_lines = [line for line in lines if line.startswith("| `")]
+        assert "`Alpha Job`" in data_lines[0]
+        assert "`Beta Job`" in data_lines[1]
+        assert "`Zebra Job`" in data_lines[2]
+
+    def test_frozen_step_names_sorted_alphabetically(self) -> None:
+        """frozen_step_text.allowlist 应按字母序排序"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": [], "job_names": []},
+            "frozen_step_text": {
+                "allowlist": ["Upload results", "Checkout repository", "Install deps"],
+            },
+        }
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        block = renderer.render_frozen_step_names_table()
+
+        # 验证按字母序排序
+        lines = block.content.split("\n")
+        data_lines = [line for line in lines if line.startswith("| `")]
+        assert "`Checkout repository`" in data_lines[0]
+        assert "`Install deps`" in data_lines[1]
+        assert "`Upload results`" in data_lines[2]
+
+    def test_make_targets_sorted_alphabetically(self) -> None:
+        """make.targets_required 应按字母序排序"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": [], "job_names": []},
+            "make": {
+                "targets_required": ["typecheck", "lint", "format"],
+            },
+        }
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        block = renderer.render_make_targets_table()
+
+        # 验证按字母序排序
+        lines = block.content.split("\n")
+        data_lines = [line for line in lines if line.startswith("| `")]
+        assert "`format`" in data_lines[0]
+        assert "`lint`" in data_lines[1]
+        assert "`typecheck`" in data_lines[2]
+
+    def test_empty_lists_render_header_only(self) -> None:
+        """空列表应只渲染表头"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": [], "job_names": []},
+            "frozen_job_names": {"allowlist": []},
+            "frozen_step_text": {"allowlist": []},
+            "make": {"targets_required": []},
+        }
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+
+        # 所有块应只有表头行
+        frozen_jobs = renderer.render_frozen_job_names_table()
+        assert frozen_jobs.content.count("\n") == 1  # 只有表头和分隔线
+
+        frozen_steps = renderer.render_frozen_step_names_table()
+        assert frozen_steps.content.count("\n") == 1
+
+        make_targets = renderer.render_make_targets_table()
+        assert make_targets.content.count("\n") == 1
+
+    def test_rendering_is_deterministic(self) -> None:
+        """多次渲染应产生相同结果"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["test", "lint"],
+                "job_names": ["Test Job", "Lint Job"],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["verify"],
+                "job_names": ["Verify Job"],
+            },
+            "frozen_job_names": {"allowlist": ["Test Job", "Lint Job"]},
+            "frozen_step_text": {"allowlist": ["Checkout", "Install"]},
+            "make": {"targets_required": ["lint", "test"]},
+        }
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        # 多次渲染
+        results = []
+        for _ in range(3):
+            renderer = WorkflowContractDocsRenderer(contract_path)
+            renderer.load_contract()
+            blocks = renderer.render_all_blocks()
+            results.append({name: block.content for name, block in blocks.items()})
+
+        # 验证所有结果相同
+        for i in range(1, len(results)):
+            assert results[0] == results[i], f"Render {i} differs from render 0"
+
+
+# ============================================================================
+# Test: Marker 解析工具函数
+# ============================================================================
+
+
+class TestMarkerParsingUtilities:
+    """测试 marker 解析工具函数"""
+
+    def test_find_all_markers_basic(self) -> None:
+        """测试基本的 marker 查找"""
+        content = """
+<!-- BEGIN:BLOCK_A -->
+content
+<!-- END:BLOCK_A -->
+"""
+        markers = find_all_markers(content)
+        assert len(markers) == 2
+        assert markers[0] == ("BLOCK_A", "begin", 1)
+        assert markers[1] == ("BLOCK_A", "end", 3)
+
+    def test_find_all_markers_multiple_blocks(self) -> None:
+        """测试多个块的 marker 查找"""
+        content = """
+<!-- BEGIN:BLOCK_A -->
+content a
+<!-- END:BLOCK_A -->
+<!-- BEGIN:BLOCK_B -->
+content b
+<!-- END:BLOCK_B -->
+"""
+        markers = find_all_markers(content)
+        assert len(markers) == 4
+
+    def test_extract_block_from_content_basic(self) -> None:
+        """测试基本的块内容提取"""
+        content = """line0
+<!-- BEGIN:TEST -->
+line2
+line3
+<!-- END:TEST -->
+line5"""
+        block_content, begin, end = extract_block_from_content(content, "TEST")
+        assert block_content == "line2\nline3"
+        assert begin == 1
+        assert end == 4
+
+    def test_extract_block_missing_begin(self) -> None:
+        """测试缺少 BEGIN marker 的情况"""
+        content = """
+content
+<!-- END:TEST -->
+"""
+        block_content, begin, end = extract_block_from_content(content, "TEST")
+        assert block_content is None
+        assert begin == -1
+
+    def test_extract_block_missing_end(self) -> None:
+        """测试缺少 END marker 的情况"""
+        content = """
+<!-- BEGIN:TEST -->
+content
+"""
+        block_content, begin, end = extract_block_from_content(content, "TEST")
+        assert block_content is None
+        assert end == -1
+
+
+# ============================================================================
+# Test: Error Types 常量完整性
+# ============================================================================
+
+
+class TestErrorTypesCompleteness:
+    """测试 error types 常量的完整性"""
+
+    def test_new_block_error_types_in_set(self) -> None:
+        """新增的块错误类型应在 DOCS_SYNC_ERROR_TYPES 集合中"""
+        assert DocsSyncErrorTypes.BLOCK_MARKER_MISSING in DOCS_SYNC_ERROR_TYPES
+        assert DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE in DOCS_SYNC_ERROR_TYPES
+        assert DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED in DOCS_SYNC_ERROR_TYPES
+        assert DocsSyncErrorTypes.BLOCK_CONTENT_MISMATCH in DOCS_SYNC_ERROR_TYPES
+
+    def test_error_types_class_matches_set(self) -> None:
+        """DocsSyncErrorTypes 类的所有属性应在集合中"""
+        class_attrs = {
+            v
+            for k, v in DocsSyncErrorTypes.__dict__.items()
+            if not k.startswith("_") and isinstance(v, str)
+        }
+        assert class_attrs == DOCS_SYNC_ERROR_TYPES

@@ -1,8 +1,17 @@
 {
   "$schema": "workflow_contract.v1.schema.json",
-  "version": "2.14.0",
+  "version": "2.22.0",
   "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
   "last_updated": "2026-02-02",
+  "_changelog_v2.22.0": "新增 ci-test-isolation job 到 CI workflow 合约：CI 测试隔离检查；新增 make.targets_required: 'check-ci-test-isolation'；修复 MAKE_TARGET_IGNORE_LIST 添加 'targets'（echo 中的 false positive）",
+  "_changelog_v2.21.0": "新增 workflow make targets 一致性检查：workflow-contract job required_steps 添加 'Check workflow make targets consistency'；make.targets_required 添加 'check-workflow-make-targets-consistency'",
+  "_changelog_v2.20.0": "新增 workflow-contract job required_steps：'Check workflow contract internal consistency'；新增 make.targets_required：'check-workflow-contract-internal-consistency'",
+  "_changelog_v2.19.0": "更新 lint job required_steps：将 'Run mypy (type check)' 重命名为 'Run mypy (baseline mode)'；新增 'Run mypy (strict-island mode)' 步骤（双层 mypy 检查策略）",
+  "_changelog_v2.18.0": "新增 step_name_aliases 可选字段：支持为 required_steps 定义别名映射；当 step 通过 alias 匹配时报告 step_name_alias_matched WARNING 而非 ERROR；新增 contract.md 5.6 节文档",
+  "_changelog_v2.17.1": "将 drift report 产物（artifacts/workflow_contract_drift.json, .md）从 required_artifact_paths 移除，改为 Optional；CI upload-artifact 添加 if-no-files-found: ignore；contract.md 8.7/8.10 节明确策略边界",
+  "_changelog_v2.17.0": "补全 CI workflow 中缺失的 required_steps：gateway-public-api-surface 添加 'Check Gateway Public API docs sync'；workflow-contract 添加 'Check workflow contract doc anchors'；make.targets_required 添加 'check-workflow-contract-doc-anchors'",
+  "_changelog_v2.16.0": "新增 contract.md 第 13 章 Error Type 体系与版本策略：罗列全部 error_type/warning_type/drift_type；规定新增/弃用 error_type 的版本策略；各脚本 error_type 收敛为常量集合（ErrorTypes/WarningTypes/DocsSyncErrorTypes/VersionPolicyErrorTypes/DriftTypes 等）",
+  "_changelog_v2.15.0": "重构版本策略检查脚本：统一 critical file 规则定义（CRITICAL_*_RULES）；新增 trigger_reasons 字段支持；新增 contract.md 11.5 节最小修复步骤",
   "_changelog_v2.14.0": "新增 contract.md 第 0 章合约系统概览：关键文件清单、检查脚本详细说明（运行命令/exit code/artifact 路径）、CI 阻断策略边界定义；章节重编号（原 13 章改为 14 章）",
   "_changelog_v2.13.0": "新增 Drift Report 漂移报告合约：补充 contract.md 8.7 节和 maintenance.md 第 4 章；更新 artifact_archive 配置包含 drift report 输出",
   "_changelog_v2.12.0": "新增 mcp-error-contract job 到 CI workflow 合约：MCP JSON-RPC 错误码合约与文档同步检查",
@@ -45,6 +54,7 @@
       "gateway-correlation-id-single-source",
       "mcp-error-contract",
       "iteration-docs-check",
+      "ci-test-isolation",
       "iteration-tools-test",
       "workflow-contract"
     ],
@@ -65,6 +75,7 @@
       "Gateway correlation_id Single Source Check",
       "MCP Error Contract Check",
       "Iteration Docs Check",
+      "CI Test Isolation Check",
       "Iteration Tools Test",
       "Workflow Contract Validation"
     ],
@@ -94,7 +105,8 @@
           "Install dependencies",
           "Run ruff check (lint)",
           "Run ruff format check",
-          "Run mypy (type check)"
+          "Run mypy (baseline mode)",
+          "Run mypy (strict-island mode)"
         ]
       },
       {
@@ -196,7 +208,8 @@
         "required_steps": [
           "Checkout repository",
           "Set up Python",
-          "Check Gateway Public API import surface"
+          "Check Gateway Public API import surface",
+          "Check Gateway Public API docs sync"
         ]
       },
       {
@@ -233,6 +246,17 @@
         ]
       },
       {
+        "id": "ci-test-isolation",
+        "name": "CI Test Isolation Check",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check CI test isolation",
+          "Generate isolation report (JSON)",
+          "Upload isolation report"
+        ]
+      },
+      {
         "id": "iteration-tools-test",
         "name": "Iteration Tools Test",
         "required_steps": [
@@ -253,6 +277,9 @@
           "Validate workflow contract",
           "Check workflow contract docs sync",
           "Check workflow contract version policy",
+          "Check workflow contract doc anchors",
+          "Check workflow contract internal consistency",
+          "Check workflow make targets consistency",
           "Generate validation report (JSON)",
           "Generate docs sync report (JSON)",
           "Generate drift report (JSON)",
@@ -265,7 +292,7 @@
     ],
     "required_env_vars": [],
     "artifact_archive": {
-      "_comment": "CI workflow 的 artifact 上传配置",
+      "_comment": "CI workflow 的 artifact 上传配置；drift report 产物为 Optional（不列入 required_artifact_paths），使用 if-no-files-found: ignore",
       "required_artifact_paths": [
         "test-results-*.xml",
         "acceptance-results-*.xml",
@@ -273,9 +300,7 @@
         "verify-output-*.log",
         "schema-validation-results.json",
         "artifacts/workflow_contract_validation.json",
-        "artifacts/workflow_contract_docs_sync.json",
-        "artifacts/workflow_contract_drift.json",
-        "artifacts/workflow_contract_drift.md"
+        "artifacts/workflow_contract_docs_sync.json"
       ],
       "artifact_step_names": [
         "Upload test results",
@@ -376,6 +401,10 @@
       "validate-workflows-strict",
       "check-workflow-contract-docs-sync",
       "check-workflow-contract-version-policy",
+      "check-workflow-contract-doc-anchors",
+      "check-workflow-contract-internal-consistency",
+      "check-workflow-make-targets-consistency",
+      "check-ci-test-isolation",
       "verify-unified",
       "verify-permissions",
       "verify-permissions-strict",

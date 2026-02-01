@@ -3,6 +3,8 @@
   "$id": "workflow_contract.v1.schema.json",
   "title": "Workflow Contract Schema",
   "description": "JSON Schema for Engram CI/CD workflow contract validation",
+  "_schema_versioning_policy": "Schema field changes follow SemVer: Major = remove/rename required field or tighten constraint; Minor = add new optional field or new definition; Patch = update descriptions or add comment fields (^_). When adding new fields like step_name_aliases: 1) Add to schema first, 2) Update validate_workflows.py, 3) Update contract.md docs, 4) Bump contract version (Minor for new optional fields).",
+  "_comment_field_convention": "Fields starting with underscore (^_) are comment/metadata fields ignored by validators. Use _changelog_vX.Y.Z for version changelogs, _note_* for inline documentation, _todo_* for pending items. Adding comment fields is always a Patch-level change.",
   "type": "object",
   "required": ["version", "ci", "nightly", "make", "frozen_step_text", "frozen_job_names"],
   "properties": {
@@ -50,17 +52,21 @@
     "frozen_job_names": {
       "$ref": "#/definitions/frozen_job_names_definition",
       "description": "Frozen job names that must match exactly"
+    },
+    "step_name_aliases": {
+      "$ref": "#/definitions/step_name_aliases_definition",
+      "description": "Optional mapping of canonical step names to allowed aliases. When a required_step is not found, the validator checks if the actual step name is in the aliases list. If matched, reports WARNING instead of ERROR."
     }
   },
   "patternProperties": {
     "^_changelog_v[0-9]+\\.[0-9]+\\.[0-9]+$": {
       "type": "string",
       "minLength": 1,
-      "description": "Changelog entry for a specific version (e.g., _changelog_v2.5.0)"
+      "description": "Changelog entry for a specific version (e.g., _changelog_v2.5.0). Version policy: Adding changelog fields is a Patch-level change. Format: brief description of changes in that version."
     },
     "^_[a-z][a-z0-9_]*$": {
       "type": "string",
-      "description": "Internal comment or metadata field (must start with underscore)"
+      "description": "Internal comment or metadata field (must start with underscore followed by lowercase letter). Version policy: Adding/modifying comment fields is always a Patch-level change. Conventions: _note_* for documentation, _todo_* for pending items, _deprecated_* for deprecation notices. These fields are ignored by validators."
     }
   },
   "additionalProperties": false,
@@ -294,6 +300,23 @@
         }
       },
       "additionalProperties": false
+    },
+    "step_name_aliases_definition": {
+      "type": "object",
+      "description": "Mapping of canonical step names to allowed aliases. Key is the canonical step name (as defined in required_steps), value is an array of acceptable alternative names. Version policy: Adding this optional field is Minor; adding new aliases is Patch; removing aliases may cause existing workflows to fail validation.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "uniqueItems": true,
+        "description": "List of acceptable alias names for this canonical step"
+      },
+      "patternProperties": {
+        "^_[a-z][a-z0-9_]*$": {
+          "type": "string",
+          "description": "Comment field starting with underscore"
+        }
+      }
     }
   }
 }

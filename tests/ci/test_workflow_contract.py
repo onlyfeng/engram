@@ -16,16 +16,19 @@ Phase 1 说明：
 """
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 导入被测模块
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from validate_workflows import (
+from scripts.ci.check_workflow_contract_docs_sync import (
+    WorkflowContractDocsSyncChecker,
+    discover_workflow_keys,
+)
+from scripts.ci.check_workflow_contract_docs_sync import (
+    format_json_output as docs_sync_format_json_output,
+)
+from scripts.ci.validate_workflows import (
     ValidationError,
     ValidationResult,
     ValidationWarning,
@@ -1874,10 +1877,7 @@ targets_required 说明
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        # 导入并运行检查器
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
+        # 运行检查器
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -1936,9 +1936,6 @@ targets_required 说明
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -1996,9 +1993,6 @@ targets_required 说明
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
         with open(doc_path, "w") as f:
             f.write(doc_content)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2074,9 +2068,6 @@ targets_required 包含以下 target：
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -2103,9 +2094,6 @@ targets_required 包含以下 target：
         # 创建文档文件
         with open(doc_path, "w") as f:
             f.write("# Contract Doc")
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2137,9 +2125,6 @@ targets_required 包含以下 target：
             json.dump(contract, f)
 
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "nonexistent.md"
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2184,12 +2169,6 @@ targets_required 包含以下 target：
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import (
-            WorkflowContractDocsSyncChecker,
-            format_json_output,
-        )
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -2198,7 +2177,7 @@ targets_required 包含以下 target：
         result = checker.check()
 
         # 测试 JSON 输出
-        json_output = format_json_output(result)
+        json_output = docs_sync_format_json_output(result)
         parsed = json.loads(json_output)
 
         assert "success" in parsed
@@ -2253,9 +2232,6 @@ make targets 说明
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
         with open(doc_path, "w") as f:
             f.write(doc_content)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2323,9 +2299,6 @@ targets_required 包含以下 target：
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -2382,9 +2355,6 @@ Version: 1.0.0
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
         with open(doc_path, "w") as f:
             f.write(doc_content)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2454,9 +2424,6 @@ targets_required 包含以下 target：
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -2515,9 +2482,6 @@ targets_required 包含以下 target：
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
         with open(doc_path, "w") as f:
             f.write(doc_content)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2588,9 +2552,6 @@ targets_required 包含以下 target：
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -2655,9 +2616,6 @@ targets_required 包含以下 target：
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -2684,9 +2642,6 @@ targets_required 包含以下 target：
             pytest.skip(f"Contract file not found: {contract_path}")
         if not doc_path.exists():
             pytest.skip(f"Doc file not found: {doc_path}")
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2773,9 +2728,6 @@ targets_required 说明
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -2844,9 +2796,6 @@ targets_required 说明
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
         with open(doc_path, "w") as f:
             f.write(doc_content)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -2930,9 +2879,6 @@ targets_required 说明
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
         with open(doc_path, "w") as f:
             f.write(doc_content)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -3029,9 +2975,6 @@ targets_required 说明
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -3097,9 +3040,6 @@ targets_required 说明
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -3162,9 +3102,6 @@ targets_required 说明
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -3222,9 +3159,6 @@ targets_required 说明
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -3257,9 +3191,6 @@ targets_required 说明
 
         if "nightly" not in contract:
             pytest.skip("Contract does not define nightly workflow")
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -4217,9 +4148,6 @@ class TestDiscoverWorkflowKeys:
 
     def test_discover_basic_workflows(self):
         """测试发现基本的 ci/nightly workflow"""
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import discover_workflow_keys
-
         contract = {
             "version": "1.0.0",
             "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"]},
@@ -4231,9 +4159,6 @@ class TestDiscoverWorkflowKeys:
 
     def test_discover_with_release_workflow(self):
         """测试发现包含 release workflow 的合约"""
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import discover_workflow_keys
-
         contract = {
             "version": "1.0.0",
             "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"]},
@@ -4246,9 +4171,6 @@ class TestDiscoverWorkflowKeys:
 
     def test_exclude_metadata_keys(self):
         """测试排除 metadata 字段"""
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import discover_workflow_keys
-
         contract = {
             "$schema": "schema.json",
             "version": "1.0.0",
@@ -4265,9 +4187,6 @@ class TestDiscoverWorkflowKeys:
 
     def test_exclude_underscore_prefix_keys(self):
         """测试排除下划线前缀字段"""
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import discover_workflow_keys
-
         contract = {
             "_changelog_v1.0.0": "Initial release",
             "_phase_1_scope": "CI only",
@@ -4280,9 +4199,6 @@ class TestDiscoverWorkflowKeys:
 
     def test_require_file_field(self):
         """测试要求 "file" 字段才识别为 workflow"""
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import discover_workflow_keys
-
         contract = {
             "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"]},
             "custom_config": {"setting": "value"},  # 没有 file 字段，不是 workflow
@@ -4294,18 +4210,12 @@ class TestDiscoverWorkflowKeys:
 
     def test_empty_contract(self):
         """测试空合约"""
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import discover_workflow_keys
-
         contract: dict = {}
         keys = discover_workflow_keys(contract)
         assert keys == []
 
     def test_sorted_output(self):
         """测试返回结果按字母序排序"""
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import discover_workflow_keys
-
         contract = {
             "zebra": {"file": "z.yml"},
             "alpha": {"file": "a.yml"},
@@ -4356,9 +4266,6 @@ class TestReleaseWorkflowDocsSync:
         doc_path = tmp_path / "contract.md"
         with open(doc_path, "w") as f:
             f.write(doc_content)
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -4445,9 +4352,6 @@ frozen_step_text allowlist:
         with open(doc_path, "w") as f:
             f.write(doc_content)
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
-
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
             doc_path=doc_path,
@@ -4491,9 +4395,6 @@ frozen_step_text allowlist:
         doc_path = tmp_path / "contract.md"
         with open(doc_path, "w") as f:
             f.write("# Empty Doc\nversion: 1.0.0")
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-        from check_workflow_contract_docs_sync import WorkflowContractDocsSyncChecker
 
         checker = WorkflowContractDocsSyncChecker(
             contract_path=contract_path,
@@ -6067,7 +5968,7 @@ class TestWorkflowContractCommon:
 
     def test_metadata_keys_contains_expected_values(self):
         """验证 METADATA_KEYS 包含预期的元数据字段"""
-        from workflow_contract_common import METADATA_KEYS
+        from scripts.ci.workflow_contract_common import METADATA_KEYS
 
         expected_keys = {
             "$schema",
@@ -6083,7 +5984,7 @@ class TestWorkflowContractCommon:
 
     def test_is_metadata_key_with_known_metadata(self):
         """测试已知 metadata key 的判断"""
-        from workflow_contract_common import is_metadata_key
+        from scripts.ci.workflow_contract_common import is_metadata_key
 
         assert is_metadata_key("$schema") is True
         assert is_metadata_key("version") is True
@@ -6096,7 +5997,7 @@ class TestWorkflowContractCommon:
 
     def test_is_metadata_key_with_underscore_prefix(self):
         """测试下划线前缀字段的判断"""
-        from workflow_contract_common import is_metadata_key
+        from scripts.ci.workflow_contract_common import is_metadata_key
 
         # 所有下划线开头的字段都应被视为 metadata
         assert is_metadata_key("_changelog_v2.14.0") is True
@@ -6107,7 +6008,7 @@ class TestWorkflowContractCommon:
 
     def test_is_metadata_key_with_workflow_keys(self):
         """测试 workflow key 不被识别为 metadata"""
-        from workflow_contract_common import is_metadata_key
+        from scripts.ci.workflow_contract_common import is_metadata_key
 
         assert is_metadata_key("ci") is False
         assert is_metadata_key("nightly") is False
@@ -6116,7 +6017,7 @@ class TestWorkflowContractCommon:
 
     def test_discover_workflow_keys_basic(self):
         """测试基本的 workflow key 发现"""
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         contract = {
             "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"]},
@@ -6127,7 +6028,7 @@ class TestWorkflowContractCommon:
 
     def test_discover_workflow_keys_excludes_metadata(self):
         """测试 discover_workflow_keys 排除 metadata 字段"""
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         contract = {
             "$schema": "workflow_contract.v1.schema.json",
@@ -6146,7 +6047,7 @@ class TestWorkflowContractCommon:
 
     def test_discover_workflow_keys_excludes_changelog_fields(self):
         """测试 discover_workflow_keys 排除 _changelog_* 字段"""
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         contract = {
             "_changelog_v2.14.0": "Some changelog notes...",
@@ -6160,7 +6061,7 @@ class TestWorkflowContractCommon:
 
     def test_discover_workflow_keys_requires_file_field(self):
         """测试 discover_workflow_keys 要求 'file' 字段"""
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         contract = {
             "ci": {"file": ".github/workflows/ci.yml"},  # 有 file 字段
@@ -6173,7 +6074,7 @@ class TestWorkflowContractCommon:
 
     def test_discover_workflow_keys_sorted_output(self):
         """测试 discover_workflow_keys 返回按字母序排序的结果"""
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         contract = {
             "zebra": {"file": ".github/workflows/zebra.yml"},
@@ -6185,7 +6086,7 @@ class TestWorkflowContractCommon:
 
     def test_discover_workflow_keys_empty_contract(self):
         """测试空 contract 的处理"""
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         result = discover_workflow_keys({})
         assert result == []
@@ -6198,7 +6099,7 @@ class TestWorkflowContractCommon:
 
         这是此重构任务的核心需求之一。
         """
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         # 模拟未来可能新增的 metadata key（含 dict 结构但无 file 字段）
         contract = {
@@ -6229,7 +6130,7 @@ class TestWorkflowContractCommon:
 
     def test_workflow_with_extra_metadata_fields(self):
         """测试带有额外字段的 workflow 定义仍能正确识别"""
-        from workflow_contract_common import discover_workflow_keys
+        from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         contract = {
             "version": "2.0.0",
@@ -6247,10 +6148,854 @@ class TestWorkflowContractCommon:
 
     def test_metadata_keys_is_frozen_set(self):
         """验证 METADATA_KEYS 是 frozenset 类型（不可变）"""
-        from workflow_contract_common import METADATA_KEYS
+        from scripts.ci.workflow_contract_common import METADATA_KEYS
 
         assert isinstance(METADATA_KEYS, frozenset)
 
         # 尝试修改应该抛出异常
         with pytest.raises(AttributeError):
             METADATA_KEYS.add("new_key")  # type: ignore
+
+
+# ============================================================================
+# Step Name Aliases Tests
+# ============================================================================
+
+
+class TestStepNameAliases:
+    """测试 step_name_aliases 别名映射功能"""
+
+    def test_alias_match_produces_warning_not_error(self, temp_workspace):
+        """测试：当 required_step 通过 alias 匹配时，产生 WARNING 而非 ERROR"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "step_name_aliases": {
+                "Run unit tests": ["Run tests", "Execute tests"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository", "Run unit tests"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        # Workflow 使用 alias "Run tests" 而非 canonical "Run unit tests"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run tests
+        run: pytest
+"""
+
+        # 写入合约和 workflow
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        # 验证
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该成功（alias 匹配产生 WARNING，不阻断）
+        assert result.success is True
+
+        # 应该有一个 step_name_alias_matched 警告
+        alias_warnings = [w for w in result.warnings if w.warning_type == "step_name_alias_matched"]
+        assert len(alias_warnings) == 1
+        assert alias_warnings[0].key == "Run unit tests"
+        assert alias_warnings[0].new_value == "Run tests"
+
+    def test_no_alias_match_falls_through_to_error(self, temp_workspace):
+        """测试：当 required_step 没有 alias 匹配且没有 fuzzy 匹配时，产生 ERROR"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "step_name_aliases": {
+                "Run unit tests": ["Execute tests"],  # 不包含 "Run something else"
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository", "Run unit tests"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        # Workflow 使用完全不同的名称，无法匹配
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Something completely different
+        run: echo "hello"
+"""
+
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该失败（missing_step ERROR）
+        assert result.success is False
+
+        # 应该有 missing_step 错误
+        missing_errors = [e for e in result.errors if e.error_type == "missing_step"]
+        assert len(missing_errors) == 1
+        assert missing_errors[0].key == "Run unit tests"
+
+    def test_empty_step_name_aliases(self, temp_workspace):
+        """测试：空的 step_name_aliases 不影响正常校验"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "step_name_aliases": {},  # 空的 aliases
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+"""
+
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该成功
+        assert result.success is True
+        assert len(result.errors) == 0
+
+    def test_no_step_name_aliases_field(self, temp_workspace):
+        """测试：没有 step_name_aliases 字段时正常工作"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            # 没有 step_name_aliases 字段
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+"""
+
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该成功
+        assert result.success is True
+        # step_name_aliases 应该是空 dict
+        assert validator.step_name_aliases == {}
+
+    def test_alias_ignores_comment_fields(self, temp_workspace):
+        """测试：step_name_aliases 中的下划线开头字段被忽略"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "step_name_aliases": {
+                "_comment": "This is a comment",
+                "_note_usage": "Use this for temporary aliases",
+                "Run unit tests": ["Run tests"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+"""
+
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        validator.load_contract()
+
+        # 验证下划线开头的字段被过滤
+        assert "_comment" not in validator.step_name_aliases
+        assert "_note_usage" not in validator.step_name_aliases
+        assert "Run unit tests" in validator.step_name_aliases
+
+    def test_multiple_aliases_for_one_step(self, temp_workspace):
+        """测试：一个 canonical step 可以有多个 aliases"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "step_name_aliases": {
+                "Run unit tests": ["Run tests", "Execute tests", "Perform tests"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Run unit tests"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        # 使用第二个 alias "Execute tests"
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute tests
+        run: pytest
+"""
+
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该成功
+        assert result.success is True
+
+        # 应该有 alias 匹配警告
+        alias_warnings = [w for w in result.warnings if w.warning_type == "step_name_alias_matched"]
+        assert len(alias_warnings) == 1
+        assert alias_warnings[0].new_value == "Execute tests"
+
+    def test_alias_has_priority_over_fuzzy_match(self, temp_workspace):
+        """测试：alias 匹配优先于 fuzzy 匹配"""
+        contract = {
+            "version": "1.0.0",
+            "frozen_step_text": {"allowlist": []},
+            "frozen_job_names": {"allowlist": ["Test Job"]},
+            "step_name_aliases": {
+                "Run unit tests": ["Run the tests"],  # 精确 alias
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Run unit tests"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        # 步骤名称既匹配 alias 也可能 fuzzy 匹配
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run the tests
+        run: pytest
+"""
+
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract, f)
+
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        # 应该成功（alias 匹配）
+        assert result.success is True
+
+        # 应该是 alias 匹配，不是 fuzzy 匹配
+        alias_warnings = [w for w in result.warnings if w.warning_type == "step_name_alias_matched"]
+        fuzzy_warnings = [w for w in result.warnings if w.warning_type == "step_name_changed"]
+        assert len(alias_warnings) == 1
+        assert len(fuzzy_warnings) == 0
+
+
+# ============================================================================
+# Frozen Item Change Fix Path Tests
+# ============================================================================
+
+
+class TestFrozenItemChangeFixPath:
+    """测试冻结项变化时的错误信息包含完整修复路径
+
+    验证 frozen_step_name_changed 和 frozen_job_name_changed 错误信息包含：
+    1. allowlist 更新指引
+    2. 版本 bump 命令（bump_workflow_contract_version.py）
+    3. contract.md 文档 anchor
+    4. maintenance.md 标准流程引用
+    """
+
+    @pytest.fixture
+    def contract_with_frozen_items(self):
+        """包含冻结 step 和 job 的合约"""
+        return {
+            "version": "1.0.0",
+            "frozen_step_text": {
+                "allowlist": ["Checkout repository", "Run CI precheck", "Upload results"],
+            },
+            "frozen_job_names": {
+                "allowlist": ["Test Job", "Lint Job"],
+            },
+            "workflows": {
+                "ci": {
+                    "file": ".github/workflows/ci.yml",
+                    "job_ids": ["test-job", "lint-job"],
+                    "job_names": ["Test Job", "Lint Job"],
+                    "required_jobs": [
+                        {
+                            "id": "test-job",
+                            "name": "Test Job",
+                            "required_steps": ["Checkout repository", "Run CI precheck"],
+                        },
+                        {
+                            "id": "lint-job",
+                            "name": "Lint Job",
+                            "required_steps": ["Checkout repository", "Upload results"],
+                        },
+                    ],
+                }
+            },
+        }
+
+    def test_frozen_step_change_error_contains_allowlist_update(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试 frozen_step_name_changed 错误包含 allowlist 更新指引"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        # 将冻结的 step name 改名
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run precheck
+        run: echo "precheck renamed"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_step_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含 allowlist 更新指引
+        assert "frozen_step_text.allowlist" in message, (
+            f"Error message should mention frozen_step_text.allowlist: {message}"
+        )
+        assert "添加新名称" in message or "移除旧名称" in message, (
+            f"Error message should explain allowlist update: {message}"
+        )
+
+    def test_frozen_step_change_error_contains_version_bump(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试 frozen_step_name_changed 错误包含版本 bump 命令"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run precheck
+        run: echo "renamed"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_step_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含版本 bump 命令
+        assert "bump_workflow_contract_version.py" in message, (
+            f"Error message should contain version bump command: {message}"
+        )
+        assert "minor" in message, (
+            f"Error message should specify version bump level (minor): {message}"
+        )
+
+    def test_frozen_step_change_error_contains_doc_anchor(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试 frozen_step_name_changed 错误包含 contract.md 文档 anchor"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run precheck
+        run: echo "renamed"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_step_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含 contract.md 文档 anchor
+        assert "contract.md#52-frozen-step-names" in message, (
+            f"Error message should contain doc anchor for Frozen Step Names: {message}"
+        )
+        # 验证错误信息包含 maintenance.md 标准流程引用
+        assert "maintenance.md#62-冻结-step-rename-标准流程" in message, (
+            f"Error message should contain maintenance.md procedure anchor: {message}"
+        )
+
+    def test_frozen_job_change_error_contains_allowlist_update(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试 frozen_job_name_changed 错误包含 allowlist 更新指引"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        # 将冻结的 job name 改名
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job Renamed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run CI precheck
+        run: echo "precheck"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_job_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含 allowlist 更新指引
+        assert "frozen_job_names.allowlist" in message, (
+            f"Error message should mention frozen_job_names.allowlist: {message}"
+        )
+        assert "添加新名称" in message or "移除旧名称" in message, (
+            f"Error message should explain allowlist update: {message}"
+        )
+
+    def test_frozen_job_change_error_contains_version_bump(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试 frozen_job_name_changed 错误包含版本 bump 命令"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job Renamed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run CI precheck
+        run: echo "precheck"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_job_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含版本 bump 命令
+        assert "bump_workflow_contract_version.py" in message, (
+            f"Error message should contain version bump command: {message}"
+        )
+        assert "minor" in message, (
+            f"Error message should specify version bump level (minor): {message}"
+        )
+
+    def test_frozen_job_change_error_contains_doc_anchors(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试 frozen_job_name_changed 错误包含完整的文档 anchors"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job Renamed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run CI precheck
+        run: echo "precheck"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_job_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含 contract.md 文档 anchors
+        assert "contract.md#2-job-id-与-job-name-对照表" in message, (
+            f"Error message should contain Job ID/Name table anchor: {message}"
+        )
+        assert "contract.md#51-frozen-job-names" in message, (
+            f"Error message should contain Frozen Job Names anchor: {message}"
+        )
+        # 验证错误信息包含 maintenance.md 标准流程引用
+        assert "maintenance.md#62-冻结-step-rename-标准流程" in message, (
+            f"Error message should contain maintenance.md procedure anchor: {message}"
+        )
+
+    def test_frozen_change_error_contains_minimum_requirement_hint(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试冻结项变化错误信息包含"最小组合"提示"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run precheck
+        run: echo "renamed"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_step_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含"最小组合"或"必需步骤"提示
+        assert "最小组合" in message or "必需步骤" in message, (
+            f"Error message should indicate minimum required combination: {message}"
+        )
+
+    def test_frozen_change_error_contains_validate_command(
+        self, temp_workspace, contract_with_frozen_items
+    ):
+        """测试冻结项变化错误信息包含验证命令"""
+        contract_path = temp_workspace / "contract.json"
+        with open(contract_path, "w") as f:
+            json.dump(contract_with_frozen_items, f)
+
+        workflow_content = """
+name: CI
+on: [push]
+jobs:
+  test-job:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run precheck
+        run: echo "renamed"
+  lint-job:
+    name: Lint Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Upload results
+        run: echo "upload"
+"""
+        workflow_path = temp_workspace / ".github" / "workflows" / "ci.yml"
+        with open(workflow_path, "w") as f:
+            f.write(workflow_content)
+
+        validator = WorkflowContractValidator(contract_path, temp_workspace)
+        result = validator.validate()
+
+        assert result.success is False
+        frozen_errors = [e for e in result.errors if e.error_type == "frozen_step_name_changed"]
+        assert len(frozen_errors) == 1
+
+        error = frozen_errors[0]
+        message = error.message
+
+        # 验证错误信息包含验证命令
+        assert "make validate-workflows" in message, (
+            f"Error message should contain validation command: {message}"
+        )

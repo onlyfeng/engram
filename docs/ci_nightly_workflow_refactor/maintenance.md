@@ -4,6 +4,77 @@
 
 ---
 
+## 0. 快速变更流程（SSOT-first）
+
+本节定义 workflow 合约系统的标准变更流程，遵循"SSOT 优先"原则，确保所有变更从合约定义开始，逐层传播到实现和文档。
+
+### 0.1 变更顺序（SSOT-first）
+
+所有 workflow 合约相关变更应按以下顺序执行：
+
+```
+1. workflow_contract.v1.json    ← SSOT，首先更新（或与 workflow 同时更新）
+       ↓
+2. .github/workflows/*.yml      ← 实现层，同步更新
+       ↓
+3. contract.md / coupling_map.md ← 文档层，同步更新
+       ↓
+4. Makefile                      ← 构建层，必要时更新
+       ↓
+5. tests/ci/*.py                 ← 测试层，最后补充
+```
+
+**关键原则**：
+- **同步更新**：`workflow_contract.v1.json` 与 `.github/workflows/*.yml` 可以在同一个 commit 中同时更新
+- **文档跟随**：`contract.md` 和 `coupling_map.md` 必须在同一 PR 中同步更新
+- **测试兜底**：如果变更涉及新的校验逻辑或错误类型，需要补充对应的测试用例
+
+### 0.2 最小验证矩阵
+
+变更完成后，必须在本地运行以下验证命令（与 CI 对齐）：
+
+| 命令 | 用途 | 通过标准 |
+|------|------|----------|
+| `make validate-workflows-strict` | 合约校验（严格模式） | Exit 0，无 ERROR |
+| `make check-workflow-contract-docs-sync` | 文档同步检查 | Exit 0，所有字段同步 |
+| `make check-workflow-contract-version-policy` | 版本策略检查 | Exit 0，版本已更新 |
+| `make check-workflow-contract-doc-anchors` | 文档锚点检查 | Exit 0，锚点有效 |
+| `make check-workflow-contract-coupling-map-sync` | Coupling Map 同步检查 | Exit 0，job_ids/artifacts/targets 已同步 |
+| `pytest tests/ci/ -q` | CI 脚本测试 | 全部 PASSED |
+
+**一键验证命令**：
+
+```bash
+# 运行所有 workflow 合约相关检查
+make validate-workflows-strict && \
+make check-workflow-contract-docs-sync && \
+make check-workflow-contract-version-policy && \
+make check-workflow-contract-doc-anchors && \
+make check-workflow-contract-coupling-map-sync && \
+pytest tests/ci/ -q
+```
+
+**或使用完整 CI 检查**：
+
+```bash
+make ci
+```
+
+### 0.3 变更类型快速索引
+
+| 变更场景 | 首先更新 | 同步更新 | 详细指引 |
+|----------|----------|----------|----------|
+| 新增 Job | contract JSON `job_ids` | workflow YAML + contract.md 第 2 章 | [12.4.1 节](contract.md#1241-新增-ci-job) |
+| 修改冻结 Job/Step Name | contract JSON `frozen_*` | workflow YAML + contract.md 第 5 章 | [12.4.2 节](contract.md#1242-修改冻结-jobstep-name) |
+| 新增 Make Target | Makefile + contract JSON | contract.md 第 7 章 + coupling_map.md | [12.4.3 节](contract.md#1243-新增-makefile-target被-workflow-调用) |
+| 新增 Artifact 路径 | workflow YAML + contract JSON | contract.md 第 8 章 | [12.4.4 节](contract.md#1244-新增-artifact-上传路径) |
+| 新增 PR Label | contract JSON `ci.labels` | script + contract.md 第 3 章 | [12.4.5 节](contract.md#1245-新增-pr-label) |
+| 工具脚本变更 | 脚本文件 + version 升级 | contract.md 第 11/14 章 | [12.4.6 节](contract.md#1246-工具脚本--schema-变更) |
+| Schema 字段变更 | Schema 文件 | validator + docs sync + contract.md | [12.4.7 节](contract.md#1247-schema-字段变更-checklist) |
+| **版本升级** | 使用 `bump_workflow_contract_version.py` | 自动更新 JSON + contract.md | [11.3 节](contract.md#113-版本更新流程) |
+
+---
+
 ## 1. 变更同步 Checklist
 
 ### 1.1 路径过滤（当前已简化）
@@ -34,7 +105,9 @@ CI workflow 采用简化模式，所有检查任务无条件执行：
 - [ ] **Makefile**: 添加新目标及其依赖
 - [ ] **workflow_contract.v1.json**: 在 `make.targets_required` 数组中添加新目标名
 - [ ] **contract.md**: 如目标涉及新环境变量，更新相关章节
+- [ ] **coupling_map.md**: 在第 3 章 "Makefile Targets 清单" 中添加新目标
 - [ ] 运行 `python scripts/ci/validate_workflows.py` 验证合约一致性
+- [ ] 运行 `make check-workflow-contract-coupling-map-sync` 验证 coupling_map 同步
 
 示例：新增 `test-new-component` 目标
 
@@ -58,7 +131,9 @@ CI workflow 采用简化模式，所有检查任务无条件执行：
   - 在 `job_names` 数组中添加 job name
   - 在 `required_jobs` 数组中添加 job 详细定义（包含 `required_steps`）
 - [ ] **contract.md**: 在 "2. Job ID 与 Job Name 对照表" 中添加新条目
+- [ ] **coupling_map.md**: 在对应 workflow 章节中添加新 job 的产物映射
 - [ ] **README.md**: 如有必要，更新说明
+- [ ] 运行 `make check-workflow-contract-coupling-map-sync` 验证 coupling_map 同步
 
 **当前 CI Jobs 列表** (v2.x)：
 - `test` - 单元测试和验收测试（矩阵：Python 3.10/3.11/3.12）
@@ -99,6 +174,79 @@ CI workflow 采用简化模式，所有检查任务无条件执行：
 - 若 contract 中有但脚本中没有：报 **ERROR** (`label_missing_in_script`)
 - 若脚本中有但 contract 中没有：报 **ERROR** (`label_missing_in_contract`)
 
+#### 1.4.1 启用 Labels 消费的扩展 Checklist
+
+当需要从"仅合约定义"升级为"实际消费 labels"时（使 workflow 行为依赖于 PR labels），需要额外完成以下步骤：
+
+**文件更新清单：**
+
+| 序号 | 文件 | 更新内容 | 说明 |
+|------|------|----------|------|
+| 1 | `.github/workflows/ci.yml` | 添加 `parse-labels` job 或步骤 | 设置 `GITHUB_EVENT_NAME`、`PR_LABELS` 环境变量并调用脚本 |
+| 2 | `.github/workflows/ci.yml` | 添加 job `outputs` 声明 | 暴露 `has_*_label` outputs 供后续 job 引用 |
+| 3 | `.github/workflows/ci.yml` | 更新依赖 job 的 `needs` 和 `if` 条件 | 根据 outputs 值决定是否执行 |
+| 4 | `scripts/ci/workflow_contract.v1.json` | 更新 `ci.job_ids`、`ci.job_names` | 如新增 `parse-labels` job |
+| 5 | `scripts/ci/workflow_contract.v1.json` | 更新 `ci.required_jobs` | 添加新 job 的 `required_steps` |
+| 6 | `docs/ci_nightly_workflow_refactor/contract.md` | 更新第 2 章 Job 对照表 | 记录新 job |
+| 7 | `docs/ci_nightly_workflow_refactor/contract.md` | 更新第 3.2 节 | 标记 labels 已启用消费 |
+
+**验证命令清单：**
+
+```bash
+# 1. 验证 labels 脚本语法
+python scripts/ci/gh_pr_labels_to_outputs.py --help 2>/dev/null || python -c "import scripts.ci.gh_pr_labels_to_outputs"
+
+# 2. 验证 labels 一致性（contract 与脚本同步）
+make validate-workflows-strict
+
+# 3. 验证文档同步
+make check-workflow-contract-docs-sync
+
+# 4. 验证版本策略（如变更触发版本更新）
+make check-workflow-contract-version-policy
+
+# 5. 运行 CI 脚本测试
+pytest tests/ci/ -q
+
+# 6. 完整回归（推荐）
+make ci
+```
+
+**ci.yml 示例代码片段：**
+
+```yaml
+# 在 jobs: 下添加
+parse-labels:
+  name: Parse PR Labels
+  runs-on: ubuntu-latest
+  outputs:
+    has_freeze_override_label: ${{ steps.labels.outputs.has_freeze_override_label }}
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Parse PR labels
+      id: labels
+      env:
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+      run: python scripts/ci/gh_pr_labels_to_outputs.py
+
+# 在需要依赖 labels 的 job 中添加
+some-conditional-job:
+  name: Some Conditional Job
+  needs: [parse-labels]
+  if: needs.parse-labels.outputs.has_freeze_override_label == 'true'
+  # ... 其他配置
+```
+
+> **详细启用流程**：参见 [contract.md#322-启用-labels-消费的流程](contract.md#322-启用-labels-消费的流程)
+
 ### 1.5 新增 workflow_dispatch 输入参数
 
 当新增手动触发输入参数时：
@@ -137,7 +285,9 @@ CI workflow 采用简化模式，所有检查任务无条件执行：
 - [ ] **workflow_contract.v1.json**: 在对应 workflow 的 `artifact_archive.required_artifact_paths` 中添加新路径
 - [ ] **workflow_contract.v1.json**: 可选：在 `artifact_archive.artifact_step_names` 中添加步骤名称（用于限定检查范围）
 - [ ] **contract.md**: 在 "8. Artifact Archive 合约" 中更新说明
+- [ ] **coupling_map.md**: 在对应 job 的产物上传表格中添加新路径
 - [ ] 运行 `python scripts/ci/validate_workflows.py` 验证 artifact 路径覆盖
+- [ ] 运行 `make check-workflow-contract-coupling-map-sync` 验证 coupling_map 同步
 
 ### 1.8 修改 Acceptance 验收测试
 
@@ -600,17 +750,24 @@ make workflow-contract-drift-report-markdown
 
 ### 6.2 冻结 Step Rename 标准流程
 
-当确实需要修改冻结 step name 时，必须遵循以下流程：
+当确实需要修改冻结 step/job name 时，**必须同时满足以下最小组合**（缺一不可）：
+
+> **最小组合要求（门禁强制检查）**：
+> 1. ✅ allowlist 更新（frozen_step_text 或 frozen_job_names）
+> 2. ✅ 版本 bump（使用 `bump_workflow_contract_version.py`）
+> 3. ✅ contract.md 指定章节更新
 
 **步骤 1: 准备变更**
 ```bash
 # 1. 创建专门的重命名分支
 git checkout -b ci/rename-frozen-step-xxx
 
-# 2. 同步修改三处文件：
-#    a) workflow 文件中的 step name
-#    b) workflow_contract.v1.json 的 frozen_step_text.allowlist
-#    c) contract.md 'Frozen Step Names' 节 (contract.md#52-frozen-step-names)
+# 2. 同步修改以下文件（最小组合，缺一不可）：
+#    a) workflow 文件中的 step/job name
+#    b) workflow_contract.v1.json 的 frozen_step_text.allowlist 或 frozen_job_names.allowlist
+#    c) contract.md 对应章节：
+#       - 'Frozen Step Names' 节 (contract.md#52-frozen-step-names) 或
+#       - 'Frozen Job Names' 节 (contract.md#51-frozen-job-names)
 ```
 
 **步骤 2: 更新 workflow_contract.v1.json**
@@ -638,37 +795,58 @@ git checkout -b ci/rename-frozen-step-xxx
 }
 ```
 
-**步骤 3: 更新 contract.md**
+**步骤 3: 版本 bump（必需）**
 
-在 "5.2 Frozen Step Names" 章节同步修改对应条目。
-
-**步骤 4: 本地验证**
 ```bash
-# 必须通过才能提交
-python scripts/ci/validate_workflows.py
-python scripts/ci/check_workflow_contract_docs_sync.py
+# 使用自动化工具进行版本 bump（推荐）
+python scripts/ci/bump_workflow_contract_version.py minor \
+  --message "Rename frozen step: Run unit and integration tests -> Run all tests"
+
+# 工具会自动更新：
+# - workflow_contract.v1.json 的 version 和 last_updated
+# - contract.md 版本控制表新增行
+# - 插入 _changelog_vX.Y.Z 空模板
+```
+
+> **注意**：冻结项改名属于 **Minor** 级别变更（功能新增/调整），而非 Patch（仅修复）。
+
+**步骤 4: 更新 contract.md**
+
+在以下章节同步修改对应条目：
+- 冻结 Step 改名：更新 "5.2 Frozen Step Names" (contract.md#52-frozen-step-names)
+- 冻结 Job 改名：更新 "5.1 Frozen Job Names" (contract.md#51-frozen-job-names) + "2. Job ID 与 Job Name 对照表" (contract.md#2-job-id-与-job-name-对照表)
+
+**步骤 5: 本地验证**
+```bash
+# 必须通过才能提交（验证最小组合完整性）
+make validate-workflows-strict
+make check-workflow-contract-docs-sync
+make check-workflow-contract-version-policy
 
 # 完整验证（推荐）
 make ci
 ```
 
-**步骤 5: PR 说明要求**
+**步骤 6: PR 说明要求**
 
 PR 描述中必须包含：
-- **变更原因**：为何需要修改此冻结 step name
+- **变更原因**：为何需要修改此冻结 step/job name
 - **影响范围**：列出所有被修改的文件
+- **最小组合确认**：确认已完成 allowlist 更新 + 版本 bump + contract.md 更新
 - **验证结果**：`make validate-workflows-strict` 输出截图或日志
 
 ### 6.3 禁止的 Rename 模式
 
-以下 rename 行为会被 CI 拒绝：
+以下 rename 行为会被 CI 拒绝（未满足最小组合要求）：
 
-| 模式 | 示例 | 原因 |
-|------|------|------|
-| 仅改 workflow 不改合约 | 改 ci.yml 但不改 workflow_contract.v1.json | 合约一致性检查失败（ERROR） |
-| 仅改合约不改 workflow | 改 workflow_contract.v1.json 但不改 ci.yml | step_missing 错误 |
-| 添加到 allowlist 但不从旧条目移除 | 新旧名称同时存在 | 允许但导致冗余，应清理旧条目 |
-| 批量修改多个冻结 step | 一个 PR 改 5+ 个冻结 step | 风险过高，建议拆分 PR |
+| 模式 | 示例 | 原因 | 门禁检查 |
+|------|------|------|----------|
+| 仅改 workflow 不改合约 | 改 ci.yml 但不改 workflow_contract.v1.json | 合约一致性检查失败 | `validate-workflows-strict` |
+| 仅改合约不改 workflow | 改 workflow_contract.v1.json 但不改 ci.yml | step_missing 错误 | `validate-workflows-strict` |
+| 缺少版本 bump | 改了 allowlist 但未 bump version | 版本策略检查失败 | `check-workflow-contract-version-policy` |
+| 缺少 contract.md 更新 | 改了 allowlist 但未更新文档 | 文档同步检查失败 | `check-workflow-contract-docs-sync` |
+| 添加到 allowlist 但不从旧条目移除 | 新旧名称同时存在 | 允许但导致冗余，应清理旧条目 | 无（人工审核） |
+| 批量修改多个冻结 step | 一个 PR 改 5+ 个冻结 step | 风险过高，建议拆分 PR | 无（人工审核） |
 
 **当前冻结的 Job Names** (v2.x)：
 - `Test (Python ${{ matrix.python-version }})`
@@ -803,6 +981,89 @@ jd /tmp/before.json /tmp/after.json
 3. 在 PR 描述中附上关键差异摘要
 4. 运行 `make validate-workflows-strict` 验证合约一致性
 
+### 7.6 智能更新建议工具
+
+除了手动对比快照，还可以使用 `suggest_workflow_contract_updates.py` 工具自动分析 workflow 与 contract 的差异并生成更新建议。
+
+**功能特性：**
+
+- 检测 workflow 中存在但 contract 未声明的 job (`missing_job_id`)
+- 检测 job name 不匹配 (`job_name_mismatch`)
+- 检测 contract 中声明但 workflow 中不存在的 step (`missing_step`)
+- 检测 contract 中声明但 workflow 中不存在的 job (`extra_job`)
+- 检测 workflow 中存在但 contract 未记录的 step (`new_step_in_workflow`)
+- 提示可能需要更新的 frozen allowlist (`frozen_allowlist_update`)
+
+**使用方法：**
+
+```bash
+# 输出 JSON 格式到 stdout（机器可读）
+python scripts/ci/suggest_workflow_contract_updates.py --json
+
+# 输出 Markdown 格式到 stdout（人类可读）
+python scripts/ci/suggest_workflow_contract_updates.py --markdown
+
+# 输出到文件（根据扩展名自动选择格式）
+python scripts/ci/suggest_workflow_contract_updates.py --output suggestions.json
+python scripts/ci/suggest_workflow_contract_updates.py --output suggestions.md
+
+# 只分析特定 workflow
+python scripts/ci/suggest_workflow_contract_updates.py --workflow ci --json
+```
+
+**参数说明：**
+
+| 参数 | 说明 |
+|------|------|
+| `--json` | 输出 JSON 格式到 stdout |
+| `--markdown` | 输出 Markdown 格式到 stdout |
+| `--output, -o` | 输出到指定文件（根据扩展名自动选择格式） |
+| `--workflow, -w` | 只分析指定 workflow（如: ci, nightly） |
+| `--contract-path` | 指定合约文件路径（默认自动查找） |
+| `--workspace-root` | 指定工作区根目录（默认自动查找） |
+
+**输出示例（JSON）：**
+
+```json
+{
+  "has_suggestions": true,
+  "contract_version": "2.16.0",
+  "suggestion_count": 3,
+  "summary": {
+    "missing_job_id": 1,
+    "job_name_mismatch": 1,
+    "missing_step": 1
+  },
+  "suggestions": [
+    {
+      "suggestion_type": "missing_job_id",
+      "workflow": "ci",
+      "key": "new-job",
+      "message": "Workflow 中存在 job 'new-job'，但 contract 的 job_ids 中未声明",
+      "priority": "high",
+      "action": "将 \"new-job\" 添加到 ci.job_ids 数组中"
+    }
+  ]
+}
+```
+
+**建议优先级说明：**
+
+| 优先级 | 说明 | 建议操作 |
+|--------|------|----------|
+| `high` | 高优先级，需要立即处理 | 更新 contract 或修复 workflow |
+| `medium` | 中优先级，建议处理 | 同步更新名称或结构 |
+| `low` | 低优先级，可选处理 | 考虑是否需要添加到 contract |
+| `info` | 仅供参考 | 检查是否需要更新 frozen allowlist |
+
+**典型工作流程：**
+
+1. 修改 workflow 文件
+2. 运行 `python scripts/ci/suggest_workflow_contract_updates.py --markdown` 查看建议
+3. 根据建议更新 `workflow_contract.v1.json`
+4. 运行 `make validate-workflows-strict` 验证
+5. 提交 PR
+
 ---
 
 ## 8. 变更 SOP 快速检查表
@@ -842,16 +1103,214 @@ make ci
 
 变更完成后需同步更新：
 
+**方式一：使用自动化工具（推荐）**
+
+```bash
+# 根据变更类型选择升级级别
+python scripts/ci/bump_workflow_contract_version.py minor --message "变更说明"
+# 或 major / patch
+
+# 工具会自动更新：
+# - workflow_contract.v1.json 的 version 和 last_updated
+# - contract.md 版本控制表新增行
+# - 插入 _changelog_vX.Y.Z 空模板
+```
+
+**方式二：手动更新**
+
 1. `scripts/ci/workflow_contract.v1.json` 的 `version` 字段
-2. `contract.md` '版本控制' 节 (contract.md#14-版本控制)
-3. 相关 changelog 或 PR 描述
+2. `scripts/ci/workflow_contract.v1.json` 的 `last_updated` 字段
+3. `contract.md` '版本控制' 节 (contract.md#14-版本控制)
+4. 相关 changelog 或 PR 描述
 
 ---
 
-## 9. 版本控制
+## 9. 常见场景最小演练
+
+本章汇总常见 workflow 变更场景的最小操作步骤，包括：1）先改哪里（SSOT/workflow/docs），2）运行哪些命令，3）如何用辅助工具，4）常见失败与修复路径。
+
+> **SSOT-first 原则**：所有变更应从 `workflow_contract.v1.json`（SSOT）开始，确保合约定义优先于实现。
+
+### 9.1 场景化操作速查表
+
+| 场景 | 首先更新（SSOT） | 然后更新（实现/文档） | 验证命令 | 辅助工具 |
+|------|------------------|----------------------|----------|----------|
+| **新增 Job** | `workflow_contract.v1.json`（job_ids, job_names, required_jobs） | ci.yml/nightly.yml → contract.md 第 2 章 → coupling_map.md | `make validate-workflows-strict && make check-workflow-contract-docs-sync` | `suggest_workflow_contract_updates.py --json` |
+| **修改冻结 Job/Step Name** | `workflow_contract.v1.json`（frozen_* allowlist）+ 版本 bump | workflow YAML → contract.md 第 5 章 | `make validate-workflows-strict && make check-workflow-contract-version-policy` | `workflow_contract_drift_report.py --output /tmp/drift.json` |
+| **新增 Make Target** | Makefile → `workflow_contract.v1.json`（make.targets_required） | contract.md 第 7 章 → coupling_map.md 第 3 章 | `make validate-workflows-strict && make check-workflow-contract-coupling-map-sync` | - |
+| **新增 Artifact 路径** | workflow YAML（upload-artifact step）→ `workflow_contract.v1.json`（artifact_archive） | contract.md 第 8 章 → coupling_map.md | `make validate-workflows-strict` | - |
+| **新增 PR Label** | `workflow_contract.v1.json`（ci.labels）**SSOT** | `gh_pr_labels_to_outputs.py`（LABEL_* 常量）→ contract.md 第 3 章 | `make validate-workflows-strict` | - |
+| **工具脚本变更** | 脚本文件修改 → `workflow_contract.v1.json`（version bump） | contract.md 第 11/14 章 | `make check-workflow-contract-version-policy` | - |
+
+### 9.2 辅助工具使用指南
+
+#### 9.2.1 suggest_workflow_contract_updates.py（更新建议）
+
+在修改 workflow 后，运行此工具获取需要同步更新 contract 的建议：
+
+```bash
+# 输出 JSON 格式（机器可读，适合脚本处理）
+python scripts/ci/suggest_workflow_contract_updates.py --json
+
+# 输出 Markdown 格式（人类可读，适合 PR 描述）
+python scripts/ci/suggest_workflow_contract_updates.py --markdown
+
+# 只分析特定 workflow
+python scripts/ci/suggest_workflow_contract_updates.py --workflow ci --json
+
+# 输出到文件
+python scripts/ci/suggest_workflow_contract_updates.py --output suggestions.md
+```
+
+**建议类型说明**：
+
+| suggestion_type | 含义 | 优先级 | 建议操作 |
+|-----------------|------|--------|----------|
+| `missing_job_id` | workflow 中存在但 contract 未声明的 job | high | 添加到 `job_ids` |
+| `job_name_mismatch` | job name 不匹配 | medium | 同步更新 `job_names` |
+| `missing_step` | contract 声明但 workflow 中不存在的 step | high | 从 `required_steps` 移除或修复 workflow |
+| `extra_job` | contract 声明但 workflow 中不存在的 job | high | 从 contract 移除或修复 workflow |
+| `new_step_in_workflow` | workflow 中存在但 contract 未记录的 step | low | 考虑是否添加到 `required_steps` |
+| `frozen_allowlist_update` | 可能需要更新 frozen allowlist | info | 检查是否为核心步骤 |
+
+**典型工作流程**：
+
+```bash
+# 1. 修改 workflow 文件
+# 2. 获取更新建议
+python scripts/ci/suggest_workflow_contract_updates.py --markdown
+# 3. 根据建议更新 contract
+# 4. 验证
+make validate-workflows-strict
+```
+
+#### 9.2.2 workflow_contract_drift_report.py（漂移报告）
+
+在变更前后生成漂移报告，识别 workflow 与 contract 之间的差异：
+
+```bash
+# 生成 JSON 报告
+python scripts/ci/workflow_contract_drift_report.py --output artifacts/drift.json
+
+# 生成 Markdown 报告（人类可读）
+python scripts/ci/workflow_contract_drift_report.py --markdown --output artifacts/drift.md
+
+# 同时生成两种格式（Make target）
+make workflow-contract-drift-report-all
+```
+
+**漂移类型说明**：
+
+| drift_type | 含义 | 严重程度 |
+|------------|------|----------|
+| `added` | 实际存在但合约未声明 | WARNING |
+| `removed` | 合约声明但实际不存在 | ERROR |
+| `changed` | 存在但值/名称不同 | WARNING/ERROR |
+
+**典型使用场景**：
+
+```bash
+# 变更前：生成基线
+python scripts/ci/workflow_contract_drift_report.py --output /tmp/before.json
+
+# 执行 workflow 变更...
+
+# 变更后：对比差异
+python scripts/ci/workflow_contract_drift_report.py --output /tmp/after.json
+diff /tmp/before.json /tmp/after.json
+```
+
+### 9.3 常见失败与修复路径速查
+
+| 失败类型 | 错误信息示例 | 原因 | 修复文件 | 修复方法 |
+|----------|--------------|------|----------|----------|
+| **missing_job_id** | `Job 'new-job' exists in workflow but not in contract` | 新增 job 未添加到 contract | `workflow_contract.v1.json` | 添加到 `ci.job_ids` 和 `ci.job_names` |
+| **frozen_step_name_changed** | `Frozen step 'Run tests' was renamed to 'Execute tests'` | 修改了冻结的 step 名称 | `workflow_contract.v1.json` | 更新 `frozen_step_text.allowlist` |
+| **missing_step** | `Required step 'Upload results' not found in job 'test'` | workflow 中缺少 contract 声明的 step | ci.yml 或 contract JSON | 添加 step 或从 `required_steps` 移除 |
+| **missing_makefile_target** | `Make target 'check-xxx' not found` | contract 声明的 target 在 Makefile 中不存在 | Makefile | 添加 target 定义 |
+| **version_not_updated** | `Critical files changed but version not updated` | 关键文件变更未更新版本 | `workflow_contract.v1.json` | 运行 `python scripts/ci/bump_workflow_contract_version.py patch` |
+| **version_not_in_doc** | `Version X.Y.Z not found in contract.md` | 版本未同步到文档 | `contract.md` 第 14 章 | 添加版本记录行 |
+| **job_name_not_in_doc** | `Job name 'XXX' not found in contract.md` | 文档未同步 job name | `contract.md` 第 2 章 | 添加到 Job ID 对照表 |
+| **extra_job_not_in_contract** | `Extra job 'xxx' in workflow but not declared in contract` | workflow 中有 contract 未声明的 job | `workflow_contract.v1.json` | 添加到 `job_ids` 或从 workflow 移除 |
+
+### 9.4 场景最小演练示例
+
+#### 9.4.1 新增 CI Job 完整流程
+
+```bash
+# ===== Step 1: 更新 SSOT (contract JSON) =====
+# 编辑 scripts/ci/workflow_contract.v1.json：
+# - ci.job_ids: 添加 "my-new-job"
+# - ci.job_names: 添加 "My New Job"
+# - ci.required_jobs: 添加 { "id": "my-new-job", "name": "My New Job", "required_steps": [...] }
+
+# ===== Step 2: 更新实现 (workflow YAML) =====
+# 编辑 .github/workflows/ci.yml：
+# - 添加 my-new-job 定义
+
+# ===== Step 3: 更新文档 =====
+# 编辑 docs/ci_nightly_workflow_refactor/contract.md：
+# - 第 2.1 章：添加 Job ID 对照表行
+# 编辑 docs/ci_nightly_workflow_refactor/coupling_map.md：
+# - 对应章节：添加 job 映射
+
+# ===== Step 4: 版本 bump =====
+python scripts/ci/bump_workflow_contract_version.py minor --message "新增 my-new-job"
+
+# ===== Step 5: 验证 =====
+make validate-workflows-strict
+make check-workflow-contract-docs-sync
+make check-workflow-contract-version-policy
+make check-workflow-contract-coupling-map-sync
+
+# 或一键验证
+make ci
+```
+
+#### 9.4.2 修改冻结 Step 名称完整流程
+
+```bash
+# ===== Step 1: 使用辅助工具诊断 =====
+python scripts/ci/workflow_contract_drift_report.py --output /tmp/before.json
+
+# ===== Step 2: 同步更新 contract 和 workflow =====
+# 编辑 scripts/ci/workflow_contract.v1.json：
+# - frozen_step_text.allowlist: 移除旧名称，添加新名称
+# - required_jobs[].required_steps: 同步更新引用
+# 编辑 .github/workflows/ci.yml：
+# - 修改 step name
+
+# ===== Step 3: 版本 bump =====
+python scripts/ci/bump_workflow_contract_version.py minor --message "Rename frozen step: Old Name -> New Name"
+
+# ===== Step 4: 更新文档 =====
+# 编辑 docs/ci_nightly_workflow_refactor/contract.md：
+# - 第 5.2 节：更新 Frozen Step Names 表
+
+# ===== Step 5: 验证 =====
+make validate-workflows-strict
+make check-workflow-contract-docs-sync
+make check-workflow-contract-version-policy
+```
+
+### 9.5 一键验证命令汇总
+
+| 场景 | 推荐验证命令 |
+|------|--------------|
+| **任何 workflow 变更** | `make validate-workflows-strict && make check-workflow-contract-docs-sync` |
+| **涉及冻结项改名** | 上述 + `make check-workflow-contract-version-policy` |
+| **涉及 Makefile** | 上述 + `make check-workflow-contract-coupling-map-sync` |
+| **完整回归** | `make ci` |
+
+---
+
+## 10. 版本控制
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.6 | 2026-02-02 | 新增第 9 章"常见场景最小演练"：场景化操作速查表、辅助工具使用指南、常见失败与修复路径速查、场景演练示例 |
+| v2.5 | 2026-02-02 | 新增 Coupling Map 同步检查：1.2/1.3/1.7 节 checklist 添加 coupling_map.md 同步要求；0.2 节添加 `make check-workflow-contract-coupling-map-sync` 验证命令 |
+| v2.4 | 2026-02-02 | 新增 7.6 节"智能更新建议工具"：介绍 `suggest_workflow_contract_updates.py` 脚本的使用方法、输出格式、建议优先级 |
 | v2.3 | 2026-02-02 | 更新章节引用：contract.md 版本控制章节由 13 改为 14（配合 contract.md 新增第 0 章） |
 | v2.2 | 2026-02-02 | 新增第 4 章"Drift Report 漂移报告"：定义运行时机、阻断策略、输出位置、Make targets |
 | v2.1 | 2026-02-02 | 修正参数说明表格：`--strict` CI 是否启用改为"是"；新增 3.1.1 节说明 CI 选择 strict 的原因；新增 3.1.2 节紧急回滚方案 |

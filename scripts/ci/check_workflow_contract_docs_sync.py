@@ -4,6 +4,10 @@ Workflow Contract 与文档同步校验脚本
 
 校验 workflow_contract.v1.json 中的关键元素是否在 contract.md 文档中有对应描述。
 
+校验模式：
+1. **受控块模式**（推荐）：当文档包含 markers 时，渲染期望块并逐字比对
+2. **字符串匹配模式**（回退）：当文档无 markers 时，检查值是否在文档中出现
+
 校验范围：
 1. <workflow>.job_ids: 每个 workflow（ci/nightly）的 job id 在对应章节可被找到
 2. <workflow>.job_names: 每个 workflow 的 job name 在对应章节可被找到
@@ -25,13 +29,93 @@ Workflow Contract 与文档同步校验脚本
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from workflow_contract_common import discover_workflow_keys
+from scripts.ci.render_workflow_contract_docs import (
+    WorkflowContractDocsRenderer,
+    extract_block_from_content,
+    find_all_markers,
+)
+from scripts.ci.workflow_contract_common import discover_workflow_keys
+
+# ============================================================================
+# Error Types - 统一定义
+# ============================================================================
+#
+# 所有 error_type 的统一定义，便于维护和测试覆盖。
+#
+# 版本策略：
+#   - 新增 error_type: Minor (0.X.0)
+#   - 弃用 error_type: Major (X.0.0) - 需提供迁移路径
+#   - 修改 error_type 含义: Major (X.0.0)
+#
+# 详见 docs/ci_nightly_workflow_refactor/contract.md 第 13 章
+#
+
+
+class DocsSyncErrorTypes:
+    """文档同步校验的 error_type 常量定义"""
+
+    # 文件/解析错误
+    CONTRACT_NOT_FOUND = "contract_not_found"
+    CONTRACT_PARSE_ERROR = "contract_parse_error"
+    DOC_NOT_FOUND = "doc_not_found"
+    DOC_READ_ERROR = "doc_read_error"
+
+    # 章节缺失错误
+    WORKFLOW_SECTION_MISSING = "workflow_section_missing"
+    FROZEN_STEP_SECTION_MISSING = "frozen_step_section_missing"
+    FROZEN_JOB_NAMES_SECTION_MISSING = "frozen_job_names_section_missing"
+    LABELS_SECTION_MISSING = "labels_section_missing"
+    MAKE_TARGETS_SECTION_MISSING = "make_targets_section_missing"
+    SEMVER_POLICY_SECTION_MISSING = "semver_policy_section_missing"
+
+    # 内容缺失错误
+    JOB_ID_NOT_IN_DOC = "job_id_not_in_doc"
+    JOB_NAME_NOT_IN_DOC = "job_name_not_in_doc"
+    FROZEN_STEP_NOT_IN_DOC = "frozen_step_not_in_doc"
+    FROZEN_JOB_NAME_NOT_IN_DOC = "frozen_job_name_not_in_doc"
+    LABEL_NOT_IN_DOC = "label_not_in_doc"
+    VERSION_NOT_IN_DOC = "version_not_in_doc"
+    MAKE_TARGET_NOT_IN_DOC = "make_target_not_in_doc"
+
+    # 受控块错误（markers 模式）
+    BLOCK_MARKER_MISSING = "block_marker_missing"
+    BLOCK_MARKER_DUPLICATE = "block_marker_duplicate"
+    BLOCK_MARKER_UNPAIRED = "block_marker_unpaired"
+    BLOCK_CONTENT_MISMATCH = "block_content_mismatch"
+
+
+# 导出所有 error_type 的集合（用于测试覆盖检查）
+DOCS_SYNC_ERROR_TYPES = frozenset({
+    DocsSyncErrorTypes.CONTRACT_NOT_FOUND,
+    DocsSyncErrorTypes.CONTRACT_PARSE_ERROR,
+    DocsSyncErrorTypes.DOC_NOT_FOUND,
+    DocsSyncErrorTypes.DOC_READ_ERROR,
+    DocsSyncErrorTypes.WORKFLOW_SECTION_MISSING,
+    DocsSyncErrorTypes.FROZEN_STEP_SECTION_MISSING,
+    DocsSyncErrorTypes.FROZEN_JOB_NAMES_SECTION_MISSING,
+    DocsSyncErrorTypes.LABELS_SECTION_MISSING,
+    DocsSyncErrorTypes.MAKE_TARGETS_SECTION_MISSING,
+    DocsSyncErrorTypes.SEMVER_POLICY_SECTION_MISSING,
+    DocsSyncErrorTypes.JOB_ID_NOT_IN_DOC,
+    DocsSyncErrorTypes.JOB_NAME_NOT_IN_DOC,
+    DocsSyncErrorTypes.FROZEN_STEP_NOT_IN_DOC,
+    DocsSyncErrorTypes.FROZEN_JOB_NAME_NOT_IN_DOC,
+    DocsSyncErrorTypes.LABEL_NOT_IN_DOC,
+    DocsSyncErrorTypes.VERSION_NOT_IN_DOC,
+    DocsSyncErrorTypes.MAKE_TARGET_NOT_IN_DOC,
+    DocsSyncErrorTypes.BLOCK_MARKER_MISSING,
+    DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE,
+    DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED,
+    DocsSyncErrorTypes.BLOCK_CONTENT_MISMATCH,
+})
+
 
 # ============================================================================
 # Constants
@@ -43,6 +127,30 @@ DEFAULT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
 # 文档中各 workflow 章节的锚点关键字（用于章节定位和切片）
 # 检查 job_ids/job_names 时，只在对应 workflow 章节内匹配
 # 注意：锚点必须足够精确，避免匹配到其他章节（如关键文件清单中的路径引用）
+#
+# ============================================================================
+# Phase 2 扩展点：纳入 release.yml
+# ============================================================================
+#
+# 当前 release 的锚点指向 "Phase 2 预留" 章节。当 release.yml 正式纳入合约时：
+#
+# 纳入 release.yml 时的同步 Checklist：
+#
+# 1. [contract.md] 更新 2.3 节为正式章节：
+#    - 标题改为 "### 2.3 Release Workflow (`release.yml`)"
+#    - 添加 Job ID / Job Name 对照表
+#
+# 2. [本脚本] 更新下方 release 锚点（如需）：
+#    - 确保锚点与 contract.md 中的实际章节标题匹配
+#    - 示例: ["### 2.3 Release Workflow", "Release Workflow (`release.yml`)"]
+#
+# 3. [workflow_contract.v1.json] 添加 release 字段定义
+#
+# 4. [验证] 运行以下命令确认 release 文档同步正确：
+#    python scripts/ci/check_workflow_contract_docs_sync.py --verbose
+#
+# 详见 contract.md 2.4.3 节迁移 Checklist
+# ============================================================================
 WORKFLOW_DOC_ANCHORS = {
     "ci": ["### 2.1 CI Workflow", "CI Workflow (`ci.yml`)"],
     "nightly": ["### 2.2 Nightly Workflow", "Nightly Workflow (`nightly.yml`)"],
@@ -96,9 +204,11 @@ class SyncError:
     """同步错误"""
 
     error_type: str
-    category: str  # "job_id", "job_name", "frozen_step"
+    category: str  # "job_id", "job_name", "frozen_step", "block"
     value: str
     message: str
+    diff: str | None = None  # unified diff for block mismatches
+    expected_block: str | None = None  # expected content for easy copy-paste
 
 
 @dataclass
@@ -115,6 +225,8 @@ class SyncResult:
     checked_labels: list[str] = field(default_factory=list)
     checked_version: str = ""
     checked_make_targets: list[str] = field(default_factory=list)
+    checked_blocks: list[str] = field(default_factory=list)  # blocks checked in marker mode
+    block_mode_used: bool = False  # whether marker mode was used
 
     def add_error(self, error: SyncError) -> None:
         """添加错误"""
@@ -690,8 +802,175 @@ class WorkflowContractDocsSyncChecker:
                 )
             )
 
+    # ========================================================================
+    # 受控块检查（Marker Mode）
+    # ========================================================================
+
+    def has_any_markers(self) -> bool:
+        """检查文档中是否存在任何受控块 markers"""
+        markers = find_all_markers(self.doc_content)
+        return len(markers) > 0
+
+    def check_controlled_blocks(self) -> bool:
+        """检查受控块内容是否与渲染结果一致
+
+        Returns:
+            True 如果使用了 marker 模式（找到了 markers），False 否则
+        """
+        # 检查是否有 markers
+        markers = find_all_markers(self.doc_content)
+        if not markers:
+            return False
+
+        self.result.block_mode_used = True
+
+        if self.verbose:
+            print("\nUsing marker mode for controlled blocks...")
+
+        # 创建渲染器
+        renderer = WorkflowContractDocsRenderer(self.contract_path)
+        if not renderer.load_contract():
+            return True  # 仍然标记为使用了 marker 模式
+
+        # 只检查 contract.md 相关的块
+        rendered_blocks = renderer.render_contract_blocks()
+
+        # 检查 marker 完整性
+        marker_map: dict[str, list[tuple[str, int]]] = {}  # block_name -> [(type, line)]
+        for block_name, marker_type, line_num in markers:
+            if block_name not in marker_map:
+                marker_map[block_name] = []
+            marker_map[block_name].append((marker_type, line_num))
+
+        # 检查每个预期的块
+        for block_name, rendered_block in rendered_blocks.items():
+            self.result.checked_blocks.append(block_name)
+
+            # 检查 markers 是否存在
+            if block_name not in marker_map:
+                # Marker 缺失 - 这是 warning 而非 error，允许渐进式迁移
+                self.result.add_warning(
+                    f"Block '{block_name}' markers not found in document. "
+                    f"Add markers to enable block comparison."
+                )
+                continue
+
+            block_markers = marker_map[block_name]
+
+            # 检查 marker 配对
+            begin_markers = [m for m in block_markers if m[0] == "begin"]
+            end_markers = [m for m in block_markers if m[0] == "end"]
+
+            if len(begin_markers) > 1:
+                self.result.add_error(
+                    SyncError(
+                        error_type=DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE,
+                        category="block",
+                        value=block_name,
+                        message=f"Duplicate BEGIN marker for block '{block_name}' at lines {[m[1]+1 for m in begin_markers]}",
+                    )
+                )
+                continue
+
+            if len(end_markers) > 1:
+                self.result.add_error(
+                    SyncError(
+                        error_type=DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE,
+                        category="block",
+                        value=block_name,
+                        message=f"Duplicate END marker for block '{block_name}' at lines {[m[1]+1 for m in end_markers]}",
+                    )
+                )
+                continue
+
+            if len(begin_markers) == 0:
+                self.result.add_error(
+                    SyncError(
+                        error_type=DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED,
+                        category="block",
+                        value=block_name,
+                        message=f"Missing BEGIN marker for block '{block_name}'",
+                    )
+                )
+                continue
+
+            if len(end_markers) == 0:
+                self.result.add_error(
+                    SyncError(
+                        error_type=DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED,
+                        category="block",
+                        value=block_name,
+                        message=f"Missing END marker for block '{block_name}'",
+                    )
+                )
+                continue
+
+            # 提取实际块内容
+            actual_content, begin_line, end_line = extract_block_from_content(
+                self.doc_content, block_name
+            )
+
+            if actual_content is None:
+                if begin_line == -2:
+                    self.result.add_error(
+                        SyncError(
+                            error_type=DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE,
+                            category="block",
+                            value=block_name,
+                            message=f"Duplicate BEGIN marker for block '{block_name}'",
+                        )
+                    )
+                elif begin_line == -3:
+                    self.result.add_error(
+                        SyncError(
+                            error_type=DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE,
+                            category="block",
+                            value=block_name,
+                            message=f"Duplicate END marker for block '{block_name}'",
+                        )
+                    )
+                continue
+
+            # 比较内容
+            expected_content = rendered_block.content
+            if actual_content.strip() != expected_content.strip():
+                # 生成 unified diff
+                actual_lines = actual_content.strip().split("\n")
+                expected_lines = expected_content.strip().split("\n")
+                diff = "\n".join(
+                    difflib.unified_diff(
+                        actual_lines,
+                        expected_lines,
+                        fromfile=f"actual:{block_name}",
+                        tofile=f"expected:{block_name}",
+                        lineterm="",
+                    )
+                )
+
+                self.result.add_error(
+                    SyncError(
+                        error_type=DocsSyncErrorTypes.BLOCK_CONTENT_MISMATCH,
+                        category="block",
+                        value=block_name,
+                        message=f"Block '{block_name}' content mismatch (lines {begin_line+2}-{end_line})",
+                        diff=diff,
+                        expected_block=rendered_block.full_block(),
+                    )
+                )
+            elif self.verbose:
+                print(f"  [OK] block: {block_name}")
+
+        return True
+
     def check(self) -> SyncResult:
-        """执行完整校验"""
+        """执行完整校验
+
+        校验流程：
+        1. 加载 contract 和文档
+        2. 尝试使用 marker 模式检查受控块
+        3. 无论是否使用 marker 模式，都执行传统的字符串匹配检查
+           （传统检查作为基线保障，确保关键内容存在）
+        """
         if self.verbose:
             print(f"Loading contract: {self.contract_path}")
 
@@ -703,6 +982,11 @@ class WorkflowContractDocsSyncChecker:
 
         if not self.load_doc():
             return self.result
+
+        # 尝试使用 marker 模式检查受控块
+        if self.verbose:
+            print("\nChecking controlled blocks (marker mode)...")
+        self.check_controlled_blocks()
 
         if self.verbose:
             print("\nChecking version...")
@@ -759,6 +1043,8 @@ def format_text_output(result: SyncResult) -> str:
 
     lines.append("")
     lines.append("Summary:")
+    lines.append(f"  - Block mode used: {result.block_mode_used}")
+    lines.append(f"  - Checked blocks: {len(result.checked_blocks)}")
     lines.append(f"  - Checked version: {result.checked_version or '(not checked)'}")
     lines.append(f"  - Checked job_ids: {len(result.checked_job_ids)}")
     lines.append(f"  - Checked job_names: {len(result.checked_job_names)}")
@@ -775,6 +1061,18 @@ def format_text_output(result: SyncResult) -> str:
         for error in result.errors:
             lines.append(f"  [{error.error_type}] {error.category}: {error.value}")
             lines.append(f"    {error.message}")
+            # 显示 diff（如果有）
+            if error.diff:
+                lines.append("")
+                lines.append("    --- Diff ---")
+                for diff_line in error.diff.split("\n"):
+                    lines.append(f"    {diff_line}")
+            # 显示期望块（如果有）
+            if error.expected_block:
+                lines.append("")
+                lines.append("    --- Expected block (copy-paste ready) ---")
+                for block_line in error.expected_block.split("\n"):
+                    lines.append(f"    {block_line}")
 
     if result.warnings:
         lines.append("")
@@ -789,8 +1087,10 @@ def format_json_output(result: SyncResult) -> str:
     """格式化 JSON 输出"""
     output = {
         "success": result.success,
+        "block_mode_used": result.block_mode_used,
         "error_count": len(result.errors),
         "warning_count": len(result.warnings),
+        "checked_blocks": result.checked_blocks,
         "checked_version": result.checked_version,
         "checked_job_ids": result.checked_job_ids,
         "checked_job_names": result.checked_job_names,
@@ -804,6 +1104,8 @@ def format_json_output(result: SyncResult) -> str:
                 "category": e.category,
                 "value": e.value,
                 "message": e.message,
+                "diff": e.diff,
+                "expected_block": e.expected_block,
             }
             for e in result.errors
         ],

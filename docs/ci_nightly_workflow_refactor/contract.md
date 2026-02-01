@@ -185,6 +185,7 @@ Drift Report 使用 `|| true` 的原因：
 | `gateway-correlation-id-single-source` | Gateway correlation_id Single Source Check | Gateway correlation_id 单一来源检查（禁止重复定义） |
 | `mcp-error-contract` | MCP Error Contract Check | MCP JSON-RPC 错误码合约与文档同步检查 |
 | `iteration-docs-check` | Iteration Docs Check | 迭代文档检查（.iteration/ 链接 + SUPERSEDED 一致性） |
+| `ci-test-isolation` | CI Test Isolation Check | CI 测试隔离检查（sys.path 污染和顶层 CI 模块导入） |
 | `iteration-tools-test` | Iteration Tools Test | 迭代工具脚本测试（无需数据库依赖） |
 | `workflow-contract` | Workflow Contract Validation | Workflow 合约校验和文档同步检查 |
 
@@ -199,6 +200,144 @@ Drift Report 使用 `|| true` 的原因：
 ### 2.3 Release Workflow (`release.yml`) - Phase 2 预留
 
 > **注意**: Release workflow 将在 Phase 2 引入，当前合约版本不包含此部分。
+
+### 2.4 Phase 2 设计：Release Workflow 纳入合约
+
+本节预定义 `release.yml` 纳入合约的设计方案，供 Phase 2 实施时参考。
+
+#### 2.4.1 最小字段集合
+
+当 `release.yml` 纳入合约时，需在 `workflow_contract.v1.json` 中添加以下字段：
+
+```json
+{
+  "release": {
+    "file": ".github/workflows/release.yml",
+    "job_ids": ["build", "publish", "notify"],
+    "job_names": ["Build Release", "Publish to Registry", "Notify Release"],
+    "required_jobs": [
+      {
+        "id": "build",
+        "name": "Build Release",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Build package",
+          "Upload release artifacts"
+        ]
+      }
+    ],
+    "artifact_archive": {
+      "required_artifact_paths": [
+        "dist/*.whl",
+        "dist/*.tar.gz"
+      ],
+      "artifact_step_names": [
+        "Upload release artifacts"
+      ]
+    },
+    "labels": []
+  }
+}
+```
+
+**字段说明：**
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `file` | ✅ | Workflow 文件路径，必须为 `.github/workflows/release.yml` |
+| `job_ids` | ✅ | Release workflow 的所有 job ID 列表 |
+| `job_names` | ✅ | 与 `job_ids` 位置对应的 job name 列表 |
+| `required_jobs` | ⚠️ | 至少定义核心 job（如 build）的 required_steps |
+| `artifact_archive` | ⚠️ | Release 产物路径（如 wheel/sdist） |
+| `labels` | ❌ | 可选，release 专用 PR labels |
+
+#### 2.4.2 Frozen 冻结范围策略
+
+**策略选项：**
+
+| 选项 | 优点 | 缺点 | 推荐场景 |
+|------|------|------|----------|
+| **A：复用现有 allowlist** | 统一管理、避免重复 | 冻结列表可能过长 | Release jobs/steps 与 CI 高度共用 |
+| **B：新增 release 专用 allowlist** | 隔离管理、灵活控制 | 维护两套列表 | Release 有独立的冻结需求 |
+| **C：混合策略（推荐）** | 平衡灵活性与一致性 | 需明确边界 | 共用基础步骤，独立 release 专用步骤 |
+
+**推荐策略 C 实现方式：**
+
+1. **共用基础步骤**：`Checkout repository`、`Set up Python` 等基础步骤复用 `frozen_step_text.allowlist`
+2. **Release 专用步骤**：如 `Build package`、`Publish to Registry` 等添加到同一 `frozen_step_text.allowlist`，并在注释中标注 `[release]`
+3. **Job Names**：Release 的核心 job names 添加到 `frozen_job_names.allowlist`，标注 `[release]`
+
+**合约配置示例（策略 C）：**
+
+```json
+{
+  "frozen_step_text": {
+    "_comment": "Phase 2: [release] 标注表示 release workflow 专用",
+    "allowlist": [
+      "Checkout repository",
+      "Set up Python",
+      "Install dependencies",
+      "Build package",
+      "Upload release artifacts",
+      "Publish to Registry"
+    ]
+  },
+  "frozen_job_names": {
+    "_comment": "Phase 2: [release] 标注表示 release workflow 专用",
+    "allowlist": [
+      "Test (Python ${{ matrix.python-version }})",
+      "Lint",
+      "Workflow Contract Validation",
+      "Unified Stack Full Verification",
+      "Build Release",
+      "Publish to Registry"
+    ]
+  }
+}
+```
+
+#### 2.4.3 Version Policy 扩展
+
+当纳入 `release.yml` 时，需扩展 `CRITICAL_WORKFLOW_RULES` 以触发版本策略检查。
+
+**扩展步骤：**
+
+1. **修改 `check_workflow_contract_version_policy.py`**：
+   ```python
+   # 在 CRITICAL_WORKFLOW_RULES 中扩展正则
+   # 当前: r"^\.github/workflows/(ci|nightly)\.yml$"
+   # Phase 2: r"^\.github/workflows/(ci|nightly|release)\.yml$"
+   ```
+
+2. **修改 `WORKFLOW_DOC_ANCHORS`**（在 `check_workflow_contract_docs_sync.py`）：
+   ```python
+   WORKFLOW_DOC_ANCHORS = {
+       "ci": [...],
+       "nightly": [...],
+       "release": ["### 2.3 Release Workflow", "Release Workflow (`release.yml`)"],
+   }
+   ```
+
+3. **更新 `contract.md` 文档**：
+   - 将 "2.3 Release Workflow - Phase 2 预留" 改为正式章节
+   - 添加 Release workflow 的 Job ID / Job Name 对照表
+   - 更新第 14 章版本控制表
+
+**迁移 Checklist：**
+
+| 步骤 | 文件 | 操作 |
+|------|------|------|
+| 1 | `workflow_contract.v1.json` | 添加 `release` 字段定义 |
+| 2 | `workflow_contract.v1.json` | 更新 `frozen_*` allowlist（如需） |
+| 3 | `workflow_contract.v1.json` | 更新 `make.targets_required`（如有 release 专用 targets） |
+| 4 | `check_workflow_contract_version_policy.py` | 扩展 `CRITICAL_WORKFLOW_RULES` 正则 |
+| 5 | `check_workflow_contract_docs_sync.py` | 扩展 `WORKFLOW_DOC_ANCHORS` |
+| 6 | `validate_workflows.py` | 无需修改（自动发现 workflow keys） |
+| 7 | `suggest_workflow_contract_updates.py` | 无需修改（自动发现 workflow keys） |
+| 8 | `contract.md` | 更新 2.3 节为正式章节 |
+| 9 | `contract.md` | 更新 version 字段（Minor 升级） |
+| 10 | `contract.md` | 更新第 14 章版本控制表 |
 
 ---
 
@@ -226,6 +365,127 @@ Drift Report 使用 `|| true` 的原因：
   ## OpenMemory Freeze Override
   **Override Reason**: Security fix for CVE-XXXX - 紧急安全修复，需要立即部署
   ```
+
+### 3.2 当前不消费 Labels 的原因与启用流程
+
+#### 3.2.1 当前状态与约束
+
+**当前状态**：CI workflow 当前**不消费** PR labels。虽然 `gh_pr_labels_to_outputs.py` 脚本存在且功能完整，但 `ci.yml` 中未调用该脚本。Labels 仅用于合约定义和一致性校验。
+
+**不消费的原因**：
+
+| 原因类别 | 说明 |
+|----------|------|
+| **简化架构** | Phase 1 重构移除了 `detect-changes` job，采用"所有检查始终执行"的简化模式 |
+| **降低复杂度** | Labels 驱动的条件执行增加了 workflow 的复杂度和调试难度 |
+| **合约优先** | 当前优先保证合约定义的完整性，labels 消费作为 Phase 2 的可选功能预留 |
+| **SeekDB 移除** | v2.0.0 移除了 SeekDB 组件相关的 labels，当前仅剩 `openmemory:freeze-override` 一个 label |
+
+**保留脚本的原因**：
+
+1. **合约校验依赖**：`validate_workflows.py` 会校验 `ci.labels` 与 `gh_pr_labels_to_outputs.py` 中 `LABEL_*` 常量的一致性
+2. **未来扩展性**：当需要 label 驱动行为时，无需重写解析逻辑
+3. **向后兼容**：保持与旧版本 workflow 的兼容性
+
+#### 3.2.2 启用 Labels 消费的流程
+
+如需启用 PR labels 消费（使 workflow 行为依赖于 labels），按以下步骤操作：
+
+**Step 1: 在 ci.yml 中添加 Labels 解析步骤**
+
+在需要消费 labels 的 job 中添加以下步骤（推荐添加在 `Checkout repository` 之后）：
+
+```yaml
+# 新增 job 或在现有 job 中添加
+parse-labels:
+  name: Parse PR Labels
+  runs-on: ubuntu-latest
+  outputs:
+    has_freeze_override_label: ${{ steps.labels.outputs.has_freeze_override_label }}
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Parse PR labels
+      id: labels
+      env:
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+      run: |
+        python scripts/ci/gh_pr_labels_to_outputs.py
+```
+
+**关键环境变量说明**：
+
+| 环境变量 | 来源 | 说明 |
+|----------|------|------|
+| `GITHUB_EVENT_NAME` | `${{ github.event_name }}` | 事件类型（`pull_request`、`push`、`workflow_dispatch`） |
+| `PR_LABELS` | `${{ join(github.event.pull_request.labels.*.name, ',') }}` | 逗号分隔的 PR labels 列表 |
+| `GITHUB_OUTPUT` | GitHub Actions 自动设置 | outputs 文件路径 |
+
+**Step 2: 在后续 job 中引用 outputs**
+
+```yaml
+some-job:
+  name: Some Job
+  needs: [parse-labels]
+  if: needs.parse-labels.outputs.has_freeze_override_label == 'true'
+  # 或使用 outputs 作为条件
+  steps:
+    - name: Conditional step
+      if: needs.parse-labels.outputs.has_freeze_override_label == 'true'
+      run: echo "Freeze override is active"
+```
+
+**Step 3: 更新合约与文档**
+
+启用 labels 消费后，需要同步更新以下内容：
+
+| 文件 | 更新内容 |
+|------|----------|
+| `workflow_contract.v1.json` | 如有新 label：更新 `ci.labels`；如有新 job：更新 `job_ids`、`job_names`、`required_jobs` |
+| `contract.md` | 更新第 2 章（job 列表）、第 3 章（labels 说明） |
+| `maintenance.md` | 更新 1.4 节启用 checklist |
+
+#### 3.2.3 输出如何影响后续 Job
+
+`gh_pr_labels_to_outputs.py` 脚本当前定义的输出：
+
+| Output Key | 值类型 | 说明 | 使用场景 |
+|------------|--------|------|----------|
+| `has_freeze_override_label` | `true`/`false` | 是否存在 `openmemory:freeze-override` label | 绕过冻结检查 |
+
+**扩展新 label 时的输出约定**：
+
+1. **命名规范**：output key 使用 `has_<label_slug>` 格式（如 `has_skip_test_label`）
+2. **值类型**：统一使用 `true`/`false` 字符串（便于 YAML 条件判断）
+3. **同步更新**：
+   - 在 `gh_pr_labels_to_outputs.py` 添加 `LABEL_*` 常量
+   - 在 `workflow_contract.v1.json` 的 `ci.labels` 添加 label
+   - 运行 `make validate-workflows-strict` 验证一致性
+
+**示例：添加 `ci:skip-slow-tests` label**
+
+```python
+# gh_pr_labels_to_outputs.py
+LABEL_SKIP_SLOW_TESTS = "ci:skip-slow-tests"
+
+# 在 main() 中添加
+has_skip_slow_tests = "true" if LABEL_SKIP_SLOW_TESTS in labels else "false"
+write_output("has_skip_slow_tests_label", has_skip_slow_tests)
+```
+
+```yaml
+# ci.yml - 在后续 job 中使用
+- name: Run slow tests
+  if: needs.parse-labels.outputs.has_skip_slow_tests_label != 'true'
+  run: pytest tests/slow/ -v
+```
 
 ---
 
@@ -472,6 +732,57 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 2. **非冻结步骤改名容忍**：`required_steps` 中但不在 `frozen_step_text.allowlist` 的步骤改名仅产生 WARNING
 3. **定期审视覆盖范围**：随着 workflow 演进，定期检查 `required_steps` 是否过度覆盖
 
+### 5.6 Step Name Aliases 别名映射
+
+`step_name_aliases` 字段允许为 `required_steps` 中的 canonical step name 定义一组可接受的别名。当 validator 在 workflow 中找不到 canonical step name 时，会检查是否存在匹配的 alias。
+
+#### 5.6.1 配置格式
+
+```json
+"step_name_aliases": {
+  "Canonical Step Name": ["Alias 1", "Alias 2"],
+  "Run unit tests": ["Run tests", "Execute unit tests"]
+}
+```
+
+**说明**：
+- Key 是 canonical step name（与 `required_steps` 中的名称一致）
+- Value 是 alias 数组，每个 alias 必须精确匹配（区分大小写）
+
+#### 5.6.2 匹配行为
+
+当 `required_step` 在 workflow 中不存在时，validator 按以下顺序检查：
+
+1. **Alias 匹配**：检查是否有 alias 在实际步骤中存在
+   - 匹配成功：报告 `step_name_alias_matched` WARNING（不阻断 CI）
+2. **Fuzzy 匹配**：尝试模糊匹配（部分匹配、词语重叠）
+   - 冻结步骤改名：报告 `frozen_step_name_changed` ERROR
+   - 非冻结步骤改名：报告 `step_name_changed` WARNING
+3. **无匹配**：报告 `missing_step` ERROR
+
+#### 5.6.3 使用场景
+
+| 场景 | 推荐做法 |
+|------|----------|
+| **步骤名称临时变更** | 添加 alias，后续统一修改为 canonical name |
+| **多语言/格式变体** | 使用 alias 容纳变体（如 `Run tests` / `Execute tests`） |
+| **渐进式迁移** | 新旧名称共存期间使用 alias，迁移完成后移除 |
+
+#### 5.6.4 版本策略影响
+
+| 变更类型 | 版本位 | 说明 |
+|----------|--------|------|
+| **添加 `step_name_aliases` 字段** | Minor (0.X.0) | 新增可选字段 |
+| **添加新的 alias 映射** | Patch (0.0.X) | 扩展现有配置 |
+| **删除 alias 映射** | Patch (0.0.X) | 可能导致某些 workflow 校验失败 |
+| **删除整个 `step_name_aliases` 字段** | Major (X.0.0) | 移除功能 |
+
+#### 5.6.5 维护建议
+
+1. **优先使用 canonical name**：alias 是临时方案，应尽快统一为 canonical name
+2. **避免 alias 泛滥**：每个 canonical step 的 alias 不应超过 3-5 个
+3. **定期清理**：移除不再使用的 alias 映射
+
 ---
 
 ## 6. upstream_ref 变更要求
@@ -543,10 +854,13 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 | `check-gateway-import-surface` | Gateway Import Surface 检查（懒加载策略） | gateway-import-surface |
 | `check-gateway-correlation-id-single-source` | Gateway correlation_id 单一来源检查 | gateway-correlation-id-single-source |
 | `check-iteration-docs` | 迭代文档规范检查（.iteration/ 链接禁止 + SUPERSEDED 一致性） | iteration-docs-check |
+| `check-ci-test-isolation` | CI 测试隔离检查（sys.path 污染和顶层 CI 模块导入） | ci-test-isolation |
 | `iteration-audit` | 迭代文档审计（详细报告生成） | iteration-audit (nightly) |
 | `validate-workflows-strict` | Workflow 合约校验（严格模式） | workflow-contract |
 | `check-workflow-contract-docs-sync` | Workflow 合约与文档同步检查 | workflow-contract |
 | `check-workflow-contract-version-policy` | Workflow 合约版本策略检查（关键文件变更时强制版本更新） | workflow-contract |
+| `check-workflow-contract-doc-anchors` | Workflow 合约文档锚点检查（验证错误消息中引用的锚点） | workflow-contract |
+| `check-workflow-contract-internal-consistency` | Workflow 合约内部一致性检查（job_ids/job_names 长度、无重复等） | workflow-contract |
 
 ### 7.2 数据库相关目标
 
@@ -583,6 +897,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ```json
 "artifact_archive": {
+  "_comment": "drift report 产物为 Optional（不列入 required_artifact_paths），使用 if-no-files-found: ignore",
   "required_artifact_paths": [
     "test-results-*.xml",
     "acceptance-results-*.xml",
@@ -590,9 +905,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
     "verify-output-*.log",
     "schema-validation-results.json",
     "artifacts/workflow_contract_validation.json",
-    "artifacts/workflow_contract_docs_sync.json",
-    "artifacts/workflow_contract_drift.json",
-    "artifacts/workflow_contract_drift.md"
+    "artifacts/workflow_contract_docs_sync.json"
   ],
   "artifact_step_names": [
     "Upload test results",
@@ -655,13 +968,169 @@ Nightly workflow 的 `Upload test results` 步骤上传以下内容：
   Location: artifact_archive.required_artifact_paths
 ```
 
-### 8.7 Drift Report 漂移报告合约
+### 8.7 产物分级与合约策略
 
-#### 8.7.1 概述
+#### 8.7.1 产物分级定义
+
+CI 产物按重要性分为三级：
+
+| 分级 | 定义 | 示例 | 合约要求 |
+|------|------|------|----------|
+| **Critical（关键）** | 门禁判定必需的产物；缺失会导致无法判定 CI 结果 | `test-results-*.xml`, `schema-validation-results.json` | **必须**列入 `required_artifact_paths` |
+| **Core（核心）** | 调试/审计必需的产物；缺失会严重影响问题排查 | `migration-output-*.log`, `artifacts/workflow_contract_validation.json` | **必须**列入 `required_artifact_paths` |
+| **Optional（可选）** | 辅助性产物；缺失不影响 CI 判定和基本调试 | Drift 报告、临时调试输出 | **可不列入** `required_artifact_paths`；使用 `if-no-files-found: ignore` |
+
+#### 8.7.2 分级对应的合约策略
+
+| 分级 | `required_artifact_paths` | `artifact_step_names` | `if-no-files-found` | 校验行为 |
+|------|--------------------------|----------------------|---------------------|----------|
+| **Critical** | ✅ 必须列入 | ✅ 列入（推荐） | `warn` 或 `error` | 缺失时 CI 报 ERROR |
+| **Core** | ✅ 必须列入 | ✅ 列入（推荐） | `warn` | 缺失时 CI 报 ERROR |
+| **Optional** | ❌ 不列入 | ⚠️ 可选 | `ignore` | 不校验 |
+
+**当前 CI Workflow 产物分级：**
+
+| 产物路径 | 分级 | 说明 |
+|----------|------|------|
+| `test-results-*.xml` | Critical | 单元测试 JUnit 报告 |
+| `acceptance-results-*.xml` | Critical | 验收测试 JUnit 报告 |
+| `schema-validation-results.json` | Critical | Schema 校验报告 |
+| `artifacts/workflow_contract_validation.json` | Core | 合约校验报告 |
+| `artifacts/workflow_contract_docs_sync.json` | Core | 文档同步报告 |
+| `migration-output-*.log` | Core | 迁移执行日志 |
+| `verify-output-*.log` | Core | 迁移验证日志 |
+| `artifacts/workflow_contract_drift.json` | Optional | 漂移报告（JSON）—— **不列入** `required_artifact_paths` |
+| `artifacts/workflow_contract_drift.md` | Optional | 漂移报告（Markdown）—— **不列入** `required_artifact_paths` |
+
+> **注意**：Drift Report 产物明确为 Optional 级别，**不列入** `required_artifact_paths`。CI 中的 `Upload drift report` 步骤使用 `if-no-files-found: ignore`，即使文件不存在也不会报错。这与其"参考性报告"的定位一致（详见 8.10 节）。
+
+### 8.8 Artifact 命名与 Retention 稳定性要求
+
+#### 8.8.1 Artifact Name 命名规范
+
+| 规则 | 说明 | 示例 |
+|------|------|------|
+| **小写 kebab-case** | Artifact name 使用小写字母和连字符 | `test-results-3.11`, `workflow-contract-drift` |
+| **含版本/矩阵后缀** | 矩阵 job 的产物需包含区分后缀 | `test-results-${{ matrix.python-version }}` |
+| **禁止空格和特殊字符** | 仅允许 `[a-z0-9-]` | ❌ `Test Results`, ✅ `test-results` |
+| **稳定性承诺** | Artifact name 一旦发布，不可随意更改（影响外部引用） | 改名需 Major 版本升级 |
+
+**当前 CI Workflow Artifact Names：**
+
+| Artifact Name | Job | 说明 |
+|---------------|-----|------|
+| `test-results-${{ matrix.python-version }}` | test | 测试结果（按 Python 版本） |
+| `migration-logs-${{ matrix.python-version }}` | test | 迁移日志（按 Python 版本） |
+| `schema-validation-results` | schema-validate | Schema 校验结果 |
+| `workflow-contract-validation` | workflow-contract | 合约校验报告 |
+| `workflow-contract-docs-sync` | workflow-contract | 文档同步报告 |
+| `workflow-contract-drift` | workflow-contract | 漂移报告 |
+| `mcp-error-contract` | mcp-error-contract | MCP 错误码合约报告 |
+| `mcp-error-docs-sync` | mcp-error-contract | MCP 错误码文档同步报告 |
+
+#### 8.8.2 Retention Days 策略
+
+| 场景 | `retention-days` | 说明 |
+|------|-----------------|------|
+| **CI Workflow** | 14 | 标准保留期，满足日常调试和回溯需求 |
+| **Nightly Workflow** | 14 | 与 CI 一致 |
+| **发布分支** | 30-90 | 可通过 workflow 条件增加（Phase 2 预留） |
+
+**稳定性约束：**
+- `retention-days` 不应随意减少（可能影响正在排查的问题）
+- 增加 `retention-days` 需考虑存储成本
+- 建议保持 workflow 内所有 artifact 使用一致的 retention
+
+#### 8.8.3 版本策略影响
+
+| 变更类型 | 版本位 | 说明 |
+|----------|--------|------|
+| **Artifact name 改名** | Major (X.0.0) | Breaking Change，影响外部引用 |
+| **新增 artifact path** | Minor (0.X.0) | 功能新增 |
+| **删除 required_artifact_path** | Major (X.0.0) | Breaking Change |
+| **调整 retention-days** | Patch (0.0.X) | 非功能性变更 |
+
+### 8.9 新增/调整 Artifact 回归流程
+
+#### 8.9.1 新增 Artifact 路径
+
+当需要新增 artifact 上传路径时：
+
+```bash
+# Step 1: 更新 workflow 文件
+# 在 .github/workflows/ci.yml 中添加 upload-artifact 步骤
+
+# Step 2: 更新合约（如果是 Critical/Core 级别产物）
+# 编辑 scripts/ci/workflow_contract.v1.json:
+#   - artifact_archive.required_artifact_paths: 添加路径
+#   - artifact_archive.artifact_step_names: 添加步骤名称（可选）
+
+# Step 3: 回归验证
+make validate-workflows-strict
+
+# Step 4: 运行 artifact 相关测试
+pytest tests/ci/test_validate_workflows_artifacts.py -v
+
+# Step 5: 更新文档（本文档第 8 章）
+# 编辑 docs/ci_nightly_workflow_refactor/contract.md
+```
+
+#### 8.9.2 调整 Artifact 路径模式
+
+当调整已有 artifact 的路径模式时（如 `*.xml` → `results/*.xml`）：
+
+```bash
+# Step 1: 确认影响范围
+# 检查是否有外部系统依赖当前路径模式
+
+# Step 2: 同步更新
+# - workflow 文件的 upload-artifact 步骤
+# - workflow_contract.v1.json 的 required_artifact_paths
+
+# Step 3: 回归验证（重要！）
+make validate-workflows-strict
+pytest tests/ci/test_validate_workflows_artifacts.py -v
+
+# Step 4: 版本升级
+# 如果是 Breaking Change，需要 Major 版本升级
+```
+
+#### 8.9.3 回归命令清单
+
+| 命令 | 用途 | 必需 |
+|------|------|------|
+| `make validate-workflows-strict` | 校验 required_artifact_paths 覆盖 | ✅ |
+| `pytest tests/ci/test_validate_workflows_artifacts.py -v` | 测试路径匹配逻辑 | ✅ |
+| `make check-workflow-contract-docs-sync` | 检查文档同步 | ✅ |
+| `make check-workflow-contract-version-policy` | 检查版本更新 | ✅ |
+
+#### 8.9.4 路径匹配规则
+
+`validate_workflows.py` 使用以下匹配规则校验 artifact 路径覆盖：
+
+| 规则 | 说明 | 示例 |
+|------|------|------|
+| **Glob 模式** | 含 `*?[]` 字符时使用 `fnmatch` | `test-results-*.xml` 匹配 `test-results-3.11.xml` |
+| **目录匹配** | 以 `/` 结尾时匹配该目录下所有路径 | `.artifacts/runs/` 匹配 `.artifacts/runs/run1.json` |
+| **精确匹配** | 其他情况使用精确匹配 | `schema-validation-results.json` |
+
+**边界情况说明：**
+
+| 场景 | required_path | uploaded_path | 是否匹配 |
+|------|---------------|---------------|----------|
+| 目录本身 | `.artifacts/runs/` | `.artifacts/runs` | ✅ 匹配 |
+| 目录下文件 | `.artifacts/runs/` | `.artifacts/runs/data.json` | ✅ 匹配 |
+| Glob 模式 | `*.xml` | `test.xml` | ✅ 匹配 |
+| Glob 模式（目录前缀） | `artifacts/*.json` | `artifacts/report.json` | ✅ 匹配 |
+| 大小写不同 | `TEST.xml` | `test.xml` | ❌ 不匹配（区分大小写） |
+
+### 8.10 Drift Report 漂移报告合约
+
+#### 8.10.1 概述
 
 Drift Report 用于检测 workflow 文件（`.github/workflows/*.yml`）与合约定义（`workflow_contract.v1.json`）之间的差异，生成漂移报告供开发者参考。
 
-#### 8.7.2 运行时机
+#### 8.10.2 运行时机
 
 | 场景 | 触发方式 | Make Target | 阻断策略 |
 |------|----------|-------------|----------|
@@ -670,21 +1139,29 @@ Drift Report 用于检测 workflow 文件（`.github/workflows/*.yml`）与合�
 | **PR/CI** | workflow-contract job | 直接调用脚本 + `|| true` | 默认不阻断 |
 | **夜间** | N/A | N/A | 不执行 drift report |
 
-#### 8.7.3 输出位置
+#### 8.10.3 输出位置
 
 | 输出格式 | 文件路径 | CI Artifact 名称 |
 |----------|----------|------------------|
 | JSON | `artifacts/workflow_contract_drift.json` | `workflow-contract-drift` |
 | Markdown | `artifacts/workflow_contract_drift.md` | `workflow-contract-drift` |
 
-#### 8.7.4 阻断策略
+#### 8.10.4 阻断策略
 
 **默认行为**：CI 中的 drift report 步骤使用 `|| true`，即使检测到差异也不阻断 CI。报告仅供参考。
 
-**启用阻断**：
+**Artifact 上传策略**：
+- Drift Report 产物 **不列入** `required_artifact_paths`（详见 8.7.1 节 Optional 分级）
+- CI 中 `Upload drift report` 步骤使用 `if-no-files-found: ignore`
+- 即使文件不存在，artifact 上传步骤也不会失败
+
+**启用阻断**（如需强化）：
 
 1. **本地阻断**：使用 `make workflow-contract-drift-report`（不加 `|| true`）
-2. **CI 阻断**：修改 `.github/workflows/ci.yml` 中 drift report 步骤，移除 `|| true`
+2. **CI 阻断**：
+   - 修改 `.github/workflows/ci.yml` 中 drift report 步骤，移除 `|| true`
+   - 将 drift 产物添加到 `artifact_archive.required_artifact_paths`
+   - 将 `Upload drift report` 步骤的 `if-no-files-found` 改为 `warn` 或 `error`
 3. **添加到 required_steps**：如需作为强制门禁，同步更新 `workflow_contract.v1.json` 的 `required_jobs[].required_steps`
 
 > **设计原则**：Drift Report 定位为"参考性报告"，帮助识别潜在问题，而非强制门禁。详细说明参见 [maintenance.md#4-drift-report-漂移报告](maintenance.md#4-drift-report-漂移报告)。
@@ -978,15 +1455,64 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
 | **功能新增** | Minor | 新增校验规则、新增错误类型、新增命令行参数 |
 | **修复/优化** | Patch | 修复 bug、优化性能、完善错误提示文案 |
 
-> **注意**：Schema 字段约束变更（如新增 required 字段）通常为 **Minor**；删除字段或收紧约束为 **Major**。
+**Schema (`workflow_contract.v1.schema.json`) 变更分类：**
+
+| 变更类型 | 版本位 | 示例 |
+|----------|--------|------|
+| **新增可选字段** | Minor | 添加 `step_name_aliases`（不在 required 中） |
+| **新增必需字段** | Major | 添加字段并加入 required 数组 |
+| **删除字段** | Major | 移除已有字段定义 |
+| **收紧约束** | Major | `minItems: 0` → `minItems: 1`，放宽 pattern |
+| **放宽约束** | Minor | `minItems: 1` → `minItems: 0`，收紧 pattern |
+| **添加注释字段 (`^_`)** | Patch | 添加 `_note_*`、`_changelog_v*` 等元数据字段 |
+| **仅改描述** | Patch | 更新 `description` 文本内容 |
+
+> **Schema 变更 Checklist**：计划引入新字段（如 `step_name_aliases`）时，需按顺序完成：
+> 1. 先在 Schema 中定义字段
+> 2. 再在 `validate_workflows.py` 中使用
+> 3. 更新 `check_workflow_contract_docs_sync.py` 同步规则
+> 4. 补充 `contract.md` 文档
+> 5. 更新 `version` 触发版本策略检查
+>
+> **详细 Checklist**：参见第 12.4.7 节 [Schema 字段变更 Checklist](#1247-schema-字段变更-checklist)
 
 ### 11.3 版本更新流程
 
+**方式一：使用自动化工具（推荐）**
+
+```bash
+# 升级 patch 版本（默认）
+python scripts/ci/bump_workflow_contract_version.py patch
+
+# 升级 minor 版本
+python scripts/ci/bump_workflow_contract_version.py minor
+
+# 升级 major 版本
+python scripts/ci/bump_workflow_contract_version.py major
+
+# 指定显式版本
+python scripts/ci/bump_workflow_contract_version.py --version 3.0.0
+
+# 带变更说明
+python scripts/ci/bump_workflow_contract_version.py minor --message "新增 XXX 功能"
+
+# 干运行模式（预览变更，不写入文件）
+python scripts/ci/bump_workflow_contract_version.py minor --dry-run
+```
+
+该工具会自动：
+1. 更新 `workflow_contract.v1.json` 的 `version` 和 `last_updated` 字段
+2. 在 JSON 顶层插入 `_changelog_vX.Y.Z` 空模板
+3. 在 `contract.md` 第 14 章版本控制表顶部插入新行模板
+
+**方式二：手动更新**
+
 ```bash
 # 1. 更新 workflow_contract.v1.json 中的 version 字段
-# 2. 更新 contract.md 第 14 章版本控制表
-# 3. 运行 make validate-workflows 验证一致性
-# 4. 运行 make check-workflow-contract-docs-sync 验证文档同步
+# 2. 更新 workflow_contract.v1.json 中的 last_updated 字段
+# 3. 更新 contract.md 第 14 章版本控制表
+# 4. 运行 make validate-workflows 验证一致性
+# 5. 运行 make check-workflow-contract-docs-sync 验证文档同步
 ```
 
 ### 11.4 向后兼容性承诺
@@ -995,11 +1521,110 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
 - **Required Artifact Paths**：`artifact_archive.required_artifact_paths` 中的路径不得随意删除
 - **Output Keys**：`detect_changes.outputs` 中的 key 不得随意删除或重命名
 
+### 11.5 版本策略检查失败时的最小修复步骤
+
+当 `make check-workflow-contract-version-policy` 失败时，按以下步骤修复：
+
+#### 11.5.1 诊断失败原因
+
+```bash
+# 1. 查看详细错误信息
+python scripts/ci/check_workflow_contract_version_policy.py --verbose
+
+# 2. 使用 JSON 输出查看 trigger_reasons（了解哪些文件触发了检查）
+python scripts/ci/check_workflow_contract_version_policy.py --json | jq '.trigger_reasons'
+
+# 3. PR 模式下检查（与 CI 一致）
+python scripts/ci/check_workflow_contract_version_policy.py --pr-mode --verbose
+```
+
+#### 11.5.2 常见错误及修复方法
+
+| 错误类型 | 错误信息 | 修复方法 |
+|----------|----------|----------|
+| `version_not_updated` | version 字段未更新 | 按 11.2 节规则升级 `workflow_contract.v1.json` 的 `version` 字段 |
+| `last_updated_not_updated` | last_updated 字段未更新 | 更新 `last_updated` 为当前日期（格式：`YYYY-MM-DD`） |
+| `version_not_in_doc` | 版本不在文档版本控制表中 | 在 `contract.md` 第 14 章添加版本记录行 |
+
+#### 11.5.3 最小修复命令序列
+
+**方式一：使用自动化工具（推荐）**
+
+```bash
+# Step 1: 确定版本升级类型（参考 11.2 节）
+# - Major: 不兼容变更
+# - Minor: 新增功能
+# - Patch: 修复/优化
+
+# Step 2: 使用 bump 工具自动更新版本和文档
+python scripts/ci/bump_workflow_contract_version.py minor --message "变更说明"
+# 或 major / patch，根据 Step 1 确定的类型
+
+# Step 3: 编辑生成的占位符内容
+# - 修改 workflow_contract.v1.json 中 _changelog_vX.Y.Z 的内容
+# - 修改 contract.md 版本控制表中新行的变更说明
+
+# Step 4: 验证修复
+make check-workflow-contract-version-policy
+make check-workflow-contract-docs-sync
+make validate-workflows-strict
+```
+
+**方式二：手动更新**
+
+```bash
+# Step 1: 确定版本升级类型（参考 11.2 节）
+# - Major: 不兼容变更
+# - Minor: 新增功能
+# - Patch: 修复/优化
+
+# Step 2: 更新 workflow_contract.v1.json
+# 编辑 scripts/ci/workflow_contract.v1.json，更新：
+#   - "version": "X.Y.Z"  （按 SemVer 升级）
+#   - "last_updated": "YYYY-MM-DD"  （当前日期）
+
+# Step 3: 更新 contract.md 版本控制表（第 14 章）
+# 在表格顶部添加新行：
+#   | vX.Y.Z | YYYY-MM-DD | <变更说明> |
+
+# Step 4: 验证修复
+make check-workflow-contract-version-policy
+make check-workflow-contract-docs-sync
+make validate-workflows-strict
+```
+
+#### 11.5.4 trigger_reasons 字段说明
+
+`--json` 输出中的 `trigger_reasons` 字段说明每个关键文件触发检查的原因：
+
+```json
+{
+  "trigger_reasons": {
+    ".github/workflows/ci.yml": "Phase 1 workflow 文件（ci.yml/nightly.yml）",
+    "scripts/ci/validate_workflows.py": "合约校验器核心脚本",
+    "Makefile": "Makefile CI/workflow 相关目标变更"
+  }
+}
+```
+
+**规则类别说明**：
+
+| 类别 | 描述 | 示例文件 |
+|------|------|----------|
+| `workflow_core` | Phase 1 workflow 文件 | `ci.yml`, `nightly.yml` |
+| `contract_definition` | 合约定义和文档 | `workflow_contract.v1.json`, `contract.md` |
+| `tooling` | 工具脚本（影响合约执行） | `validate_workflows.py`, `*.schema.json` |
+| `special` | 特殊规则（如 Makefile CI 相关） | `Makefile`（仅 CI 相关变更） |
+
+> **注意**：Phase 1 仅覆盖 `ci.yml` 和 `nightly.yml`。扩展支持其他 workflow 文件时，需修改 `check_workflow_contract_version_policy.py` 中的 `CRITICAL_WORKFLOW_RULES`。
+
 ---
 
 ## 12. SSOT & 同步矩阵
 
 本章定义 workflow 合约的唯一真实来源（SSOT）及各类变更的同步更新要求。
+
+> **快速变更流程**：标准变更顺序和最小验证矩阵请参见 [maintenance.md 第 0 章](maintenance.md#0-快速变更流程ssot-first)。该流程明确了 SSOT-first 原则：先改 `workflow_contract.v1.json` → 同步 workflow YAML → 同步文档 → 必要时改 Makefile → 最后补测试。
 
 ### 12.1 合约字段 SSOT 定义
 
@@ -1020,6 +1645,7 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
 | `nightly.artifact_archive` | `workflow_contract.v1.json` | Nightly workflow 的 Artifact 配置 | `validate_workflows.py` |
 | `make.targets_required` | `workflow_contract.v1.json` | workflow 依赖的 Makefile 目标列表 | `validate_workflows.py` |
 | `ci.labels` | `workflow_contract.v1.json` | 支持的 PR Label 列表 | `validate_workflows.py` |
+| `step_name_aliases` | `workflow_contract.v1.json` | Step 名称别名映射（canonical → aliases） | `validate_workflows.py` |
 
 #### 12.1.1 字段约束规则
 
@@ -1189,6 +1815,93 @@ make check-workflow-contract-version-policy   # 版本策略检查
 make validate-workflows-strict                # 合约校验
 ```
 
+#### 12.4.7 Schema 字段变更 Checklist
+
+当需要在 `workflow_contract.v1.schema.json` 中新增字段（如 `step_name_aliases`、`job_timeout_minutes` 等）时，按以下顺序操作：
+
+**Step 1: 更新 Schema 文件**
+```bash
+# 文件：scripts/ci/workflow_contract.v1.schema.json
+# 操作：
+1. 在 definitions 或 properties 中添加新字段定义
+2. 指定 type、description、pattern（如适用）
+3. 如为可选字段，不添加到 required 数组
+4. 如为必需字段，添加到对应 required 数组（Breaking Change！）
+
+# 示例：添加 step_name_aliases 字段
+"step_name_aliases": {
+  "type": "object",
+  "additionalProperties": {
+    "type": "array",
+    "items": { "type": "string" }
+  },
+  "description": "Map of canonical step name to allowed aliases. Version policy: Adding this field is Minor; removing is Major."
+}
+```
+
+**Step 2: 更新 Validator 脚本**
+```bash
+# 文件：scripts/ci/validate_workflows.py
+# 操作：
+1. 读取新字段（如有）并添加校验逻辑
+2. 新增对应的 error_type（如需要）
+3. 添加单元测试覆盖新逻辑
+
+# 对应测试文件：
+- tests/ci/test_validate_workflows*.py
+```
+
+**Step 3: 更新文档同步规则**
+```bash
+# 文件：scripts/ci/check_workflow_contract_docs_sync.py
+# 操作：
+1. 如新字段需要同步到 contract.md，添加同步检查规则
+2. 更新 SYNC_FIELDS 或对应的字段映射
+
+# 验证：
+make check-workflow-contract-docs-sync
+```
+
+**Step 4: 更新 Contract 文档**
+```bash
+# 文件：docs/ci_nightly_workflow_refactor/contract.md
+# 操作：
+1. 在对应章节描述新字段的语义和用法
+2. 更新第 12.1 节 SSOT 定义表（如适用）
+3. 更新第 14 章版本控制表
+```
+
+**Step 5: 更新版本号**
+```bash
+# 文件：scripts/ci/workflow_contract.v1.json
+# 操作：
+1. version 字段升级（按下表规则）
+2. last_updated 更新为当前日期
+```
+
+**Schema 变更版本位规则：**
+
+| 变更类型 | 版本位 | 示例 |
+|----------|--------|------|
+| **新增可选字段** | Minor (0.X.0) | 添加 `step_name_aliases`（可选） |
+| **新增必需字段** | Major (X.0.0) | 添加 `required_outputs`（必需） |
+| **删除字段** | Major (X.0.0) | 移除 `deprecated_field` |
+| **收紧约束** | Major (X.0.0) | `minItems: 0` → `minItems: 1` |
+| **放宽约束** | Minor (0.X.0) | `minItems: 1` → `minItems: 0` |
+| **仅改描述/注释** | Patch (0.0.X) | 更新 `description` 文本 |
+| **添加注释字段 (`^_`)** | Patch (0.0.X) | 添加 `_note_usage` |
+
+**验证命令：**
+```bash
+# 完整验证流程
+make check-schemas                            # Schema 语法校验
+make validate-workflows-strict                # 合约校验
+make check-workflow-contract-docs-sync        # 文档同步检查
+make check-workflow-contract-version-policy   # 版本策略检查
+```
+
+> **注意**：Schema 变更属于"基础设施变更"，建议在独立 PR 中完成，便于 review 和回滚。
+
 ### 12.5 版本更新触发条件
 
 | 变更类型 | 版本位 | 触发条件示例 |
@@ -1201,10 +1914,196 @@ make validate-workflows-strict                # 合约校验
 
 ---
 
+## 13. Error Type 体系与版本策略
+
+本章罗列所有校验脚本的 `error_type`、`warning_type` 和 drift 报告的 `drift_type` 定义，便于维护和测试覆盖。
+
+### 13.1 validate_workflows.py 错误类型
+
+#### 13.1.1 ValidationError.error_type 列表
+
+| error_type | 说明 | 严重程度 | `--strict` 行为 |
+|------------|------|----------|-----------------|
+| `contract_not_found` | 合约文件未找到 | ERROR | 阻断 |
+| `contract_parse_error` | 合约 JSON 解析失败 | ERROR | 阻断 |
+| `schema_parse_error` | Schema 文件解析失败 | ERROR | 阻断 |
+| `schema_error` | Schema 校验失败 | ERROR | 阻断 |
+| `workflow_not_found` | Workflow 文件未找到 | ERROR | 阻断 |
+| `workflow_parse_error` | Workflow YAML 解析失败 | ERROR | 阻断 |
+| `makefile_not_found` | Makefile 不存在 | ERROR | 阻断 |
+| `missing_job` | 必需 Job 不存在 | ERROR | 阻断 |
+| `missing_job_id` | Job ID 在 workflow 中不存在 | ERROR | 阻断 |
+| `extra_job_not_in_contract` | workflow 中存在但 contract 未声明的 job | WARNING/ERROR | `--require-job-coverage` 时为 ERROR |
+| `frozen_job_name_changed` | 冻结的 Job Name 被改名 | ERROR | 阻断 |
+| `missing_step` | 必需 Step 不存在 | ERROR | 阻断 |
+| `frozen_step_name_changed` | 冻结的 Step Name 被改名 | ERROR | 阻断 |
+| `missing_output` | 必需 Output 不存在 | ERROR | 阻断 |
+| `missing_env_var` | 必需环境变量不存在 | ERROR | 阻断 |
+| `missing_artifact_path` | 必需 Artifact 路径缺失 | ERROR | 阻断 |
+| `missing_makefile_target` | 必需 Makefile Target 缺失 | ERROR | 阻断 |
+| `undeclared_make_target` | workflow 调用但 contract 未声明的 make target | ERROR | 阻断 |
+| `label_missing_in_script` | Label 在 contract 中定义但脚本中缺失 | ERROR | 阻断 |
+| `label_missing_in_contract` | Label 在脚本中定义但 contract 中缺失 | ERROR | 阻断 |
+| `contract_job_ids_names_length_mismatch` | job_ids/job_names 数组长度不一致 | ERROR | 阻断 |
+| `contract_job_ids_duplicate` | job_ids 中存在重复项 | ERROR | 阻断 |
+| `contract_required_job_id_duplicate` | required_jobs 中 id 重复 | ERROR | 阻断 |
+| `contract_required_job_not_in_job_ids` | required_jobs 的 id 不在 job_ids 中 | ERROR | 阻断 |
+| `contract_frozen_step_missing` | required_steps 不在 frozen allowlist 中 | ERROR | `--require-frozen-consistency` 时报告 |
+| `contract_frozen_job_missing` | job_names 不在 frozen allowlist 中 | ERROR | `--require-frozen-consistency` 时报告 |
+| `unfrozen_required_step` | required step 未冻结 | WARNING/ERROR | `--require-frozen-consistency` 时为 ERROR |
+| `unfrozen_required_job` | required job 未冻结 | WARNING/ERROR | `--require-frozen-consistency` 时为 ERROR |
+
+#### 13.1.2 ValidationWarning.warning_type 列表
+
+| warning_type | 说明 | `--strict` 行为 |
+|--------------|------|-----------------|
+| `schema_skip` | jsonschema 库未安装，跳过 Schema 校验 | 不提升 |
+| `job_name_changed` | Job Name 变更（非冻结） | 提升为 ERROR |
+| `job_name_mismatch` | Job Name 与 contract 定义不匹配 | 提升为 ERROR |
+| `extra_job_not_in_contract` | workflow 中存在但 contract 未声明的 job | 提升为 ERROR（`--require-job-coverage`） |
+| `step_name_changed` | Step Name 变更（非冻结） | 提升为 ERROR |
+| `step_name_alias_matched` | required step 通过 alias 映射匹配到实际步骤 | 保持 WARNING |
+| `unfrozen_required_step` | required step 未冻结（非 strict 模式） | 保持 WARNING |
+| `unfrozen_required_job` | required job 未冻结（非 strict 模式） | 保持 WARNING |
+| `label_script_parse_warning` | Label 脚本解析警告 | 保持 WARNING |
+
+### 13.2 check_workflow_contract_docs_sync.py 错误类型
+
+| error_type | 说明 | 分类 |
+|------------|------|------|
+| `contract_not_found` | 合约文件未找到 | file |
+| `contract_parse_error` | 合约 JSON 解析失败 | file |
+| `doc_not_found` | 文档文件未找到 | file |
+| `doc_read_error` | 文档读取失败 | file |
+| `workflow_section_missing` | 文档中缺少 workflow 章节 | section |
+| `frozen_step_section_missing` | 冻结 Step 章节缺失 | section |
+| `frozen_job_names_section_missing` | Frozen Job Names 章节缺失 | section |
+| `labels_section_missing` | PR Labels 章节缺失 | section |
+| `make_targets_section_missing` | Make Targets 章节缺失 | section |
+| `semver_policy_section_missing` | SemVer Policy 章节缺失 | section |
+| `job_id_not_in_doc` | Job ID 在文档中未找到 | content |
+| `job_name_not_in_doc` | Job Name 在文档中未找到 | content |
+| `frozen_step_not_in_doc` | Frozen Step 在文档中未找到 | content |
+| `frozen_job_name_not_in_doc` | Frozen Job Name 在文档中未找到 | content |
+| `label_not_in_doc` | Label 在文档中未找到 | content |
+| `version_not_in_doc` | 版本号在文档中未找到 | content |
+| `make_target_not_in_doc` | Make Target 在文档中未找到 | content |
+
+### 13.3 check_workflow_contract_version_policy.py 错误类型
+
+| error_type | 说明 | Exit Code |
+|------------|------|-----------|
+| `contract_not_found` | 合约文件未找到 | 2 |
+| `contract_parse_error` | 合约 JSON 解析失败 | 2 |
+| `doc_not_found` | 文档文件未找到 | 2 |
+| `doc_read_error` | 文档读取失败 | 2 |
+| `version_not_updated` | 关键文件变更但 version 未更新 | 1 |
+| `last_updated_not_updated` | 关键文件变更但 last_updated 未更新 | 1 |
+| `version_not_in_doc` | 版本号不在文档版本控制表中 | 1 |
+
+### 13.4 workflow_contract_drift_report.py 漂移类型
+
+#### 13.4.1 drift_type 列表
+
+| drift_type | 说明 |
+|------------|------|
+| `added` | 实际存在但合约未声明 |
+| `removed` | 合约声明但实际不存在 |
+| `changed` | 存在但值/名称不同 |
+
+#### 13.4.2 category 列表
+
+| category | 说明 | `removed` 严重程度 | `added` 严重程度 |
+|----------|------|-------------------|------------------|
+| `workflow` | Workflow 文件级别 | ERROR | - |
+| `job_id` | Job ID | ERROR | WARNING |
+| `job_name` | Job Name | - | - |
+| `step` | Step Name | ERROR | - |
+| `env_var` | 环境变量 | ERROR | - |
+| `artifact_path` | Artifact 路径 | ERROR | INFO |
+| `make_target` | Makefile Target | ERROR | WARNING |
+| `label` | PR Label | ERROR | WARNING |
+
+#### 13.4.3 severity 列表
+
+| severity | 说明 | 使用场景 |
+|----------|------|----------|
+| `info` | 信息性提示 | 新增了合约未要求的项（如 artifact path） |
+| `warning` | 警告 | 名称变更、新增未声明的 job/target |
+| `error` | 错误 | 必需项缺失 |
+
+### 13.5 Error Type 版本策略
+
+#### 13.5.1 新增 error_type 流程
+
+新增 error_type 属于 **Minor** 版本变更（0.X.0）：
+
+1. 在对应脚本的 `*ErrorTypes` 类中添加常量定义
+2. 在对应的 `*_ERROR_TYPES` 集合中添加该常量
+3. 更新本文档第 13 章对应的表格
+4. 更新 `workflow_contract.v1.json` 的 `version` 字段（Minor 升级）
+5. 在测试文件中添加覆盖测试
+
+**示例：新增 `missing_label` 错误类型**
+
+```python
+# scripts/ci/validate_workflows.py
+class ErrorTypes:
+    # ...
+    MISSING_LABEL = "missing_label"  # 新增
+```
+
+#### 13.5.2 弃用 error_type 流程
+
+弃用 error_type 属于 **Major** 版本变更（X.0.0），需要提供迁移路径：
+
+1. **标记阶段**（Minor 版本）：
+   - 在代码中添加 `# DEPRECATED: v3.0.0 移除，替换为 xxx` 注释
+   - 在文档中标记 `（已弃用，将在 vX.0.0 移除）`
+   - 保持向后兼容性
+
+2. **移除阶段**（Major 版本）：
+   - 从 `*ErrorTypes` 类中移除常量
+   - 从 `*_ERROR_TYPES` 集合中移除
+   - 更新文档移除相关条目
+   - 更新 `version` 字段（Major 升级）
+
+3. **迁移指南**：
+   - 在版本控制表中记录替换关系
+   - 提供代码迁移示例
+
+#### 13.5.3 修改 error_type 含义
+
+修改 error_type 含义属于 **Major** 版本变更（X.0.0）：
+
+- 如果语义变化影响调用方的判断逻辑，必须升级 Major 版本
+- 建议新增新的 error_type 而非修改现有的
+- 在文档中明确记录语义变化
+
+### 13.6 常量定义位置索引
+
+| 脚本文件 | 常量类 | 集合常量 |
+|----------|--------|----------|
+| `validate_workflows.py` | `ErrorTypes`, `WarningTypes` | `CRITICAL_ERROR_TYPES`, `STRICT_PROMOTED_WARNING_TYPES` |
+| `check_workflow_contract_docs_sync.py` | `DocsSyncErrorTypes` | `DOCS_SYNC_ERROR_TYPES` |
+| `check_workflow_contract_version_policy.py` | `VersionPolicyErrorTypes` | `VERSION_POLICY_ERROR_TYPES`, `VERSION_POLICY_FILE_ERROR_TYPES` |
+| `workflow_contract_drift_report.py` | `DriftTypes`, `DriftCategories`, `DriftSeverities` | `DRIFT_TYPES`, `DRIFT_CATEGORIES`, `DRIFT_SEVERITIES`, `DRIFT_SEVERITY_MAP` |
+
+---
+
 ## 14. 版本控制
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.22.0 | 2026-02-02 | 新增 ci-test-isolation job 到 CI workflow 合约：CI 测试隔离检查；新增 make.targets_required: 'check-ci-test-isolation' |
+| v2.21.0 | 2026-02-02 | 新增 workflow make targets 一致性检查：workflow-contract job required_steps 添加 'Check workflow make targets consistency'；make.targets_required 添加 'check-workflow-make-targets-consistency' |
+| v2.20.0 | 2026-02-02 | 新增 workflow-contract job required_steps：'Check workflow contract internal consistency'；新增 make.targets_required：'check-workflow-contract-internal-consistency' |
+| v2.19.0 | 2026-02-02 | 更新 lint job required_steps：将 'Run mypy (type check)' 重命名为 'Run mypy (baseline mode)'；新增 'Run mypy (strict-island mode)' 步骤（双层 mypy 检查策略） |
+| v2.18.0 | 2026-02-02 | 新增 `step_name_aliases` 可选字段：支持为 required_steps 定义别名映射；当 step 通过 alias 匹配时报告 `step_name_alias_matched` WARNING 而非 ERROR；新增 contract.md 5.6 节文档 |
+| v2.17.1 | 2026-02-02 | 将 drift report 产物（artifacts/workflow_contract_drift.json, .md）从 required_artifact_paths 移除，改为 Optional 分级；CI upload-artifact 添加 if-no-files-found: ignore；更新 contract.md 8.7/8.10 节明确策略边界 |
+| v2.17.0 | 2026-02-02 | 补全 CI workflow 中缺失的 required_steps：gateway-public-api-surface 添加 'Check Gateway Public API docs sync'；workflow-contract 添加 'Check workflow contract doc anchors'；make.targets_required 添加 'check-workflow-contract-doc-anchors' |
+| v2.16.0 | 2026-02-02 | 新增第 13 章"Error Type 体系与版本策略"：罗列 validate_workflows.py 全部 error_type/warning_type；罗列 docs sync/version policy/drift report 的 error_type 体系；规定新增/弃用 error_type 的版本策略；各脚本 error_type 收敛为常量集合 |
+| v2.15.0 | 2026-02-02 | 重构版本策略检查脚本：统一 critical file 规则定义（CRITICAL_*_RULES）；新增 trigger_reasons 字段支持；新增 11.5 节"版本策略失败时的最小修复步骤" |
 | v2.14.0 | 2026-02-02 | 新增第 0 章"合约系统概览"：关键文件清单、检查脚本详细说明（运行命令/exit code/artifact 路径）、CI 阻断策略边界定义；章节重编号（原 13 章改为 14 章） |
 | v2.13.0 | 2026-02-02 | 新增 8.7 节"Drift Report 漂移报告合约"：定义运行时机、输出位置、阻断策略；更新 artifact_archive 配置包含 drift report 输出 |
 | v2.12.0 | 2026-02-02 | 新增 mcp-error-contract job 到 CI workflow 合约：MCP JSON-RPC 错误码合约与文档同步检查 |

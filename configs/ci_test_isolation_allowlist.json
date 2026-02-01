@@ -1,0 +1,133 @@
+{
+  "version": "1",
+  "description": "CI 测试隔离检查豁免列表。每个条目代表一个已知的历史遗留违规，需要在到期前修复。添加新条目需要说明原因、负责人和到期日期。",
+  "entries": [
+    {
+      "id": "logbook-legacy-sys-path",
+      "file_glob": "tests/logbook/*.py",
+      "violation_type": "sys_path_insert",
+      "reason": "历史遗留代码，使用 sys.path 导入根目录脚本。计划迁移到 scripts.ci 命名空间。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02",
+      "notes": "涉及约 15 个测试文件"
+    },
+    {
+      "id": "verify-cli-entrypoints-sys-path",
+      "file_glob": "tests/test_verify_cli_entrypoints_consistency.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试脚本需要导入 scripts/ 目录下的模块。计划重构为使用正确的命名空间。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-codemod-root-wrappers-sys-path",
+      "file_glob": "tests/test_codemod_root_wrappers.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 codemod 脚本需要导入脚本目录。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "acceptance-legacy-sys-path",
+      "file_glob": "tests/acceptance/*.py",
+      "violation_type": "sys_path_insert",
+      "reason": "验收测试历史遗留代码。计划迁移。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-noqa-policy-sys-path",
+      "file_glob": "tests/test_noqa_policy.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 noqa 策略脚本需要导入。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-type-ignore-policy-sys-path",
+      "file_glob": "tests/test_type_ignore_policy.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 type ignore 策略脚本需要导入。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-ruff-gate-sys-path",
+      "file_glob": "tests/test_ruff_gate.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 ruff gate 脚本需要导入。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-mypy-gate-sys-path",
+      "file_glob": "tests/test_mypy_gate.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 mypy gate 脚本需要导入。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-mypy-baseline-policy-sys-path",
+      "file_glob": "tests/test_mypy_baseline_policy.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 mypy baseline 策略脚本需要导入。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-resolve-mypy-gate-sys-path",
+      "file_glob": "tests/test_resolve_mypy_gate.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 resolve mypy gate 脚本需要导入。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "test-no-root-wrappers-sys-path",
+      "file_glob": "tests/test_no_root_wrappers*.py",
+      "violation_type": "sys_path_insert",
+      "reason": "测试 no root wrappers 脚本需要导入。计划重构。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "ci-tests-legacy-sys-path",
+      "file_glob": "tests/ci/*.py",
+      "violation_type": "sys_path_insert",
+      "reason": "CI 测试历史遗留代码，部分使用 sys.path 导入。计划迁移。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "gateway-tests-legacy-sys-path",
+      "file_glob": "tests/gateway/*.py",
+      "violation_type": "sys_path_insert",
+      "reason": "Gateway 测试历史遗留代码。计划迁移。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    },
+    {
+      "id": "iteration-tests-legacy-sys-path",
+      "file_glob": "tests/iteration/*.py",
+      "violation_type": "sys_path_insert",
+      "reason": "迭代工具测试历史遗留代码，需要导入 scripts/iteration 目录。计划重构为使用命名空间导入。",
+      "owner": "@engram-team",
+      "expires_on": "2026-06-30",
+      "created_at": "2026-02-02"
+    }
+  ]
+}
