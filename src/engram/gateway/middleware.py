@@ -103,8 +103,8 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         """
         处理请求，生成并传递 correlation_id
         """
-        # 延迟导入：避免 import-time 依赖
-        from .mcp_rpc import generate_correlation_id
+        # 从 correlation_id 模块导入（单一来源原则）
+        from .correlation_id import generate_correlation_id
 
         # 1. 生成 correlation_id
         correlation_id = generate_correlation_id()
@@ -148,13 +148,13 @@ def _create_unhandled_exception_handler():
         1. 正确的 JSON 格式
         2. correlation_id 在 header 和 body 中一致
         """
-        # 延迟导入：避免 import-time 依赖
+        # correlation_id 从统一模块导入（单一来源原则）
+        from .correlation_id import generate_correlation_id
         from .mcp_rpc import (
             ErrorCategory,
             ErrorData,
             ErrorReason,
             JsonRpcErrorCode,
-            generate_correlation_id,
             make_jsonrpc_error,
         )
 

@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .logbook_adapter import LogbookAdapter
     from .logbook_db import LogbookDatabase
     from .openmemory_client import OpenMemoryClient
+    from .services.ports import ToolExecutorPort
 
 
 @dataclass
@@ -71,6 +72,7 @@ class GatewayContainer:
     _db: Optional["LogbookDatabase"] = field(default=None, repr=False)
     _logbook_adapter: Optional["LogbookAdapter"] = field(default=None, repr=False)
     _openmemory_client: Optional["OpenMemoryClient"] = field(default=None, repr=False)
+    _tool_executor: Optional["ToolExecutorPort"] = field(default=None, repr=False)
     _deps_cache: Optional["GatewayDepsProtocol"] = field(default=None, repr=False)
 
     @classmethod
@@ -95,6 +97,7 @@ class GatewayContainer:
         db: Optional["LogbookDatabase"] = None,
         logbook_adapter: Optional["LogbookAdapter"] = None,
         openmemory_client: Optional["OpenMemoryClient"] = None,
+        tool_executor: Optional["ToolExecutorPort"] = None,
     ) -> "GatewayContainer":
         """
         创建用于测试的 GatewayContainer 实例
@@ -106,6 +109,7 @@ class GatewayContainer:
             db: 数据库实例
             logbook_adapter: Logbook 适配器实例
             openmemory_client: OpenMemory 客户端实例
+            tool_executor: 工具执行器实例
 
         Returns:
             GatewayContainer 实例
@@ -114,6 +118,7 @@ class GatewayContainer:
         container._db = db
         container._logbook_adapter = logbook_adapter
         container._openmemory_client = openmemory_client
+        container._tool_executor = tool_executor
         return container
 
     @property
@@ -162,6 +167,20 @@ class GatewayContainer:
             )
         return self._openmemory_client
 
+    @property
+    def tool_executor(self) -> "ToolExecutorPort":
+        """
+        获取 ToolExecutor 实例（延迟初始化）
+
+        Returns:
+            ToolExecutorPort 实例
+        """
+        if self._tool_executor is None:
+            from .entrypoints.tool_executor import DefaultToolExecutor
+
+            self._tool_executor = DefaultToolExecutor()
+        return self._tool_executor
+
     def reset(self) -> None:
         """
         重置所有依赖实例
@@ -171,6 +190,7 @@ class GatewayContainer:
         self._db = None
         self._logbook_adapter = None
         self._openmemory_client = None
+        self._tool_executor = None
         # 同时清除缓存的 deps 实例
         if hasattr(self, "_deps_cache"):
             self._deps_cache = None

@@ -15,48 +15,94 @@ Gateway 公共 API 模块 (Public API)
 ========
 - v1.0 (2026-02-01): 初始版本
 - v1.1 (2026-02-02): 引入 Tier A/B 分层延迟导入策略
+- v1.2 (2026-02-02): 引入 Tier C 分层（便捷/内部层），明确失败语义
+
+Tier 分层定义
+=============
+- Tier A（核心稳定层）: 主版本内接口不变，插件作者优先依赖
+- Tier B（可选依赖层）: 主版本内接口不变，失败时抛出 ImportError + 安装指引
+- Tier C（便捷/内部层）: 可能在次版本调整签名，建议使用 Tier A 替代方案
 
 导出清单
 ========
 
 Tier A（核心稳定，直接导入）:
 - RequestContext: 请求上下文 dataclass
-- GatewayDepsProtocol: 依赖容器 Protocol
+- GatewayDepsProtocol: 依赖容器 Protocol（推荐用于类型注解）
 - GatewayDeps: 依赖容器实现类
-- generate_correlation_id: 生成 correlation_id 的便捷函数
 - WriteAuditPort: 审计写入接口
 - UserDirectoryPort: 用户目录接口
 - ActorPolicyConfigPort: Actor 策略配置接口
+- ToolExecutorPort, ToolRouterPort: 工具执行器端口
+- ToolDefinition, ToolCallContext, ToolCallResult: 工具调用数据类
 - McpErrorCode, McpErrorCategory, McpErrorReason: 错误码常量
 - ToolResultErrorCode: 工具执行结果错误码
 
-Tier B（可选依赖，延迟导入）:
+Tier B（可选依赖，延迟导入，失败时抛出 ImportError）:
 - LogbookAdapter: Logbook 数据库适配器（需要 engram_logbook）
 - get_adapter: 获取 LogbookAdapter 单例
 - get_reliability_report: 获取可靠性统计报告
 - execute_tool: MCP 工具执行入口
-- dispatch_jsonrpc_request: 统一的 JSON-RPC 请求分发入口
-- JsonRpcDispatchResult: JSON-RPC 请求处理结果封装
+- dispatch_jsonrpc_request: JSON-RPC 请求分发便捷函数
+- JsonRpcDispatchResult: JSON-RPC 分发结果类型
+
+Tier C（便捷/内部，可能在次版本调整）:
+- create_request_context: 便捷函数，建议直接用 RequestContext(...)
+- create_gateway_deps: 便捷函数，建议直接用 GatewayDeps(...)
+- generate_correlation_id: 便捷函数，通常由中间件自动生成
+
+Tier B 失败语义
+===============
+当 Tier B 符号依赖的模块不可用时，在 ``from ... import`` 语句执行时即触发懒加载
+并抛出 ImportError。Python 的 ``from module import name`` 会调用 ``__getattr__(name)``，
+因此 **import 语句执行时即报错**，而非延迟到符号使用时。
+
+错误消息格式（必须包含以下字段）::
+
+    ImportError: 无法导入 '{symbol_name}'（来自 {module_path}）
+
+    原因: {original_error}
+
+    {install_hint}
+
+错误消息字段说明:
+- symbol_name: 导入失败的符号名（如 LogbookAdapter）
+- module_path: 来源模块路径（如 .logbook_adapter）
+- original_error: 原始 ImportError 消息
+- install_hint: 安装指引
+
+示例::
+
+    # engram_logbook 未安装时，以下 import 语句会立即抛出 ImportError
+    from engram.gateway.public_api import LogbookAdapter
+    # ImportError: 无法导入 'LogbookAdapter'（来自 .logbook_adapter）
+    #
+    # 原因: No module named 'engram_logbook'
+    #
+    # 此功能需要 engram_logbook 模块。
+    # 请安装：pip install -e ".[full]" 或 pip install engram-logbook
 
 使用示例
 ========
 
-插件开发者推荐导入方式::
+插件开发者推荐导入方式（优先 Protocol/错误码）::
 
     from engram.gateway.public_api import (
+        # ✅ Tier A: Protocol（依赖抽象，便于测试 mock）
         RequestContext,
         GatewayDepsProtocol,
         WriteAuditPort,
         UserDirectoryPort,
+        # ✅ Tier A: 错误码
+        McpErrorCode,
+        McpErrorReason,
     )
 
     # 定义自定义 handler
     async def my_handler(
         ctx: RequestContext,
-        deps: GatewayDepsProtocol,
+        deps: GatewayDepsProtocol,  # ← 使用 Protocol 而非实现类
     ) -> dict:
-        # 使用类型注解获得 IDE 支持
-        adapter = deps.logbook_adapter
         ...
 
 测试中使用 mock 依赖::
@@ -70,13 +116,27 @@ Tier B（可选依赖，延迟导入）:
     )
 
     # 创建测试上下文
-    ctx = RequestContext.for_testing(actor_user_id="test-user")
+    ctx = RequestContext(
+        correlation_id="corr-test123",
+        actor_user_id="test-user",
+    )
 
-延迟导入（Tier B 符号）::
+Tier B 符号的安全使用（检查依赖可用性）::
 
-    # Tier B 符号在首次访问时才导入底层模块
-    # 如果 engram_logbook 未安装，会抛出 ImportError 并提示安装指引
-    from engram.gateway.public_api import LogbookAdapter  # 触发延迟导入
+    try:
+        from engram.gateway.public_api import LogbookAdapter
+        LOGBOOK_AVAILABLE = True
+    except ImportError:
+        LOGBOOK_AVAILABLE = False
+
+    # 在代码中检查
+    if not LOGBOOK_AVAILABLE:
+        raise RuntimeError("此插件需要 engram_logbook 模块")
+
+相关文档
+========
+- 向后兼容策略: docs/contracts/gateway_contract_convergence.md §11
+- 导出项分析: docs/architecture/gateway_public_api_surface.md
 """
 
 from __future__ import annotations
@@ -130,35 +190,75 @@ _TIER_B_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "get_reliability_report": (".logbook_adapter", "get_reliability_report"),
     # tool_executor 模块
     "execute_tool": (".entrypoints.tool_executor", "execute_tool"),
-    # mcp_rpc 模块
+    # mcp_rpc 模块（JSON-RPC 分发入口）
     "dispatch_jsonrpc_request": (".mcp_rpc", "dispatch_jsonrpc_request"),
     "JsonRpcDispatchResult": (".mcp_rpc", "JsonRpcDispatchResult"),
 }
 
-# 安装指引映射
+# 安装指引映射（统一格式：功能说明 + 安装命令）
 _TIER_B_INSTALL_HINTS: dict[str, str] = {
     ".logbook_adapter": (
         "此功能需要 engram_logbook 模块。\n"
         '请安装：pip install -e ".[full]" 或 pip install engram-logbook'
     ),
     ".entrypoints.tool_executor": (
-        '此功能需要完整的 Gateway 依赖。\n请确保已安装所有依赖：pip install -e ".[full]"'
+        '此功能需要完整的 Gateway 工具执行器依赖。\n请安装：pip install -e ".[full]"'
     ),
-    ".mcp_rpc": ('此功能需要 MCP RPC 支持模块。\n请确保已安装所有依赖：pip install -e ".[full]"'),
+    ".mcp_rpc": ('此功能需要 MCP RPC 支持模块。\n请安装：pip install -e ".[full]"'),
 }
+
+# ======================== 依赖缺失 ImportError 消息模板 ========================
+
+# 错误消息模板，包含以下字段：
+# - symbol_name: 导入失败的符号名（如 LogbookAdapter）
+# - module_path: 来源模块路径（如 .logbook_adapter）
+# - original_error: 原始 ImportError 消息
+# - install_hint: 安装指引
+_IMPORT_ERROR_TEMPLATE = """\
+无法导入 '{symbol_name}'（来自 {module_path}）
+
+原因: {original_error}
+
+{install_hint}"""
+
+
+def _format_import_error(
+    symbol_name: str,
+    module_path: str,
+    original_error: BaseException,
+    install_hint: str,
+) -> str:
+    """
+    格式化依赖缺失的 ImportError 消息
+
+    Args:
+        symbol_name: 导入失败的符号名（如 LogbookAdapter）
+        module_path: 来源模块路径（如 .logbook_adapter）
+        original_error: 原始 ImportError 异常
+        install_hint: 安装指引文本
+
+    Returns:
+        格式化后的错误消息字符串
+    """
+    return _IMPORT_ERROR_TEMPLATE.format(
+        symbol_name=symbol_name,
+        module_path=module_path,
+        original_error=str(original_error),
+        install_hint=install_hint,
+    )
+
 
 # ======================== 导出清单 ========================
 
 __all__ = [
+    # ══════════════════════════════════════════════════════════════════
+    # Tier A: 核心稳定层（主版本内接口不变）
+    # ══════════════════════════════════════════════════════════════════
     # Tier A: 核心类型
     "RequestContext",
     "GatewayDeps",
     "GatewayDepsProtocol",
-    # Tier A: 便捷函数
-    "create_request_context",
-    "create_gateway_deps",
-    "generate_correlation_id",
-    # Tier A: 服务端口 Protocol
+    # Tier A: 服务端口 Protocol（插件作者优先依赖）
     "WriteAuditPort",
     "UserDirectoryPort",
     "ActorPolicyConfigPort",
@@ -173,15 +273,24 @@ __all__ = [
     "McpErrorCategory",
     "McpErrorReason",
     "ToolResultErrorCode",
-    # Tier B: 适配器（延迟导入）
+    # ══════════════════════════════════════════════════════════════════
+    # Tier B: 可选依赖层（延迟导入，失败时抛 ImportError + 安装指引）
+    # ══════════════════════════════════════════════════════════════════
+    # Tier B: 适配器（需要 engram_logbook）
     "LogbookAdapter",
     "get_adapter",
     "get_reliability_report",
-    # Tier B: 工具执行（延迟导入）
+    # Tier B: 工具执行（需要 Gateway 完整依赖）
     "execute_tool",
-    # Tier B: JSON-RPC 入口（延迟导入，方便 patch 测试）
+    # Tier B: JSON-RPC 分发入口
     "dispatch_jsonrpc_request",
     "JsonRpcDispatchResult",
+    # ══════════════════════════════════════════════════════════════════
+    # Tier C: 便捷/内部层（可能在次版本调整签名）
+    # ══════════════════════════════════════════════════════════════════
+    "create_request_context",
+    "create_gateway_deps",
+    "generate_correlation_id",
 ]
 
 
@@ -219,8 +328,12 @@ def __getattr__(name: str) -> Any:
                 module_path,
                 '请确保已安装所有依赖：pip install -e ".[full]"',
             )
-            raise ImportError(
-                f"无法导入 '{name}'（来自 {module_path}）: {e}\n\n{install_hint}"
-            ) from e
+            error_message = _format_import_error(
+                symbol_name=name,
+                module_path=module_path,
+                original_error=e,
+                install_hint=install_hint,
+            )
+            raise ImportError(error_message) from e
 
     raise AttributeError(f"模块 {__name__!r} 没有属性 {name!r}")

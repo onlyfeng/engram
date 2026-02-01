@@ -54,10 +54,13 @@ Gateway 依赖注入模块 (Dependency Injection)
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
+
+# correlation_id 函数从统一模块导入（单一来源原则）
+# 不再内联实现，确保格式与行为一致
+from .correlation_id import generate_correlation_id
 
 if TYPE_CHECKING:
     from .config import GatewayConfig
@@ -65,28 +68,12 @@ if TYPE_CHECKING:
     from .logbook_adapter import LogbookAdapter
     from .logbook_db import LogbookDatabase
     from .openmemory_client import OpenMemoryClient
+    from .services.ports import ToolExecutorPort
 
 
 def _utc_now() -> datetime:
     """获取当前 UTC 时间"""
     return datetime.now(timezone.utc)
-
-
-def generate_correlation_id() -> str:
-    """
-    生成关联 ID
-
-    格式: corr-{16位十六进制}
-    与 schemas/audit_event_v1.schema.json 中定义的格式一致。
-    此函数在本模块内联实现，避免依赖 mcp_rpc 模块，确保 import-safe。
-
-    注意：mcp_rpc.py 中有同样的实现，用于 JSON-RPC 层。
-    两处实现保持格式一致：corr-{uuid.hex[:16]}
-
-    Returns:
-        格式为 corr-{16位十六进制} 的关联 ID
-    """
-    return f"corr-{uuid.uuid4().hex[:16]}"
 
 
 # ======================== RequestContext ========================
@@ -257,6 +244,11 @@ class GatewayDepsProtocol(Protocol):
         """OpenMemory 客户端实例"""
         ...
 
+    @property
+    def tool_executor(self) -> "ToolExecutorPort":
+        """工具执行器实例"""
+        ...
+
 
 @dataclass
 class GatewayDeps:
@@ -332,6 +324,7 @@ class GatewayDeps:
     _db: Optional["LogbookDatabase"] = field(default=None, repr=False)
     _logbook_adapter: Optional["LogbookAdapter"] = field(default=None, repr=False)
     _openmemory_client: Optional["OpenMemoryClient"] = field(default=None, repr=False)
+    _tool_executor: Optional["ToolExecutorPort"] = field(default=None, repr=False)
 
     @classmethod
     def from_container(cls, container: "GatewayContainer") -> "GatewayDeps":
@@ -416,6 +409,7 @@ class GatewayDeps:
         db: Optional["LogbookDatabase"] = None,
         logbook_adapter: Optional["LogbookAdapter"] = None,
         openmemory_client: Optional["OpenMemoryClient"] = None,
+        tool_executor: Optional["ToolExecutorPort"] = None,
     ) -> "GatewayDeps":
         """
         创建用于测试的 GatewayDeps 实例
@@ -428,6 +422,7 @@ class GatewayDeps:
             db: 数据库实例
             logbook_adapter: Logbook 适配器实例
             openmemory_client: OpenMemory 客户端实例
+            tool_executor: 工具执行器实例
 
         Returns:
             GatewayDeps 实例
@@ -437,6 +432,7 @@ class GatewayDeps:
             _db=db,
             _logbook_adapter=logbook_adapter,
             _openmemory_client=openmemory_client,
+            _tool_executor=tool_executor,
         )
 
     @property
@@ -588,6 +584,35 @@ class GatewayDeps:
                 api_key=self.config.openmemory_api_key,
             )
         return self._openmemory_client
+
+    @property
+    def tool_executor(self) -> "ToolExecutorPort":
+        """
+        获取 ToolExecutor 实例
+
+        线程安全: 是（DefaultToolExecutor 无状态）
+        可重入: 是（幂等操作，每次返回同一实例）
+
+        构造参数来源:
+            - 容器绑定模式: 委托给 container.tool_executor
+            - 独立模式: DefaultToolExecutor() 直接构造
+
+        测试替换:
+            deps = GatewayDeps.for_testing(tool_executor=mock_executor)
+
+        Returns:
+            ToolExecutorPort 实例
+        """
+        # 容器绑定模式：委托给容器
+        if self._container is not None:
+            return self._container.tool_executor
+
+        # 独立模式：延迟初始化
+        if self._tool_executor is None:
+            from .entrypoints.tool_executor import DefaultToolExecutor
+
+            self._tool_executor = DefaultToolExecutor()
+        return self._tool_executor
 
 
 # ======================== 便捷构造函数 ========================

@@ -29,7 +29,7 @@ Gateway 请求级依赖获取模块
 ================
 - container.py: GatewayContainer 管理依赖生命周期
 - di.py: GatewayDeps/GatewayDepsProtocol 定义依赖接口
-- mcp_rpc.py: correlation_id 生成和校验的底层实现
+- correlation_id.py: correlation_id 生成和校验的单一来源实现
 - middleware.py: 中间件层的 correlation_id 上下文管理
 
 本模块作为入口层的薄封装，屏蔽底层实现细节。
@@ -82,7 +82,7 @@ def new_request_correlation_id(existing: Optional[str] = None) -> str:
     """
     获取或生成请求的 correlation_id（仅在入口/路由层调用）
 
-    此函数是入口层获取 correlation_id 的统一接口，封装了对 mcp_rpc 的访问。
+    此函数是入口层获取 correlation_id 的统一接口，封装了对 correlation_id 模块的访问。
     handlers 不应直接调用此函数，而应通过参数接收 correlation_id。
 
     行为说明：
@@ -113,8 +113,8 @@ def new_request_correlation_id(existing: Optional[str] = None) -> str:
         # 独立使用（不在中间件上下文中）
         correlation_id = new_request_correlation_id()
     """
-    # 延迟导入，保持与 routes.py 相同的导入策略
-    from .mcp_rpc import generate_correlation_id, normalize_correlation_id
+    # 从 correlation_id 模块导入（单一来源原则）
+    from .correlation_id import generate_correlation_id, normalize_correlation_id
 
     if existing:
         # 归一化：如果 existing 合规则直接返回，否则生成新的

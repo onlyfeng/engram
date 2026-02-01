@@ -44,6 +44,7 @@ async def governance_update_impl(
     admin_key: Optional[str] = None,
     actor_user_id: Optional[str] = None,
     *,
+    correlation_id: Optional[str] = None,
     deps: GatewayDepsProtocol,
 ) -> GovernanceSettingsUpdateResponse:
     """
@@ -104,10 +105,10 @@ async def governance_update_impl(
         else:
             reject_reason = ErrorCode.GOVERNANCE_UPDATE_USER_NOT_IN_ALLOWLIST
 
-        # 生成 correlation_id 用于追踪
+        # 使用传入的 correlation_id 或生成新的（用于追踪）
         from ..mcp_rpc import generate_correlation_id
 
-        correlation_id = generate_correlation_id()
+        corr_id = correlation_id or generate_correlation_id()
 
         # 写入审计日志（拒绝）- audit-first 策略：失败时阻断主操作
         try:
@@ -122,17 +123,17 @@ async def governance_update_impl(
                     "source": "gateway",
                     "operation": "governance_update",
                     "auth_method_attempted": "admin_key" if admin_key else "allowlist",
-                    "correlation_id": correlation_id,
+                    "correlation_id": corr_id,
                 },
-                correlation_id=correlation_id,
+                correlation_id=corr_id,
             )
         except AuditWriteError as e:
-            logger.error(f"governance_update 审计写入失败: {e}, correlation_id={correlation_id}")
+            logger.error(f"governance_update 审计写入失败: {e}, correlation_id={corr_id}")
             return GovernanceSettingsUpdateResponse(
                 ok=False,
                 action="error",
                 settings=None,
-                message=f"审计写入失败，操作已阻断 (correlation_id={correlation_id})",
+                message=f"审计写入失败，操作已阻断 (correlation_id={corr_id})",
             )
 
         logger.warning(f"governance_update 鉴权失败: {reject_reason}, actor={actor_user_id}")
@@ -145,10 +146,10 @@ async def governance_update_impl(
         )
 
     # 鉴权通过，执行更新
-    # 生成 correlation_id 用于追踪
+    # 使用传入的 correlation_id 或生成新的（用于追踪）
     from ..mcp_rpc import generate_correlation_id
 
-    correlation_id = generate_correlation_id()
+    corr_id = correlation_id or generate_correlation_id()
 
     try:
         # 合并策略变更
@@ -205,17 +206,17 @@ async def governance_update_impl(
                         "team_write_enabled": team_write_enabled,
                         "policy_json_updated": policy_json is not None,
                     },
-                    "correlation_id": correlation_id,
+                    "correlation_id": corr_id,
                 },
-                correlation_id=correlation_id,
+                correlation_id=corr_id,
             )
         except AuditWriteError as e:
-            logger.error(f"governance_update 审计写入失败: {e}, correlation_id={correlation_id}")
+            logger.error(f"governance_update 审计写入失败: {e}, correlation_id={corr_id}")
             return GovernanceSettingsUpdateResponse(
                 ok=False,
                 action="error",
                 settings=None,
-                message=f"审计写入失败，操作已阻断 (correlation_id={correlation_id})",
+                message=f"审计写入失败，操作已阻断 (correlation_id={corr_id})",
             )
 
         logger.info(
@@ -249,19 +250,19 @@ async def governance_update_impl(
                     "source": "gateway",
                     "operation": "governance_update",
                     "error": str(e)[:500],
-                    "correlation_id": correlation_id,
+                    "correlation_id": corr_id,
                 },
-                correlation_id=correlation_id,
+                correlation_id=corr_id,
             )
         except AuditWriteError as audit_err:
             logger.error(
-                f"governance_update 错误审计写入也失败: {audit_err}, correlation_id={correlation_id}"
+                f"governance_update 错误审计写入也失败: {audit_err}, correlation_id={corr_id}"
             )
             return GovernanceSettingsUpdateResponse(
                 ok=False,
                 action="error",
                 settings=None,
-                message=f"操作失败且审计写入失败 (correlation_id={correlation_id})",
+                message=f"操作失败且审计写入失败 (correlation_id={corr_id})",
             )
 
         return GovernanceSettingsUpdateResponse(

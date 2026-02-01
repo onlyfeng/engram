@@ -65,3 +65,15 @@ def __getattr__(name: str):
         globals()[name] = module
         return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _reset_gateway_lazy_import_cache_for_testing() -> None:
+    """
+    重置懒加载缓存
+
+    仅用于测试，确保测试之间的状态隔离。
+    清除 globals() 中缓存的懒加载子模块引用。
+    """
+    for name in _LAZY_SUBMODULES:
+        if name in globals():
+            del globals()[name]
