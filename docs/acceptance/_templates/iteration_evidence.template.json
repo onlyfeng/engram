@@ -1,0 +1,28 @@
+{
+  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "iteration_number": 1,
+  "recorded_at": "2026-01-01T00:00:00Z",
+  "commit_sha": "0000000000000000000000000000000000000000",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.13.2",
+    "arch": "x86_64",
+    "runner_label": "local"
+  },
+  "commands": [
+    {
+      "name": "ci",
+      "command": "make ci",
+      "result": "PASS",
+      "summary": "All checks passed",
+      "duration_seconds": 0,
+      "exit_code": 0
+    }
+  ],
+  "links": {
+    "regression_doc_url": "docs/acceptance/iteration_1_regression.md"
+  },
+  "notes": "模板占位值，实际使用时请替换为迭代执行结果。",
+  "overall_result": "PASS",
+  "sensitive_data_declaration": true
+}

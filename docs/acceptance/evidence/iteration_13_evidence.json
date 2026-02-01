@@ -1,0 +1,45 @@
+{
+  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "iteration_number": 13,
+  "recorded_at": "2026-02-01T21:04:04Z",
+  "commit_sha": "abc1234def5678901234567890abcdef12345678",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.13.2",
+    "arch": "x86_64",
+    "runner_label": "ubuntu-latest"
+  },
+  "commands": [
+    {
+      "name": "lint",
+      "command": "make lint",
+      "result": "PASS",
+      "summary": "ruff check passed",
+      "duration_seconds": 5.2,
+      "exit_code": 0
+    },
+    {
+      "name": "typecheck",
+      "command": "make typecheck",
+      "result": "PASS",
+      "summary": "mypy passed",
+      "duration_seconds": 12.8,
+      "exit_code": 0
+    },
+    {
+      "name": "test",
+      "command": "make test",
+      "result": "PASS",
+      "summary": "142 passed, 0 failed",
+      "duration_seconds": 45.3,
+      "exit_code": 0
+    }
+  ],
+  "overall_result": "PASS",
+  "sensitive_data_declaration": true,
+  "links": {
+    "ci_run_url": "https://github.com/org/repo/actions/runs/12345",
+    "regression_doc_url": "docs/acceptance/iteration_13_regression.md"
+  },
+  "notes": "所有门禁通过，验收完成。"
+}

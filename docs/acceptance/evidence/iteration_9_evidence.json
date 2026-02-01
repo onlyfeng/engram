@@ -1,0 +1,31 @@
+{
+  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "iteration_number": 9,
+  "recorded_at": "2026-02-01T21:38:34Z",
+  "commit_sha": "11fb91d2105a05e07cc19f937f58913052ca25ba",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.13.2",
+    "arch": "x86_64"
+  },
+  "commands": [
+    {
+      "name": "regression",
+      "command": "make regression",
+      "result": "FAIL"
+    },
+    {
+      "name": "gateway-tests",
+      "command": "pytest tests/gateway/ -v",
+      "result": "PASS"
+    },
+    {
+      "name": "acceptance-tests",
+      "command": "pytest tests/acceptance/ -v",
+      "result": "PASS"
+    }
+  ],
+  "overall_result": "PARTIAL",
+  "sensitive_data_declaration": true,
+  "notes": "本次运行: regression 因 lint 错误失败（2 个 ruff 错误）; gateway 测试 1069 passed, 206 skipped; acceptance 测试 132 passed, 48 skipped。与 iteration_9_regression.md 记录有差异（当时 gateway 有 4 个失败）。"
+}
