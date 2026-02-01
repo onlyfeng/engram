@@ -1,0 +1,20 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 130,
+    "title": "Add feature with baseline changes",
+    "body": "## Summary\n\nAdding new feature with type changes.\n\n### CI Baseline 变更检查\n\n- **关联 Issue**：#456\n- **净增原因**：新模块引入暂时无法添加类型\n\n**新增错误摘要**：\n\n- `src/engram/gateway/new_handler.py`: Missing return type [return]\n- `src/engram/gateway/new_handler.py`: Argument type mismatch [arg-type]\n\n## Related Issues\n\n#456",
+    "labels": [
+      {"name": "enhancement"},
+      {"name": "tech-debt"}
+    ],
+    "base": {
+      "ref": "main",
+      "sha": "abc123"
+    },
+    "head": {
+      "ref": "feature/new-feature",
+      "sha": "def456"
+    }
+  }
+}

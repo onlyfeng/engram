@@ -547,7 +547,7 @@ class TestToolsCall:
     def test_tools_call_reliability_report(self, client, mock_dependencies):
         """调用 reliability_report 工具"""
         # Mock get_reliability_report
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {"pending": 0, "success": 5},
                 "audit_stats": {"allow": 10, "reject": 2},
@@ -643,7 +643,7 @@ class TestLegacyProtocol:
 
     def test_legacy_format_with_empty_arguments(self, client, mock_dependencies):
         """旧格式空 arguments 应正常处理"""
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -1438,7 +1438,7 @@ class TestCorrelationIdUnifiedContract:
 
     def test_legacy_protocol_success_response_has_correlation_id(self, client, mock_dependencies):
         """旧协议成功响应必须包含 correlation_id"""
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -1671,7 +1671,7 @@ class TestCorrelationIdUnifiedSourceRegression:
         """
         import re
 
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -1773,7 +1773,7 @@ class TestLegacyProtocolComplete:
 
     def test_legacy_reliability_report_tool(self, client, mock_dependencies):
         """Legacy 格式调用 reliability_report 工具"""
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {"pending": 0, "success": 10},
                 "audit_stats": {"allow": 50, "reject": 5},
@@ -1830,7 +1830,7 @@ class TestLegacyProtocolComplete:
 
     def test_legacy_response_has_correlation_id(self, client, mock_dependencies):
         """Legacy 格式响应包含 correlation_id"""
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -1904,7 +1904,7 @@ class TestLegacyProtocolComplete:
 
     def test_legacy_extra_fields_ignored(self, client, mock_dependencies):
         """Legacy 格式额外字段应被忽略"""
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -1951,7 +1951,7 @@ class TestLegacyVsJsonRpcCoexistence:
 
     def test_legacy_request_gets_legacy_response(self, client, mock_dependencies):
         """Legacy 请求获得 Legacy 响应"""
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -2591,7 +2591,7 @@ class TestCorrelationIdSingleSourceContract:
         import json as json_module
         import re
 
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -2820,7 +2820,7 @@ class TestCorrelationIdSingleSourceContract:
         """
         import re
 
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -3018,7 +3018,7 @@ class TestCorrelationIdSingleSourceContract:
         mock_client.store.return_value = MagicMock(success=True, memory_id="test-id", error=None)
         mock_client.search.return_value = MagicMock(success=True, results=[], error=None)
 
-        with patch("engram.gateway.app.get_reliability_report") as mock_report:
+        with patch("engram.gateway.logbook_adapter.get_reliability_report") as mock_report:
             mock_report.return_value = {
                 "outbox_stats": {},
                 "audit_stats": {},
@@ -3471,6 +3471,104 @@ class TestErrorDataStrictModeInDispatchChain:
         assert d["correlation_id"] == http_entry_corr_id
         assert d["category"] == ErrorCategory.PROTOCOL
         assert d["reason"] == ErrorReason.METHOD_NOT_FOUND
+
+
+class TestErrorCodeBoundaryMisuse:
+    """
+    错误码命名空间边界反误用测试
+
+    确保 ToolResultErrorCode.* 不会被误用到 error.data.reason 字段，
+    反之亦然（McpErrorReason.* 不应出现在 result.error_code 中）。
+
+    契约参见: docs/contracts/mcp_jsonrpc_error_v1.md §3.0
+    """
+
+    def test_tool_result_error_codes_not_in_mcp_error_reasons(self):
+        """
+        ToolResultErrorCode 常量不应出现在 PUBLIC_MCP_ERROR_REASONS 中
+
+        边界规则：两个命名空间相互隔离
+        """
+        from engram.gateway.error_codes import PUBLIC_MCP_ERROR_REASONS
+        from engram.gateway.result_error_codes import ToolResultErrorCode
+
+        # 提取 ToolResultErrorCode 的所有公开字符串常量
+        tool_result_codes: set[str] = set()
+        for name in dir(ToolResultErrorCode):
+            if name.startswith("_"):
+                continue
+            value = getattr(ToolResultErrorCode, name)
+            if isinstance(value, str):
+                tool_result_codes.add(value)
+
+        # 检查是否有交集（DEPENDENCY_MISSING 等仅属于 ToolResultErrorCode）
+        mcp_reasons_set = set(PUBLIC_MCP_ERROR_REASONS)
+
+        # ToolResultErrorCode 专有的错误码不应出现在 MCP 层
+        tool_result_only_codes = {"DEPENDENCY_MISSING"}
+        for code in tool_result_only_codes:
+            assert code not in mcp_reasons_set, (
+                f"边界违规: ToolResultErrorCode.{code} 不应出现在 PUBLIC_MCP_ERROR_REASONS 中。"
+                f"ToolResultErrorCode 仅用于 result.error_code，"
+                f"不应用于 error.data.reason。"
+            )
+
+    def test_mcp_error_reasons_not_for_result_error_code(self):
+        """
+        McpErrorReason 专有常量不应与 ToolResultErrorCode 混淆
+
+        这是一个静态检查，确保两个命名空间的设计意图被正确理解。
+        """
+        from engram.gateway.result_error_codes import ToolResultErrorCode
+
+        # McpErrorReason 专有的错误码（协议层/系统层）
+        # 这些错误码仅用于 error.data.reason，不应出现在 ToolResultErrorCode 中
+        mcp_only_reasons = {
+            "PARSE_ERROR",
+            "INVALID_REQUEST",
+            "METHOD_NOT_FOUND",
+            "UNKNOWN_TOOL",
+            "UNHANDLED_EXCEPTION",
+            "TOOL_EXECUTOR_NOT_REGISTERED",
+            "OPENMEMORY_UNAVAILABLE",
+            "OPENMEMORY_CONNECTION_FAILED",
+            "OPENMEMORY_API_ERROR",
+            "LOGBOOK_DB_UNAVAILABLE",
+            "LOGBOOK_DB_CHECK_FAILED",
+        }
+
+        # 提取 ToolResultErrorCode 的所有公开字符串常量
+        tool_result_codes: set[str] = set()
+        for name in dir(ToolResultErrorCode):
+            if name.startswith("_"):
+                continue
+            value = getattr(ToolResultErrorCode, name)
+            if isinstance(value, str):
+                tool_result_codes.add(value)
+
+        # MCP 专有错误码不应出现在 ToolResultErrorCode 中
+        for reason in mcp_only_reasons:
+            assert reason not in tool_result_codes, (
+                f"边界违规: McpErrorReason.{reason} 不应在 ToolResultErrorCode 中定义。"
+                f"McpErrorReason 仅用于 error.data.reason，"
+                f"不应用于 result.error_code。"
+            )
+
+    def test_valid_error_reasons_whitelist_excludes_tool_result_codes(self):
+        """
+        测试辅助函数 VALID_ERROR_REASONS 不包含 ToolResultErrorCode 专有码
+
+        VALID_ERROR_REASONS 用于契约断言，必须与 PUBLIC_MCP_ERROR_REASONS 一致。
+        """
+        # ToolResultErrorCode 专有的错误码（定义在 result_error_codes.py 中）
+        # 这些错误码仅用于 result.error_code，不应出现在 VALID_ERROR_REASONS 中
+        tool_result_only_codes = {"DEPENDENCY_MISSING"}
+
+        for code in tool_result_only_codes:
+            assert code not in VALID_ERROR_REASONS, (
+                f"边界违规: VALID_ERROR_REASONS 不应包含 ToolResultErrorCode.{code}。"
+                f"请确保测试文件中的 VALID_ERROR_REASONS 与 PUBLIC_MCP_ERROR_REASONS 一致。"
+            )
 
 
 if __name__ == "__main__":

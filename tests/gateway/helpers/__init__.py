@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Gateway 测试 Helper 函数
+Gateway 测试 Helper 模块
 
-提供测试中常用的辅助函数，确保测试数据符合 schema 契约。
+提供用于 Gateway 测试的辅助工具，包括：
+- sys.modules 模拟（用于 optional-deps/ImportError 测试）
+- correlation_id 生成与验证（符合 schema 契约）
 
 ================================================================================
                        correlation_id 规范
@@ -26,6 +28,8 @@ Gateway 测试 Helper 函数
 import re
 import uuid
 from typing import Optional
+
+from tests.gateway.helpers.sys_modules_patch import FailingImport, patch_sys_modules
 
 # correlation_id 格式正则表达式（与 schema 定义对齐）
 CORRELATION_ID_PATTERN = re.compile(r"^corr-[a-fA-F0-9]{16}$")
@@ -133,6 +137,9 @@ CORR_ID_STRICT_FAIL = "corr-5010cfa110000001"
 
 
 __all__ = [
+    # sys.modules 模拟工具
+    "FailingImport",
+    "patch_sys_modules",
     # 生成函数
     "generate_compliant_correlation_id",
     "make_test_correlation_id",

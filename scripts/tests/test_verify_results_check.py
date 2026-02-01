@@ -27,12 +27,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from verify_results_check import (
-    run_validation,
     _is_allowed_skip_reason,
+    run_validation,
     validate_required_steps,
     validate_step_statuses,
-    ALLOWED_SKIP_REASONS,
-    DISALLOWED_SKIP_REASONS,
 )
 
 # ============================================================================

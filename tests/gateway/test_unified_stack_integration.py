@@ -1227,8 +1227,6 @@ class TestMockDegradationFlow:
         import json
         from unittest.mock import MagicMock, patch
 
-        from tests.gateway.helpers import CORRELATION_ID_PATTERN
-
         # 导入所需模块
         from engram.gateway.handlers.memory_store import memory_store_impl
         from engram.gateway.openmemory_client import (
@@ -1237,6 +1235,7 @@ class TestMockDegradationFlow:
             StoreResult,
         )
         from engram.gateway.outbox_worker import WorkerConfig, process_batch
+        from tests.gateway.helpers import CORRELATION_ID_PATTERN
 
         # 生成唯一测试内容
         unique_id = uuid.uuid4().hex[:12]
@@ -1426,10 +1425,10 @@ class TestMockDegradationFlow:
             print(f"  - shared outbox_id: {outbox_id}")
             print(f"  - gateway audit_id: {gateway_audit['audit_id']}")
             print(f"  - gateway correlation_id: {gateway_corr_id}")
-            print(f"  - gateway source: gateway")
+            print("  - gateway source: gateway")
             print(f"  - worker audit_id: {worker_audit['audit_id']}")
             print(f"  - worker correlation_id: {worker_corr_id}")
-            print(f"  - worker source: outbox_worker")
+            print("  - worker source: outbox_worker")
             print(f"  - correlation_ids 独立生成: {gateway_corr_id != worker_corr_id}")
 
 

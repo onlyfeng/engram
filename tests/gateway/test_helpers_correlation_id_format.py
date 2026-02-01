@@ -13,7 +13,6 @@ import pytest
 from tests.gateway import helpers
 from tests.gateway.helpers import CORRELATION_ID_PATTERN, is_valid_correlation_id
 
-
 # 需要验证格式的常量名称模式
 CORRELATION_ID_CONST_PREFIXES = ("TEST_CORRELATION_ID", "CORR_ID_")
 

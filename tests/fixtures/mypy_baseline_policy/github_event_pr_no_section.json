@@ -1,0 +1,19 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 124,
+    "title": "Quick fix",
+    "body": "## Summary\n\nQuick fix for something.\n\n## Test Plan\n\n- Local test passed",
+    "labels": [
+      {"name": "bug"}
+    ],
+    "base": {
+      "ref": "main",
+      "sha": "abc123"
+    },
+    "head": {
+      "ref": "fix/quick-fix",
+      "sha": "def456"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 131,
+    "title": "Add feature with baseline changes (table format)",
+    "body": "## Summary\n\nAdding new feature with type changes.\n\n### CI Baseline 变更检查\n\n- **关联 Issue**：#789\n- **净增原因**：重构导致临时类型退化\n\n**新增错误摘要**：\n\n| 文件 | 错误类型 | 说明 |\n|------|----------|------|\n| `src/engram/gateway/foo.py` | [return] | Missing return type |\n| `src/engram/logbook/bar.py` | [arg-type] | Argument mismatch |\n\n## Related Issues\n\n#789",
+    "labels": [
+      {"name": "enhancement"}
+    ],
+    "base": {
+      "ref": "main",
+      "sha": "abc123"
+    },
+    "head": {
+      "ref": "feature/refactor",
+      "sha": "def456"
+    }
+  }
+}

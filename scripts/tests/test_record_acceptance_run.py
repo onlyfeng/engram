@@ -27,13 +27,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "acceptance"))
 from record_acceptance_run import (
     list_artifacts,
     load_summary_duration,
+    main,
     merge_metadata,
     parse_metadata_kv,
     record_acceptance_run,
     sanitize_value,
-    main,
 )
-
 
 # ============================================================================
 # Test: sanitize_value (POSTGRES_DSN 脱敏)
@@ -98,10 +97,10 @@ class TestListArtifacts:
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
         (artifacts_dir / "summary.json").write_text('{"result": "PASS"}')
-        
+
         # 切换工作目录使 relative_to 正常工作
         monkeypatch.chdir(tmp_path)
-        
+
         result = list_artifacts(artifacts_dir)
         assert len(result) == 1
         assert "summary.json" in result[0]
@@ -113,9 +112,9 @@ class TestListArtifacts:
         (artifacts_dir / "summary.json").write_text("{}")
         (artifacts_dir / "steps.log").write_text("step1")
         (artifacts_dir / "health.json").write_text("{}")
-        
+
         monkeypatch.chdir(tmp_path)
-        
+
         result = list_artifacts(artifacts_dir)
         assert len(result) == 3
         # 验证排序
@@ -127,13 +126,13 @@ class TestListArtifacts:
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
         (artifacts_dir / "summary.json").write_text("{}")
-        
+
         subdir = artifacts_dir / "diagnostics"
         subdir.mkdir()
         (subdir / "logs.txt").write_text("logs")
-        
+
         monkeypatch.chdir(tmp_path)
-        
+
         result = list_artifacts(artifacts_dir)
         assert len(result) == 2
         # 应包含顶层和嵌套文件
@@ -152,10 +151,10 @@ class TestLoadSummaryDuration:
         """从 summary.json 读取 duration_seconds"""
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
-        
+
         summary = {"result": "PASS", "duration_seconds": 120}
         (artifacts_dir / "summary.json").write_text(json.dumps(summary))
-        
+
         result = load_summary_duration(artifacts_dir)
         assert result == 120
 
@@ -163,7 +162,7 @@ class TestLoadSummaryDuration:
         """无 summary.json 时返回 None"""
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
-        
+
         result = load_summary_duration(artifacts_dir)
         assert result is None
 
@@ -171,10 +170,10 @@ class TestLoadSummaryDuration:
         """summary.json 无 duration_seconds 字段时返回 None"""
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
-        
+
         summary = {"result": "PASS"}
         (artifacts_dir / "summary.json").write_text(json.dumps(summary))
-        
+
         result = load_summary_duration(artifacts_dir)
         assert result is None
 
@@ -183,7 +182,7 @@ class TestLoadSummaryDuration:
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
         (artifacts_dir / "summary.json").write_text("{invalid json}")
-        
+
         result = load_summary_duration(artifacts_dir)
         assert result is None
 
@@ -191,10 +190,10 @@ class TestLoadSummaryDuration:
         """duration_seconds 为 0 时应正确返回"""
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
-        
+
         summary = {"duration_seconds": 0}
         (artifacts_dir / "summary.json").write_text(json.dumps(summary))
-        
+
         result = load_summary_duration(artifacts_dir)
         assert result == 0
 
@@ -437,7 +436,7 @@ class TestRecordAcceptanceRun:
         """同时使用所有新参数"""
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
-        
+
         # 创建 summary.json
         summary = {"duration_seconds": 120}
         (artifacts_dir / "summary.json").write_text(json.dumps(summary))
@@ -750,7 +749,7 @@ class TestMakefileAcceptanceConstraints:
     def test_acceptance_target_creates_artifacts(self, workspace_root: Path, target: str):
         """验证 acceptance target 会创建 steps.log 和 summary.json"""
         import subprocess
-        
+
         # 使用 make -n 获取 dry-run 输出
         result = subprocess.run(
             ["make", "-n", target],
@@ -759,16 +758,16 @@ class TestMakefileAcceptanceConstraints:
             text=True,
             timeout=30,
         )
-        
+
         # 组合 stdout 和 Makefile 内容进行分析
         # 注意: make -n 可能不会展开所有 shell 变量，所以我们直接检查 Makefile
         makefile_path = workspace_root / "Makefile"
         makefile_content = makefile_path.read_text()
-        
+
         # 提取对应 target 的定义块
         target_pattern = f"{target}:"
         assert target_pattern in makefile_content, f"Target {target} not found in Makefile"
-        
+
         # 验证 target 定义中包含必要的输出文件
         # 查找该 target 到下一个 target 之间的内容
         lines = makefile_content.split("\n")
@@ -782,9 +781,9 @@ class TestMakefileAcceptanceConstraints:
                 if line and not line.startswith("\t") and not line.startswith(" ") and ":" in line:
                     break  # 遇到下一个 target
                 target_content.append(line)
-        
+
         target_block = "\n".join(target_content)
-        
+
         # 验证关键文件创建
         assert "steps.log" in target_block, f"{target} should create steps.log"
         assert "summary.json" in target_block, f"{target} should create summary.json"
@@ -794,10 +793,10 @@ class TestMakefileAcceptanceConstraints:
         """验证 acceptance-unified-min 使用 HTTP_ONLY_MODE"""
         makefile_path = workspace_root / "Makefile"
         makefile_content = makefile_path.read_text()
-        
+
         # 查找 acceptance-unified-min target
         assert 'HTTP_ONLY_MODE' in makefile_content
-        
+
         # 找到 target 定义块
         lines = makefile_content.split("\n")
         in_target = False
@@ -810,7 +809,7 @@ class TestMakefileAcceptanceConstraints:
                 return
             elif in_target and not line.startswith("\t") and ":" in line and line.strip():
                 break
-        
+
         # 如果能找到则通过
         assert in_target, "acceptance-unified-min target should exist"
 

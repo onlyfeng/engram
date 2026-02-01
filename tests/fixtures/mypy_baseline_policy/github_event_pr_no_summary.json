@@ -1,0 +1,19 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 132,
+    "title": "Add feature without error summary",
+    "body": "## Summary\n\nAdding new feature.\n\n### CI Baseline 变更检查\n\n- [x] 是否变更 baseline: 是\n- [x] 变更类型: 净增加\n关联 Issue: #999\n净增原因: 新模块引入\n\n## Related Issues\n\n#999",
+    "labels": [
+      {"name": "enhancement"}
+    ],
+    "base": {
+      "ref": "main",
+      "sha": "abc123"
+    },
+    "head": {
+      "ref": "feature/missing-summary",
+      "sha": "def456"
+    }
+  }
+}

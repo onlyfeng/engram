@@ -322,7 +322,7 @@ def test_compose_paths_covered_by_manifest():
     compose_paths = parse_compose_paths(compose_content)
     issues = check_compose_dependencies(compose_paths, manifest_paths, manifest)
 
-    assert not issues, f"Compose dependencies not in manifest:\n" + "\n".join(
+    assert not issues, "Compose dependencies not in manifest:\n" + "\n".join(
         f"  - {issue}" for issue in issues
     )
 
@@ -345,7 +345,7 @@ def test_gateway_dockerfile_paths_covered_by_manifest():
         dockerfile_paths, manifest_paths, manifest, dockerfile_context="."
     )
 
-    assert not issues, f"Dockerfile dependencies not in manifest:\n" + "\n".join(
+    assert not issues, "Dockerfile dependencies not in manifest:\n" + "\n".join(
         f"  - {issue}" for issue in issues
     )
 
@@ -397,7 +397,7 @@ def test_manifest_profiles_reference_valid_paths():
                     f"Profile '{profile_name}' requires '{req_path}' not in manifest"
                 )
 
-    assert not issues, f"Profile required_files issues:\n" + "\n".join(
+    assert not issues, "Profile required_files issues:\n" + "\n".join(
         f"  - {issue}" for issue in issues
     )
 

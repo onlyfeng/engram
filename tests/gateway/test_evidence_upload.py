@@ -719,37 +719,26 @@ class TestEvidenceUploadDependencyMissing:
         - retryable: false
         - suggestion 包含安装指引
         """
-        import sys
+        from tests.gateway.helpers import FailingImport, patch_sys_modules
 
-        # 模拟 evidence_store 导入失败
-        # 通过修改 sys.modules 来模拟 ImportError
-        original_modules = {}
-
-        # 保存并移除相关模块
+        # 需要移除的模块列表
         modules_to_remove = [
             "engram.gateway.evidence_store",
             "engram.logbook.artifact_store",
             "engram.logbook.db",
             "engram.logbook.uri",
+            "engram.gateway.handlers.evidence_upload",
         ]
-        for mod in modules_to_remove:
-            if mod in sys.modules:
-                original_modules[mod] = sys.modules.pop(mod)
 
-        # 创建一个会抛出 ImportError 的 mock 模块
-        class FailingImport:
-            def __getattr__(self, name):
-                raise ImportError("No module named 'engram_logbook' (mocked)")
-
-        # 注入会失败的模块
-        sys.modules["engram.gateway.evidence_store"] = FailingImport()
-
-        try:
-            # 重新导入 execute_evidence_upload（会获取新的导入状态）
-            # 需要先清除缓存的模块
-            if "engram.gateway.handlers.evidence_upload" in sys.modules:
-                del sys.modules["engram.gateway.handlers.evidence_upload"]
-
+        # 使用 patch_sys_modules 进行模拟
+        with patch_sys_modules(
+            replacements={
+                "engram.gateway.evidence_store": FailingImport(
+                    "No module named 'engram_logbook' (mocked)"
+                ),
+            },
+            remove=modules_to_remove,
+        ):
             from engram.gateway.handlers.evidence_upload import execute_evidence_upload
 
             # 创建 mock deps
@@ -772,17 +761,6 @@ class TestEvidenceUploadDependencyMissing:
             assert "details" in result
             assert result["details"]["missing_module"] == "engram_logbook"
 
-        finally:
-            # 恢复原始模块
-            for mod in modules_to_remove:
-                if mod in sys.modules:
-                    del sys.modules[mod]
-            for mod, original in original_modules.items():
-                sys.modules[mod] = original
-            # 清除 handler 缓存以恢复正常状态
-            if "engram.gateway.handlers.evidence_upload" in sys.modules:
-                del sys.modules["engram.gateway.handlers.evidence_upload"]
-
     @pytest.mark.asyncio
     async def test_import_failure_does_not_raise_exception(self, monkeypatch):
         """
@@ -790,29 +768,22 @@ class TestEvidenceUploadDependencyMissing:
 
         验证函数正常返回 dict，而不是抛出 ImportError
         """
-        import sys
+        from tests.gateway.helpers import FailingImport, patch_sys_modules
 
-        original_modules = {}
         modules_to_remove = [
             "engram.gateway.evidence_store",
             "engram.logbook.artifact_store",
             "engram.logbook.db",
             "engram.logbook.uri",
+            "engram.gateway.handlers.evidence_upload",
         ]
-        for mod in modules_to_remove:
-            if mod in sys.modules:
-                original_modules[mod] = sys.modules.pop(mod)
 
-        class FailingImport:
-            def __getattr__(self, name):
-                raise ImportError("Test import failure")
-
-        sys.modules["engram.gateway.evidence_store"] = FailingImport()
-
-        try:
-            if "engram.gateway.handlers.evidence_upload" in sys.modules:
-                del sys.modules["engram.gateway.handlers.evidence_upload"]
-
+        with patch_sys_modules(
+            replacements={
+                "engram.gateway.evidence_store": FailingImport("Test import failure"),
+            },
+            remove=modules_to_remove,
+        ):
             from engram.gateway.handlers.evidence_upload import execute_evidence_upload
 
             mock_deps = MagicMock()
@@ -827,15 +798,6 @@ class TestEvidenceUploadDependencyMissing:
             # 应该返回 dict
             assert isinstance(result, dict)
             assert result["ok"] is False
-
-        finally:
-            for mod in modules_to_remove:
-                if mod in sys.modules:
-                    del sys.modules[mod]
-            for mod, original in original_modules.items():
-                sys.modules[mod] = original
-            if "engram.gateway.handlers.evidence_upload" in sys.modules:
-                del sys.modules["engram.gateway.handlers.evidence_upload"]
 
     def test_error_reason_dependency_missing_exists(self):
         """验证 ErrorReason.DEPENDENCY_MISSING 常量存在"""

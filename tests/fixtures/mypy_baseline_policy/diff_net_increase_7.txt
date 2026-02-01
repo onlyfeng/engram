@@ -1,0 +1,16 @@
+diff --git a/scripts/ci/mypy_baseline.txt b/scripts/ci/mypy_baseline.txt
+index abc1234..def5678 100644
+--- a/scripts/ci/mypy_baseline.txt
++++ b/scripts/ci/mypy_baseline.txt
+@@ -1,3 +1,12 @@
+ src/engram/gateway/app.py: error: Argument 1 to "foo" has incompatible type "str"  [arg-type]
+ src/engram/gateway/app.py: error: Incompatible return value type  [return-value]
+-src/engram/logbook/db.py: error: "Dict[str, Any]" has no attribute "items"  [attr-defined]
++src/engram/gateway/handlers/new_handler.py: error: Missing return statement  [return]
++src/engram/gateway/handlers/new_handler.py: error: Type mismatch  [arg-type]
++src/engram/gateway/handlers/new_handler.py: error: Invalid type annotation  [type-arg]
++src/engram/gateway/handlers/another.py: error: Missing return statement  [return]
++src/engram/gateway/handlers/another.py: error: Type mismatch  [arg-type]
++src/engram/gateway/handlers/another.py: error: Invalid type annotation  [type-arg]
++src/engram/gateway/handlers/another.py: error: Incompatible types  [assignment]
++src/engram/gateway/handlers/another.py: error: Unused variable  [unused-variable]

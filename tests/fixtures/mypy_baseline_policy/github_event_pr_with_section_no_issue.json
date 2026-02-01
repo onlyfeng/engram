@@ -1,0 +1,19 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 125,
+    "title": "Type changes",
+    "body": "## Summary\n\nSome type changes.\n\n### CI Baseline 变更检查\n\n- [x] 是否变更 baseline: 是\n- [x] 变更类型: 净增加\n- 变更说明: 新模块引入暂时无法添加类型\n- 关联 Issue: (待填写)",
+    "labels": [
+      {"name": "enhancement"}
+    ],
+    "base": {
+      "ref": "main",
+      "sha": "abc123"
+    },
+    "head": {
+      "ref": "feature/type-changes",
+      "sha": "def456"
+    }
+  }
+}

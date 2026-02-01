@@ -4132,7 +4132,6 @@ class TestCorrelationIdNormalizationContract:
         场景：传入不符合 ^corr-[a-fA-F0-9]{16}$ 格式的 correlation_id
         期望：build_audit_event 返回的事件中 correlation_id 被归一化为合规格式
         """
-        import re
 
         from engram.gateway.audit_event import build_audit_event
 

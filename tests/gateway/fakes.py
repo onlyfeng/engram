@@ -543,7 +543,7 @@ class FakeLogbookDatabase:
 class FakeLogbookAdapter:
     """
     Fake logbook_adapter 模块，模拟 check_dedup、query_knowledge_candidates、
-    check_user_exists 和 ensure_user 等方法
+    check_user_exists、ensure_user、write_audit、update_write_audit 等方法
     """
 
     def __init__(self):
@@ -551,11 +551,25 @@ class FakeLogbookAdapter:
         self._knowledge_candidates: List[Dict[str, Any]] = []
         self._user_exists: bool = True  # 默认用户存在
 
+        # 配置的 settings
+        self._settings: Dict[str, Any] = {
+            "team_write_enabled": False,
+            "policy_json": {},
+        }
+
         # 调用记录
         self.dedup_calls: List[Dict[str, Any]] = []
         self.query_calls: List[Dict[str, Any]] = []
         self.check_user_calls: List[str] = []
         self.ensure_user_calls: List[Dict[str, Any]] = []
+
+        # 审计调用记录（两阶段审计支持）
+        self._audit_calls: List[Dict[str, Any]] = []
+        self._update_audit_calls: List[Dict[str, Any]] = []
+        self._outbox_calls: List[Dict[str, Any]] = []
+        self._audit_records: Dict[str, Dict[str, Any]] = {}  # correlation_id -> record
+        self._next_audit_id: int = 1
+        self._next_outbox_id: int = 1
 
     def configure_dedup_hit(
         self,
@@ -585,6 +599,23 @@ class FakeLogbookAdapter:
     def configure_user_exists(self, exists: bool = True):
         """配置 check_user_exists 返回值"""
         self._user_exists = exists
+
+    def configure_outbox_success(self, start_id: int = 1):
+        """配置 outbox 入队成功，设置起始 ID"""
+        self._next_outbox_id = start_id
+
+    def configure_settings(
+        self,
+        team_write_enabled: bool = False,
+        policy_json: Optional[Dict[str, Any]] = None,
+        **extra_settings,
+    ):
+        """配置 settings 响应"""
+        self._settings = {
+            "team_write_enabled": team_write_enabled,
+            "policy_json": policy_json or {},
+            **extra_settings,
+        }
 
     def check_user_exists(self, user_id: str) -> bool:
         """检查用户是否存在"""
@@ -656,12 +687,131 @@ class FakeLogbookAdapter:
         # 此方法为 governance_update_impl 所需
         return True
 
+    def get_settings(self, project_key: str) -> Optional[Dict[str, Any]]:
+        """读取治理设置"""
+        return self._settings.copy()
+
+    def get_or_create_settings(self, project_key: str) -> Dict[str, Any]:
+        """获取或创建治理设置"""
+        return self._settings.copy()
+
+    # ============== 两阶段审计支持 ==============
+
+    def write_audit(
+        self,
+        correlation_id: str,
+        actor_user_id: Optional[str] = None,
+        target_space: Optional[str] = None,
+        action: str = "store",
+        reason: Optional[str] = None,
+        payload_sha: Optional[str] = None,
+        evidence_refs_json: Optional[Dict] = None,
+        status: str = "pending",
+        **kwargs,
+    ) -> int:
+        """写入审计日志（两阶段审计 phase-1）"""
+        call_record = {
+            "correlation_id": correlation_id,
+            "actor_user_id": actor_user_id,
+            "target_space": target_space,
+            "action": action,
+            "reason": reason,
+            "payload_sha": payload_sha,
+            "evidence_refs_json": evidence_refs_json or {},
+            "status": status,
+        }
+        self._audit_calls.append(call_record)
+
+        # 存储审计记录
+        audit_id = self._next_audit_id
+        self._next_audit_id += 1
+        self._audit_records[correlation_id] = {
+            "audit_id": audit_id,
+            **call_record,
+        }
+        return audit_id
+
+    def update_write_audit(
+        self,
+        correlation_id: str,
+        status: str,
+        reason_suffix: Optional[str] = None,
+        evidence_refs_json_patch: Optional[Dict] = None,
+        **kwargs,
+    ) -> bool:
+        """更新审计日志（两阶段审计 phase-2 finalize）"""
+        call_record = {
+            "correlation_id": correlation_id,
+            "status": status,
+            "reason_suffix": reason_suffix,
+            "evidence_refs_json_patch": evidence_refs_json_patch or {},
+        }
+        self._update_audit_calls.append(call_record)
+
+        # 更新审计记录
+        if correlation_id in self._audit_records:
+            self._audit_records[correlation_id]["status"] = status
+            if reason_suffix:
+                old_reason = self._audit_records[correlation_id].get("reason", "") or ""
+                self._audit_records[correlation_id]["reason"] = f"{old_reason} {reason_suffix}".strip()
+            if evidence_refs_json_patch:
+                old_refs = self._audit_records[correlation_id].get("evidence_refs_json", {})
+                self._audit_records[correlation_id]["evidence_refs_json"] = {
+                    **old_refs,
+                    **evidence_refs_json_patch,
+                }
+        return True
+
+    def enqueue_outbox(
+        self,
+        payload_md: str,
+        target_space: str,
+        correlation_id: Optional[str] = None,
+        item_id: Optional[int] = None,
+        last_error: Optional[str] = None,
+        next_attempt_at: Optional[datetime] = None,
+        **kwargs,
+    ) -> int:
+        """将记忆入队到 outbox_memory 表"""
+        call_record = {
+            "payload_md": payload_md,
+            "target_space": target_space,
+            "correlation_id": correlation_id,
+            "item_id": item_id,
+            "last_error": last_error,
+        }
+        self._outbox_calls.append(call_record)
+
+        outbox_id = self._next_outbox_id
+        self._next_outbox_id += 1
+        return outbox_id
+
+    def get_audit_calls(self) -> List[Dict[str, Any]]:
+        """获取所有 write_audit 调用记录"""
+        return self._audit_calls.copy()
+
+    def get_update_audit_calls(self) -> List[Dict[str, Any]]:
+        """获取所有 update_write_audit 调用记录"""
+        return self._update_audit_calls.copy()
+
+    def get_outbox_calls(self) -> List[Dict[str, Any]]:
+        """获取所有 enqueue_outbox 调用记录"""
+        return self._outbox_calls.copy()
+
+    def get_audit_record_by_correlation_id(self, correlation_id: str) -> Optional[Dict[str, Any]]:
+        """通过 correlation_id 查询审计记录"""
+        return self._audit_records.get(correlation_id)
+
     def reset_calls(self):
         """重置调用记录"""
         self.dedup_calls.clear()
         self.query_calls.clear()
         self.check_user_calls.clear()
         self.ensure_user_calls.clear()
+        self._audit_calls.clear()
+        self._update_audit_calls.clear()
+        self._outbox_calls.clear()
+        self._audit_records.clear()
 
 
 # ============== Fake GatewayConfig ==============

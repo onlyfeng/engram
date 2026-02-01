@@ -1,0 +1,8 @@
+src/engram/gateway/app.py:42: error: Argument 1 to "foo" has incompatible type "str"; expected "int"  [arg-type]
+src/engram/gateway/app.py:58: error: Incompatible return value type (got "None", expected "str")  [return-value]
+src/engram/logbook/db.py:123: error: "Dict[str, Any]" has no attribute "items"  [attr-defined]
+src/engram/logbook/db.py:200: warning: Unused "type: ignore" comment  [unused-ignore]
+src\engram\gateway\handlers\memory_store.py:15: error: Missing return statement  [return]
+src\engram\gateway\handlers\memory_store.py:30: note: See documentation for more info
+
+Found 6 errors in 3 files (checked 42 source files)
