@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/gateway_deps_db_allowlist_v1.schema.json",
+  "title": "Gateway deps.db Allowlist V1 Schema",
+  "description": "Gateway deps.db 直接访问例外允许列表 JSON Schema (V1)，用于 scripts/ci/check_gateway_di_boundaries.py 的例外管理",
+  "$comment": "【SSOT 声明】此 Schema 是 allowlist 格式的权威定义。数据文件: scripts/ci/gateway_deps_db_allowlist.json。检查脚本: scripts/ci/check_gateway_di_boundaries.py",
+
+  "definitions": {
+    "iso8601_date": {
+      "type": "string",
+      "description": "ISO8601 格式的日期字符串 (YYYY-MM-DD)",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+
+    "iso8601_datetime": {
+      "type": "string",
+      "description": "ISO8601 格式的日期时间字符串",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})?$"
+    },
+
+    "category": {
+      "type": "string",
+      "description": "例外分类，用于统计和管理",
+      "enum": [
+        "adapter_internal",
+        "migration_script",
+        "legacy_compat",
+        "testing",
+        "other"
+      ]
+    },
+
+    "allowlist_entry": {
+      "type": "object",
+      "description": "单个 deps.db 访问例外条目",
+      "required": ["id", "file_glob", "reason", "owner", "category", "expires_on"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "唯一标识符，格式建议: <category>-<module>-<序号>",
+          "pattern": "^[a-z0-9_-]+$",
+          "minLength": 1
+        },
+        "file_glob": {
+          "type": "string",
+          "description": "适用的文件 glob 模式，例如 'src/engram/gateway/handlers/*.py'",
+          "minLength": 1
+        },
+        "file_path": {
+          "type": "string",
+          "description": "（可选）精确文件路径，优先级高于 file_glob。若指定则忽略 file_glob"
+        },
+        "reason": {
+          "type": "string",
+          "description": "允许直接访问 deps.db 的原因说明",
+          "minLength": 10
+        },
+        "owner": {
+          "type": "string",
+          "description": "例外负责人，格式: GitHub 用户名或团队（如 @platform-team）",
+          "pattern": "^@[a-zA-Z0-9_-]+$",
+          "minLength": 2
+        },
+        "expires_on": {
+          "$ref": "#/definitions/iso8601_date",
+          "description": "例外过期日期，超过此日期后 CI 应报错。格式: YYYY-MM-DD"
+        },
+        "category": {
+          "$ref": "#/definitions/category"
+        },
+        "created_at": {
+          "$ref": "#/definitions/iso8601_date",
+          "description": "（可选）条目创建日期"
+        },
+        "ticket": {
+          "type": "string",
+          "description": "（可选）关联的 JIRA 工单号或 GitHub Issue"
+        },
+        "notes": {
+          "type": "string",
+          "description": "（可选）补充说明"
+        },
+        "migration_target": {
+          "type": "string",
+          "description": "（可选）推荐的迁移方式，如 'deps.logbook_adapter.execute(...)'"
+        }
+      }
+    }
+  },
+
+  "type": "object",
+  "required": ["version", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Allowlist 文件格式版本",
+      "enum": ["1", "1.0"]
+    },
+    "generated_at": {
+      "$ref": "#/definitions/iso8601_datetime",
+      "description": "（可选）文件生成/更新时间戳"
+    },
+    "description": {
+      "type": "string",
+      "description": "（可选）文件用途说明"
+    },
+    "entries": {
+      "type": "array",
+      "description": "例外允许条目列表",
+      "items": {
+        "$ref": "#/definitions/allowlist_entry"
+      },
+      "uniqueItems": true
+    }
+  },
+
+  "examples": [
+    {
+      "version": "1",
+      "description": "Gateway deps.db 直接访问例外允许列表",
+      "entries": [
+        {
+          "id": "adapter-internal-audit-v1",
+          "file_glob": "src/engram/gateway/services/audit_service.py",
+          "reason": "Audit service 内部需要直接访问连接进行批量写入优化",
+          "owner": "@platform-team",
+          "expires_on": "2026-06-30",
+          "category": "adapter_internal",
+          "created_at": "2026-02-01",
+          "migration_target": "deps.logbook_adapter.batch_execute(...)"
+        }
+      ]
+    }
+  ]
+}

@@ -54,13 +54,10 @@ Gateway 依赖注入模块 (Dependency Injection)
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
-
-# 从 mcp_rpc 导入统一的 correlation_id 生成函数
-# 确保全网关使用一致的 correlation_id 格式: corr-{16位十六进制}
-from .mcp_rpc import generate_correlation_id
 
 if TYPE_CHECKING:
     from .config import GatewayConfig
@@ -73,6 +70,23 @@ if TYPE_CHECKING:
 def _utc_now() -> datetime:
     """获取当前 UTC 时间"""
     return datetime.now(timezone.utc)
+
+
+def generate_correlation_id() -> str:
+    """
+    生成关联 ID
+
+    格式: corr-{16位十六进制}
+    与 schemas/audit_event_v1.schema.json 中定义的格式一致。
+    此函数在本模块内联实现，避免依赖 mcp_rpc 模块，确保 import-safe。
+
+    注意：mcp_rpc.py 中有同样的实现，用于 JSON-RPC 层。
+    两处实现保持格式一致：corr-{uuid.hex[:16]}
+
+    Returns:
+        格式为 corr-{16位十六进制} 的关联 ID
+    """
+    return f"corr-{uuid.uuid4().hex[:16]}"
 
 
 # ======================== RequestContext ========================
@@ -669,7 +683,7 @@ def get_request_context(
             ...
 
         # 显式调用（推荐在入口层使用）
-        from engram.gateway.mcp_rpc import generate_correlation_id
+        from engram.gateway.di import generate_correlation_id
         ctx = get_request_context(correlation_id=generate_correlation_id())
         # correlation_id 格式: corr-{16位十六进制}
     """
@@ -690,6 +704,7 @@ __all__ = [
     # 便捷函数
     "create_request_context",
     "create_gateway_deps",
+    "generate_correlation_id",
     # FastAPI Depends 函数
     "get_request_context",
 ]
