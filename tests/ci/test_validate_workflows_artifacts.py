@@ -6,6 +6,7 @@ Workflow Contract Validator - Artifact Archive 单元测试
 1. extract_upload_artifact_paths: 从 workflow 中提取 upload-artifact 步骤
 2. check_artifact_path_coverage: 验证 required paths 覆盖情况
 3. validate_artifact_archive: 集成到 WorkflowContractValidator 的验证
+4. normalize_artifact_path / normalize_artifact_paths: 路径标准化函数
 
 Phase 0 说明：
 - 仅测试 artifact 相关的提取和校验逻辑
@@ -13,19 +14,23 @@ Phase 0 说明：
 """
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 导入被测模块
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from validate_workflows import (
+from scripts.ci.validate_workflows import (
     WorkflowContractValidator,
     check_artifact_path_coverage,
     extract_upload_artifact_paths,
+)
+from scripts.ci.workflow_contract_common import (
+    ArtifactPathError,
+    is_valid_artifact_path,
+    normalize_artifact_path,
+    normalize_artifact_paths,
+    normalize_glob_pattern,
+    paths_are_equivalent,
 )
 
 # ============================================================================
@@ -486,3 +491,555 @@ jobs:
         assert step["job_id"] == "unified-standard"
         assert len(step["paths"]) == 4
         assert ".artifacts/verify-results.json" in step["paths"]
+
+
+# ============================================================================
+# Glob/Directory Matching Edge Cases (边界用例测试)
+# ============================================================================
+
+
+class TestPathMatchingEdgeCases:
+    """路径匹配边界用例测试
+
+    测试 _path_matches 和 check_artifact_path_coverage 的边界情况：
+    - 目录本身（带/不带末尾斜杠）
+    - 混合多行 path
+    - 大小写敏感性
+    - glob 模式边界
+    """
+
+    def test_directory_itself_with_trailing_slash(self):
+        """测试目录本身（上传路径不带斜杠，required 带斜杠）"""
+        upload_steps = [
+            {"step_name": "Upload", "paths": [".artifacts/runs"]}  # 不带斜杠
+        ]
+        required_paths = [".artifacts/runs/"]  # 带斜杠
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # 应该匹配：上传的目录本身等于 required 目录
+        assert ".artifacts/runs/" in covered
+        assert missing == []
+
+    def test_directory_itself_without_trailing_slash(self):
+        """测试目录本身（上传路径带斜杠，required 带斜杠）"""
+        upload_steps = [{"step_name": "Upload", "paths": [".artifacts/runs/"]}]
+        required_paths = [".artifacts/runs/"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert ".artifacts/runs/" in covered
+        assert missing == []
+
+    def test_file_under_directory(self):
+        """测试目录下的文件"""
+        upload_steps = [{"step_name": "Upload", "paths": [".artifacts/runs/run_001.json"]}]
+        required_paths = [".artifacts/runs/"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # 上传的文件在 required 目录下，应该覆盖
+        assert ".artifacts/runs/" in covered
+        assert missing == []
+
+    def test_nested_directory_file(self):
+        """测试嵌套目录下的文件"""
+        upload_steps = [{"step_name": "Upload", "paths": [".artifacts/runs/2026/01/run.json"]}]
+        required_paths = [".artifacts/runs/"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # 深层嵌套文件也应该覆盖
+        assert ".artifacts/runs/" in covered
+        assert missing == []
+
+    def test_similar_directory_name_no_match(self):
+        """测试相似目录名不应匹配"""
+        upload_steps = [{"step_name": "Upload", "paths": [".artifacts/runs-backup/data.json"]}]
+        required_paths = [".artifacts/runs/"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # runs-backup 不是 runs/ 的子路径
+        assert covered == []
+        assert ".artifacts/runs/" in missing
+
+    def test_glob_pattern_simple(self):
+        """测试简单 glob 模式"""
+        upload_steps = [{"step_name": "Upload", "paths": ["test-results-3.11.xml"]}]
+        required_paths = ["test-results-*.xml"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "test-results-*.xml" in covered
+        assert missing == []
+
+    def test_glob_pattern_with_directory(self):
+        """测试带目录的 glob 模式"""
+        upload_steps = [{"step_name": "Upload", "paths": ["artifacts/report-v1.json"]}]
+        required_paths = ["artifacts/*.json"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "artifacts/*.json" in covered
+        assert missing == []
+
+    def test_glob_pattern_no_match(self):
+        """测试 glob 模式不匹配"""
+        upload_steps = [
+            {"step_name": "Upload", "paths": ["test-results-3.11.txt"]}  # .txt 不匹配 .xml
+        ]
+        required_paths = ["test-results-*.xml"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert covered == []
+        assert "test-results-*.xml" in missing
+
+    def test_case_sensitivity(self):
+        """测试大小写敏感性（应区分大小写）"""
+        upload_steps = [{"step_name": "Upload", "paths": ["TEST-RESULTS.xml"]}]
+        required_paths = ["test-results.xml"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # 大小写不同，不应匹配
+        assert covered == []
+        assert "test-results.xml" in missing
+
+    def test_case_sensitivity_glob(self):
+        """测试 glob 模式的大小写敏感性"""
+        upload_steps = [{"step_name": "Upload", "paths": ["TEST-RESULTS-3.11.xml"]}]
+        required_paths = ["test-results-*.xml"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # glob 也区分大小写
+        assert covered == []
+        assert "test-results-*.xml" in missing
+
+    def test_multiple_paths_partial_coverage(self):
+        """测试多路径部分覆盖"""
+        upload_steps = [
+            {"step_name": "Upload A", "paths": ["test-results.xml"]},
+            {"step_name": "Upload B", "paths": [".artifacts/logs/"]},
+        ]
+        required_paths = ["test-results.xml", ".artifacts/logs/", "missing-file.json"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "test-results.xml" in covered
+        assert ".artifacts/logs/" in covered
+        assert missing == ["missing-file.json"]
+
+    def test_multiline_paths_mixed(self):
+        """测试混合多行路径（文件+目录+glob）"""
+        upload_steps = [
+            {
+                "step_name": "Upload All",
+                "paths": ["results.xml", ".artifacts/data/", "logs/app-2026-01-01.log"],
+            }
+        ]
+        required_paths = [
+            "results.xml",  # 精确匹配
+            ".artifacts/data/",  # 目录匹配
+            "logs/*.log",  # glob 模式
+        ]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "results.xml" in covered
+        assert ".artifacts/data/" in covered
+        assert "logs/*.log" in covered
+        assert missing == []
+
+    def test_glob_question_mark(self):
+        """测试 glob 问号匹配单字符"""
+        upload_steps = [{"step_name": "Upload", "paths": ["test-results-3.xml"]}]
+        required_paths = ["test-results-?.xml"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "test-results-?.xml" in covered
+        assert missing == []
+
+    def test_glob_bracket_pattern(self):
+        """测试 glob 方括号模式"""
+        upload_steps = [{"step_name": "Upload", "paths": ["log-a.txt"]}]
+        required_paths = ["log-[abc].txt"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "log-[abc].txt" in covered
+        assert missing == []
+
+    def test_glob_bracket_no_match(self):
+        """测试 glob 方括号不匹配"""
+        upload_steps = [{"step_name": "Upload", "paths": ["log-x.txt"]}]
+        required_paths = ["log-[abc].txt"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert covered == []
+        assert "log-[abc].txt" in missing
+
+    def test_exact_match_with_special_chars_escaped(self):
+        """测试精确匹配（无 glob 字符）"""
+        upload_steps = [{"step_name": "Upload", "paths": ["report_v1.2.3.json"]}]
+        required_paths = ["report_v1.2.3.json"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # 没有 glob 字符，使用精确匹配
+        assert "report_v1.2.3.json" in covered
+        assert missing == []
+
+    def test_empty_path_in_upload(self):
+        """测试上传路径中的空路径被正确处理"""
+        upload_steps = [{"step_name": "Upload", "paths": ["", "valid.xml", ""]}]
+        required_paths = ["valid.xml"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "valid.xml" in covered
+        assert missing == []
+
+    def test_directory_without_content(self):
+        """测试 required 是精确文件路径，uploaded 是目录"""
+        upload_steps = [{"step_name": "Upload", "paths": [".artifacts/"]}]
+        required_paths = [".artifacts/report.json"]  # 精确文件
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        # 目录不应匹配精确文件路径
+        assert covered == []
+        assert ".artifacts/report.json" in missing
+
+
+# ============================================================================
+# normalize_artifact_path Tests
+# ============================================================================
+
+
+class TestNormalizeArtifactPath:
+    """normalize_artifact_path 函数测试"""
+
+    def test_basic_normalization(self):
+        """测试基本标准化"""
+        assert normalize_artifact_path("artifacts/results.json") == "artifacts/results.json"
+
+    def test_strip_whitespace(self):
+        """测试去除首尾空白"""
+        assert normalize_artifact_path("  artifacts/file.json  ") == "artifacts/file.json"
+        assert normalize_artifact_path("\tartifacts/\n") == "artifacts/"
+
+    def test_windows_separator(self):
+        """测试 Windows 分隔符转换"""
+        assert (
+            normalize_artifact_path("artifacts\\results\\file.json")
+            == "artifacts/results/file.json"
+        )
+        assert normalize_artifact_path("a\\b\\c") == "a/b/c"
+
+    def test_remove_dot_slash_prefix(self):
+        """测试移除 ./ 前缀"""
+        assert normalize_artifact_path("./artifacts/") == "artifacts/"
+        assert normalize_artifact_path("./artifacts/file.json") == "artifacts/file.json"
+        assert normalize_artifact_path("././artifacts/") == "artifacts/"
+
+    def test_remove_duplicate_slashes(self):
+        """测试移除重复斜杠"""
+        assert normalize_artifact_path("artifacts//results//") == "artifacts/results/"
+        assert normalize_artifact_path("a///b////c") == "a/b/c"
+
+    def test_preserve_trailing_slash(self):
+        """测试保留目录末尾斜杠"""
+        assert normalize_artifact_path("artifacts/") == "artifacts/"
+        assert normalize_artifact_path("artifacts/results/") == "artifacts/results/"
+
+    def test_glob_patterns_preserved(self):
+        """测试 glob 模式保持不变"""
+        assert normalize_artifact_path("**/*.xml") == "**/*.xml"
+        assert normalize_artifact_path("./**/*.xml") == "**/*.xml"
+        assert normalize_artifact_path("test-results-*.xml") == "test-results-*.xml"
+        assert normalize_artifact_path("logs/[abc]*.log") == "logs/[abc]*.log"
+        assert normalize_artifact_path("file?.txt") == "file?.txt"
+
+    def test_empty_path_error(self):
+        """测试空路径报错"""
+        with pytest.raises(ArtifactPathError) as exc_info:
+            normalize_artifact_path("")
+        assert "cannot be empty" in str(exc_info.value)
+
+        with pytest.raises(ArtifactPathError) as exc_info:
+            normalize_artifact_path("   ")
+        assert "cannot be empty" in str(exc_info.value)
+
+    def test_empty_path_allowed(self):
+        """测试允许空路径"""
+        assert normalize_artifact_path("", allow_empty=True) == ""
+        assert normalize_artifact_path("   ", allow_empty=True) == ""
+
+    def test_combined_normalization(self):
+        """测试组合标准化场景"""
+        # 同时包含多种需要标准化的情况
+        assert (
+            normalize_artifact_path("  ./artifacts\\\\results//file.json  ")
+            == "artifacts/results/file.json"
+        )
+        assert normalize_artifact_path("./a\\b//c\\d/") == "a/b/c/d/"
+
+
+# ============================================================================
+# normalize_artifact_paths Tests
+# ============================================================================
+
+
+class TestNormalizeArtifactPaths:
+    """normalize_artifact_paths 函数测试"""
+
+    def test_basic_list_normalization(self):
+        """测试基本列表标准化"""
+        result = normalize_artifact_paths(["a/", "b/c", "d.txt"])
+        assert result == ["a/", "b/c", "d.txt"]
+
+    def test_deduplication(self):
+        """测试去重功能"""
+        # 同一路径多种写法应去重
+        result = normalize_artifact_paths(
+            [
+                "./a/",
+                "a/",
+                ".\\a\\",
+                "a//",
+            ]
+        )
+        assert result == ["a/"]
+
+    def test_deduplication_preserves_first(self):
+        """测试去重保留首次出现（排序前）"""
+        # 关闭排序，验证保留首次出现
+        result = normalize_artifact_paths(
+            [
+                "./z/",
+                "a/",
+                "z/",  # 与 ./z/ 等价，应被去重
+                "b/",
+            ],
+            sort=False,
+        )
+        assert result == ["z/", "a/", "b/"]
+
+    def test_sorting(self):
+        """测试排序功能"""
+        result = normalize_artifact_paths(["z", "a", "m"])
+        assert result == ["a", "m", "z"]
+
+    def test_sorting_stability(self):
+        """测试排序稳定性"""
+        # 多次调用应返回相同结果
+        paths = ["z/a", "a/b", "m/c", "a/a", "z/b"]
+        result1 = normalize_artifact_paths(paths)
+        result2 = normalize_artifact_paths(paths)
+        result3 = normalize_artifact_paths(paths)
+        assert result1 == result2 == result3
+        assert result1 == ["a/a", "a/b", "m/c", "z/a", "z/b"]
+
+    def test_no_sort(self):
+        """测试禁用排序"""
+        result = normalize_artifact_paths(["z", "a", "m"], sort=False)
+        assert result == ["z", "a", "m"]
+
+    def test_no_deduplicate(self):
+        """测试禁用去重"""
+        result = normalize_artifact_paths(["a/", "./a/"], deduplicate=False, sort=False)
+        assert result == ["a/", "a/"]
+
+    def test_empty_path_error(self):
+        """测试空路径报错"""
+        with pytest.raises(ArtifactPathError) as exc_info:
+            normalize_artifact_paths(["valid.txt", "", "also-valid.txt"])
+        assert "Invalid artifact path" in str(exc_info.value)
+
+    def test_empty_path_allowed(self):
+        """测试允许空路径"""
+        result = normalize_artifact_paths(["valid.txt", "", "also-valid.txt"], allow_empty=True)
+        # 空路径被跳过
+        assert result == ["also-valid.txt", "valid.txt"]
+
+    def test_empty_list(self):
+        """测试空列表"""
+        result = normalize_artifact_paths([])
+        assert result == []
+
+    def test_equivalent_paths_deduplication(self):
+        """测试等价路径去重（同一路径多种写法）"""
+        paths = [
+            "artifacts/results.json",
+            "./artifacts/results.json",
+            "artifacts\\results.json",
+            ".\\artifacts\\results.json",
+            "artifacts//results.json",
+        ]
+        result = normalize_artifact_paths(paths)
+        assert len(result) == 1
+        assert result[0] == "artifacts/results.json"
+
+    def test_mixed_paths_with_glob(self):
+        """测试混合路径（包含 glob 模式）"""
+        paths = [
+            "./artifacts/",
+            "**/*.xml",
+            "./**/*.json",
+            "artifacts/",  # 与 ./artifacts/ 等价
+        ]
+        result = normalize_artifact_paths(paths)
+        assert len(result) == 3
+        assert "**/*.json" in result
+        assert "**/*.xml" in result
+        assert "artifacts/" in result
+
+
+# ============================================================================
+# paths_are_equivalent Tests
+# ============================================================================
+
+
+class TestPathsAreEquivalent:
+    """paths_are_equivalent 函数测试"""
+
+    def test_identical_paths(self):
+        """测试完全相同的路径"""
+        assert paths_are_equivalent("a/b/c", "a/b/c") is True
+
+    def test_dot_slash_equivalence(self):
+        """测试 ./ 前缀等价"""
+        assert paths_are_equivalent("./artifacts/", "artifacts/") is True
+        assert paths_are_equivalent("././a/", "a/") is True
+
+    def test_separator_equivalence(self):
+        """测试分隔符等价"""
+        assert paths_are_equivalent("a\\b", "a/b") is True
+        assert paths_are_equivalent("a\\b\\c", "a/b/c") is True
+
+    def test_duplicate_slash_equivalence(self):
+        """测试重复斜杠等价"""
+        assert paths_are_equivalent("a//b", "a/b") is True
+
+    def test_combined_equivalence(self):
+        """测试组合等价"""
+        assert paths_are_equivalent("./a\\\\b//c", "a/b/c") is True
+
+    def test_not_equivalent(self):
+        """测试不等价的路径"""
+        assert paths_are_equivalent("a/b", "a/c") is False
+        assert paths_are_equivalent("a/", "a") is False  # 目录 vs 文件
+
+    def test_empty_paths(self):
+        """测试空路径"""
+        assert paths_are_equivalent("", "") is True
+        assert paths_are_equivalent("", "a") is False
+
+
+# ============================================================================
+# is_valid_artifact_path Tests
+# ============================================================================
+
+
+class TestIsValidArtifactPath:
+    """is_valid_artifact_path 函数测试"""
+
+    def test_valid_paths(self):
+        """测试有效路径"""
+        assert is_valid_artifact_path("artifacts/results.json") is True
+        assert is_valid_artifact_path("./a/") is True
+        assert is_valid_artifact_path("**/*.xml") is True
+
+    def test_invalid_paths(self):
+        """测试无效路径"""
+        assert is_valid_artifact_path("") is False
+        assert is_valid_artifact_path("   ") is False
+
+
+# ============================================================================
+# normalize_glob_pattern Tests
+# ============================================================================
+
+
+class TestNormalizeGlobPattern:
+    """normalize_glob_pattern 函数测试"""
+
+    def test_basic_glob_normalization(self):
+        """测试基本 glob 模式标准化"""
+        assert normalize_glob_pattern("./**/*.xml") == "**/*.xml"
+        assert normalize_glob_pattern("./logs/[abc]*.log") == "logs/[abc]*.log"
+
+    def test_preserve_glob_characters(self):
+        """测试保留 glob 特殊字符"""
+        assert normalize_glob_pattern("test-*.xml") == "test-*.xml"
+        assert normalize_glob_pattern("file?.txt") == "file?.txt"
+        assert normalize_glob_pattern("[abc].txt") == "[abc].txt"
+        assert normalize_glob_pattern("**/*.json") == "**/*.json"
+
+
+# ============================================================================
+# Path Normalization Integration with check_artifact_path_coverage Tests
+# ============================================================================
+
+
+class TestNormalizationIntegrationWithCoverage:
+    """测试路径标准化与 check_artifact_path_coverage 的集成"""
+
+    def test_normalized_paths_match(self):
+        """测试标准化后的路径能正确匹配"""
+        # uploaded 使用 Windows 分隔符，required 使用 Unix 分隔符
+        upload_steps = [{"step_name": "Upload", "paths": ["artifacts\\results.json"]}]
+        required_paths = ["artifacts/results.json"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "artifacts/results.json" in covered
+        assert missing == []
+
+    def test_dot_slash_paths_match(self):
+        """测试 ./ 前缀路径能正确匹配"""
+        upload_steps = [{"step_name": "Upload", "paths": ["./artifacts/"]}]
+        required_paths = ["artifacts/"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "artifacts/" in covered
+        assert missing == []
+
+    def test_duplicate_slashes_match(self):
+        """测试重复斜杠路径能正确匹配"""
+        upload_steps = [{"step_name": "Upload", "paths": ["artifacts//results//"]}]
+        required_paths = ["artifacts/results/"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "artifacts/results/" in covered
+        assert missing == []
+
+    def test_empty_uploaded_path_skipped(self):
+        """测试空的上传路径被跳过"""
+        upload_steps = [{"step_name": "Upload", "paths": ["", "valid.xml", "  "]}]
+        required_paths = ["valid.xml"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "valid.xml" in covered
+        assert missing == []
+
+    def test_multiple_equivalent_uploads_deduplicated(self):
+        """测试多个等价的上传路径被正确处理"""
+        upload_steps = [
+            {"step_name": "Upload 1", "paths": ["./artifacts/results.json"]},
+            {"step_name": "Upload 2", "paths": ["artifacts\\results.json"]},
+        ]
+        required_paths = ["artifacts/results.json"]
+
+        covered, missing = check_artifact_path_coverage(upload_steps, required_paths)
+
+        assert "artifacts/results.json" in covered
+        assert missing == []

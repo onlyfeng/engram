@@ -127,6 +127,28 @@ class InstallHintConsistencyResult:
 
 
 @dataclass
+class DirectImportSurfaceResult:
+    """直接导入模块表面检查结果
+
+    检查 public_api.py 中直接导入的模块集合是否符合要求：
+    1. 所有直接导入的模块都应在 Tier A allowlist 中
+    2. 不应包含任何 Tier B 模块或其子模块
+    """
+
+    direct_import_modules: List[str] = field(default_factory=list)  # 所有直接导入的模块
+    tier_b_in_direct_imports: List[str] = field(
+        default_factory=list
+    )  # 直接导入中发现的 Tier B 模块
+    non_allowlist_in_direct_imports: List[str] = field(
+        default_factory=list
+    )  # 直接导入中发现的非 allowlist 模块
+
+    def is_valid(self) -> bool:
+        """检查直接导入表面是否有效（无 Tier B 模块，全在 allowlist 中）"""
+        return len(self.tier_b_in_direct_imports) == 0 and len(self.non_allowlist_in_direct_imports) == 0
+
+
+@dataclass
 class CheckResult:
     """检查结果"""
 
@@ -139,6 +161,9 @@ class CheckResult:
     install_hint_consistency: InstallHintConsistencyResult = field(
         default_factory=InstallHintConsistencyResult
     )
+    direct_import_surface: DirectImportSurfaceResult = field(
+        default_factory=DirectImportSurfaceResult
+    )
 
     def has_violations(self) -> bool:
         return len(self.violations) > 0
@@ -148,6 +173,10 @@ class CheckResult:
             not self.all_consistency.is_consistent()
             or not self.install_hint_consistency.is_consistent()
         )
+
+    def has_direct_import_surface_errors(self) -> bool:
+        """检查直接导入表面是否有错误"""
+        return not self.direct_import_surface.is_valid()
 
     def get_allowlist_violations(self) -> List[ImportViolation]:
         """获取非 allowlist 模块的导入违规"""
@@ -159,7 +188,9 @@ class CheckResult:
 
     def to_dict(self) -> dict:
         return {
-            "ok": not self.has_violations() and not self.has_consistency_errors(),
+            "ok": not self.has_violations()
+            and not self.has_consistency_errors()
+            and not self.has_direct_import_surface_errors(),
             "violation_count": len(self.violations),
             "allowlist_violation_count": len(self.get_allowlist_violations()),
             "tier_b_violation_count": len(self.get_tier_b_violations()),
@@ -178,6 +209,12 @@ class CheckResult:
                 "tier_b_module_paths": self.install_hint_consistency.tier_b_module_paths,
                 "install_hint_keys": self.install_hint_consistency.install_hint_keys,
                 "missing_install_hints": self.install_hint_consistency.missing_install_hints,
+            },
+            "direct_import_surface": {
+                "is_valid": self.direct_import_surface.is_valid(),
+                "direct_import_modules": self.direct_import_surface.direct_import_modules,
+                "tier_b_in_direct_imports": self.direct_import_surface.tier_b_in_direct_imports,
+                "non_allowlist_in_direct_imports": self.direct_import_surface.non_allowlist_in_direct_imports,
             },
             "violations": [
                 {
@@ -241,6 +278,8 @@ class PublicApiImportChecker(ast.NodeVisitor):
         self.tier_b_keys: List[str] = []  # _TIER_B_LAZY_IMPORTS 的 key 列表
         self.tier_b_module_paths: List[str] = []  # _TIER_B_LAZY_IMPORTS 的 module_path 列表（去重）
         self.install_hint_keys: List[str] = []  # _TIER_B_INSTALL_HINTS 的 key 列表
+        # 直接导入表面追踪（用于 Tier C 来源验证）
+        self.direct_import_modules: Set[str] = set()  # 所有直接导入的模块（非 TYPE_CHECKING/非 __getattr__）
 
     def visit_If(self, node: ast.If) -> None:
         """检测 if TYPE_CHECKING: 块"""
@@ -404,9 +443,14 @@ class PublicApiImportChecker(ast.NodeVisitor):
         违规条件：
         1. 模块不在 allowlist 中（非 Tier A 模块）
         2. 或者模块是 Tier B 模块（必须懒加载）
+
+        同时记录所有直接导入的模块（用于 Tier C 来源验证）
         """
         # 获取第一级模块名用于 allowlist 检查
         first_part = module_name.split(".")[0]
+
+        # 记录直接导入的模块（无论是否违规，都记录用于表面分析）
+        self.direct_import_modules.add(module_name)
 
         # 检查是否在 allowlist 中
         if not _is_in_allowlist(module_name) and first_part not in ALLOWED_RELATIVE_IMPORTS:
@@ -512,6 +556,22 @@ def check_public_api_import_surface(file_path: Path) -> CheckResult:
         tier_b_module_paths=checker.tier_b_module_paths,
         install_hint_keys=checker.install_hint_keys,
         missing_install_hints=missing_install_hints,
+    )
+
+    # 构建直接导入表面检查结果
+    direct_import_modules = sorted(checker.direct_import_modules)
+    tier_b_in_direct_imports = [
+        m for m in direct_import_modules if _is_tier_b_module(m) or _is_tier_b_module(m.split(".")[0])
+    ]
+    non_allowlist_in_direct_imports = [
+        m
+        for m in direct_import_modules
+        if not _is_in_allowlist(m) and m.split(".")[0] not in ALLOWED_RELATIVE_IMPORTS
+    ]
+    result.direct_import_surface = DirectImportSurfaceResult(
+        direct_import_modules=direct_import_modules,
+        tier_b_in_direct_imports=tier_b_in_direct_imports,
+        non_allowlist_in_direct_imports=non_allowlist_in_direct_imports,
     )
 
     return result
@@ -632,6 +692,27 @@ def main() -> int:
                 print(f"    - {mp}")
         print()
 
+        # 显示直接导入表面检查结果
+        print("直接导入表面检查（Tier C 来源验证）:")
+        print(
+            f"  直接导入的模块数: {len(result.direct_import_surface.direct_import_modules)}"
+        )
+        if args.verbose:
+            for m in result.direct_import_surface.direct_import_modules:
+                print(f"    - {m}")
+        if result.direct_import_surface.is_valid():
+            print("  [OK] 所有直接导入的模块都在 Tier A allowlist 中，无 Tier B 模块")
+        else:
+            if result.direct_import_surface.tier_b_in_direct_imports:
+                print("  [ERROR] 直接导入中发现 Tier B 模块（应使用懒加载）:")
+                for m in result.direct_import_surface.tier_b_in_direct_imports:
+                    print(f"    - {m}")
+            if result.direct_import_surface.non_allowlist_in_direct_imports:
+                print("  [ERROR] 直接导入中发现非 allowlist 模块:")
+                for m in result.direct_import_surface.non_allowlist_in_direct_imports:
+                    print(f"    - {m}")
+        print()
+
         if not result.has_violations():
             print("[OK] 未发现导入违规")
         else:
@@ -668,9 +749,16 @@ def main() -> int:
         print(
             f"install_hint 一致性错误: {len(result.install_hint_consistency.missing_install_hints)}"
         )
+        print(
+            f"直接导入表面错误: {len(result.direct_import_surface.tier_b_in_direct_imports) + len(result.direct_import_surface.non_allowlist_in_direct_imports)}"
+        )
         print()
 
-        has_errors = result.has_violations() or result.has_consistency_errors()
+        has_errors = (
+            result.has_violations()
+            or result.has_consistency_errors()
+            or result.has_direct_import_surface_errors()
+        )
         if has_errors:
             print("[FAIL] Gateway Public API import surface 检查失败")
             print()
@@ -686,11 +774,22 @@ def main() -> int:
             if not result.install_hint_consistency.is_consistent():
                 print("  - 确保 _TIER_B_INSTALL_HINTS 包含所有 module_path 的安装指引")
                 print("  - 缺失的 module_path 需要在 _TIER_B_INSTALL_HINTS 中添加对应条目")
+            if result.has_direct_import_surface_errors():
+                print("  - Tier C 符号的来源模块必须在 Tier A allowlist 中")
+                print("  - 禁止在直接导入中包含 Tier B 模块或其子模块")
             print("  - 参见: docs/architecture/gateway_public_api_surface.md")
         else:
             print("[OK] Gateway Public API import surface 检查通过")
 
-    return 1 if (result.has_violations() or result.has_consistency_errors()) else 0
+    return (
+        1
+        if (
+            result.has_violations()
+            or result.has_consistency_errors()
+            or result.has_direct_import_surface_errors()
+        )
+        else 0
+    )
 
 
 if __name__ == "__main__":

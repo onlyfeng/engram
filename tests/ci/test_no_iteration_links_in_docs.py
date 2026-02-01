@@ -17,16 +17,12 @@ Fixtures 使用小型 Markdown 文档，避免依赖真实文件。
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 导入被测模块
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from check_no_iteration_links_in_docs import (
+from scripts.ci.check_no_iteration_links_in_docs import (
     ITERATION_LINK_PATTERN,
     FixSuggestion,
     IterationIndexEntry,
@@ -724,8 +720,8 @@ class TestPrintReportSuggestions:
         self, temp_project: Path, md_with_iteration_link: Path, capsys, monkeypatch
     ):
         """测试报告包含 promote_iteration.py 的命令建议"""
-        import check_no_iteration_links_in_docs as module
-        from check_no_iteration_links_in_docs import print_report
+        from scripts.ci import check_no_iteration_links_in_docs as module
+        from scripts.ci.check_no_iteration_links_in_docs import print_report
 
         # Mock get_project_root 返回临时项目目录
         monkeypatch.setattr(module, "get_project_root", lambda: temp_project)
@@ -759,8 +755,8 @@ class TestPrintReportSuggestions:
         self, temp_project: Path, md_with_iteration_link: Path, capsys, monkeypatch
     ):
         """测试报告包含 export_local_iteration.py 的命令建议"""
-        import check_no_iteration_links_in_docs as module
-        from check_no_iteration_links_in_docs import print_report
+        from scripts.ci import check_no_iteration_links_in_docs as module
+        from scripts.ci.check_no_iteration_links_in_docs import print_report
 
         # Mock get_project_root 返回临时项目目录
         monkeypatch.setattr(module, "get_project_root", lambda: temp_project)
@@ -795,8 +791,8 @@ class TestPrintReportSuggestions:
         self, temp_project: Path, md_with_iteration_link: Path, capsys, monkeypatch
     ):
         """测试报告包含 inline code 修复建议"""
-        import check_no_iteration_links_in_docs as module
-        from check_no_iteration_links_in_docs import print_report
+        from scripts.ci import check_no_iteration_links_in_docs as module
+        from scripts.ci.check_no_iteration_links_in_docs import print_report
 
         # Mock get_project_root 返回临时项目目录
         monkeypatch.setattr(module, "get_project_root", lambda: temp_project)
@@ -824,8 +820,8 @@ class TestPrintReportSuggestions:
         self, temp_project: Path, md_without_iteration_link: Path, capsys, monkeypatch
     ):
         """测试无违规时不显示修复建议"""
-        import check_no_iteration_links_in_docs as module
-        from check_no_iteration_links_in_docs import print_report
+        from scripts.ci import check_no_iteration_links_in_docs as module
+        from scripts.ci.check_no_iteration_links_in_docs import print_report
 
         # Mock get_project_root 返回临时项目目录
         monkeypatch.setattr(module, "get_project_root", lambda: temp_project)

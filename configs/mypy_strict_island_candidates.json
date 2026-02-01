@@ -1,10 +1,17 @@
 {
   "$schema": "../schemas/mypy_strict_island_candidates_v1.schema.json",
   "version": "1",
-  "description": "Mypy Strict Island 准入候选清单",
-  "candidates": [],
+  "description": "Mypy Strict Island 准入候选清单（SSOT）。候选模块需先清零 baseline 错误后方可纳入 Strict Island。",
+  "candidates": [
+    "src/engram/logbook/scm_db.py",
+    "src/engram/logbook/scm_sync_runner.py",
+    "src/engram/logbook/artifact_delete.py",
+    "src/engram/logbook/views.py",
+    "src/engram/logbook/artifact_gc.py"
+  ],
   "metadata": {
-    "last_updated": "2026-02-01",
-    "updated_by": "@platform-team"
+    "last_updated": "2026-02-02",
+    "updated_by": "@platform-team",
+    "notes": "候选模块基于当前 baseline 错误分布选定。纳入前需修复所有 mypy 错误。"
   }
 }

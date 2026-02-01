@@ -9,16 +9,12 @@ tests/test_noqa_policy.py
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import List
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-
-from check_noqa_policy import (
+from scripts.ci.check_noqa_policy import (
     NOQA_PATTERN,
     REASON_PATTERN,
     NoqaEntry,

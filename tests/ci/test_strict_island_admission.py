@@ -12,16 +12,12 @@ tests/ci/test_strict_island_admission.py
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from check_strict_island_admission import (
+from scripts.ci.check_strict_island_admission import (
     AdmissionResult,
     CheckResult,
     check_candidate,

@@ -9,16 +9,12 @@ tests/test_type_ignore_policy.py
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import List
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-
-from check_type_ignore_policy import (
+from scripts.ci.check_type_ignore_policy import (
     REASON_PATTERN,
     TYPE_IGNORE_PATTERN,
     TypeIgnoreEntry,

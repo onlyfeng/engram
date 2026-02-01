@@ -56,8 +56,9 @@ dev = [
     "requests-mock>=1.11.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
-    # 类型桩
+    # 类型桩（与 requirements-dev.txt 保持同步）
     "types-requests>=2.28.0",
+    "types-PyYAML>=6.0.0",
     "boto3-stubs[s3]>=1.28.0",
 ]
 
@@ -100,6 +101,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 addopts = "--durations=20"
+# pythonpath 配置：确保 pytest 能正确解析 scripts.ci.* 命名空间导入
+# 参见 docs/dev/ci_test_isolation.md
+pythonpath = ["."]
 markers = [
     "unit: 单元测试",
     "integration: 集成测试",
@@ -124,3 +128,144 @@ ignore = ["E501"]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_ignores = true
+
+# ============================================================
+# Engram mypy 扩展配置
+# ============================================================
+# strict_island_paths: 严格类型检查的核心模块列表（CI 阻断）
+# 这些路径必须在 [[tool.mypy.overrides]] 中有对应配置
+# 约束: strict_island_paths ⊆ mypy_strict_overrides
+# ============================================================
+[tool.engram.mypy]
+strict_island_paths = [
+    # Gateway 核心模块（DI 相关）- P0
+    "src/engram/gateway/di.py",
+    "src/engram/gateway/container.py",
+    "src/engram/gateway/services/",
+    # Logbook 核心配置模块 - P0
+    "src/engram/logbook/config.py",
+    "src/engram/logbook/uri.py",
+    # Gateway handlers/policy/audit - P1
+    "src/engram/gateway/handlers/",
+    "src/engram/gateway/policy.py",
+    "src/engram/gateway/audit_event.py",
+    # Logbook cursor/governance/outbox - P2
+    "src/engram/logbook/cursor.py",
+    "src/engram/logbook/governance.py",
+    "src/engram/logbook/outbox.py",
+    # Logbook db/views/artifact_gc - P3
+    "src/engram/logbook/db.py",
+    "src/engram/logbook/views.py",
+    "src/engram/logbook/artifact_gc.py",
+]
+
+# ============================================================
+# mypy 模块级 overrides
+# ============================================================
+# 每个 strict_island_paths 中的模块必须在此配置:
+# - disallow_untyped_defs = true
+# - ignore_missing_imports = false
+# ============================================================
+
+# --- Gateway P0: DI 核心 ---
+[[tool.mypy.overrides]]
+module = "engram.gateway.di"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.gateway.container"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.gateway.services.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+# --- Logbook P0: 核心配置 ---
+[[tool.mypy.overrides]]
+module = "engram.logbook.config"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.logbook.uri"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+# --- Gateway P1: handlers/policy/audit ---
+[[tool.mypy.overrides]]
+module = "engram.gateway.handlers.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.gateway.policy"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.gateway.audit_event"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+# --- Logbook P2: cursor/governance/outbox ---
+[[tool.mypy.overrides]]
+module = "engram.logbook.cursor"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.logbook.governance"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.logbook.outbox"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+# --- Logbook P3: db/views/artifact_gc ---
+[[tool.mypy.overrides]]
+module = "engram.logbook.db"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.logbook.views"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "engram.logbook.artifact_gc"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = false
+warn_return_any = true

@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate mypy-baseline-update migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-docs-superseded-only iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -154,19 +154,35 @@ typecheck:  ## 类型检查（mypy）
 
 typecheck-gate:  ## mypy 类型检查（baseline 模式，CI 门禁使用）
 	@echo "运行 mypy 类型检查（baseline 模式）..."
-	$(PYTHON) scripts/ci/check_mypy_gate.py
+	$(PYTHON) -m scripts.ci.check_mypy_gate --gate baseline --verbose
 	@echo "mypy 类型检查通过"
+
+typecheck-strict-island:  ## mypy 类型检查（strict-island 模式，仅检查 strict island 模块）
+	@echo "运行 mypy 类型检查（strict-island 模式）..."
+	$(PYTHON) -m scripts.ci.check_mypy_gate --gate strict-island --verbose
+	@echo "mypy strict-island 类型检查通过"
 
 mypy-baseline-update:  ## 更新 mypy baseline 文件
 	@echo "更新 mypy baseline..."
-	$(PYTHON) scripts/ci/check_mypy_gate.py --write-baseline
+	$(PYTHON) -m scripts.ci.check_mypy_gate --write-baseline
 	@echo "mypy baseline 已更新"
+
+mypy-metrics:  ## 生成 mypy 指标报告（聚合 baseline 错误统计）
+	@echo "生成 mypy 指标报告..."
+	@mkdir -p artifacts
+	$(PYTHON) -m scripts.ci.mypy_metrics --output artifacts/mypy_metrics.json --verbose
+	@echo "mypy 指标报告已生成: artifacts/mypy_metrics.json"
+
+check-mypy-metrics-thresholds:  ## 检查 mypy 指标阈值（仅告警，不阻断 CI）
+	@echo "检查 mypy 指标阈值..."
+	$(PYTHON) -m scripts.ci.check_mypy_metrics_thresholds --verbose
+	@echo "mypy 指标阈值检查完成"
 
 ## ==================== CI 检查目标（与 GitHub Actions 对齐） ====================
 
 check-env-consistency:  ## 检查环境变量一致性（.env.example, docs, code）
 	@echo "检查环境变量一致性..."
-	$(PYTHON) scripts/ci/check_env_var_consistency.py --verbose
+	$(PYTHON) -m scripts.ci.check_env_var_consistency --verbose
 	@echo "环境变量一致性检查通过"
 
 check-logbook-consistency:  ## 检查 Logbook 配置一致性
@@ -204,89 +220,137 @@ check-scm-sync-consistency:  ## 检查 SCM Sync 一致性（文档/代码/配置
 
 check-gateway-error-reason-usage:  ## 检查 Gateway ErrorReason 使用规范（禁止硬编码 reason 字符串）
 	@echo "检查 Gateway ErrorReason 使用规范..."
-	$(PYTHON) scripts/ci/check_gateway_error_reason_usage.py --verbose
+	$(PYTHON) -m scripts.ci.check_gateway_error_reason_usage --verbose
 	@echo "Gateway ErrorReason 使用规范检查通过"
 
 check-gateway-public-api-surface:  ## 检查 Gateway Public API 导入表面（确保 Tier B 模块懒加载）
 	@echo "检查 Gateway Public API 导入表面..."
-	$(PYTHON) scripts/ci/check_gateway_public_api_import_surface.py --verbose
+	$(PYTHON) -m scripts.ci.check_gateway_public_api_import_surface --verbose
 	@echo "Gateway Public API 导入表面检查通过"
 
 check-gateway-public-api-docs-sync:  ## 检查 Gateway Public API 代码与文档同步
 	@echo "检查 Gateway Public API 文档同步..."
-	$(PYTHON) scripts/ci/check_gateway_public_api_docs_sync.py --verbose
+	$(PYTHON) -m scripts.ci.check_gateway_public_api_docs_sync --verbose
 	@echo "Gateway Public API 文档同步检查通过"
 
 check-gateway-di-boundaries:  ## 检查 Gateway DI 边界（禁止 deps.db 直接使用）
 	@echo "检查 Gateway DI 边界..."
-	$(PYTHON) scripts/ci/check_gateway_di_boundaries.py --verbose
+	$(PYTHON) -m scripts.ci.check_gateway_di_boundaries --verbose
 	@echo "Gateway DI 边界检查通过"
 
 check-gateway-import-surface:  ## 检查 Gateway __init__.py 懒加载策略（禁止 eager-import）
 	@echo "检查 Gateway Import Surface..."
-	$(PYTHON) scripts/ci/check_gateway_import_surface.py --verbose
+	$(PYTHON) -m scripts.ci.check_gateway_import_surface --verbose
 	@echo "Gateway Import Surface 检查通过"
 
 check-gateway-correlation-id-single-source:  ## 检查 Gateway correlation_id 单一来源（禁止重复定义）
 	@echo "检查 Gateway correlation_id 单一来源..."
-	$(PYTHON) scripts/ci/check_gateway_correlation_id_single_source.py --verbose
+	$(PYTHON) -m scripts.ci.check_gateway_correlation_id_single_source --verbose
 	@echo "Gateway correlation_id 单一来源检查通过"
 
-check-iteration-docs:  ## 检查迭代文档规范（.iteration/ 链接禁止 + .artifacts/ 链接禁止 + SUPERSEDED 一致性 + 模板占位符）
+check-iteration-docs:  ## 检查迭代文档规范（.iteration/ 链接禁止 + .artifacts/ 链接禁止 + SUPERSEDED 一致性 + 模板占位符 + 证据合约）
 	@echo "检查迭代文档规范..."
-	$(PYTHON) scripts/ci/check_no_iteration_links_in_docs.py --verbose
-	$(PYTHON) scripts/ci/check_no_local_artifact_links_in_docs.py --verbose
-	$(PYTHON) scripts/ci/check_iteration_docs_placeholders.py --verbose
+	$(PYTHON) -m scripts.ci.check_no_iteration_links_in_docs --verbose
+	$(PYTHON) -m scripts.ci.check_no_local_artifact_links_in_docs --verbose
+	$(PYTHON) -m scripts.ci.check_iteration_docs_placeholders --verbose --warn-only
+	$(PYTHON) -m scripts.ci.check_iteration_evidence_contract --verbose
 	@echo "迭代文档规范检查通过"
+
+check-iteration-docs-headings:  ## 检查 regression 文件标准标题（阻断模式）
+	@echo "检查 regression 文件标准标题..."
+	$(PYTHON) -m scripts.ci.check_iteration_docs_placeholders --verbose
+	@echo "regression 文件标准标题检查通过"
+
+check-iteration-docs-headings-warn:  ## 检查 regression 文件标准标题（仅警告，不阻断）
+	@echo "检查 regression 文件标准标题（仅警告）..."
+	$(PYTHON) -m scripts.ci.check_iteration_docs_placeholders --verbose --warn-only
+	@echo "regression 文件标准标题检查完成（仅警告模式）"
 
 check-iteration-docs-superseded-only:  ## 仅检查 SUPERSEDED 一致性（跳过 .iteration/ 链接检查）
 	@echo "检查 SUPERSEDED 一致性..."
-	$(PYTHON) scripts/ci/check_no_iteration_links_in_docs.py --superseded-only --verbose
+	$(PYTHON) -m scripts.ci.check_no_iteration_links_in_docs --superseded-only --verbose
 	@echo "SUPERSEDED 一致性检查通过"
+
+check-iteration-evidence:  ## 检查迭代证据文件合约（命名规范 + JSON Schema）
+	@echo "检查迭代证据文件合约..."
+	$(PYTHON) -m scripts.ci.check_iteration_evidence_contract --verbose
+	@echo "迭代证据文件合约检查通过"
 
 validate-workflows:  ## Workflow 合约校验（默认模式）
 	@echo "校验 Workflow 合约..."
-	$(PYTHON) scripts/ci/validate_workflows.py
+	$(PYTHON) -m scripts.ci.validate_workflows
 	@echo "Workflow 合约校验通过"
 
 validate-workflows-strict:  ## Workflow 合约校验（严格模式，CI 使用）
 	@echo "校验 Workflow 合约（严格模式）..."
-	$(PYTHON) scripts/ci/validate_workflows.py --strict
+	$(PYTHON) -m scripts.ci.validate_workflows --strict
 	@echo "Workflow 合约校验通过（严格模式）"
 
 validate-workflows-json:  ## Workflow 合约校验（JSON 输出）
-	$(PYTHON) scripts/ci/validate_workflows.py --json
+	$(PYTHON) -m scripts.ci.validate_workflows --json
 
 check-workflow-contract-docs-sync:  ## Workflow 合约与文档同步检查
 	@echo "检查 Workflow 合约与文档同步..."
-	$(PYTHON) scripts/ci/check_workflow_contract_docs_sync.py
+	$(PYTHON) -m scripts.ci.check_workflow_contract_docs_sync
 	@echo "Workflow 合约与文档同步检查通过"
 
 check-workflow-contract-docs-sync-json:  ## Workflow 合约与文档同步检查（JSON 输出）
-	$(PYTHON) scripts/ci/check_workflow_contract_docs_sync.py --json
+	$(PYTHON) -m scripts.ci.check_workflow_contract_docs_sync --json
 
 check-workflow-contract-version-policy:  ## Workflow 合约版本策略检查（关键文件变更时强制版本更新）
 	@echo "检查 Workflow 合约版本策略..."
-	$(PYTHON) scripts/ci/check_workflow_contract_version_policy.py --pr-mode
+	$(PYTHON) -m scripts.ci.check_workflow_contract_version_policy --pr-mode
 	@echo "Workflow 合约版本策略检查通过"
 
 check-workflow-contract-version-policy-json:  ## Workflow 合约版本策略检查（JSON 输出）
-	$(PYTHON) scripts/ci/check_workflow_contract_version_policy.py --pr-mode --json
+	$(PYTHON) -m scripts.ci.check_workflow_contract_version_policy --pr-mode --json
+
+check-workflow-contract-doc-anchors:  ## Workflow 合约文档锚点检查（验证错误消息中的锚点引用）
+	@echo "检查 Workflow 合约文档锚点..."
+	$(PYTHON) -m scripts.ci.check_workflow_contract_doc_anchors --verbose
+	@echo "Workflow 合约文档锚点检查通过"
+
+check-workflow-contract-doc-anchors-json:  ## Workflow 合约文档锚点检查（JSON 输出）
+	$(PYTHON) -m scripts.ci.check_workflow_contract_doc_anchors --json
+
+check-workflow-contract-internal-consistency:  ## Workflow 合约内部一致性检查（job_ids/job_names 长度、无重复等）
+	@echo "检查 Workflow 合约内部一致性..."
+	$(PYTHON) -m scripts.ci.check_workflow_contract_internal_consistency --verbose
+	@echo "Workflow 合约内部一致性检查通过"
+
+check-workflow-contract-internal-consistency-json:  ## Workflow 合约内部一致性检查（JSON 输出）
+	$(PYTHON) -m scripts.ci.check_workflow_contract_internal_consistency --json
+
+check-workflow-contract-coupling-map-sync:  ## Workflow 合约与 Coupling Map 同步检查
+	@echo "检查 Workflow 合约与 Coupling Map 同步..."
+	$(PYTHON) -m scripts.ci.check_workflow_contract_coupling_map_sync --verbose
+	@echo "Workflow 合约与 Coupling Map 同步检查通过"
+
+check-workflow-contract-coupling-map-sync-json:  ## Workflow 合约与 Coupling Map 同步检查（JSON 输出）
+	$(PYTHON) -m scripts.ci.check_workflow_contract_coupling_map_sync --json
+
+check-workflow-make-targets-consistency:  ## Workflow make targets 与 Makefile/Contract 一致性检查
+	@echo "检查 Workflow make targets 一致性..."
+	$(PYTHON) -m scripts.ci.check_workflow_make_targets_consistency --verbose
+	@echo "Workflow make targets 一致性检查通过"
+
+check-workflow-make-targets-consistency-json:  ## Workflow make targets 一致性检查（JSON 输出）
+	$(PYTHON) -m scripts.ci.check_workflow_make_targets_consistency --json
 
 workflow-contract-drift-report:  ## Workflow 合约 drift 报告（JSON 输出）
-	$(PYTHON) scripts/ci/workflow_contract_drift_report.py
+	$(PYTHON) -m scripts.ci.workflow_contract_drift_report
 
 workflow-contract-drift-report-json:  ## Workflow 合约 drift 报告（JSON 输出到文件）
 	@mkdir -p artifacts
-	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --output artifacts/workflow_contract_drift.json
+	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --output artifacts/workflow_contract_drift.json
 
 workflow-contract-drift-report-markdown:  ## Workflow 合约 drift 报告（Markdown 输出）
-	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --markdown
+	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --markdown
 
 workflow-contract-drift-report-all:  ## Workflow 合约 drift 报告（JSON + Markdown 输出到 artifacts/）
 	@mkdir -p artifacts
-	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --output artifacts/workflow_contract_drift.json || true
-	$(PYTHON) scripts/ci/workflow_contract_drift_report.py --markdown --output artifacts/workflow_contract_drift.md || true
+	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --output artifacts/workflow_contract_drift.json || true
+	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --markdown --output artifacts/workflow_contract_drift.md || true
 	@echo "Drift reports 已生成到 artifacts/ 目录"
 
 check-cli-entrypoints:  ## CLI 入口点一致性检查（pyproject.toml 与文档同步）
@@ -296,29 +360,37 @@ check-cli-entrypoints:  ## CLI 入口点一致性检查（pyproject.toml 与文�
 
 check-noqa-policy:  ## noqa 注释策略检查
 	@echo "检查 noqa 注释策略..."
-	$(PYTHON) scripts/ci/check_noqa_policy.py --verbose
+	$(PYTHON) -m scripts.ci.check_noqa_policy --verbose
 	@echo "noqa 注释策略检查通过"
 
 check-no-root-wrappers:  ## 根目录 wrapper 禁止导入检查
 	@echo "检查根目录 wrapper 导入..."
-	$(PYTHON) scripts/ci/check_no_root_wrappers_usage.py --verbose
-	$(PYTHON) scripts/ci/check_no_root_wrappers_allowlist.py --verbose
+	$(PYTHON) -m scripts.ci.check_no_root_wrappers_usage --verbose
+	$(PYTHON) -m scripts.ci.check_no_root_wrappers_allowlist --verbose
 	@echo "根目录 wrapper 导入检查通过"
 
 check-mcp-error-contract:  ## MCP JSON-RPC 错误码合约检查
 	@echo "检查 MCP JSON-RPC 错误码合约..."
-	$(PYTHON) scripts/ci/check_mcp_jsonrpc_error_contract.py --verbose
+	$(PYTHON) -m scripts.ci.check_mcp_jsonrpc_error_contract --verbose
 	@echo "MCP JSON-RPC 错误码合约检查通过"
 
 check-mcp-error-docs-sync:  ## MCP JSON-RPC 错误码文档与 Schema 同步检查
 	@echo "检查 MCP JSON-RPC 错误码文档同步..."
-	$(PYTHON) scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --verbose
+	$(PYTHON) -m scripts.ci.check_mcp_jsonrpc_error_docs_sync --verbose
 	@echo "MCP JSON-RPC 错误码文档同步检查通过"
 
 check-mcp-error-docs-sync-json:  ## MCP JSON-RPC 错误码文档同步检查（JSON 输出）
-	$(PYTHON) scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --json
+	$(PYTHON) -m scripts.ci.check_mcp_jsonrpc_error_docs_sync --json
 
-ci: lint format-check typecheck check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs validate-workflows-strict check-workflow-contract-docs-sync check-workflow-contract-version-policy check-mcp-error-contract check-mcp-error-docs-sync  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
+check-ci-test-isolation:  ## CI 测试隔离检查（禁止模块级 sys.path 污染和顶层 CI 模块导入）
+	@echo "检查 CI 测试隔离..."
+	$(PYTHON) -m scripts.ci.check_ci_test_isolation --verbose
+	@echo "CI 测试隔离检查通过"
+
+check-ci-test-isolation-json:  ## CI 测试隔离检查（JSON 输出）
+	$(PYTHON) -m scripts.ci.check_ci_test_isolation --json
+
+ci: lint format-check typecheck-gate typecheck-strict-island mypy-metrics check-mypy-metrics-thresholds check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs validate-workflows-strict check-workflow-contract-docs-sync check-workflow-contract-version-policy check-workflow-contract-internal-consistency check-workflow-make-targets-consistency check-mcp-error-contract check-mcp-error-docs-sync check-ci-test-isolation  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
 	@echo ""
 	@echo "=========================================="
 	@echo "[OK] 所有 CI 检查通过"

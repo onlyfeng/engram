@@ -14,17 +14,12 @@ codemod_root_wrappers.py 脚本的单元测试
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Set
 
 import pytest
 
-# 添加 scripts/ci 到路径
-scripts_ci_path = Path(__file__).resolve().parent.parent / "scripts" / "ci"
-sys.path.insert(0, str(scripts_ci_path))
-
-from codemod_root_wrappers import (
+from scripts.ci.codemod_root_wrappers import (
     ImportMatch,
     MigrationEntry,
     extract_imports,

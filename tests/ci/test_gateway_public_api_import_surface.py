@@ -24,16 +24,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from scripts.ci.check_gateway_public_api_import_surface import (  # noqa: E402
+from scripts.ci.check_gateway_public_api_import_surface import (
     ALLOWED_RELATIVE_IMPORTS,
     PUBLIC_API_PATH,
     TIER_B_MODULES,
     TIER_B_SUBMODULE_PATHS,
     check_public_api_import_surface,
 )
+from tests.ci.helpers.subprocess_env import get_subprocess_env
 
 # ============================================================================
 # 辅助函数
@@ -132,6 +130,7 @@ class TestScriptSubprocess:
             [sys.executable, str(script_path), "--project-root", str(project_root)],
             capture_output=True,
             text=True,
+            env=get_subprocess_env(project_root),
             cwd=str(project_root),
         )
 
@@ -156,6 +155,7 @@ class TestScriptSubprocess:
             ],
             capture_output=True,
             text=True,
+            env=get_subprocess_env(project_root),
             cwd=str(project_root),
         )
 
@@ -1235,6 +1235,7 @@ def __getattr__(name: str):
             ],
             capture_output=True,
             text=True,
+            env=get_subprocess_env(project_root),
             cwd=str(project_root),
         )
 
@@ -1246,3 +1247,315 @@ def __getattr__(name: str):
         assert "all_symbols" in output["all_consistency"]
         assert "tier_b_keys" in output["all_consistency"]
         assert "missing_in_all" in output["all_consistency"]
+
+
+# ============================================================================
+# 直接导入表面检查测试（Tier C 来源验证）
+# ============================================================================
+
+
+class TestDirectImportSurface:
+    """
+    测试直接导入表面检查功能
+
+    确保 public_api.py 的直接导入模块集合：
+    1. 全部来自 Tier A allowlist
+    2. 不包含任何 Tier B 模块或其子模块
+    """
+
+    def test_real_public_api_direct_import_surface_valid(self) -> None:
+        """实际的 public_api.py 的直接导入表面应有效（Tier C 来源均在 allowlist）"""
+        project_root = get_project_root()
+        file_path = project_root / PUBLIC_API_PATH
+
+        result = check_public_api_import_surface(file_path)
+
+        assert result.direct_import_surface.is_valid(), (
+            f"public_api.py 的直接导入表面应有效，"
+            f"但发现 Tier B 模块: {result.direct_import_surface.tier_b_in_direct_imports}, "
+            f"非 allowlist 模块: {result.direct_import_surface.non_allowlist_in_direct_imports}"
+        )
+        # 确保直接导入了 Tier A 模块
+        assert len(result.direct_import_surface.direct_import_modules) > 0, (
+            "public_api.py 应有直接导入的模块"
+        )
+
+    def test_tier_b_in_direct_import_detected(self) -> None:
+        """负例：直接导入 Tier B 模块应被检测并标记在 direct_import_surface 中"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+# 违规：直接导入 Tier B 模块
+from .logbook_adapter import LogbookAdapter
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            # 应有违规
+            assert result.has_violations()
+            assert result.violations[0].violation_type == "tier_b_eager_import"
+
+            # direct_import_surface 应标记 Tier B 模块
+            assert not result.direct_import_surface.is_valid()
+            assert "logbook_adapter" in result.direct_import_surface.tier_b_in_direct_imports
+            assert "logbook_adapter" in result.direct_import_surface.direct_import_modules
+
+            # has_direct_import_surface_errors 应返回 True
+            assert result.has_direct_import_surface_errors()
+        finally:
+            file_path.unlink()
+
+    def test_tier_b_submodule_in_direct_import_detected(self) -> None:
+        """负例：直接导入 Tier B 子模块应被检测"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+# 违规：直接导入 Tier B 子模块
+from .entrypoints.tool_executor import execute_tool
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            # 应有违规
+            assert result.has_violations()
+            assert result.violations[0].violation_type == "tier_b_eager_import"
+
+            # direct_import_surface 应标记 Tier B 子模块
+            assert not result.direct_import_surface.is_valid()
+            assert (
+                "entrypoints.tool_executor" in result.direct_import_surface.tier_b_in_direct_imports
+            )
+        finally:
+            file_path.unlink()
+
+    def test_multiple_tier_b_in_direct_import_all_detected(self) -> None:
+        """负例：多个 Tier B 模块直接导入应全部被检测"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+# 违规：多个 Tier B 模块直接导入
+from . import logbook_adapter
+from . import mcp_rpc
+from . import entrypoints
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            # 应有 3 处违规
+            assert len(result.violations) == 3
+
+            # direct_import_surface 应标记所有 Tier B 模块
+            assert not result.direct_import_surface.is_valid()
+            assert set(result.direct_import_surface.tier_b_in_direct_imports) == TIER_B_MODULES
+        finally:
+            file_path.unlink()
+
+    def test_tier_a_only_direct_import_valid(self) -> None:
+        """正例：仅直接导入 Tier A 模块应通过"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+# Tier A 模块直接导入
+from .di import GatewayDeps, RequestContext
+from .error_codes import McpErrorCode
+from .services.ports import WriteAuditPort
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            # 应无违规
+            assert not result.has_violations()
+
+            # direct_import_surface 应有效
+            assert result.direct_import_surface.is_valid()
+            assert len(result.direct_import_surface.direct_import_modules) == 3
+            assert "di" in result.direct_import_surface.direct_import_modules
+            assert "error_codes" in result.direct_import_surface.direct_import_modules
+            assert "services.ports" in result.direct_import_surface.direct_import_modules
+
+            # 无 Tier B 模块
+            assert len(result.direct_import_surface.tier_b_in_direct_imports) == 0
+            # 无非 allowlist 模块
+            assert len(result.direct_import_surface.non_allowlist_in_direct_imports) == 0
+        finally:
+            file_path.unlink()
+
+    def test_non_allowlist_in_direct_import_detected(self) -> None:
+        """负例：直接导入非 allowlist 模块应被检测"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+# 违规：非 allowlist 模块
+from .container import SomeContainer
+from .config import GatewayConfig
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            # 应有违规
+            assert result.has_violations()
+            assert len(result.violations) == 2
+
+            # direct_import_surface 应标记非 allowlist 模块
+            assert not result.direct_import_surface.is_valid()
+            assert "container" in result.direct_import_surface.non_allowlist_in_direct_imports
+            assert "config" in result.direct_import_surface.non_allowlist_in_direct_imports
+        finally:
+            file_path.unlink()
+
+    def test_mixed_tier_b_and_non_allowlist_detected(self) -> None:
+        """负例：混合违规（Tier B + 非 allowlist）应全部被检测"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+# Tier A 允许
+from .di import RequestContext
+
+# 违规：Tier B 模块
+from .logbook_adapter import LogbookAdapter
+
+# 违规：非 allowlist 模块
+from .container import Container
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            # 应有 2 处违规
+            assert len(result.violations) == 2
+
+            # direct_import_surface 应标记所有问题
+            assert not result.direct_import_surface.is_valid()
+            assert "logbook_adapter" in result.direct_import_surface.tier_b_in_direct_imports
+            assert "container" in result.direct_import_surface.non_allowlist_in_direct_imports
+
+            # di 模块应在直接导入列表中但不在违规列表中
+            assert "di" in result.direct_import_surface.direct_import_modules
+            assert "di" not in result.direct_import_surface.tier_b_in_direct_imports
+            assert "di" not in result.direct_import_surface.non_allowlist_in_direct_imports
+        finally:
+            file_path.unlink()
+
+    def test_to_dict_includes_direct_import_surface(self) -> None:
+        """to_dict() 应包含 direct_import_surface 字段"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+from .di import RequestContext
+from .logbook_adapter import LogbookAdapter
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+            output = result.to_dict()
+
+            assert "direct_import_surface" in output
+            assert "is_valid" in output["direct_import_surface"]
+            assert output["direct_import_surface"]["is_valid"] is False
+            assert "direct_import_modules" in output["direct_import_surface"]
+            assert "tier_b_in_direct_imports" in output["direct_import_surface"]
+            assert "non_allowlist_in_direct_imports" in output["direct_import_surface"]
+            assert "logbook_adapter" in output["direct_import_surface"]["tier_b_in_direct_imports"]
+            # ok 应为 False（有违规和直接导入表面错误）
+            assert output["ok"] is False
+        finally:
+            file_path.unlink()
+
+    def test_json_output_includes_direct_import_surface(self) -> None:
+        """JSON 输出应包含 direct_import_surface 信息"""
+        project_root = get_project_root()
+        script_path = project_root / "scripts" / "ci" / "check_gateway_public_api_import_surface.py"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--project-root",
+                str(project_root),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env=get_subprocess_env(project_root),
+            cwd=str(project_root),
+        )
+
+        import json
+
+        output = json.loads(result.stdout)
+        assert "direct_import_surface" in output
+        assert "is_valid" in output["direct_import_surface"]
+        assert "direct_import_modules" in output["direct_import_surface"]
+        assert "tier_b_in_direct_imports" in output["direct_import_surface"]
+        assert "non_allowlist_in_direct_imports" in output["direct_import_surface"]
+
+    def test_empty_file_has_empty_direct_import_surface(self) -> None:
+        """空文件的直接导入表面应为空且有效"""
+        content = ""
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            assert result.direct_import_surface.is_valid()
+            assert len(result.direct_import_surface.direct_import_modules) == 0
+            assert len(result.direct_import_surface.tier_b_in_direct_imports) == 0
+            assert len(result.direct_import_surface.non_allowlist_in_direct_imports) == 0
+        finally:
+            file_path.unlink()
+
+    def test_type_checking_imports_not_in_direct_import_surface(self) -> None:
+        """TYPE_CHECKING 块内的导入不应出现在直接导入表面中"""
+        content = '''\
+"""Test module"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+# Tier A 直接导入
+from .di import RequestContext
+
+# TYPE_CHECKING 块内导入不算直接导入
+if TYPE_CHECKING:
+    from .logbook_adapter import LogbookAdapter
+
+__version__ = "1.0.0"
+'''
+        file_path = create_temp_file(content)
+        try:
+            result = check_public_api_import_surface(file_path)
+
+            # 应无违规（TYPE_CHECKING 内的导入不检查）
+            assert not result.has_violations()
+
+            # direct_import_surface 应只包含 di，不包含 logbook_adapter
+            assert result.direct_import_surface.is_valid()
+            assert "di" in result.direct_import_surface.direct_import_modules
+            assert "logbook_adapter" not in result.direct_import_surface.direct_import_modules
+        finally:
+            file_path.unlink()

@@ -13,22 +13,20 @@ Fixtures 使用临时目录构造 docs/acceptance 结构。
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 导入被测模块
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from check_iteration_docs_placeholders import (
+from scripts.ci.check_iteration_docs_placeholders import (
     PLACEHOLDER_PATTERN,
+    REGRESSION_REQUIRED_HEADINGS,
     PlaceholderViolation,
     get_iteration_files,
     run_check,
     scan_file,
     scan_file_for_placeholders,
+    scan_file_for_required_headings,
     scan_file_for_usage_instructions,
 )
 
@@ -549,6 +547,137 @@ class TestIntegration:
 # ============================================================================
 
 
+# ============================================================================
+# scan_file_for_required_headings 测试
+# ============================================================================
+
+
+class TestScanFileForRequiredHeadings:
+    """scan_file_for_required_headings 函数测试"""
+
+    def test_detects_missing_headings_in_regression(self, temp_project: Path):
+        """测试检测 regression 文件中缺少的标准标题"""
+        # 创建一个缺少标准标题的 regression 文件
+        content = """# Iteration 13 Regression
+
+## 概述
+
+这是一个回归记录。
+
+## 详细执行记录
+
+内容...
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_13_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_required_headings(filepath))
+
+        # 应该检测到缺少 "## 执行信息" 和 "## 最小门禁命令块"
+        assert len(violations) == 2
+        matched_texts = [v.matched_text for v in violations]
+        assert "## 执行信息" in matched_texts
+        assert "## 最小门禁命令块" in matched_texts
+
+    def test_no_violations_for_complete_regression(self, temp_project: Path):
+        """测试完整的 regression 文件无违规"""
+        content = """# Iteration 13 Regression
+
+## 执行信息
+
+| 项目 | 值 |
+|------|-----|
+| 执行日期 | 2026-02-02 |
+
+## 最小门禁命令块
+
+命令清单...
+
+## 执行结果总览
+
+其他内容...
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_14_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_required_headings(filepath))
+        assert len(violations) == 0
+
+    def test_skips_plan_files(self, temp_project: Path):
+        """测试不检查 plan 文件的标准标题"""
+        # plan 文件不需要检查 regression 专用标题
+        content = """# Iteration 13 Plan
+
+## 概述
+
+计划内容...
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_13_plan.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_required_headings(filepath))
+        assert len(violations) == 0
+
+    def test_partial_headings(self, temp_project: Path):
+        """测试只有部分标准标题"""
+        content = """# Iteration 15 Regression
+
+## 执行信息
+
+执行信息内容...
+
+## 其他内容
+
+缺少最小门禁命令块...
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_15_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_required_headings(filepath))
+
+        # 应该只检测到缺少 "## 最小门禁命令块"
+        assert len(violations) == 1
+        assert violations[0].matched_text == "## 最小门禁命令块"
+
+    def test_violation_type_is_missing_heading(self, temp_project: Path):
+        """测试违规类型为 missing_heading"""
+        content = """# Iteration 16 Regression
+
+没有标准标题...
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_16_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations = list(scan_file_for_required_headings(filepath))
+
+        for v in violations:
+            assert v.violation_type == "missing_heading"
+            assert v.line_number == 0  # 文件级问题
+
+    def test_custom_required_headings(self, temp_project: Path):
+        """测试自定义必需标题列表"""
+        content = """# Iteration 17 Regression
+
+## 自定义标题A
+
+内容...
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_17_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        custom_headings = ["## 自定义标题A", "## 自定义标题B"]
+        violations = list(scan_file_for_required_headings(filepath, custom_headings))
+
+        # 应该只检测到缺少 "## 自定义标题B"
+        assert len(violations) == 1
+        assert violations[0].matched_text == "## 自定义标题B"
+
+
+# ============================================================================
+# 边界情况测试
+# ============================================================================
+
+
 class TestEdgeCases:
     """边界情况测试"""
 
@@ -557,7 +686,7 @@ class TestEdgeCases:
         filepath = temp_project / "docs" / "acceptance" / "iteration_50_plan.md"
         filepath.write_text("", encoding="utf-8")
 
-        violations = scan_file(filepath)
+        violations = scan_file(filepath, check_required_headings=False)
         assert len(violations) == 0
 
     def test_file_with_only_code_blocks(self, temp_project: Path):
@@ -570,7 +699,8 @@ class TestEdgeCases:
         filepath = temp_project / "docs" / "acceptance" / "iteration_51_regression.md"
         filepath.write_text(content, encoding="utf-8")
 
-        violations = scan_file(filepath)
+        # 禁用标题检查，仅测试占位符和代码块跳过
+        violations = scan_file(filepath, check_required_headings=False)
         # 代码块内的内容不应被检测
         assert len(violations) == 0
 
@@ -594,7 +724,8 @@ class TestEdgeCases:
         filepath = temp_project / "docs" / "acceptance" / "iteration_52_plan.md"
         filepath.write_text(content, encoding="utf-8")
 
-        violations = scan_file(filepath)
+        # 禁用标题检查，仅测试占位符检测
+        violations = scan_file(filepath, check_required_headings=False)
 
         # 只有代码块外的 {M} 应被检测
         matched = [v.matched_text for v in violations]
@@ -620,8 +751,144 @@ class TestEdgeCases:
         filepath = temp_project / "docs" / "acceptance" / "iteration_53_plan.md"
         filepath.write_text(content, encoding="utf-8")
 
-        violations = scan_file(filepath)
+        # 禁用标题检查，仅测试占位符检测
+        violations = scan_file(filepath, check_required_headings=False)
 
         # 应该检测到中文占位符
         matched = [v.matched_text for v in violations]
         assert any("问题描述" in text for text in matched)
+
+    def test_empty_regression_file_missing_all_headings(self, temp_project: Path):
+        """测试空的 regression 文件缺少所有标准标题"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_54_regression.md"
+        filepath.write_text("# Iteration 54 Regression\n", encoding="utf-8")
+
+        violations = scan_file(filepath, check_required_headings=True)
+
+        # 应该检测到缺少两个标准标题
+        heading_violations = [v for v in violations if v.violation_type == "missing_heading"]
+        assert len(heading_violations) == 2
+
+
+# ============================================================================
+# run_check 与标准标题集成测试
+# ============================================================================
+
+
+class TestRunCheckWithHeadings:
+    """run_check 函数与标准标题检查集成测试"""
+
+    def test_run_check_detects_missing_headings(self, temp_project: Path):
+        """测试 run_check 检测缺少的标准标题"""
+        # 创建缺少标准标题的 regression 文件
+        content = """# Iteration 30 Regression
+
+## 概述
+
+没有标准标题的回归记录。
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_30_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations, total_files = run_check(
+            project_root=temp_project,
+            check_required_headings=True,
+        )
+
+        assert total_files >= 1
+
+        # 应该检测到缺少的标准标题
+        heading_violations = [v for v in violations if v.violation_type == "missing_heading"]
+        assert len(heading_violations) == 2
+
+    def test_run_check_skip_headings_when_disabled(self, temp_project: Path):
+        """测试禁用标题检查时不检测缺少的标题"""
+        # 创建缺少标准标题的 regression 文件
+        content = """# Iteration 31 Regression
+
+## 概述
+
+没有标准标题的回归记录。
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_31_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations, total_files = run_check(
+            project_root=temp_project,
+            check_required_headings=False,
+        )
+
+        assert total_files >= 1
+
+        # 不应该检测到标题违规
+        heading_violations = [v for v in violations if v.violation_type == "missing_heading"]
+        assert len(heading_violations) == 0
+
+    def test_mixed_violations_with_headings(self, temp_project: Path):
+        """测试同时存在占位符和标准标题缺失的情况"""
+        content = """# Iteration 32 Regression
+
+## 概述
+
+| 日期 | {YYYY-MM-DD} |
+"""
+        filepath = temp_project / "docs" / "acceptance" / "iteration_32_regression.md"
+        filepath.write_text(content, encoding="utf-8")
+
+        violations, _ = run_check(
+            project_root=temp_project,
+            check_required_headings=True,
+        )
+
+        # 应该同时检测到占位符和标题缺失
+        placeholder_violations = [v for v in violations if v.violation_type == "placeholder"]
+        heading_violations = [v for v in violations if v.violation_type == "missing_heading"]
+
+        assert len(placeholder_violations) >= 1
+        assert len(heading_violations) == 2
+
+
+# ============================================================================
+# REGRESSION_REQUIRED_HEADINGS 常量测试
+# ============================================================================
+
+
+class TestRegressionRequiredHeadings:
+    """REGRESSION_REQUIRED_HEADINGS 常量测试"""
+
+    def test_constant_is_list(self):
+        """测试常量是列表类型"""
+        assert isinstance(REGRESSION_REQUIRED_HEADINGS, list)
+
+    def test_constant_contains_required_headings(self):
+        """测试常量包含预期的标准标题"""
+        assert "## 执行信息" in REGRESSION_REQUIRED_HEADINGS
+        assert "## 最小门禁命令块" in REGRESSION_REQUIRED_HEADINGS
+
+    def test_constant_has_at_least_two_headings(self):
+        """测试常量至少有两个标题"""
+        assert len(REGRESSION_REQUIRED_HEADINGS) >= 2
+
+
+# ============================================================================
+# PlaceholderViolation 数据类扩展测试
+# ============================================================================
+
+
+class TestPlaceholderViolationMissingHeading:
+    """PlaceholderViolation 数据类 missing_heading 类型测试"""
+
+    def test_str_format_missing_heading(self):
+        """测试缺少标题违规的字符串格式"""
+        violation = PlaceholderViolation(
+            file=Path("docs/acceptance/iteration_13_regression.md"),
+            line_number=0,
+            line_content="",
+            violation_type="missing_heading",
+            matched_text="## 执行信息",
+        )
+
+        str_repr = str(violation)
+        assert "缺少标准标题" in str_repr
+        assert "## 执行信息" in str_repr
+        assert ":0:" in str_repr

@@ -22,218 +22,18 @@
 
 from __future__ import annotations
 
-import os
-import re
-import subprocess
-import sys
 import textwrap
-from pathlib import Path
-from typing import NamedTuple, Optional
 
 import pytest
 
-# ============================================================================
-# ImportError 消息结构解析（用于契约验证）
-# ============================================================================
-
-
-class ImportErrorFields(NamedTuple):
-    """ImportError 错误消息解析结果
-
-    四个必需字段（与 public_api._IMPORT_ERROR_TEMPLATE 保持一致）：
-    - symbol_name: 导入失败的符号名（如 LogbookAdapter）
-    - module_path: 来源模块路径（如 .logbook_adapter）
-    - original_error: 原始错误信息
-    - install_hint: 安装指引
-    """
-
-    symbol_name: str
-    module_path: str
-    original_error: str
-    install_hint: str
-
-
-# 结构校验正则（宽松匹配：允许全角/半角冒号和括号）
-# 格式参考：docs/architecture/gateway_public_api_surface.md §Tier B 失败语义
-_IMPORT_ERROR_STRUCT_PATTERN = re.compile(
-    r"无法导入\s*'([^']+)'\s*[（(]来自\s*([^)）]+)[)）]"  # 第一行：symbol_name, module_path
-    r".*?"  # 中间分隔（允许任意字符）
-    r"原因[:：]\s*(.+?)"  # 原因字段（支持半角/全角冒号）
-    r"\n\s*\n"  # 空行分隔
-    r"(.+)",  # install_hint（剩余内容）
-    re.DOTALL,
+from tests.gateway.helpers.public_api_import_contract_helpers import (
+    BLOCKING_LOGBOOK_ADAPTER_CODE,
+    TIER_B_SYMBOL_SPECS,
+    TierBSymbolSpec,
+    get_regex_validation_code,
+    make_blocking_finder_code,
+    run_subprocess,
 )
-
-
-def parse_import_error_structure(error_msg: str) -> Optional[ImportErrorFields]:
-    """
-    解析 ImportError 消息结构，提取四个必需字段。
-
-    仅校验结构存在性，不锁定具体空格/标点细节。
-
-    Args:
-        error_msg: ImportError 的字符串消息
-
-    Returns:
-        ImportErrorFields 如果结构匹配，否则 None
-    """
-    match = _IMPORT_ERROR_STRUCT_PATTERN.match(error_msg)
-    if match:
-        return ImportErrorFields(
-            symbol_name=match.group(1).strip(),
-            module_path=match.group(2).strip(),
-            original_error=match.group(3).strip(),
-            install_hint=match.group(4).strip(),
-        )
-    return None
-
-
-def _get_regex_validation_code() -> str:
-    """
-    生成 ImportError 消息结构正则校验的 Python 代码（供子进程使用）
-
-    Returns:
-        包含 parse_error 函数定义的 Python 代码字符串
-    """
-    return '''\
-import re
-
-# 结构校验正则（宽松匹配：允许全角/半角冒号和括号）
-_PATTERN = re.compile(
-    r"无法导入\\s*'([^']+)'\\s*[（(]来自\\s*([^)）]+)[)）]"
-    r".*?"
-    r"原因[:：]\\s*(.+?)"
-    r"\\n\\s*\\n"
-    r"(.+)",
-    re.DOTALL,
-)
-
-def parse_error(msg):
-    """解析 ImportError 消息，返回四字段字典或 None"""
-    match = _PATTERN.match(msg)
-    if match:
-        return {
-            "symbol_name": match.group(1).strip(),
-            "module_path": match.group(2).strip(),
-            "original_error": match.group(3).strip(),
-            "install_hint": match.group(4).strip(),
-        }
-    return None
-'''
-
-
-def _get_pythonpath() -> str:
-    """获取 PYTHONPATH，确保可导入 src/ 目录"""
-    repo_root = Path(__file__).parent.parent.parent
-    src_path = repo_root / "src"
-    return str(src_path)
-
-
-def _make_blocking_code(blocked_module: str) -> str:
-    """
-    生成通用的 BlockingFinder 代码
-
-    Args:
-        blocked_module: 要阻断的完整模块名（如 engram.gateway.logbook_adapter）
-
-    Returns:
-        BlockingFinder Python 代码字符串
-    """
-    return f"""\
-import sys
-from importlib.abc import MetaPathFinder
-from importlib.machinery import ModuleSpec
-
-class BlockingFinder(MetaPathFinder):
-    '''阻断 {blocked_module} 模块导入'''
-    BLOCKED_MODULES = frozenset([
-        '{blocked_module}',
-    ])
-
-    def find_spec(self, fullname, path, target=None):
-        if fullname in self.BLOCKED_MODULES:
-            return ModuleSpec(fullname, BlockingLoader(fullname))
-        return None
-
-class BlockingLoader:
-    def __init__(self, fullname):
-        self.fullname = fullname
-
-    def create_module(self, spec):
-        return None
-
-    def exec_module(self, module):
-        raise ImportError(
-            f"[BlockingFinder] 模块 '{{self.fullname}}' 被阻断以模拟依赖缺失"
-        )
-
-sys.meta_path.insert(0, BlockingFinder())
-"""
-
-
-# BlockingFinder 代码片段，用于阻断 engram.gateway.logbook_adapter
-_BLOCKING_LOGBOOK_ADAPTER_CODE = _make_blocking_code("engram.gateway.logbook_adapter")
-
-
-def _run_import_script(
-    script: str, env_vars: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    """
-    在子进程中执行 Python 脚本
-
-    Args:
-        script: 要执行的 Python 脚本内容
-        env_vars: 额外的环境变量
-
-    Returns:
-        subprocess.CompletedProcess 结果
-    """
-    # 构建干净的环境变量（排除 PROJECT_KEY 和 POSTGRES_DSN）
-    clean_env = {k: v for k, v in os.environ.items() if k not in ("PROJECT_KEY", "POSTGRES_DSN")}
-    clean_env["PYTHONPATH"] = _get_pythonpath()
-
-    # 添加额外的环境变量
-    if env_vars:
-        clean_env.update(env_vars)
-
-    return subprocess.run(
-        [sys.executable, "-c", script],
-        env=clean_env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-
-
-# ============================================================================
-# Tier B 符号测试矩阵
-# ============================================================================
-
-
-class TierBSymbolSpec(NamedTuple):
-    """Tier B 符号测试规格"""
-
-    symbol_name: str  # 符号名（如 LogbookAdapter）
-    module_path: str  # 相对模块路径（如 .logbook_adapter）
-    blocked_module: str  # 需要阻断的完整模块名（如 engram.gateway.logbook_adapter）
-
-
-# 与 public_api.py 中 _TIER_B_LAZY_IMPORTS 保持同步的测试矩阵
-TIER_B_SYMBOL_SPECS: list[TierBSymbolSpec] = [
-    # logbook_adapter 模块
-    TierBSymbolSpec("LogbookAdapter", ".logbook_adapter", "engram.gateway.logbook_adapter"),
-    TierBSymbolSpec("get_adapter", ".logbook_adapter", "engram.gateway.logbook_adapter"),
-    TierBSymbolSpec("get_reliability_report", ".logbook_adapter", "engram.gateway.logbook_adapter"),
-    # tool_executor 模块
-    TierBSymbolSpec(
-        "execute_tool",
-        ".entrypoints.tool_executor",
-        "engram.gateway.entrypoints.tool_executor",
-    ),
-    # mcp_rpc 模块
-    TierBSymbolSpec("dispatch_jsonrpc_request", ".mcp_rpc", "engram.gateway.mcp_rpc"),
-    TierBSymbolSpec("JsonRpcDispatchResult", ".mcp_rpc", "engram.gateway.mcp_rpc"),
-]
 
 
 class TestImportErrorMessageContract:
@@ -258,7 +58,7 @@ class TestImportErrorMessageContract:
         - [full] 或 engram-logbook（安装选项）
         - "原因"字段（原始错误）
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("LogbookAdapter 导入应触发 ImportError")
@@ -287,7 +87,7 @@ class TestImportErrorMessageContract:
 
             print("OK: 所有必需字段验证通过")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -297,7 +97,7 @@ class TestImportErrorMessageContract:
 
         验证异常链正确保留原始错误
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("LogbookAdapter 导入应触发 ImportError")
@@ -313,7 +113,7 @@ class TestImportErrorMessageContract:
 
             print("OK: __cause__ 验证通过")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -323,7 +123,7 @@ class TestImportErrorMessageContract:
 
         验证 str(e) 本身包含 BlockingFinder 的错误信息（不仅仅是 __cause__）
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("LogbookAdapter 导入应触发 ImportError")
@@ -336,7 +136,7 @@ class TestImportErrorMessageContract:
 
             print("OK: 原始错误信息嵌入验证通过")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -348,7 +148,7 @@ class TestImportErrorMessageContract:
         - str(e) 包含所有必需字段
         - e.__cause__ 非空且包含 BlockingFinder 痕迹
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("LogbookAdapter 导入应触发 ImportError")
@@ -394,7 +194,7 @@ class TestImportErrorMessageContract:
 
             print("OK: 综合合约验证通过")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -410,7 +210,7 @@ class TestGetAdapterImportErrorMessageContract:
         """
         合约测试：get_adapter 导入错误消息包含所有必需字段
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import get_adapter
             raise AssertionError("get_adapter 导入应触发 ImportError")
@@ -433,7 +233,7 @@ class TestGetAdapterImportErrorMessageContract:
 
             print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -465,8 +265,8 @@ class TestAllTierBSymbolsImportErrorMessageContract:
 
         同时验证正则能匹配消息结构且四字段均非空。
         """
-        blocking_code = _make_blocking_code(spec.blocked_module)
-        regex_code = _get_regex_validation_code()
+        blocking_code = make_blocking_finder_code(spec.blocked_module)
+        regex_code = get_regex_validation_code()
 
         script = (
             blocking_code
@@ -519,7 +319,7 @@ class TestAllTierBSymbolsImportErrorMessageContract:
         """)
         )
 
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, (
             f"Script failed for {spec.symbol_name}:\n"
             f"stdout: {result.stdout}\n"
@@ -538,7 +338,7 @@ class TestAllTierBSymbolsImportErrorMessageContract:
 
         验证异常链正确保留原始错误
         """
-        blocking_code = _make_blocking_code(spec.blocked_module)
+        blocking_code = make_blocking_finder_code(spec.blocked_module)
 
         script = blocking_code + textwrap.dedent(f"""
         try:
@@ -557,7 +357,7 @@ class TestAllTierBSymbolsImportErrorMessageContract:
             print("OK: {spec.symbol_name}")
         """)
 
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, (
             f"Script failed for {spec.symbol_name}:\n"
             f"stdout: {result.stdout}\n"
@@ -608,7 +408,7 @@ class TestTierBSymbolsMatrixCompleteness:
         print("OK")
         """)
 
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, (
             f"Script failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         )

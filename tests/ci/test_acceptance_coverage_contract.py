@@ -11,16 +11,12 @@ Acceptance Coverage Contract Checker 单元测试
 """
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 导入被测模块
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from check_acceptance_coverage_contract import (
+from scripts.ci.check_acceptance_coverage_contract import (
     AcceptanceCoverageChecker,
     ContainsMatcher,
     CoverageCheckResult,

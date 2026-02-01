@@ -11,7 +11,6 @@ tests/test_no_root_wrappers_allowlist.py
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
@@ -19,10 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-
-from check_no_root_wrappers_allowlist import (
+from scripts.ci.check_no_root_wrappers_allowlist import (
     DATE_PATTERN,
     OWNER_PATTERN,
     ValidationError,

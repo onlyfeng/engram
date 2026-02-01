@@ -16,6 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    env:
+      # 防止 Python 生成 .pyc 字节码缓存文件
+      # 避免缓存导致的测试隔离问题和 import 不一致
+      PYTHONDONTWRITEBYTECODE: "1"
+
     strategy:
       matrix:
         python-version: ['3.10', '3.11', '3.12']
@@ -158,8 +163,68 @@ jobs:
       - name: Run ruff format check
         run: ruff format --check src/ tests/
 
-      - name: Run mypy (type check)
-        run: mypy src/engram/
+      # ============================================================
+      # mypy 门禁检查 - 动态解析 gate
+      # 流程: baseline_count -> resolve_gate -> check_mypy_gate
+      # 文档: docs/architecture/adr_mypy_baseline_and_gating.md
+      # ============================================================
+
+      - name: Count mypy baseline errors
+        id: baseline-count
+        run: |
+          # 优先使用 mypy_metrics.py 获取准确的 total_errors（排除 note 行）
+          # Fallback: 使用 wc -l（包含 note 行，数值略高）
+          mkdir -p artifacts
+
+          if python -m scripts.ci.mypy_metrics --output artifacts/mypy_metrics.json 2>/dev/null; then
+            # 从 mypy_metrics 获取 total_errors（主口径）
+            COUNT=$(python -c "import json; print(json.load(open('artifacts/mypy_metrics.json'))['summary']['total_errors'])" 2>/dev/null || echo "0")
+            echo "[INFO] 使用 mypy_metrics 口径: total_errors=${COUNT}"
+          else
+            # Fallback: 使用 wc -l（备选口径，包含 note 行）
+            BASELINE_FILE="scripts/ci/mypy_baseline.txt"
+            if [ -f "$BASELINE_FILE" ]; then
+              COUNT=$(wc -l < "$BASELINE_FILE" | tr -d ' ')
+            else
+              COUNT=0
+            fi
+            echo "[WARN] mypy_metrics 不可用，使用 wc -l fallback: count=${COUNT}"
+          fi
+          echo "count=${COUNT}" >> $GITHUB_OUTPUT
+          echo "[INFO] baseline_count=${COUNT}"
+
+      - name: Resolve mypy gate
+        id: resolve-mypy-gate
+        run: |
+          # 根据迁移阶段、分支、阈值解析最终的 gate 级别
+          # 回滚开关: ENGRAM_MYPY_GATE_OVERRIDE (优先级最高)
+          # 文档: docs/dev/ci_gate_runbook.md#31-mypy-门禁回滚
+          GATE=$(python -m scripts.ci.resolve_mypy_gate \
+            --phase "${{ vars.ENGRAM_MYPY_MIGRATION_PHASE || '0' }}" \
+            --override "${{ vars.ENGRAM_MYPY_GATE_OVERRIDE || '' }}" \
+            --threshold "${{ vars.ENGRAM_MYPY_STRICT_THRESHOLD || '0' }}" \
+            --baseline-count "${{ steps.baseline-count.outputs.count }}" \
+            --branch "${{ github.head_ref || '' }}" \
+            --ref "${{ github.ref }}" \
+            --explain)
+          echo "gate=${GATE}" >> $GITHUB_OUTPUT
+          echo "[INFO] Resolved gate=${GATE}"
+
+      - name: Run mypy (baseline mode)
+        run: |
+          # 使用解析后的 gate 执行 mypy 检查
+          # gate 可能值: baseline / strict / warn / off
+          python -m scripts.ci.check_mypy_gate \
+            --gate "${{ steps.resolve-mypy-gate.outputs.gate }}" \
+            --baseline-file scripts/ci/mypy_baseline.txt \
+            --mypy-path src/engram/ \
+            --verbose
+
+      - name: Run mypy (strict-island mode)
+        run: |
+          # strict-island 模式: 核心模块必须零错误
+          # 配置: pyproject.toml [tool.engram.mypy].strict_island_paths
+          python -m scripts.ci.check_mypy_gate --gate strict-island --verbose
 
   # ============================================================================
   # .iteration/ 目录禁止提交检查
@@ -207,7 +272,7 @@ jobs:
 
       - name: Check environment variable consistency
         run: |
-          python scripts/ci/check_env_var_consistency.py --verbose
+          python -m scripts.ci.check_env_var_consistency --verbose
           echo "Environment variable consistency check passed"
 
   # ============================================================================
@@ -377,7 +442,7 @@ jobs:
 
       - name: Check Gateway DI boundaries
         run: |
-          python scripts/ci/check_gateway_di_boundaries.py --verbose
+          python -m scripts.ci.check_gateway_di_boundaries --verbose
           echo "Gateway DI boundaries check passed"
 
   # ============================================================================
@@ -426,7 +491,7 @@ jobs:
 
       - name: Check Gateway ErrorReason usage
         run: |
-          python scripts/ci/check_gateway_error_reason_usage.py --verbose
+          python -m scripts.ci.check_gateway_error_reason_usage --verbose
           echo "Gateway ErrorReason usage check passed"
 
   # ============================================================================
@@ -448,7 +513,7 @@ jobs:
 
       - name: Check Gateway import surface
         run: |
-          python scripts/ci/check_gateway_import_surface.py --verbose
+          python -m scripts.ci.check_gateway_import_surface --verbose
           echo "Gateway import surface check passed"
 
   # ============================================================================
@@ -470,12 +535,12 @@ jobs:
 
       - name: Check Gateway Public API import surface
         run: |
-          python scripts/ci/check_gateway_public_api_import_surface.py --verbose
+          python -m scripts.ci.check_gateway_public_api_import_surface --verbose
           echo "Gateway Public API import surface check passed"
 
       - name: Check Gateway Public API docs sync
         run: |
-          python scripts/ci/check_gateway_public_api_docs_sync.py --verbose
+          python -m scripts.ci.check_gateway_public_api_docs_sync --verbose
           echo "Gateway Public API docs sync check passed"
 
   # ============================================================================
@@ -497,7 +562,7 @@ jobs:
 
       - name: Check Gateway correlation_id single source
         run: |
-          python scripts/ci/check_gateway_correlation_id_single_source.py --verbose
+          python -m scripts.ci.check_gateway_correlation_id_single_source --verbose
           echo "Gateway correlation_id single source check passed"
 
   # ============================================================================
@@ -524,25 +589,25 @@ jobs:
 
       - name: Check MCP JSON-RPC error contract
         run: |
-          python scripts/ci/check_mcp_jsonrpc_error_contract.py --verbose
+          python -m scripts.ci.check_mcp_jsonrpc_error_contract --verbose
           echo "MCP JSON-RPC error contract check passed"
 
       - name: Check MCP JSON-RPC error docs sync
         run: |
-          python scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --verbose
+          python -m scripts.ci.check_mcp_jsonrpc_error_docs_sync --verbose
           echo "MCP JSON-RPC error docs sync check passed"
 
       - name: Generate contract report (JSON)
         if: always()
         run: |
           mkdir -p artifacts
-          python scripts/ci/check_mcp_jsonrpc_error_contract.py --json > artifacts/mcp_error_contract.json || true
+          python -m scripts.ci.check_mcp_jsonrpc_error_contract --json > artifacts/mcp_error_contract.json || true
 
       - name: Generate sync report (JSON)
         if: always()
         run: |
           mkdir -p artifacts
-          python scripts/ci/check_mcp_jsonrpc_error_docs_sync.py --json > artifacts/mcp_error_docs_sync.json || true
+          python -m scripts.ci.check_mcp_jsonrpc_error_docs_sync --json > artifacts/mcp_error_docs_sync.json || true
 
       - name: Upload contract report
         if: always()
@@ -579,8 +644,52 @@ jobs:
 
       - name: Check iteration docs consistency
         run: |
-          python scripts/ci/check_no_iteration_links_in_docs.py --verbose
+          python -m scripts.ci.check_no_iteration_links_in_docs --verbose
           echo "Iteration docs consistency check passed"
+
+      - name: Check iteration evidence contract
+        run: |
+          python -m scripts.ci.check_iteration_evidence_contract --verbose
+          echo "Iteration evidence contract check passed"
+
+  # ============================================================================
+  # CI 测试隔离检查
+  # ============================================================================
+  ci-test-isolation:
+    name: CI Test Isolation Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check CI test isolation
+        run: |
+          echo "=== CI Test Isolation Check ==="
+          echo "检查 tests/**/*.py 中的 sys.path 污染和顶层 CI 模块导入"
+          echo ""
+          python -m scripts.ci.check_ci_test_isolation --verbose
+          echo "CI test isolation check passed"
+
+      - name: Generate isolation report (JSON)
+        if: always()
+        run: |
+          mkdir -p artifacts
+          python -m scripts.ci.check_ci_test_isolation --json > artifacts/ci_test_isolation.json || true
+
+      - name: Upload isolation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-test-isolation
+          path: artifacts/ci_test_isolation.json
+          retention-days: 14
 
   # ============================================================================
   # 迭代工具脚本测试（无需数据库）
@@ -641,10 +750,7 @@ jobs:
           echo ""
           pytest tests/ci/ -q \
             --ignore=tests/ci/test_gateway_deps_db_allowlist.py \
-            --ignore=tests/ci/test_gateway_deps_db_gate.py \
-            --ignore=tests/ci/test_strict_island_admission.py \
-            --ignore=tests/ci/test_mypy_baseline_policy.py \
-            --ignore=tests/ci/test_mypy_metrics.py
+            --ignore=tests/ci/test_gateway_deps_db_gate.py
           echo "CI script tests passed"
 
       - name: Validate workflow contract
@@ -669,29 +775,50 @@ jobs:
           echo ""
           make check-workflow-contract-version-policy
 
+      - name: Check workflow contract doc anchors
+        run: |
+          echo "=== Workflow Contract Doc Anchors Check ==="
+          echo "检查错误消息中引用的文档锚点是否存在"
+          echo ""
+          make check-workflow-contract-doc-anchors
+
+      - name: Check workflow contract internal consistency
+        run: |
+          echo "=== Workflow Contract Internal Consistency Check ==="
+          echo "检查合约内部不变量（job_ids/job_names 长度、无重复等）"
+          echo ""
+          make check-workflow-contract-internal-consistency
+
+      - name: Check workflow make targets consistency
+        run: |
+          echo "=== Workflow Make Targets Consistency Check ==="
+          echo "检查 workflow 中 make targets 与 Makefile/Contract 一致性"
+          echo ""
+          make check-workflow-make-targets-consistency
+
       - name: Generate validation report (JSON)
         if: always()
         run: |
           mkdir -p artifacts
-          python scripts/ci/validate_workflows.py --json > artifacts/workflow_contract_validation.json || true
+          python -m scripts.ci.validate_workflows --json > artifacts/workflow_contract_validation.json || true
 
       - name: Generate docs sync report (JSON)
         if: always()
         run: |
           mkdir -p artifacts
-          python scripts/ci/check_workflow_contract_docs_sync.py --json > artifacts/workflow_contract_docs_sync.json || true
+          python -m scripts.ci.check_workflow_contract_docs_sync --json > artifacts/workflow_contract_docs_sync.json || true
 
       - name: Generate drift report (JSON)
         if: always()
         run: |
           mkdir -p artifacts
-          python scripts/ci/workflow_contract_drift_report.py --output artifacts/workflow_contract_drift.json || true
+          python -m scripts.ci.workflow_contract_drift_report --output artifacts/workflow_contract_drift.json || true
 
       - name: Generate drift report (Markdown)
         if: always()
         run: |
           mkdir -p artifacts
-          python scripts/ci/workflow_contract_drift_report.py --markdown --output artifacts/workflow_contract_drift.md || true
+          python -m scripts.ci.workflow_contract_drift_report --markdown --output artifacts/workflow_contract_drift.md || true
 
       - name: Upload validation report
         if: always()
@@ -717,4 +844,5 @@ jobs:
           path: |
             artifacts/workflow_contract_drift.json
             artifacts/workflow_contract_drift.md
+          if-no-files-found: ignore
           retention-days: 14

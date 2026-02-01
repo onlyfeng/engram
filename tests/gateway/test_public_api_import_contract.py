@@ -19,82 +19,12 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
-from pathlib import Path
 
-
-def _get_pythonpath() -> str:
-    """获取 PYTHONPATH，确保可导入 src/ 目录"""
-    repo_root = Path(__file__).parent.parent.parent
-    src_path = repo_root / "src"
-    return str(src_path)
-
-
-# BlockingFinder 代码片段，用于阻断 engram.gateway.logbook_adapter
-_BLOCKING_LOGBOOK_ADAPTER_CODE = """\
-import sys
-from importlib.abc import MetaPathFinder
-from importlib.machinery import ModuleSpec
-
-class BlockingFinder(MetaPathFinder):
-    '''阻断 engram.gateway.logbook_adapter 模块导入'''
-    BLOCKED_MODULES = frozenset([
-        'engram.gateway.logbook_adapter',
-    ])
-
-    def find_spec(self, fullname, path, target=None):
-        if fullname in self.BLOCKED_MODULES:
-            return ModuleSpec(fullname, BlockingLoader(fullname))
-        return None
-
-class BlockingLoader:
-    def __init__(self, fullname):
-        self.fullname = fullname
-
-    def create_module(self, spec):
-        return None
-
-    def exec_module(self, module):
-        raise ImportError(
-            f"[BlockingFinder] 模块 '{self.fullname}' 被阻断以模拟依赖缺失\\n"
-            "此功能需要 engram_logbook 模块。"
-        )
-
-sys.meta_path.insert(0, BlockingFinder())
-"""
-
-
-def _run_import_script(
-    script: str, env_vars: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    """
-    在子进程中执行 Python 脚本
-
-    Args:
-        script: 要执行的 Python 脚本内容
-        env_vars: 额外的环境变量
-
-    Returns:
-        subprocess.CompletedProcess 结果
-    """
-    # 构建干净的环境变量（排除 PROJECT_KEY 和 POSTGRES_DSN）
-    clean_env = {k: v for k, v in os.environ.items() if k not in ("PROJECT_KEY", "POSTGRES_DSN")}
-    clean_env["PYTHONPATH"] = _get_pythonpath()
-
-    # 添加额外的环境变量
-    if env_vars:
-        clean_env.update(env_vars)
-
-    return subprocess.run(
-        [sys.executable, "-c", script],
-        env=clean_env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+from tests.gateway.helpers.public_api_import_contract_helpers import (
+    BLOCKING_LOGBOOK_ADAPTER_CODE,
+    run_subprocess,
+)
 
 
 class TestPublicApiTierAImportWithBlockedLogbookAdapter:
@@ -111,7 +41,7 @@ class TestPublicApiTierAImportWithBlockedLogbookAdapter:
 
         验证 Tier A 核心符号可正常导入使用。
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         # ============ 验证 Tier A 符号可正常导入 ============
         from engram.gateway.public_api import (
             RequestContext,
@@ -136,7 +66,7 @@ class TestPublicApiTierAImportWithBlockedLogbookAdapter:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -144,7 +74,7 @@ class TestPublicApiTierAImportWithBlockedLogbookAdapter:
         """
         契约测试：更多 Tier A 符号在 logbook_adapter 被阻断时仍可导入
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         from engram.gateway.public_api import (
             GatewayDeps,
             generate_correlation_id,
@@ -181,7 +111,7 @@ class TestPublicApiTierAImportWithBlockedLogbookAdapter:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -199,7 +129,7 @@ class TestPublicApiTierBImportFailureWithBlockedLogbookAdapter:
         """
         契约测试：LogbookAdapter 在 logbook_adapter 被阻断时触发 ImportError
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         import engram.gateway.public_api
 
         # 验证 Tier A 符号可访问
@@ -216,7 +146,7 @@ class TestPublicApiTierBImportFailureWithBlockedLogbookAdapter:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -224,7 +154,7 @@ class TestPublicApiTierBImportFailureWithBlockedLogbookAdapter:
         """
         契约测试：get_adapter 在 logbook_adapter 被阻断时触发 ImportError
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         import engram.gateway.public_api
 
         try:
@@ -237,7 +167,7 @@ class TestPublicApiTierBImportFailureWithBlockedLogbookAdapter:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -245,7 +175,7 @@ class TestPublicApiTierBImportFailureWithBlockedLogbookAdapter:
         """
         契约测试：Tier B 符号延迟加载不影响 Tier A 符号使用
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         from engram.gateway.public_api import (
             RequestContext,
             GatewayDepsProtocol,
@@ -273,7 +203,7 @@ class TestPublicApiTierBImportFailureWithBlockedLogbookAdapter:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -287,7 +217,7 @@ class TestPublicApiImportErrorMessageQuality:
         """
         契约测试：ImportError 错误消息包含模块名
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("应抛出 ImportError")
@@ -300,7 +230,7 @@ class TestPublicApiImportErrorMessageQuality:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -308,7 +238,7 @@ class TestPublicApiImportErrorMessageQuality:
         """
         契约测试：ImportError 保留原始错误原因
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("应抛出 ImportError")
@@ -321,7 +251,7 @@ class TestPublicApiImportErrorMessageQuality:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -329,7 +259,7 @@ class TestPublicApiImportErrorMessageQuality:
         """
         契约测试：ImportError 错误消息包含安装指引
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("应抛出 ImportError")
@@ -344,7 +274,7 @@ class TestPublicApiImportErrorMessageQuality:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -352,7 +282,7 @@ class TestPublicApiImportErrorMessageQuality:
         """
         契约测试：ImportError 错误消息包含原始错误信息
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import LogbookAdapter
             raise AssertionError("应抛出 ImportError")
@@ -368,7 +298,7 @@ class TestPublicApiImportErrorMessageQuality:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -382,7 +312,7 @@ class TestPublicApiImportErrorMessageQuality:
         - original_error: 原始错误信息
         - install_hint: 安装指引
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         try:
             from engram.gateway.public_api import get_adapter
             raise AssertionError("应抛出 ImportError")
@@ -405,7 +335,7 @@ class TestPublicApiImportErrorMessageQuality:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -432,7 +362,7 @@ class TestPublicApiMcpRpcTierBImport:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -458,7 +388,7 @@ class TestPublicApiMcpRpcTierBImport:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -487,7 +417,7 @@ class TestPublicApiMcpRpcTierBImport:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -509,7 +439,7 @@ class TestPublicApiMcpRpcTierBImport:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -544,7 +474,7 @@ class TestPublicApiMcpRpcTierBImport:
 
         asyncio.run(test())
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -558,7 +488,7 @@ class TestPublicApiModuleLevelImportSafe:
         """
         契约测试：import engram.gateway.public_api 在 logbook_adapter 被阻断时成功
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         import engram.gateway.public_api
 
         assert hasattr(engram.gateway.public_api, "__all__")
@@ -571,7 +501,7 @@ class TestPublicApiModuleLevelImportSafe:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -579,7 +509,7 @@ class TestPublicApiModuleLevelImportSafe:
         """
         契约测试：Tier A 符号可访问，logbook 相关 Tier B 符号被阻断
         """
-        script = _BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
+        script = BLOCKING_LOGBOOK_ADAPTER_CODE + textwrap.dedent("""
         TIER_A_SYMBOLS = [
             "RequestContext",
             "GatewayDeps",
@@ -638,7 +568,7 @@ class TestPublicApiModuleLevelImportSafe:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -678,6 +608,6 @@ class TestPublicApiImportContractWithSysModulesPatch:
 
         print("OK")
         """)
-        result = _run_import_script(script)
+        result = run_subprocess(script)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
         assert "OK" in result.stdout

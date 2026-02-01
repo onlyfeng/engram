@@ -11,12 +11,59 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from scripts.ci.check_ruff_gate import (
+    check_future_baseline,
+    load_baseline,
+    parse_violation_key,
+    save_baseline,
+)
+from scripts.ci.check_ruff_lint_island import (
+    DEFAULT_SCAN_ROOT,
+    PHASE3_EXTRA_RULES,
+    LintIslandConfig,
+    aggregate_violations,
+    load_pyproject_config,
+    resolve_phase,
+    run_lint_island_check,
+)
+from scripts.ci.check_ruff_lint_island import CheckResult as LintIslandCheckResult
+from scripts.ci.check_ruff_lint_island import (
+    format_json_output as lint_island_format_json_output,
+)
+from scripts.ci.check_ruff_lint_island import (
+    format_text_output as lint_island_format_text_output,
+)
+from scripts.ci.check_ruff_metrics_thresholds import CheckResult as ThresholdsCheckResult
+from scripts.ci.check_ruff_metrics_thresholds import (
+    ThresholdConfig,
+    check_thresholds,
+    load_config_from_env,
+    merge_config,
+)
+from scripts.ci.check_ruff_metrics_thresholds import (
+    format_json_output as thresholds_format_json_output,
+)
+from scripts.ci.check_ruff_metrics_thresholds import (
+    format_output as thresholds_format_output,
+)
+from scripts.ci.ruff_metrics import (
+    aggregate_by_code,
+    aggregate_by_directory,
+    aggregate_by_file,
+)
+from tests.ci.helpers.subprocess_env import get_subprocess_env
+
 if TYPE_CHECKING:
     import pytest
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 
 class TestRuffMetrics:
@@ -24,12 +71,6 @@ class TestRuffMetrics:
 
     def test_aggregate_by_code(self) -> None:
         """测试按 code 聚合"""
-        # 动态导入以避免模块级依赖
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from ruff_metrics import aggregate_by_code
-
         violations = [
             {"code": "F401", "fix": {"edits": []}, "message": "unused import"},
             {"code": "F401", "fix": {"edits": []}, "message": "unused import"},
@@ -47,11 +88,6 @@ class TestRuffMetrics:
 
     def test_aggregate_by_directory(self) -> None:
         """测试按目录聚合"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from ruff_metrics import aggregate_by_directory
-
         violations = [
             {"filename": "src/engram/gateway/app.py", "fix": None},
             {"filename": "src/engram/gateway/routes.py", "fix": {"edits": []}},
@@ -68,11 +104,6 @@ class TestRuffMetrics:
 
     def test_aggregate_by_file(self) -> None:
         """测试按文件聚合"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from ruff_metrics import aggregate_by_file
-
         violations = [
             {"filename": "src/foo.py"},
             {"filename": "src/foo.py"},
@@ -93,11 +124,6 @@ class TestCheckRuffGate:
 
     def test_load_baseline_not_exists(self, tmp_path: Path) -> None:
         """测试加载不存在的 baseline 文件"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_gate import load_baseline
-
         result = load_baseline(tmp_path / "nonexistent.json")
 
         assert result["rules"] == []
@@ -105,11 +131,6 @@ class TestCheckRuffGate:
 
     def test_load_baseline_valid(self, tmp_path: Path) -> None:
         """测试加载有效的 baseline 文件"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_gate import load_baseline
-
         baseline_file = tmp_path / "baseline.json"
         baseline_data = {
             "rules": ["E501"],
@@ -124,11 +145,6 @@ class TestCheckRuffGate:
 
     def test_save_baseline(self, tmp_path: Path) -> None:
         """测试保存 baseline 文件"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_gate import save_baseline
-
         violations = [
             {"code": "E501", "filename": "src/foo.py", "location": {"row": 10, "column": 1}},
             {"code": "E501", "filename": "src/foo.py", "location": {"row": 20, "column": 1}},
@@ -149,11 +165,6 @@ class TestCheckRuffGate:
 
     def test_check_future_baseline_pass(self) -> None:
         """测试 future-baseline 检查通过"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_gate import check_future_baseline
-
         violations = [
             {"code": "E501", "filename": "src/foo.py", "location": {"row": 10, "column": 1}},
         ]
@@ -169,11 +180,6 @@ class TestCheckRuffGate:
 
     def test_check_future_baseline_fail(self) -> None:
         """测试 future-baseline 检查失败（有新增）"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_gate import check_future_baseline
-
         violations = [
             {"code": "E501", "filename": "src/foo.py", "location": {"row": 10, "column": 1}},
             {
@@ -195,11 +201,6 @@ class TestCheckRuffGate:
 
     def test_check_future_baseline_ignore_non_baseline_rules(self) -> None:
         """测试 future-baseline 忽略不在 baseline 中的规则"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_gate import check_future_baseline
-
         violations = [
             {
                 "code": "F401",
@@ -217,11 +218,6 @@ class TestCheckRuffGate:
 
     def test_parse_violation_key(self) -> None:
         """测试 violation key 生成"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_gate import parse_violation_key
-
         violation = {"filename": "src/foo.py", "location": {"row": 10, "column": 5}, "code": "E501"}
 
         key = parse_violation_key(violation)
@@ -234,22 +230,25 @@ class TestRuffGateIntegration:
 
     def test_metrics_script_runs(self) -> None:
         """测试 ruff_metrics.py 脚本能够运行"""
-        import subprocess
-        from pathlib import Path
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "ruff_metrics.py"
-        project_root = Path(__file__).parent.parent
-
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             output_file = f.name
 
         try:
             result = subprocess.run(
-                ["python", str(script_path), "--output", output_file, "--scan-paths", "src/"],
-                cwd=project_root,
+                [
+                    sys.executable,
+                    "-m",
+                    "scripts.ci.ruff_metrics",
+                    "--output",
+                    output_file,
+                    "--scan-paths",
+                    "src/",
+                ],
+                cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
                 timeout=60,
+                env=get_subprocess_env(PROJECT_ROOT),
             )
             # 脚本应该返回 0（即使有 violations）
             assert result.returncode == 0
@@ -265,16 +264,13 @@ class TestRuffGateIntegration:
 
     def test_gate_script_help(self) -> None:
         """测试 check_ruff_gate.py --help 能运行"""
-        import subprocess
-        from pathlib import Path
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_gate.py"
-
         result = subprocess.run(
-            ["python", str(script_path), "--help"],
+            [sys.executable, "-m", "scripts.ci.check_ruff_gate", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
+            env=get_subprocess_env(PROJECT_ROOT),
+            cwd=PROJECT_ROOT,
         )
 
         assert result.returncode == 0
@@ -291,11 +287,6 @@ class TestLintIslandConfig:
 
     def test_load_pyproject_config(self, tmp_path: Path) -> None:
         """测试从 pyproject.toml 加载配置"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import load_pyproject_config
-
         # 创建测试 pyproject.toml
         pyproject_content = """
 [tool.engram.ruff]
@@ -318,11 +309,6 @@ current_phase = 1
 
     def test_load_pyproject_config_missing_file(self, tmp_path: Path) -> None:
         """测试 pyproject.toml 不存在时返回默认配置"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import load_pyproject_config
-
         config = load_pyproject_config(tmp_path)
 
         assert config.lint_island_paths == []
@@ -334,12 +320,6 @@ class TestLintIslandPhaseResolution:
 
     def test_phase_priority_cli(self) -> None:
         """测试 CLI 参数优先级最高"""
-        import os
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import resolve_phase
-
         # 设置环境变量
         old_env = os.environ.get("ENGRAM_RUFF_PHASE")
         os.environ["ENGRAM_RUFF_PHASE"] = "2"
@@ -356,12 +336,6 @@ class TestLintIslandPhaseResolution:
 
     def test_phase_priority_env(self) -> None:
         """测试环境变量优先级"""
-        import os
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import resolve_phase
-
         old_env = os.environ.get("ENGRAM_RUFF_PHASE")
         os.environ["ENGRAM_RUFF_PHASE"] = "2"
 
@@ -377,12 +351,6 @@ class TestLintIslandPhaseResolution:
 
     def test_phase_priority_pyproject(self) -> None:
         """测试 pyproject.toml 优先级"""
-        import os
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import resolve_phase
-
         # 确保环境变量未设置
         old_env = os.environ.pop("ENGRAM_RUFF_PHASE", None)
 
@@ -396,12 +364,6 @@ class TestLintIslandPhaseResolution:
 
     def test_phase_priority_default(self) -> None:
         """测试默认值"""
-        import os
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import resolve_phase
-
         old_env = os.environ.pop("ENGRAM_RUFF_PHASE", None)
 
         try:
@@ -418,23 +380,17 @@ class TestLintIslandCheck:
 
     def test_phase_0_skip(self) -> None:
         """测试 Phase 0 跳过检查"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import LintIslandConfig, run_lint_island_check
-
         config = LintIslandConfig(
             lint_island_paths=["src/engram/gateway/di.py"],
             p1_rules=["B", "UP"],
             current_phase=0,
         )
-        project_root = Path(__file__).parent.parent
 
         result = run_lint_island_check(
             phase=0,
             phase_source="default",
             config=config,
-            project_root=project_root,
+            project_root=PROJECT_ROOT,
         )
 
         assert result.success is True
@@ -443,23 +399,17 @@ class TestLintIslandCheck:
 
     def test_empty_lint_island_paths_skip(self) -> None:
         """测试空 lint_island_paths 跳过检查"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import LintIslandConfig, run_lint_island_check
-
         config = LintIslandConfig(
             lint_island_paths=[],
             p1_rules=["B", "UP"],
             current_phase=1,
         )
-        project_root = Path(__file__).parent.parent
 
         result = run_lint_island_check(
             phase=1,
             phase_source="pyproject",
             config=config,
-            project_root=project_root,
+            project_root=PROJECT_ROOT,
         )
 
         assert result.success is True
@@ -468,11 +418,6 @@ class TestLintIslandCheck:
 
     def test_aggregate_violations(self) -> None:
         """测试 violation 聚合"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import aggregate_violations
-
         violations = [
             {"code": "B006", "filename": "src/foo.py"},
             {"code": "B006", "filename": "src/foo.py"},
@@ -492,12 +437,7 @@ class TestLintIslandOutput:
 
     def test_json_output_format(self) -> None:
         """测试 JSON 输出格式"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import CheckResult, format_json_output
-
-        result = CheckResult(
+        result = LintIslandCheckResult(
             success=True,
             phase=1,
             phase_source="env",
@@ -507,7 +447,7 @@ class TestLintIslandOutput:
             violation_count=0,
         )
 
-        output = format_json_output(result)
+        output = lint_island_format_json_output(result)
         parsed = json.loads(output)
 
         assert parsed["success"] is True
@@ -517,12 +457,7 @@ class TestLintIslandOutput:
 
     def test_text_output_format(self) -> None:
         """测试文本输出格式"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import CheckResult, format_text_output
-
-        result = CheckResult(
+        result = LintIslandCheckResult(
             success=False,
             phase=1,
             phase_source="pyproject",
@@ -533,7 +468,7 @@ class TestLintIslandOutput:
             by_code={"B006": 1},
         )
 
-        output = format_text_output(result)
+        output = lint_island_format_text_output(result)
 
         assert "Lint-Island" in output
         assert "Phase:" in output
@@ -546,16 +481,13 @@ class TestLintIslandScriptIntegration:
 
     def test_lint_island_script_help(self) -> None:
         """测试 check_ruff_lint_island.py --help 能运行"""
-        import subprocess
-        from pathlib import Path
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-
         result = subprocess.run(
-            ["python", str(script_path), "--help"],
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
+            env=get_subprocess_env(PROJECT_ROOT),
+            cwd=PROJECT_ROOT,
         )
 
         assert result.returncode == 0
@@ -563,18 +495,13 @@ class TestLintIslandScriptIntegration:
 
     def test_lint_island_script_phase_0(self) -> None:
         """测试 Phase 0 跳过检查"""
-        import subprocess
-        from pathlib import Path
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "0"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "0"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=30,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         assert result.returncode == 0
@@ -582,18 +509,13 @@ class TestLintIslandScriptIntegration:
 
     def test_lint_island_script_json_output(self) -> None:
         """测试 JSON 输出模式"""
-        import subprocess
-        from pathlib import Path
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "0", "--json"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "0", "--json"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=30,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         assert result.returncode == 0
@@ -615,11 +537,6 @@ class TestRuffMetricsThresholdsConfig:
 
     def test_load_config_from_env(self, monkeypatch: "pytest.MonkeyPatch") -> None:
         """测试从环境变量加载配置"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import load_config_from_env
-
         monkeypatch.setenv("ENGRAM_RUFF_TOTAL_THRESHOLD", "100")
         monkeypatch.setenv("ENGRAM_NOQA_TOTAL_THRESHOLD", "50")
         monkeypatch.setenv("ENGRAM_RUFF_FAIL_ON_THRESHOLD", "true")
@@ -632,11 +549,6 @@ class TestRuffMetricsThresholdsConfig:
 
     def test_load_config_from_env_defaults(self, monkeypatch: "pytest.MonkeyPatch") -> None:
         """测试环境变量未设置时的默认值"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import load_config_from_env
-
         monkeypatch.delenv("ENGRAM_RUFF_TOTAL_THRESHOLD", raising=False)
         monkeypatch.delenv("ENGRAM_NOQA_TOTAL_THRESHOLD", raising=False)
         monkeypatch.delenv("ENGRAM_RUFF_FAIL_ON_THRESHOLD", raising=False)
@@ -649,11 +561,6 @@ class TestRuffMetricsThresholdsConfig:
 
     def test_merge_config_cli_priority(self) -> None:
         """测试 CLI 参数优先级"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import ThresholdConfig, merge_config
-
         env_config = ThresholdConfig(
             total_threshold=100,
             noqa_threshold=50,
@@ -677,11 +584,6 @@ class TestRuffMetricsThresholdsCheck:
 
     def test_check_thresholds_pass(self) -> None:
         """测试阈值检查通过（未超阈值）"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import ThresholdConfig, check_thresholds
-
         metrics = {
             "summary": {
                 "total_violations": 50,
@@ -705,11 +607,6 @@ class TestRuffMetricsThresholdsCheck:
 
     def test_check_thresholds_exceed_warn_only(self) -> None:
         """测试超阈值但仅警告（fail_on_threshold=False）"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import ThresholdConfig, check_thresholds
-
         metrics = {
             "summary": {
                 "total_violations": 150,
@@ -733,11 +630,6 @@ class TestRuffMetricsThresholdsCheck:
 
     def test_check_thresholds_exceed_fail(self) -> None:
         """测试超阈值失败（fail_on_threshold=True）"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import ThresholdConfig, check_thresholds
-
         metrics = {
             "summary": {
                 "total_violations": 150,
@@ -761,11 +653,6 @@ class TestRuffMetricsThresholdsCheck:
 
     def test_check_thresholds_no_limit(self) -> None:
         """测试无阈值限制"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import ThresholdConfig, check_thresholds
-
         metrics = {
             "summary": {
                 "total_violations": 10000,  # 很高的数量
@@ -792,16 +679,7 @@ class TestRuffMetricsThresholdsOutput:
 
     def test_format_json_output(self) -> None:
         """测试 JSON 输出格式"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import (
-            CheckResult,
-            ThresholdConfig,
-            format_json_output,
-        )
-
-        result = CheckResult(
+        result = ThresholdsCheckResult(
             success=True,
             total_violations=50,
             total_threshold=100,
@@ -818,7 +696,7 @@ class TestRuffMetricsThresholdsOutput:
             fail_on_threshold=False,
         )
 
-        output = format_json_output(result, config)
+        output = thresholds_format_json_output(result, config)
         parsed = json.loads(output)
 
         assert parsed["success"] is True
@@ -829,16 +707,7 @@ class TestRuffMetricsThresholdsOutput:
 
     def test_format_text_output_success(self) -> None:
         """测试文本输出格式（成功）"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import (
-            CheckResult,
-            ThresholdConfig,
-            format_output,
-        )
-
-        result = CheckResult(
+        result = ThresholdsCheckResult(
             success=True,
             total_violations=50,
             total_threshold=100,
@@ -855,7 +724,7 @@ class TestRuffMetricsThresholdsOutput:
             fail_on_threshold=False,
         )
 
-        output = format_output(result, config, verbose=True)
+        output = thresholds_format_output(result, config, verbose=True)
 
         assert "ruff 指标阈值检查" in output
         assert "[OK]" in output
@@ -863,16 +732,7 @@ class TestRuffMetricsThresholdsOutput:
 
     def test_format_text_output_warning(self) -> None:
         """测试文本输出格式（警告）"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_metrics_thresholds import (
-            CheckResult,
-            ThresholdConfig,
-            format_output,
-        )
-
-        result = CheckResult(
+        result = ThresholdsCheckResult(
             success=True,
             total_violations=150,
             total_threshold=100,
@@ -889,7 +749,7 @@ class TestRuffMetricsThresholdsOutput:
             fail_on_threshold=False,
         )
 
-        output = format_output(result, config)
+        output = thresholds_format_output(result, config)
 
         assert "[WARN]" in output
         assert "超出阈值" in output
@@ -900,17 +760,13 @@ class TestRuffMetricsThresholdsIntegration:
 
     def test_script_help(self) -> None:
         """测试 check_ruff_metrics_thresholds.py --help 能运行"""
-        import subprocess
-
-        script_path = (
-            Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_metrics_thresholds.py"
-        )
-
         result = subprocess.run(
-            ["python", str(script_path), "--help"],
+            [sys.executable, "-m", "scripts.ci.check_ruff_metrics_thresholds", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
+            env=get_subprocess_env(PROJECT_ROOT),
+            cwd=PROJECT_ROOT,
         )
 
         assert result.returncode == 0
@@ -918,12 +774,6 @@ class TestRuffMetricsThresholdsIntegration:
 
     def test_script_with_metrics_file(self, tmp_path: Path) -> None:
         """测试读取指标文件"""
-        import subprocess
-
-        script_path = (
-            Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_metrics_thresholds.py"
-        )
-
         # 创建测试指标文件
         metrics_file = tmp_path / "ruff_metrics.json"
         metrics_data = {
@@ -942,8 +792,9 @@ class TestRuffMetricsThresholdsIntegration:
 
         result = subprocess.run(
             [
-                "python",
-                str(script_path),
+                sys.executable,
+                "-m",
+                "scripts.ci.check_ruff_metrics_thresholds",
                 "--metrics-file",
                 str(metrics_file),
                 "--total-threshold",
@@ -953,6 +804,8 @@ class TestRuffMetricsThresholdsIntegration:
             capture_output=True,
             text=True,
             timeout=10,
+            env=get_subprocess_env(PROJECT_ROOT),
+            cwd=PROJECT_ROOT,
         )
 
         assert result.returncode == 0
@@ -960,12 +813,6 @@ class TestRuffMetricsThresholdsIntegration:
 
     def test_script_threshold_exceed_warn(self, tmp_path: Path) -> None:
         """测试超阈值警告模式"""
-        import subprocess
-
-        script_path = (
-            Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_metrics_thresholds.py"
-        )
-
         # 创建测试指标文件
         metrics_file = tmp_path / "ruff_metrics.json"
         metrics_data = {
@@ -979,8 +826,9 @@ class TestRuffMetricsThresholdsIntegration:
 
         result = subprocess.run(
             [
-                "python",
-                str(script_path),
+                sys.executable,
+                "-m",
+                "scripts.ci.check_ruff_metrics_thresholds",
                 "--metrics-file",
                 str(metrics_file),
                 "--total-threshold",
@@ -991,6 +839,8 @@ class TestRuffMetricsThresholdsIntegration:
             capture_output=True,
             text=True,
             timeout=10,
+            env=get_subprocess_env(PROJECT_ROOT),
+            cwd=PROJECT_ROOT,
         )
 
         assert result.returncode == 0  # 仅警告，不失败
@@ -998,12 +848,6 @@ class TestRuffMetricsThresholdsIntegration:
 
     def test_script_threshold_exceed_fail(self, tmp_path: Path) -> None:
         """测试超阈值失败模式"""
-        import subprocess
-
-        script_path = (
-            Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_metrics_thresholds.py"
-        )
-
         # 创建测试指标文件
         metrics_file = tmp_path / "ruff_metrics.json"
         metrics_data = {
@@ -1017,8 +861,9 @@ class TestRuffMetricsThresholdsIntegration:
 
         result = subprocess.run(
             [
-                "python",
-                str(script_path),
+                sys.executable,
+                "-m",
+                "scripts.ci.check_ruff_metrics_thresholds",
                 "--metrics-file",
                 str(metrics_file),
                 "--total-threshold",
@@ -1029,6 +874,8 @@ class TestRuffMetricsThresholdsIntegration:
             capture_output=True,
             text=True,
             timeout=10,
+            env=get_subprocess_env(PROJECT_ROOT),
+            cwd=PROJECT_ROOT,
         )
 
         assert result.returncode == 1  # 失败
@@ -1045,27 +892,17 @@ class TestLintIslandPhase2:
 
     def test_phase_2_uses_full_scan_paths(self) -> None:
         """测试 Phase 2 使用全仓扫描路径"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import (
-            DEFAULT_SCAN_ROOT,
-            LintIslandConfig,
-            run_lint_island_check,
-        )
-
         config = LintIslandConfig(
             lint_island_paths=["src/engram/gateway/di.py"],  # Phase 2 不使用这个
             p1_rules=["B", "UP"],
             current_phase=2,
         )
-        project_root = Path(__file__).parent.parent
 
         result = run_lint_island_check(
             phase=2,
             phase_source="cli",
             config=config,
-            project_root=project_root,
+            project_root=PROJECT_ROOT,
         )
 
         # Phase 2 应使用 DEFAULT_SCAN_ROOT 而不是 lint_island_paths
@@ -1075,23 +912,17 @@ class TestLintIslandPhase2:
 
     def test_phase_2_does_not_require_lint_island_paths(self) -> None:
         """测试 Phase 2 不需要 lint_island_paths"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import LintIslandConfig, run_lint_island_check
-
         config = LintIslandConfig(
             lint_island_paths=[],  # 空
             p1_rules=["B", "UP"],
             current_phase=2,
         )
-        project_root = Path(__file__).parent.parent
 
         result = run_lint_island_check(
             phase=2,
             phase_source="cli",
             config=config,
-            project_root=project_root,
+            project_root=PROJECT_ROOT,
         )
 
         # Phase 2 即使 lint_island_paths 为空也不跳过
@@ -1100,17 +931,13 @@ class TestLintIslandPhase2:
 
     def test_phase_2_script_execution(self) -> None:
         """测试 Phase 2 脚本执行（集成测试）"""
-        import subprocess
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "2", "--json"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "2", "--json"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=60,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         # 解析 JSON 输出
@@ -1123,12 +950,7 @@ class TestLintIslandPhase2:
 
     def test_phase_2_text_output_format(self) -> None:
         """测试 Phase 2 文本输出格式"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import CheckResult, format_text_output
-
-        result = CheckResult(
+        result = LintIslandCheckResult(
             success=True,
             phase=2,
             phase_source="cli",
@@ -1138,7 +960,7 @@ class TestLintIslandPhase2:
             violation_count=0,
         )
 
-        output = format_text_output(result)
+        output = lint_island_format_text_output(result)
 
         assert "Phase 2" in output or "全仓" in output
         assert "扫描路径" in output
@@ -1154,23 +976,17 @@ class TestLintIslandPhase3:
 
     def test_phase_3_includes_ruf100_rule(self) -> None:
         """测试 Phase 3 包含 RUF100 规则"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import LintIslandConfig, run_lint_island_check
-
         config = LintIslandConfig(
             lint_island_paths=[],
             p1_rules=["B", "UP"],
             current_phase=3,
         )
-        project_root = Path(__file__).parent.parent
 
         result = run_lint_island_check(
             phase=3,
             phase_source="cli",
             config=config,
-            project_root=project_root,
+            project_root=PROJECT_ROOT,
         )
 
         # Phase 3 的 p1_rules 应包含 RUF100
@@ -1180,27 +996,17 @@ class TestLintIslandPhase3:
 
     def test_phase_3_uses_full_scan_paths(self) -> None:
         """测试 Phase 3 使用全仓扫描路径"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import (
-            DEFAULT_SCAN_ROOT,
-            LintIslandConfig,
-            run_lint_island_check,
-        )
-
         config = LintIslandConfig(
             lint_island_paths=["src/engram/gateway/di.py"],
             p1_rules=["B", "UP"],
             current_phase=3,
         )
-        project_root = Path(__file__).parent.parent
 
         result = run_lint_island_check(
             phase=3,
             phase_source="cli",
             config=config,
-            project_root=project_root,
+            project_root=PROJECT_ROOT,
         )
 
         # Phase 3 应使用 DEFAULT_SCAN_ROOT
@@ -1209,17 +1015,13 @@ class TestLintIslandPhase3:
 
     def test_phase_3_script_execution(self) -> None:
         """测试 Phase 3 脚本执行（集成测试）"""
-        import subprocess
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "3", "--json"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "3", "--json"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=60,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         # 解析 JSON 输出
@@ -1229,12 +1031,7 @@ class TestLintIslandPhase3:
 
     def test_phase_3_text_output_format(self) -> None:
         """测试 Phase 3 文本输出格式（显示 RUF100 统计）"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import CheckResult, format_text_output
-
-        result = CheckResult(
+        result = LintIslandCheckResult(
             success=False,
             phase=3,
             phase_source="cli",
@@ -1248,7 +1045,7 @@ class TestLintIslandPhase3:
             by_code={"B006": 1, "RUF100": 1},
         )
 
-        output = format_text_output(result)
+        output = lint_island_format_text_output(result)
 
         assert "Phase 3" in output or "noqa 清理" in output
         assert "RUF100" in output
@@ -1265,34 +1062,26 @@ class TestLintIslandExitCodes:
 
     def test_phase_0_exit_code_0(self) -> None:
         """测试 Phase 0 跳过时退出码为 0"""
-        import subprocess
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "0"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "0"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=30,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         assert result.returncode == 0
 
     def test_phase_1_exit_code_depends_on_violations(self) -> None:
         """测试 Phase 1 退出码取决于是否有 violations（使用 JSON 检查）"""
-        import subprocess
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "1", "--json"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "1", "--json"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=60,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         data = json.loads(result.stdout)
@@ -1305,17 +1094,13 @@ class TestLintIslandExitCodes:
 
     def test_phase_2_exit_code_depends_on_violations(self) -> None:
         """测试 Phase 2 退出码取决于是否有 violations"""
-        import subprocess
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "2", "--json"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "2", "--json"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=60,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         data = json.loads(result.stdout)
@@ -1327,17 +1112,13 @@ class TestLintIslandExitCodes:
 
     def test_phase_3_exit_code_depends_on_violations(self) -> None:
         """测试 Phase 3 退出码取决于是否有 violations"""
-        import subprocess
-
-        script_path = Path(__file__).parent.parent / "scripts" / "ci" / "check_ruff_lint_island.py"
-        project_root = Path(__file__).parent.parent
-
         result = subprocess.run(
-            ["python", str(script_path), "--phase", "3", "--json"],
-            cwd=project_root,
+            [sys.executable, "-m", "scripts.ci.check_ruff_lint_island", "--phase", "3", "--json"],
+            cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=60,
+            env=get_subprocess_env(PROJECT_ROOT),
         )
 
         data = json.loads(result.stdout)
@@ -1358,19 +1139,9 @@ class TestPhaseConstants:
 
     def test_default_scan_root(self) -> None:
         """测试默认扫描路径包含 src/ 和 tests/"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import DEFAULT_SCAN_ROOT
-
         assert "src/" in DEFAULT_SCAN_ROOT
         assert "tests/" in DEFAULT_SCAN_ROOT
 
     def test_phase3_extra_rules(self) -> None:
         """测试 Phase 3 额外规则包含 RUF100"""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-        from check_ruff_lint_island import PHASE3_EXTRA_RULES
-
         assert "RUF100" in PHASE3_EXTRA_RULES

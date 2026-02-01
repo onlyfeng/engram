@@ -13,17 +13,14 @@ tests/test_mypy_baseline_policy.py
 from __future__ import annotations
 
 import json
-import sys
+import os
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-
-from check_mypy_baseline_policy import (
+from scripts.ci.check_mypy_baseline_policy import (
     ALLOWED_LABELS,
     REQUIRED_PR_SECTION,
     THRESHOLD_REQUIRE_EXPLANATION,
@@ -546,4 +543,3 @@ class TestConstants:
 
 
 # 需要导入 os 模块
-import os

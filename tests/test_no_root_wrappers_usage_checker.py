@@ -12,26 +12,16 @@ check_no_root_wrappers_usage.py 脚本的单元测试
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-# 添加 scripts/ci 到路径
-scripts_ci_path = Path(__file__).resolve().parent.parent / "scripts" / "ci"
-sys.path.insert(0, str(scripts_ci_path))
-
-from check_no_root_wrappers_usage import (
+from scripts.ci.check_no_root_wrappers_usage import (
     MIGRATION_MAP,
     ROOT_WRAPPER_MODULES,
     AllowlistEntry,
     CheckResult,
     InlineMarker,
-    _get_category,
-    _get_expiry,
-    _get_file_path_exact,
-    _get_file_pattern,
-    _get_scope,
     check_allowlist_match,
     extract_imports_via_ast,
     get_migration_suggestion,
@@ -39,6 +29,48 @@ from check_no_root_wrappers_usage import (
     load_allowlist,
     validate_allowlist_entry,
 )
+
+# ============================================================================
+# 测试辅助函数（原脚本中不存在，仅用于测试）
+# ============================================================================
+
+
+def _get_scope(entry: dict) -> str:
+    """从 allowlist entry 字典中提取 scope 字段"""
+    return entry.get("scope", "import")
+
+
+def _get_category(entry: dict) -> str:
+    """从 allowlist entry 字典中提取 category 字段"""
+    return entry.get("category", "other")
+
+
+def _get_file_path_exact(entry: dict) -> str | None:
+    """从 allowlist entry 字典中提取精确 file_path 字段"""
+    return entry.get("file_path")
+
+
+def _get_file_pattern(entry: dict) -> str | None:
+    """从 allowlist entry 字典中获取文件模式
+
+    优先级: file_glob > file_path > file_pattern
+    """
+    if "file_glob" in entry:
+        return entry["file_glob"]
+    if "file_path" in entry:
+        return entry["file_path"]
+    return entry.get("file_pattern")
+
+
+def _get_expiry(entry: dict) -> str | None:
+    """从 allowlist entry 字典中获取过期日期
+
+    优先级: expires_on > expiry
+    """
+    if "expires_on" in entry:
+        return entry["expires_on"]
+    return entry.get("expiry")
+
 
 # 初始化模块列表（需要在测试前完成）
 _project_root = Path(__file__).resolve().parent.parent

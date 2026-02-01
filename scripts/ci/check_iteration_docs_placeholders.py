@@ -10,7 +10,8 @@
    - {N-1}, {N+1} 等表达式变量
    - {YYYY-MM-DD}, {STATUS}, {STATUS_EMOJI} 等常见模板变量
 3. 检测文件顶部的模板"使用说明"区块（如 `> **使用说明**`）
-4. 输出违规列表和修复建议
+4. 检测 regression 文件的标准标题结构（如 `## 执行信息`、`## 最小门禁命令块`）
+5. 输出违规列表和修复建议
 
 用法:
     # 检查 docs/acceptance/ 目录
@@ -21,6 +22,9 @@
 
     # 仅统计（不阻断）
     python scripts/ci/check_iteration_docs_placeholders.py --stats-only
+
+    # 仅警告模式（标准标题检查不阻断）
+    python scripts/ci/check_iteration_docs_placeholders.py --warn-only
 
 退出码:
     0 - 检查通过或 --stats-only 模式
@@ -48,14 +52,16 @@ class PlaceholderViolation:
     file: Path
     line_number: int
     line_content: str
-    violation_type: str  # "placeholder" 或 "usage_instruction"
+    violation_type: str  # "placeholder", "usage_instruction", 或 "missing_heading"
     matched_text: str
 
     def __str__(self) -> str:
         if self.violation_type == "placeholder":
             return f"{self.file}:{self.line_number}: 模板占位符未替换: {self.matched_text}"
-        else:
+        elif self.violation_type == "usage_instruction":
             return f"{self.file}:{self.line_number}: 模板使用说明未移除: {self.matched_text}"
+        else:  # missing_heading
+            return f"{self.file}:{self.line_number}: 缺少标准标题: {self.matched_text}"
 
 
 # ============================================================================
@@ -93,6 +99,16 @@ USAGE_INSTRUCTION_PATTERNS = [
 
 # 代码块边界模式
 CODE_BLOCK_PATTERN = re.compile(r"^(`{3}|~{3})")
+
+# Regression 文件标准标题（必须存在）
+# 顺序表示推荐的结构顺序
+REGRESSION_REQUIRED_HEADINGS = [
+    "## 执行信息",
+    "## 最小门禁命令块",
+]
+
+# H2 标题模式
+H2_HEADING_PATTERN = re.compile(r"^##\s+(.+)$")
 
 
 # ============================================================================
@@ -215,12 +231,68 @@ def scan_file_for_usage_instructions(
                 break
 
 
-def scan_file(file_path: Path) -> List[PlaceholderViolation]:
+def scan_file_for_required_headings(
+    file_path: Path,
+    required_headings: Optional[List[str]] = None,
+) -> Iterator[PlaceholderViolation]:
+    """
+    扫描文件是否包含必需的标准标题。
+
+    仅对 regression 文件执行此检查。
+
+    Args:
+        file_path: 要扫描的文件路径
+        required_headings: 必需的标题列表（默认使用 REGRESSION_REQUIRED_HEADINGS）
+
+    Yields:
+        PlaceholderViolation 对象（缺少的标题）
+    """
+    # 仅对 regression 文件检查
+    if "_regression.md" not in file_path.name:
+        return
+
+    if required_headings is None:
+        required_headings = REGRESSION_REQUIRED_HEADINGS
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, PermissionError) as e:
+        print(f"[WARN] 无法读取文件 {file_path}: {e}", file=sys.stderr)
+        return
+
+    lines = content.splitlines()
+
+    # 收集文件中所有的 H2 标题
+    found_headings: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        match = H2_HEADING_PATTERN.match(stripped)
+        if match:
+            # 保存完整的标题行（## + 标题内容）
+            found_headings.add(stripped)
+
+    # 检查必需标题是否存在
+    for heading in required_headings:
+        if heading not in found_headings:
+            yield PlaceholderViolation(
+                file=file_path,
+                line_number=0,  # 0 表示整个文件层面的问题
+                line_content="",
+                violation_type="missing_heading",
+                matched_text=heading,
+            )
+
+
+def scan_file(
+    file_path: Path,
+    check_required_headings: bool = True,
+) -> List[PlaceholderViolation]:
     """
     扫描单个文件的所有违规。
 
     Args:
         file_path: 要扫描的文件路径
+        check_required_headings: 是否检查必需标题（默认 True）
 
     Returns:
         违规列表
@@ -233,6 +305,10 @@ def scan_file(file_path: Path) -> List[PlaceholderViolation]:
     # 检测使用说明区块
     violations.extend(scan_file_for_usage_instructions(file_path))
 
+    # 检测必需标题（仅 regression 文件）
+    if check_required_headings:
+        violations.extend(scan_file_for_required_headings(file_path))
+
     return violations
 
 
@@ -244,6 +320,7 @@ def scan_file(file_path: Path) -> List[PlaceholderViolation]:
 def run_check(
     verbose: bool = False,
     project_root: Optional[Path] = None,
+    check_required_headings: bool = True,
 ) -> tuple[List[PlaceholderViolation], int]:
     """
     执行模板占位符检查。
@@ -251,6 +328,7 @@ def run_check(
     Args:
         verbose: 是否显示详细输出
         project_root: 项目根目录（None 则自动检测）
+        check_required_headings: 是否检查必需标题（默认 True）
 
     Returns:
         (违规列表, 总扫描文件数)
@@ -276,14 +354,20 @@ def run_check(
     violations: List[PlaceholderViolation] = []
 
     for file_path in files:
-        file_violations = scan_file(file_path)
+        file_violations = scan_file(
+            file_path,
+            check_required_headings=check_required_headings,
+        )
         violations.extend(file_violations)
 
         if verbose and file_violations:
             rel_path = file_path.relative_to(project_root)
             print(f"  ❌ {rel_path}: {len(file_violations)} 个违规")
             for v in file_violations[:5]:  # 最多显示 5 个
-                print(f"     第 {v.line_number} 行: {v.matched_text}")
+                if v.line_number > 0:
+                    print(f"     第 {v.line_number} 行: {v.matched_text}")
+                else:
+                    print(f"     文件级: {v.matched_text}")
             if len(file_violations) > 5:
                 print(f"     ... 及其他 {len(file_violations) - 5} 个")
 
@@ -295,6 +379,7 @@ def print_report(
     total_files: int,
     verbose: bool = False,
     project_root: Optional[Path] = None,
+    warn_only_headings: bool = False,
 ) -> None:
     """
     打印检查报告。
@@ -304,6 +389,7 @@ def print_report(
         total_files: 总扫描文件数
         verbose: 是否显示详细输出
         project_root: 项目根目录
+        warn_only_headings: 是否仅警告标准标题问题（不阻断）
     """
     if project_root is None:
         project_root = get_project_root()
@@ -320,8 +406,12 @@ def print_report(
     # 按类型统计
     placeholder_count = sum(1 for v in violations if v.violation_type == "placeholder")
     instruction_count = sum(1 for v in violations if v.violation_type == "usage_instruction")
+    heading_count = sum(1 for v in violations if v.violation_type == "missing_heading")
     print(f"  - 模板占位符:  {placeholder_count}")
     print(f"  - 使用说明:    {instruction_count}")
+    print(f"  - 缺少标题:    {heading_count}")
+    if warn_only_headings and heading_count > 0:
+        print("    (--warn-only 模式: 标准标题检查不阻断)")
     print()
 
     if violations:
@@ -340,6 +430,7 @@ def print_report(
             # 分类显示
             placeholders = [v for v in vlist if v.violation_type == "placeholder"]
             instructions = [v for v in vlist if v.violation_type == "usage_instruction"]
+            missing_headings = [v for v in vlist if v.violation_type == "missing_heading"]
 
             if instructions:
                 print("  模板使用说明（应移除）:")
@@ -355,6 +446,12 @@ def print_report(
                 if len(placeholders) > 10:
                     print(f"    ... 及其他 {len(placeholders) - 10} 条")
 
+            if missing_headings:
+                mode_indicator = " [WARN]" if warn_only_headings else ""
+                print(f"  缺少标准标题{mode_indicator}:")
+                for v in missing_headings:
+                    print(f"    - {v.matched_text}")
+
         print()
         print("-" * 70)
         print()
@@ -368,6 +465,11 @@ def print_report(
         print("  2. 模板使用说明未移除:")
         print("     移除文件顶部的使用说明区块:")
         print("     > **使用说明**：复制本模板到 ...")
+        print()
+        print("  3. 缺少标准标题 (regression 文件):")
+        print("     确保 regression 文件包含以下标准标题:")
+        for heading in REGRESSION_REQUIRED_HEADINGS:
+            print(f"       - {heading}")
         print()
         print("  参考模板:")
         print("     - docs/acceptance/_templates/iteration_plan.template.md")
@@ -399,6 +501,11 @@ def main() -> int:
         action="store_true",
         help="仅统计，不阻断（始终返回 0）",
     )
+    parser.add_argument(
+        "--warn-only",
+        action="store_true",
+        help="仅警告模式：标准标题检查不阻断（占位符和使用说明仍然阻断）",
+    )
 
     args = parser.parse_args()
 
@@ -412,6 +519,7 @@ def main() -> int:
     violations, total_files = run_check(
         verbose=args.verbose,
         project_root=project_root,
+        check_required_headings=True,
     )
 
     print_report(
@@ -419,6 +527,7 @@ def main() -> int:
         total_files,
         verbose=args.verbose,
         project_root=project_root,
+        warn_only_headings=args.warn_only,
     )
 
     # 确定退出码
@@ -428,9 +537,23 @@ def main() -> int:
         print("[OK] 退出码: 0")
         return 0
 
-    if violations:
+    # 计算阻断性违规
+    blocking_violations = violations
+    if args.warn_only:
+        # --warn-only 模式下，标准标题问题不阻断
+        blocking_violations = [
+            v for v in violations if v.violation_type != "missing_heading"
+        ]
+        heading_warnings = [
+            v for v in violations if v.violation_type == "missing_heading"
+        ]
+        if heading_warnings:
+            print()
+            print(f"[WARN] 标准标题警告: {len(heading_warnings)} 条（不阻断）")
+
+    if blocking_violations:
         print()
-        print(f"[FAIL] 存在 {len(violations)} 个违规")
+        print(f"[FAIL] 存在 {len(blocking_violations)} 个阻断性违规")
         print("[FAIL] 退出码: 1")
         return 1
 

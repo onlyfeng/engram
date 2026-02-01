@@ -29,8 +29,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-# 导入共享日期工具
-from _date_utils import utc_today
+from scripts.ci._date_utils import utc_today
 
 # ============================================================================
 # 配置

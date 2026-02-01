@@ -16,14 +16,7 @@ resolve_mypy_gate.py 脚本的单元测试
 
 from __future__ import annotations
 
-# 导入待测试的模块
-import sys
-from pathlib import Path
-
-# 添加 scripts/ci 到路径
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-
-from resolve_mypy_gate import (
+from scripts.ci.resolve_mypy_gate import (
     extract_branch_from_ref,
     resolve_gate,
 )

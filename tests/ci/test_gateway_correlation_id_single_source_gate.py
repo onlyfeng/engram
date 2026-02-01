@@ -24,10 +24,7 @@ from pathlib import Path
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from scripts.ci.check_gateway_correlation_id_single_source import (  # noqa: E402
+from scripts.ci.check_gateway_correlation_id_single_source import (
     FORBIDDEN_FUNCTION_DEFINITIONS,
     FORBIDDEN_PATTERNS,
     SCAN_DIRECTORY,
@@ -37,6 +34,7 @@ from scripts.ci.check_gateway_correlation_id_single_source import (  # noqa: E40
     scan_gateway_directory,
     verify_single_source_file,
 )
+from tests.ci.helpers.subprocess_env import get_subprocess_env
 
 # ============================================================================
 # 辅助函数
@@ -127,6 +125,7 @@ class TestScriptSubprocess:
             [sys.executable, str(script_path), "--project-root", str(project_root)],
             capture_output=True,
             text=True,
+            env=get_subprocess_env(project_root),
             cwd=str(project_root),
         )
 
@@ -153,6 +152,7 @@ class TestScriptSubprocess:
             ],
             capture_output=True,
             text=True,
+            env=get_subprocess_env(project_root),
             cwd=str(project_root),
         )
 

@@ -12,17 +12,13 @@ tests/test_mypy_gate.py
 from __future__ import annotations
 
 import os
-import sys
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-
-from check_mypy_gate import (
+from scripts.ci.check_mypy_gate import (
     STRICT_ISLAND_MODULES,
     load_baseline,
     load_strict_island_paths,
@@ -1172,10 +1168,7 @@ class TestDeprecatedScriptSubprocessBehavior:
 # resolve_mypy_gate.py 集成测试
 # ============================================================================
 
-# 导入 resolve_mypy_gate 模块（需要先设置 sys.path）
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ci"))
-
-from resolve_mypy_gate import extract_branch_from_ref, resolve_gate  # noqa: E402
+from scripts.ci.resolve_mypy_gate import extract_branch_from_ref, resolve_gate
 
 
 class TestResolveMypyGate:

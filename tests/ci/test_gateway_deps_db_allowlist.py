@@ -13,7 +13,6 @@ tests/ci/test_gateway_deps_db_allowlist.py
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
@@ -21,10 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-# 将 scripts/ci 加入 path 以便导入
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "ci"))
-
-from check_gateway_deps_db_allowlist import (
+from scripts.ci.check_gateway_deps_db_allowlist import (
     DATE_PATTERN,
     ID_PATTERN,
     OWNER_PATTERN,
@@ -1158,7 +1154,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         self, tmp_path: Path, minimal_schema: dict
     ) -> None:
         """验证 JSON 输出在 warn-only 模式下包含 exceeds_max_expiry_entries 且 ok=true。"""
-        from check_gateway_deps_db_allowlist import main
+        from scripts.ci.check_gateway_deps_db_allowlist import main
 
         fixed_today = date(2026, 1, 1)
         expires_date = date(2026, 8, 1)  # 超过 180 天
@@ -1199,7 +1195,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
                 # 不传 --fail-on-max-expiry（warn-only 模式）
             ],
         ):
-            with patch("check_gateway_deps_db_allowlist.utc_today", return_value=fixed_today):
+            with patch(
+                "scripts.ci.check_gateway_deps_db_allowlist.utc_today", return_value=fixed_today
+            ):
                 captured = StringIO()
                 with patch("sys.stdout", captured):
                     exit_code = main()
@@ -1220,7 +1218,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         self, tmp_path: Path, minimal_schema: dict
     ) -> None:
         """验证 JSON 输出在 fail-on-max-expiry 模式下 ok=false 且 errors 非空。"""
-        from check_gateway_deps_db_allowlist import main
+        from scripts.ci.check_gateway_deps_db_allowlist import main
 
         fixed_today = date(2026, 1, 1)
         expires_date = date(2026, 8, 1)  # 超过 180 天
@@ -1261,7 +1259,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
                 "--fail-on-max-expiry",  # fail 模式
             ],
         ):
-            with patch("check_gateway_deps_db_allowlist.utc_today", return_value=fixed_today):
+            with patch(
+                "scripts.ci.check_gateway_deps_db_allowlist.utc_today", return_value=fixed_today
+            ):
                 captured = StringIO()
                 with patch("sys.stdout", captured):
                     exit_code = main()
@@ -1343,7 +1343,7 @@ class TestMainFunction:
         minimal_schema: dict,
     ) -> None:
         """有效 allowlist 应返回 0。"""
-        from check_gateway_deps_db_allowlist import main
+        from scripts.ci.check_gateway_deps_db_allowlist import main
 
         allowlist_file = tmp_path / "allowlist.json"
         schema_file = tmp_path / "schema.json"
@@ -1377,7 +1377,7 @@ class TestMainFunction:
         minimal_schema: dict,
     ) -> None:
         """无效 allowlist 应返回 1。"""
-        from check_gateway_deps_db_allowlist import main
+        from scripts.ci.check_gateway_deps_db_allowlist import main
 
         # 缺少必需字段的 allowlist
         invalid_data = {
@@ -1418,7 +1418,7 @@ class TestMainFunction:
         minimal_schema: dict,
     ) -> None:
         """--json 应输出有效 JSON。"""
-        from check_gateway_deps_db_allowlist import main
+        from scripts.ci.check_gateway_deps_db_allowlist import main
 
         allowlist_file = tmp_path / "allowlist.json"
         schema_file = tmp_path / "schema.json"
