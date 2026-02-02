@@ -73,6 +73,25 @@ make format          # 修复格式问题
 ruff check --fix .   # 自动修复 lint 问题
 ```
 
+### 迭代草稿与记录（`.iteration/`）
+
+- **设计目的**：用于“迭代计划/回归记录”的草稿与工作追踪（含当前进度/待办/备注），是否纳入版本控制由项目自行决定；迭代成熟后可晋升到 `docs/acceptance/` 作为 SSOT。
+- **推荐工作流**：
+  - 初始化：`make iteration-init-next`（或 `make iteration-init N=<n>`）
+  - 编辑：`.iteration/<N>/plan.md` 与 `.iteration/<N>/regression.md`
+  - 晋升：`make iteration-promote N=<N>`
+  - 验证：`make check-iteration-docs`
+- **协作/审核边界**：
+  - 若 `.iteration/` **不纳入版本控制**：代码评审不可直接看到；需要对外对齐/留痕时，优先“晋升到 SSOT”或“导出分享”。版本化文档中**禁止**出现指向 `.iteration/` 的 Markdown 链接（避免链接失效；CI 也会检查）。
+  - 若 `.iteration/` **纳入版本控制**：可作为协作文档参与评审，但仍建议将“权威索引/验收结果/长期引用”沉淀到 `docs/acceptance/`。
+  - 详细规则见 `docs/dev/iteration_local_drafts.md` 与 `docs/dev/iteration_runbook.md`
+
+### 优先使用 Engram 记录（若 MCP/Gateway 可用）
+
+- **触发条件**：Cursor 已配置并可连通 `configs/mcp/.mcp.json.example` 指向的 Gateway `/mcp`（可按 `docs/gateway/02_mcp_integration_cursor.md` 做健康检查与 `tools/list` 验证）。
+- **后续记录策略**：当 Engram MCP 可用时，将迭代执行过程中的**进度更新/决策/回归笔记/证据引用**优先写入 Engram（MCP 工具如 `memory_store`、`evidence_upload`），作为可审计、可共享的记录面。
+- **迁移策略**：如本地存在 `.iteration/<N>/{plan,regression}.md`，可将其内容按“迭代编号/文档类型/来源路径”等元信息写入 Engram；迁移后可将 `.iteration/` 仅作为本地临时草稿区继续使用或逐步收敛到 Engram。
+
 ---
 
 ## 标准执行顺序
