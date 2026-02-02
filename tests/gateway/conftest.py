@@ -349,23 +349,13 @@ def db_conn(migrated_db: dict) -> Generator[psycopg.Connection, None, None]:
         error_msg = str(e).lower()
         if "connection refused" in error_msg:
             pytest.skip(
-                f"数据库连接被拒绝\n"
-                f"测试数据库可能已被删除或 PostgreSQL 服务已停止。\n"
-                f"详细错误: {e}"
+                f"数据库连接被拒绝\n测试数据库可能已被删除或 PostgreSQL 服务已停止。\n详细错误: {e}"
             )
         else:
-            pytest.skip(
-                f"无法连接测试数据库\n"
-                f"DSN: {dsn.split('@')[0]}@...\n"
-                f"详细错误: {e}"
-            )
+            pytest.skip(f"无法连接测试数据库\nDSN: {dsn.split('@')[0]}@...\n详细错误: {e}")
         return
     except Exception as e:
-        pytest.skip(
-            f"无法连接测试数据库\n"
-            f"错误类型: {type(e).__name__}\n"
-            f"详细错误: {e}"
-        )
+        pytest.skip(f"无法连接测试数据库\n错误类型: {type(e).__name__}\n详细错误: {e}")
         return
 
     try:
@@ -398,23 +388,13 @@ def db_conn_committed(migrated_db: dict) -> Generator[psycopg.Connection, None, 
         error_msg = str(e).lower()
         if "connection refused" in error_msg:
             pytest.skip(
-                f"数据库连接被拒绝\n"
-                f"测试数据库可能已被删除或 PostgreSQL 服务已停止。\n"
-                f"详细错误: {e}"
+                f"数据库连接被拒绝\n测试数据库可能已被删除或 PostgreSQL 服务已停止。\n详细错误: {e}"
             )
         else:
-            pytest.skip(
-                f"无法连接测试数据库\n"
-                f"DSN: {dsn.split('@')[0]}@...\n"
-                f"详细错误: {e}"
-            )
+            pytest.skip(f"无法连接测试数据库\nDSN: {dsn.split('@')[0]}@...\n详细错误: {e}")
         return
     except Exception as e:
-        pytest.skip(
-            f"无法连接测试数据库\n"
-            f"错误类型: {type(e).__name__}\n"
-            f"详细错误: {e}"
-        )
+        pytest.skip(f"无法连接测试数据库\n错误类型: {type(e).__name__}\n详细错误: {e}")
         return
 
     try:

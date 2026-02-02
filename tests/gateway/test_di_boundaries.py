@@ -1337,9 +1337,7 @@ class TestOpenMemoryClientCheckWithoutEnvSideEffects:
         mock_init = MagicMock(return_value=None)
 
         try:
-            with patch(
-                "engram.gateway.openmemory_client.OpenMemoryClient.__init__", mock_init
-            ):
+            with patch("engram.gateway.openmemory_client.OpenMemoryClient.__init__", mock_init):
                 # 调用 get_client_or_none 不应触发构造
                 result = get_client_or_none()
 
