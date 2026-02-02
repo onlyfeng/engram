@@ -538,7 +538,7 @@ class TestMrIdConsistencyAcrossScripts:
 # ---------- GitLab 增量同步去重/边界测试 ----------
 
 # 导入增量同步相关模块
-from scm_sync_gitlab_commits import (
+from engram.logbook.scm_sync_tasks.gitlab_commits import (
     GitCommit,
     _deduplicate_commits,
     _get_commit_timestamp,
@@ -791,7 +791,7 @@ class TestIncrementalSyncConfig:
 # ---------- Strict 模式与 Diff Mode 测试 ----------
 
 
-from scm_sync_gitlab_commits import (
+from engram.logbook.scm_sync_tasks.gitlab_commits import (
     DiffMode,
     SyncConfig,
     is_unrecoverable_api_error,

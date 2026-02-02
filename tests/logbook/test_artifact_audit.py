@@ -16,8 +16,6 @@ test_artifact_audit.py - 制品审计工具测试
 """
 
 import json
-import os
-import sys
 import threading
 import time
 from datetime import datetime
@@ -26,22 +24,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# 添加 scripts 目录到 path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from artifact_audit import (
-    ArtifactAuditor,
-    AuditResult,
-    AuditSummary,
-    RateLimiter,
-    parse_args,
-)
 from engram.logbook.artifact_store import (
     FileUriStore,
     LocalArtifactsStore,
     ObjectStore,
 )
 from engram.logbook.hashing import sha256 as compute_sha256
+from scripts.artifact_audit import (
+    ArtifactAuditor,
+    AuditResult,
+    AuditSummary,
+    RateLimiter,
+    parse_args,
+)
 
 # =============================================================================
 # Fixtures
@@ -949,9 +944,9 @@ class TestStoreSelection:
         mock_config.artifacts.allowed_prefixes = None
         mock_config.artifacts.policy = None
 
-        with patch("artifact_audit.get_app_config", return_value=mock_config):
+        with patch("scripts.artifact_audit.get_app_config", return_value=mock_config):
             with patch(
-                "artifact_audit.get_artifact_store_from_config",
+                "scripts.artifact_audit.get_artifact_store_from_config",
                 return_value=LocalArtifactsStore(root=artifacts_root),
             ) as mock_get_store:
                 auditor = ArtifactAuditor(
@@ -975,9 +970,9 @@ class TestStoreSelection:
         # Mock ObjectStore
         mock_object_store = MagicMock(spec=ObjectStore)
 
-        with patch("artifact_audit.get_app_config"):
+        with patch("scripts.artifact_audit.get_app_config"):
             with patch(
-                "artifact_audit.get_artifact_store_from_config",
+                "scripts.artifact_audit.get_artifact_store_from_config",
                 return_value=mock_object_store,
             ) as mock_get_store:
                 auditor = ArtifactAuditor(
@@ -1001,9 +996,9 @@ class TestStoreSelection:
 
         mock_object_store = MagicMock(spec=ObjectStore)
 
-        with patch("artifact_audit.get_app_config"):
+        with patch("scripts.artifact_audit.get_app_config"):
             with patch(
-                "artifact_audit.get_artifact_store_from_config",
+                "scripts.artifact_audit.get_artifact_store_from_config",
                 return_value=mock_object_store,
             ) as mock_get_store:
                 auditor = ArtifactAuditor(
@@ -1032,9 +1027,9 @@ class TestStoreSelection:
             "size_bytes": 1024,
         }
 
-        with patch("artifact_audit.get_app_config"):
+        with patch("scripts.artifact_audit.get_app_config"):
             with patch(
-                "artifact_audit.get_artifact_store_from_config",
+                "scripts.artifact_audit.get_artifact_store_from_config",
                 return_value=mock_object_store,
             ):
                 auditor = ArtifactAuditor(
@@ -1083,9 +1078,9 @@ class TestHeadOnlyMode:
         mock_object_store._get_client.return_value = mock_client
         mock_object_store._object_key.return_value = "test/file.txt"
 
-        with patch("artifact_audit.get_app_config"):
+        with patch("scripts.artifact_audit.get_app_config"):
             with patch(
-                "artifact_audit.get_artifact_store_from_config",
+                "scripts.artifact_audit.get_artifact_store_from_config",
                 return_value=mock_object_store,
             ):
                 auditor = ArtifactAuditor(
@@ -1127,9 +1122,9 @@ class TestHeadOnlyMode:
         mock_object_store._get_client.return_value = mock_client
         mock_object_store._object_key.return_value = "test/file.txt"
 
-        with patch("artifact_audit.get_app_config"):
+        with patch("scripts.artifact_audit.get_app_config"):
             with patch(
-                "artifact_audit.get_artifact_store_from_config",
+                "scripts.artifact_audit.get_artifact_store_from_config",
                 return_value=mock_object_store,
             ):
                 auditor = ArtifactAuditor(

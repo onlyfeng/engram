@@ -55,11 +55,11 @@
         "type": "directory"
       },
       {
-        "id": "db_bootstrap",
-        "description": "DB bootstrap 脚本（服务账号初始化）",
-        "source_path": "db_bootstrap.py",
-        "target_path": "db_bootstrap.py",
-        "type": "file"
+        "id": "scripts",
+        "description": "运维脚本（含 db_bootstrap）",
+        "source_path": "scripts",
+        "target_path": "scripts",
+        "type": "directory"
       },
       {
         "id": "pyproject",

@@ -10,16 +10,12 @@ test_gitlab_commits_windowed_incremental.py - GitLab Commits 窗口化增量同�
 5. 使用 mock GitLabClient 模拟"最新优先分页"的 commits
 """
 
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from scm_sync_gitlab_commits import (
+from engram.logbook.scm_sync_tasks.gitlab_commits import (
     AdaptiveWindowState,
     GitCommit,
     compute_batch_cursor_target,
@@ -804,7 +800,7 @@ class TestPayloadSuggestedParameterOverride:
         验证 payload 中的 suggested_batch_size 覆盖默认值
         """
         from engram.logbook.scm_auth import TokenProvider
-        from scm_sync_gitlab_commits import DiffMode, SyncConfig
+        from engram.logbook.scm_sync_tasks.gitlab_commits import DiffMode, SyncConfig
 
         # 创建一个简单的 token provider
         class DummyTokenProvider(TokenProvider):
@@ -861,7 +857,7 @@ class TestPayloadSuggestedParameterOverride:
         验证 payload 中部分参数覆盖，其他保持默认
         """
         from engram.logbook.scm_auth import TokenProvider
-        from scm_sync_gitlab_commits import DiffMode, SyncConfig
+        from engram.logbook.scm_sync_tasks.gitlab_commits import DiffMode, SyncConfig
 
         class DummyTokenProvider(TokenProvider):
             def get_token(self) -> str:
@@ -913,7 +909,7 @@ class TestPayloadSuggestedParameterOverride:
         验证 payload 中 None 值不覆盖默认配置
         """
         from engram.logbook.scm_auth import TokenProvider
-        from scm_sync_gitlab_commits import DiffMode, SyncConfig
+        from engram.logbook.scm_sync_tasks.gitlab_commits import DiffMode, SyncConfig
 
         class DummyTokenProvider(TokenProvider):
             def get_token(self) -> str:
@@ -967,7 +963,7 @@ class TestPayloadSuggestedParameterOverride:
         验证空 payload 或无 payload 时保持默认配置
         """
         from engram.logbook.scm_auth import TokenProvider
-        from scm_sync_gitlab_commits import DiffMode, SyncConfig
+        from engram.logbook.scm_sync_tasks.gitlab_commits import DiffMode, SyncConfig
 
         class DummyTokenProvider(TokenProvider):
             def get_token(self) -> str:
@@ -1093,7 +1089,7 @@ class TestWindowedSyncWithDegradation:
         """
         降级后的 forward_window_seconds 影响时间窗口计算
         """
-        from scm_sync_gitlab_commits import compute_commit_fetch_window
+        from engram.logbook.scm_sync_tasks.gitlab_commits import compute_commit_fetch_window
 
         now = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
         cursor_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)

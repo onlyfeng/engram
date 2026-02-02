@@ -9,14 +9,9 @@ test_materialize_cli.py - scm_materialize_patch_blob CLI 单测
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-# 添加 scripts 目录到 path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from scm_materialize_patch_blob import (
+from engram.logbook.materialize_patch_blob import (
     MaterializeResult,
     MaterializeStatus,
     PatchBlobRecord,

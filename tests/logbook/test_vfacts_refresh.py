@@ -260,20 +260,20 @@ class TestCLIRefreshVfactsCommand:
 
     def test_cli_has_refresh_vfacts_command(self):
         """测试 CLI 包含 refresh-vfacts 命令"""
-        from logbook_cli_main import scm_app
+        from scripts.logbook_cli_main import scm_app
 
         # 获取已注册的命令
         command_names = [cmd.name for cmd in scm_app.registered_commands]
 
         assert "refresh-vfacts" in command_names
 
-    @patch("logbook_cli_main.get_connection")
-    @patch("logbook_cli_main.load_config")
+    @patch("scripts.logbook_cli_main.get_connection")
+    @patch("scripts.logbook_cli_main.load_config")
     def test_cli_refresh_dry_run(self, mock_load_config, mock_get_conn, capsys):
         """测试 CLI dry-run 模式"""
         from typer.testing import CliRunner
 
-        from logbook_cli_main import app
+        from scripts.logbook_cli_main import app
 
         runner = CliRunner()
 

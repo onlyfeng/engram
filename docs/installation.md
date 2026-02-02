@@ -123,7 +123,7 @@ make setup-db
 
 > **入口策略说明**: 
 > - `pyproject.toml [project.scripts]` + `python -m engram.*` 为**权威入口**
-> - 根目录与 `logbook_postgres/scripts/` 的脚本均为**薄包装器，已弃用**
+> - 根目录脚本已在 v2.0 移除，`logbook_postgres/scripts/` 为历史遗留目录（不再推荐）
 >
 > 推荐使用:
 > - Bootstrap: `engram-bootstrap-roles`
@@ -132,7 +132,7 @@ make setup-db
 > - SCM Sync: `engram-scm-scheduler`, `engram-scm-worker`, `engram-scm-reaper`, `engram-scm-status`, `engram-scm run`
 > - Artifacts: `engram-artifacts`
 >
-> **弃用说明**: `python scripts/db_bootstrap.py`、`python scm_sync_*.py`、`python artifact_cli.py` 等脚本已弃用，将在 v1.0 移除。
+> **弃用说明**: 旧脚本入口（根目录与部分 `scripts/` wrapper）已在 v2.0 移除，请改用 `engram-*` 或 `python -m engram.*`。
 
 ## 3. 安装 Engram
 

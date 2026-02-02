@@ -550,40 +550,10 @@ class TestLegacyEntryPointsDeprecation:
         """获取项目根目录"""
         return Path(__file__).parent.parent.parent
 
-    def test_db_bootstrap_help_shows_deprecation_warning(self, project_root):
-        """python db_bootstrap.py --help 应输出弃用提示"""
+    def test_db_bootstrap_wrapper_removed(self, project_root):
+        """根目录 db_bootstrap.py 已在 v2.0 移除"""
         script_path = project_root / "db_bootstrap.py"
-        if not script_path.exists():
-            pytest.skip("db_bootstrap.py 不存在")
-
-        result = subprocess.run(
-            [sys.executable, str(script_path), "--help"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(project_root),
-        )
-        # 应该成功或显示帮助
-        assert result.returncode in (0, 1, 2), f"stderr: {result.stderr}"
-        # 检查弃用警告（在 stderr 或 stdout 中）
-        combined_output = result.stderr + result.stdout
-        # 弃用警告应该包含 "弃用" 或 "deprecated" 或 "scripts/db_bootstrap"
-        has_deprecation = (
-            "弃用" in combined_output
-            or "deprecated" in combined_output.lower()
-            or "scripts/db_bootstrap" in combined_output
-            or "scripts" in combined_output
-        )
-        # 如果脚本设计为转发，检查是否有帮助输出
-        has_help = (
-            "--dsn" in combined_output
-            or "usage" in combined_output.lower()
-            or "help" in combined_output.lower()
-        )
-        assert has_deprecation or has_help, (
-            f"db_bootstrap.py --help 应显示弃用警告或帮助信息\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        assert not script_path.exists(), "db_bootstrap.py 不应再存在"
 
     def test_scm_sync_status_help_runs(self, project_root):
         """python scm_sync_status.py --help 应能正常运行"""

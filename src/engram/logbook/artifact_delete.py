@@ -359,18 +359,6 @@ def _delete_object_store_artifact(
     """
     normalized_uri = normalize_uri(uri)
 
-    # 严格检查 bucket 配置
-    bucket = store.bucket
-    if bucket is None:
-        raise ArtifactDeleteConfigurationError(
-            "对象存储 bucket 未配置。\n"
-            "请设置 ENGRAM_S3_BUCKET 环境变量或在 config.toml 中配置 bucket",
-            {
-                "uri": normalized_uri,
-                "hint": "设置 ENGRAM_S3_BUCKET 环境变量",
-            },
-        )
-
     # 强制 ops 凭证检查
     if require_ops and not store.is_ops_credentials():
         raise ArtifactDeleteOpsCredentialsRequiredError(
@@ -380,6 +368,18 @@ def _delete_object_store_artifact(
                 "uri": normalized_uri,
                 "using_ops_credentials": store.using_ops_credentials,
                 "hint": "设置 ENGRAM_S3_USE_OPS=true 来使用 ops 凭证",
+            },
+        )
+
+    # 严格检查 bucket 配置
+    bucket = store.bucket
+    if bucket is None:
+        raise ArtifactDeleteConfigurationError(
+            "对象存储 bucket 未配置。\n"
+            "请设置 ENGRAM_S3_BUCKET 环境变量或在 config.toml 中配置 bucket",
+            {
+                "uri": normalized_uri,
+                "hint": "设置 ENGRAM_S3_BUCKET 环境变量",
             },
         )
 

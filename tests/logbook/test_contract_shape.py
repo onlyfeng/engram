@@ -340,7 +340,7 @@ class TestIdentitySyncContractShape:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from identity_sync import SyncStats
+        from engram.logbook.identity_sync import SyncStats
 
         stats = SyncStats(
             users_inserted=2,
@@ -394,7 +394,7 @@ accounts:
         }.get(key, f"mock_{key}")
 
         from engram.logbook.errors import make_success_result
-        from identity_sync import sync_identities
+        from engram.logbook.identity_sync import sync_identities
 
         with patch("engram_logbook.db.get_config", return_value=mock_config):
             stats = sync_identities(
@@ -490,7 +490,7 @@ class TestScmCliContractShape:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_ok_result
+        from scripts.logbook_cli_main import make_ok_result
 
         # 模拟成功响应
         result = make_ok_result(
@@ -524,7 +524,7 @@ class TestScmCliContractShape:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_ok_result
+        from scripts.logbook_cli_main import make_ok_result
 
         # 模拟成功响应（按契约定义）
         result = make_ok_result(
@@ -558,7 +558,7 @@ class TestScmCliContractShape:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_ok_result
+        from scripts.logbook_cli_main import make_ok_result
 
         # 模拟成功响应（按契约定义）
         result = make_ok_result(
@@ -586,7 +586,7 @@ class TestScmCliContractShape:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_ok_result
+        from scripts.logbook_cli_main import make_ok_result
 
         # 模拟成功响应（按契约定义）
         result = make_ok_result(
@@ -622,7 +622,7 @@ class TestScmCliContractShape:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_ok_result
+        from scripts.logbook_cli_main import make_ok_result
 
         # 模拟成功响应（按契约定义）
         result = make_ok_result(
@@ -658,7 +658,7 @@ class TestScmCliContractShape:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_err_result
+        from scripts.logbook_cli_main import make_err_result
 
         # 模拟错误响应
         result = make_err_result(
@@ -1572,7 +1572,7 @@ class TestOkFieldConsistency:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_err_result, make_ok_result
+        from scripts.logbook_cli_main import make_err_result, make_ok_result
 
         success = make_ok_result(repo_id=123)
         error = make_err_result(code="TEST", message="test")
@@ -1593,7 +1593,7 @@ class TestOkFieldConsistency:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_ok_result
+        from scripts.logbook_cli_main import make_ok_result
 
         # 按契约构造 sync_svn 结果
         result = make_ok_result(
@@ -1620,7 +1620,7 @@ class TestOkFieldConsistency:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from logbook_cli_main import make_ok_result
+        from scripts.logbook_cli_main import make_ok_result
 
         result = make_ok_result(
             repo_id=123,

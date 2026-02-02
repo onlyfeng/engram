@@ -1,7 +1,7 @@
 # CLI 入口清单与调用规范
 
 > **状态**：当前  
-> **更新日期**：2026-01-31  
+> **更新日期**：2026-02-01  
 > **关联文档**：[iteration_2_plan.md](iteration_2_plan.md) (M1: 脚本入口收敛)
 
 ---
@@ -18,14 +18,14 @@
 |----------|------|----------|------|
 | **Console Scripts** | `pyproject.toml [project.scripts]` | 官方入口，推荐的调用方式 | 当前 |
 | **scripts/** | `scripts/` 目录 | 运维工具、CI 脚本、验证工具 | 长期保留 |
-| **根目录脚本** | 项目根目录 `*.py` | 已弃用的兼容入口（deprecated wrapper） | 待移除 |
+| **根目录脚本** | 项目根目录 `*.py` | 历史兼容入口（deprecated wrapper） | 已移除（v2.0） |
 | **logbook_postgres/scripts/** | 遗留目录 | 历史遗留，已无使用价值 | 待移除 |
 
 **职责原则**：
 
 - `console scripts`：用户和 CI 的官方调用入口，通过 `pip install` 后可直接使用
 - `scripts/`：不依赖包安装的独立运维脚本，主要用于 CI 流水线、一致性验证、本地调试
-- 根目录脚本：仅为向后兼容保留，输出 deprecation 警告后转发到官方入口
+- 根目录脚本：v2.0 已移除，请使用 console scripts 或 `scripts/`
 
 ---
 
@@ -48,26 +48,29 @@
 | `engram-scm-status` | `engram.logbook.cli.scm_sync:status_main` | 状态查询快捷入口 | scm |
 | `engram-scm-runner` | `engram.logbook.cli.scm_sync:runner_main` | Runner 快捷入口 | scm |
 
-### 1.2 根目录脚本（兼容入口）
+### 1.2 根目录脚本（已移除）
 
-位于项目根目录，为历史遗留或向后兼容目的保留：
+v2.0 已移除根目录兼容入口，以下清单仅用于历史追溯：
 
 | 脚本 | 功能描述 | 对应新入口 | 状态 |
 |------|----------|------------|------|
 | `db.py` | 数据库连接工具 | `engram.logbook.db` | 兼容保留 |
-| `db_migrate.py` | 数据库迁移 | `engram-migrate` | 待移除 |
-| `logbook_cli.py` | Logbook CLI | `engram-logbook` | 待移除 |
-| `logbook_cli_main.py` | Logbook CLI 入口 | `engram-logbook` | 待移除 |
-| `artifact_cli.py` | Artifact 操作 | `engram-logbook artifact` | 待移除 |
-| `artifact_migrate.py` | Artifact 迁移 | `engram-migrate` | 待移除 |
-| `identity_sync.py` | 身份同步工具 | TBD | 待评估 |
-| `kv.py` | KV 存储工具 | TBD | 待评估 |
+| `db_bootstrap.py` | 数据库初始化 | `engram-bootstrap-roles` | 已移除（v2.0） |
+| `db_migrate.py` | 数据库迁移 | `engram-migrate` | 已移除（v2.0） |
+| `logbook_cli.py` | Logbook CLI | `engram-logbook` | 已移除（v2.0） |
+| `logbook_cli_main.py` | Logbook CLI 入口 | `engram-logbook` | 已移除（v2.0） |
+| `artifact_cli.py` | Artifact 操作 | `engram-artifacts` | 已移除（v2.0） |
+| `artifact_gc.py` | Artifact 垃圾回收 | `engram-artifacts gc` | 已移除（v2.0） |
+| `artifact_migrate.py` | Artifact 迁移 | `engram-artifacts migrate` | 已移除（v2.0） |
+| `artifact_audit.py` | Artifact 审计 | `scripts/artifact_audit.py` | 已移除（v2.0） |
+| `identity_sync.py` | 身份同步工具 | `engram-identity-sync` | 已移除（v2.0） |
+| `kv.py` | KV 存储工具 | `engram.logbook.kv` | 兼容保留 |
 | `scm_repo.py` | SCM 仓库工具 | `engram.logbook.scm_repo` | 兼容保留 |
 | `scm_sync_runner.py` | SCM Sync 运行器 | `engram-scm-runner` | 待移除 |
 | `scm_sync_status.py` | SCM Sync 状态 | `engram-scm-status` | 待移除 |
 | `scm_sync_reaper.py` | SCM Sync 清理器 | `engram-scm-reaper` | 待移除 |
 | `scm_sync_worker.py` | SCM Sync Worker | `engram-scm-worker` | 待移除 |
-| `scm_sync_gitlab_commits.py` | GitLab Commits 同步 | `engram-scm-sync` | 待移除 |
+| `scm_sync_gitlab_commits.py` | GitLab Commits 同步 | `engram-scm-sync` | 已移除（v2.0） |
 | `scm_sync_gitlab_mrs.py` | GitLab MRs 同步 | `engram-scm-sync` | 待移除 |
 | `scm_sync_svn.py` | SVN 同步 | `engram-scm-sync` | 待移除 |
 
@@ -174,15 +177,15 @@ python scripts/verify_logbook_consistency.py
 - 运维脚本（不依赖包安装）
 - 开发调试
 
-### 优先级 4: 兼容入口（不推荐）
+### 优先级 4: 兼容入口（已移除）
 
 ```bash
-# 历史兼容，输出 deprecation 警告
+# v2.0 起已移除（历史兼容入口）
 python db_migrate.py --help
 python logbook_cli.py --help
 ```
 
-**注意**：这些入口将在兼容期结束后移除。
+**注意**：这些入口已在 v2.0 移除，请改用 console scripts。
 
 ---
 

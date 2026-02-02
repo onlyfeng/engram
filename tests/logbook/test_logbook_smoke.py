@@ -1269,7 +1269,7 @@ dsn = "{migrated_db["dsn"]}"
             sys.path.insert(0, str(scripts_dir))
 
         # 导入并调用 run_migrate
-        from db_migrate import run_migrate
+        from engram.logbook.migrate import run_migrate
 
         result = run_migrate(str(config_path))
 
@@ -1308,7 +1308,7 @@ class TestMigrateSelfCheckRegression:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from db_migrate import run_all_checks
+        from engram.logbook.migrate import run_all_checks
 
         conn = psycopg.connect(migrated_db["dsn"])
         try:
@@ -1428,7 +1428,7 @@ class TestDatabaseAutoCreate:
 
     def test_validate_db_name_valid(self):
         """测试合法的数据库名称"""
-        from db_migrate import validate_db_name
+        from engram.logbook.migrate import validate_db_name
 
         valid_names = [
             "proj_a",
@@ -1445,7 +1445,7 @@ class TestDatabaseAutoCreate:
 
     def test_validate_db_name_invalid(self):
         """测试非法的数据库名称"""
-        from db_migrate import validate_db_name
+        from engram.logbook.migrate import validate_db_name
 
         invalid_names = [
             ("", "空字符串"),
@@ -1464,7 +1464,7 @@ class TestDatabaseAutoCreate:
 
     def test_parse_db_name_from_dsn(self):
         """测试从 DSN 解析数据库名"""
-        from db_migrate import parse_db_name_from_dsn
+        from engram.logbook.migrate import parse_db_name_from_dsn
 
         cases = [
             ("postgresql://user:pass@localhost:5432/mydb", "mydb"),
@@ -1479,7 +1479,7 @@ class TestDatabaseAutoCreate:
 
     def test_replace_db_in_dsn(self):
         """测试替换 DSN 中的数据库名"""
-        from db_migrate import replace_db_in_dsn
+        from engram.logbook.migrate import replace_db_in_dsn
 
         dsn = "postgresql://user:pass@localhost:5432/old_db"
         new_dsn = replace_db_in_dsn(dsn, "new_db")
@@ -1489,7 +1489,7 @@ class TestDatabaseAutoCreate:
 
     def test_ensure_database_exists_no_admin_dsn(self):
         """测试无 admin_dsn 时跳过创建"""
-        from db_migrate import ensure_database_exists
+        from engram.logbook.migrate import ensure_database_exists
 
         result = ensure_database_exists(
             target_dsn="postgresql://user:pass@localhost/proj_a",
@@ -1504,7 +1504,7 @@ class TestDatabaseAutoCreate:
 
     def test_ensure_database_exists_invalid_name(self):
         """测试非法数据库名称时返回错误"""
-        from db_migrate import ensure_database_exists
+        from engram.logbook.migrate import ensure_database_exists
 
         result = ensure_database_exists(
             target_dsn="postgresql://user:pass@localhost/Invalid-Name",
@@ -1525,7 +1525,7 @@ class TestDatabaseAutoCreateIntegration:
 
         import psycopg
 
-        from db_migrate import (
+        from engram.logbook.migrate import (
             check_database_exists,
             ensure_database_exists,
             replace_db_in_dsn,
@@ -1571,7 +1571,7 @@ class TestDatabaseAutoCreateIntegration:
 
         import psycopg
 
-        from db_migrate import (
+        from engram.logbook.migrate import (
             check_database_exists,
             create_database,
             ensure_database_exists,
@@ -1616,7 +1616,7 @@ class TestDatabaseAutoCreateIntegration:
 
         import psycopg
 
-        from db_migrate import check_database_exists, replace_db_in_dsn, run_migrate
+        from engram.logbook.migrate import check_database_exists, replace_db_in_dsn, run_migrate
 
         admin_dsn = test_db_info["admin_dsn"]
 
@@ -1698,7 +1698,7 @@ class TestRolesAndGrants:
 
         import psycopg
 
-        from db_migrate import run_migrate
+        from engram.logbook.migrate import run_migrate
 
         dsn = test_db_info["dsn"]
 
@@ -1756,7 +1756,7 @@ class TestRolesAndGrants:
 
         import psycopg
 
-        from db_migrate import get_openmemory_schema, run_migrate
+        from engram.logbook.migrate import get_openmemory_schema, run_migrate
 
         dsn = test_db_info["dsn"]
 
@@ -1844,7 +1844,7 @@ class TestRolesAndGrants:
 
         import psycopg
 
-        from db_migrate import get_openmemory_schema, run_migrate
+        from engram.logbook.migrate import get_openmemory_schema, run_migrate
 
         dsn = test_db_info["dsn"]
         admin_dsn = test_db_info.get("admin_dsn", dsn)
@@ -1962,7 +1962,7 @@ class TestRolesAndGrants:
 
         import psycopg
 
-        from db_migrate import run_migrate
+        from engram.logbook.migrate import run_migrate
 
         dsn = test_db_info["dsn"]
 
@@ -2015,7 +2015,7 @@ class TestRolesAndGrants:
         """测试：不启用 --apply-roles 时跳过角色脚本"""
         import os
 
-        from db_migrate import run_migrate
+        from engram.logbook.migrate import run_migrate
 
         dsn = test_db_info["dsn"]
 
@@ -2324,7 +2324,7 @@ class TestOpenMemorySchemaConfig:
 
         import psycopg
 
-        from db_migrate import get_openmemory_schema, run_migrate
+        from engram.logbook.migrate import get_openmemory_schema, run_migrate
 
         dsn = test_db_info["dsn"]
 
@@ -2420,7 +2420,7 @@ class TestOpenMemorySchemaConfig:
 
         import psycopg
 
-        from db_migrate import run_all_checks, run_migrate
+        from engram.logbook.migrate import run_all_checks, run_migrate
 
         dsn = test_db_info["dsn"]
 
@@ -2488,7 +2488,7 @@ class TestOpenMemorySchemaConfig:
         """
         import os
 
-        from db_migrate import get_openmemory_schema
+        from engram.logbook.migrate import get_openmemory_schema
 
         # 确保环境变量未设置
         old_om_schema = os.environ.get("OM_PG_SCHEMA")
@@ -2517,7 +2517,7 @@ class TestOpenMemorySchemaConfig:
 
         import psycopg
 
-        from db_migrate import run_migrate
+        from engram.logbook.migrate import run_migrate
 
         dsn = test_db_info["dsn"]
 

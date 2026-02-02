@@ -9,17 +9,13 @@ test_gitlab_commit_cursor_tie_break.py - GitLab Commit 游标 tie-break 测试
 4. 游标推进条件的边界情况
 """
 
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from engram.logbook.cursor import should_advance_gitlab_commit_cursor
-from scm_sync_gitlab_commits import (
+from engram.logbook.scm_sync_tasks.gitlab_commits import (
     GitCommit,
     _deduplicate_commits,
     _get_commit_sort_key,

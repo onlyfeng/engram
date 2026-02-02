@@ -50,7 +50,7 @@ COPY src ./src
 COPY sql ./sql
 COPY logbook_postgres ./logbook_postgres
 COPY engram_logbook ./engram_logbook
-COPY db_bootstrap.py ./
+COPY scripts ./scripts
 ```
 
 **Compose 引用**：

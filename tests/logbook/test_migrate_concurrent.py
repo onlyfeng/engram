@@ -15,14 +15,9 @@ schema_prefix 功能仅用于测试环境隔离，生产环境禁用。
 
 import multiprocessing
 import os
-import sys
 import time
-from pathlib import Path
 
 import pytest
-
-# 确保可以导入 db_migrate
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 # 设置测试模式环境变量（允许使用 schema_prefix）
@@ -48,15 +43,11 @@ def run_migrate_in_process(dsn: str, schema_prefix: str, result_queue: multiproc
         result_queue: 用于返回结果的队列
     """
     import os
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).parent.parent))
 
     # [路线A 约束] 子进程需要设置测试模式环境变量
     os.environ["ENGRAM_TESTING"] = "1"
 
-    from db_migrate import run_migrate
+    from engram.logbook.migrate import run_migrate
 
     start_time = time.time()
     try:
@@ -187,14 +178,14 @@ class TestAdvisoryLockHelpers:
 
     def test_build_lock_key_with_prefix(self):
         """测试带前缀的锁键生成"""
-        from db_migrate import _build_lock_key
+        from engram.logbook.migrate import _build_lock_key
 
         key = _build_lock_key("tenant_abc")
         assert key == "engram_migrate:tenant_abc"
 
     def test_build_lock_key_without_prefix(self):
         """测试无前缀的锁键生成"""
-        from db_migrate import _build_lock_key
+        from engram.logbook.migrate import _build_lock_key
 
         key = _build_lock_key(None)
         assert key == "engram_migrate:default"
@@ -206,7 +197,7 @@ class TestAdvisoryLockHelpers:
         """测试咨询锁的获取和释放"""
         import psycopg
 
-        from db_migrate import _acquire_advisory_lock, _release_advisory_lock
+        from engram.logbook.migrate import _acquire_advisory_lock, _release_advisory_lock
 
         dsn = test_db_info["dsn"]
         lock_key = "test_lock_key"
@@ -235,7 +226,7 @@ class TestMigrateWithLock:
         """验证迁移过程正确获取和释放锁"""
         import psycopg
 
-        from db_migrate import run_migrate
+        from engram.logbook.migrate import run_migrate
 
         dsn = test_db_info["dsn"]
         prefix = "lock_test"
@@ -271,7 +262,7 @@ class TestDatabaseAutoCreateHelpers:
 
     def test_validate_db_name_whitelist(self):
         """测试数据库名称白名单校验"""
-        from db_migrate import validate_db_name
+        from engram.logbook.migrate import validate_db_name
 
         # 合法名称
         valid_cases = ["proj_a", "engram_test", "a", "abc123", "my_project"]
@@ -294,7 +285,7 @@ class TestDatabaseAutoCreateHelpers:
 
     def test_parse_db_name_from_dsn(self):
         """测试从 DSN 解析数据库名"""
-        from db_migrate import parse_db_name_from_dsn
+        from engram.logbook.migrate import parse_db_name_from_dsn
 
         cases = [
             ("postgresql://user:pass@localhost:5432/mydb", "mydb"),
@@ -307,7 +298,7 @@ class TestDatabaseAutoCreateHelpers:
 
     def test_ensure_database_exists_without_admin_dsn(self):
         """测试无 admin_dsn 时跳过创建"""
-        from db_migrate import ensure_database_exists
+        from engram.logbook.migrate import ensure_database_exists
 
         result = ensure_database_exists(
             target_dsn="postgresql://user:pass@localhost/proj_a",
@@ -335,7 +326,7 @@ class TestDatabaseAutoCreateConcurrent:
         """
         import uuid
 
-        from db_migrate import (
+        from engram.logbook.migrate import (
             check_database_exists,
             ensure_database_exists,
             replace_db_in_dsn,

@@ -112,8 +112,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
-# 添加 scripts 目录到 path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# scripts 模块通过包路径导入，无需修改 sys.path
 
 
 # ============================================================================
@@ -322,7 +321,7 @@ def migrated_database(unified_stack_ready, db_connection):
 
     使用 db_migrate 执行迁移，确保 schema 完整。
     """
-    from db_migrate import run_migrate
+    from engram.logbook.migrate import run_migrate
 
     dsn = unified_stack_ready["postgres_dsn"]
 
@@ -648,7 +647,7 @@ class TestAuditWithDbReferences:
         cleanup_artifacts,
     ):
         """审计被引用的制品应返回 OK"""
-        from artifact_audit import ArtifactAuditor
+        from scripts.artifact_audit import ArtifactAuditor
 
         conn = migrated_database["conn"]
         migrated_database["dsn"]
@@ -698,7 +697,7 @@ class TestAuditWithDbReferences:
         unique_prefix,
     ):
         """审计检测缺失的制品"""
-        from artifact_audit import ArtifactAuditor
+        from scripts.artifact_audit import ArtifactAuditor
 
         conn = migrated_database["conn"]
 
@@ -740,7 +739,7 @@ class TestAuditWithDbReferences:
         cleanup_artifacts,
     ):
         """审计检测哈希不匹配"""
-        from artifact_audit import ArtifactAuditor
+        from scripts.artifact_audit import ArtifactAuditor
 
         conn = migrated_database["conn"]
 
@@ -797,7 +796,7 @@ class TestGarbageCollection:
         unique_prefix,
     ):
         """GC 保护被引用的制品"""
-        from artifact_gc import run_gc
+        from engram.logbook.artifact_gc import run_gc
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
@@ -855,7 +854,7 @@ class TestGarbageCollection:
         unique_prefix,
     ):
         """GC 仅删除孤立制品"""
-        from artifact_gc import run_gc
+        from engram.logbook.artifact_gc import run_gc
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
@@ -910,7 +909,7 @@ class TestGarbageCollection:
         unique_prefix,
     ):
         """删除 DB 引用后，GC 应清理该制品"""
-        from artifact_gc import run_gc
+        from engram.logbook.artifact_gc import run_gc
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
@@ -987,7 +986,7 @@ class TestGarbageCollection:
 
         这是确保 GC 正确解析 s3:// 物理 URI 的回归测试。
         """
-        from artifact_gc import run_gc
+        from engram.logbook.artifact_gc import run_gc
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
@@ -1069,7 +1068,7 @@ class TestGarbageCollection:
         - 一个使用 artifact key 引用
         - GC dry-run 应该保护两个制品
         """
-        from artifact_gc import run_gc
+        from engram.logbook.artifact_gc import run_gc
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
@@ -1262,7 +1261,7 @@ class TestArtifactMigration:
         cleanup_artifacts,
     ):
         """迁移后使用审计验证完整性"""
-        from artifact_audit import ArtifactAuditor
+        from scripts.artifact_audit import ArtifactAuditor
 
         conn = migrated_database["conn"]
 
@@ -1324,8 +1323,8 @@ class TestEndToEndFlow:
         unique_prefix,
     ):
         """完整生命周期：创建 -> 引用 -> 审计 -> 删除引用 -> GC"""
-        from artifact_audit import ArtifactAuditor
-        from artifact_gc import run_gc
+        from engram.logbook.artifact_gc import run_gc
+        from scripts.artifact_audit import ArtifactAuditor
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
@@ -1431,8 +1430,8 @@ class TestEndToEndFlow:
         unique_prefix,
     ):
         """完整生命周期：使用 attachments 表"""
-        from artifact_audit import ArtifactAuditor
-        from artifact_gc import run_gc
+        from engram.logbook.artifact_gc import run_gc
+        from scripts.artifact_audit import ArtifactAuditor
 
         conn = migrated_database["conn"]
         dsn = migrated_database["dsn"]
@@ -3713,7 +3712,6 @@ class TestScmSyncStackIntegration:
         2. 输出为结构化 JSON 日志
         3. 输出不包含敏感信息
         """
-        import sys
         from io import StringIO
 
         import scm_sync_reaper as reaper

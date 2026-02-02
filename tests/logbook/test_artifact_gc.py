@@ -26,10 +26,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# 添加 scripts 目录到 path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from artifact_gc import (
+# 为 patch("artifact_gc.*") 提供模块别名
+import engram.logbook.artifact_gc as _artifact_gc_module
+from engram.logbook.artifact_gc import (
     GCDatabaseError,
     GCOpsCredentialsRequiredError,
     GCPrefixError,
@@ -52,6 +51,8 @@ from engram.logbook.artifact_ops_audit import (
 )
 from engram.logbook.artifact_store import FileUriStore, LocalArtifactsStore
 from engram.logbook.uri import PhysicalRef
+
+sys.modules.setdefault("artifact_gc", _artifact_gc_module)
 
 # =============================================================================
 # Fixtures
@@ -276,7 +277,7 @@ class TestReferenceProtection:
         sample_artifacts: dict,
     ):
         """当数据库不可用时，所有文件都应被保护"""
-        from artifact_gc import GCDatabaseError
+        from engram.logbook.artifact_gc import GCDatabaseError
 
         # Mock 数据库查询抛出异常
         with patch("artifact_gc.get_referenced_uris") as mock_get_refs:
@@ -1517,7 +1518,7 @@ class TestFileUriStoreGCIntegration:
             full_path = file_uri_root / rel_path
             file_uri = store._ensure_file_uri(str(full_path))
             # 规范化后的 path 部分用于匹配
-            from artifact_gc import _normalize_uri_for_gc
+            from engram.logbook.artifact_gc import _normalize_uri_for_gc
 
             normalized, uri_type = _normalize_uri_for_gc(file_uri)
             if uri_type == "physical_uri" and isinstance(normalized, PhysicalRef):

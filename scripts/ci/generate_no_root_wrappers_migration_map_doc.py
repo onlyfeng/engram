@@ -40,6 +40,7 @@ def status_to_display(status: str) -> str:
     mapping = {
         "migrated": "根目录已移除",
         "wrapper_exists": "根目录 wrapper",
+        "removed": "根目录已移除",
         "preserved": "长期保留",
         "completed": "已完成",
     }
@@ -53,6 +54,8 @@ def derive_migration_action(module: dict) -> str:
 
     if status == "preserved":
         return "保留"
+    if status == "removed":
+        return "已移除"
     if status == "migrated":
         return "仅改引用"
     if status == "wrapper_exists":

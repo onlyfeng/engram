@@ -33,22 +33,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# 添加 scripts 目录到 path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from artifact_audit import (
-    ArtifactAuditor,
-)
-from artifact_gc import (
-    ReferencedUris,
-    run_gc,
-    run_tmp_gc,
-)
-from artifact_migrate import (
-    MigrationItem,
-    MigrationResult,
-)
+# 为 patch("artifact_gc.*") 提供模块别名
+import engram.logbook.artifact_gc as _artifact_gc_module
+from engram.logbook.artifact_gc import ReferencedUris, run_gc, run_tmp_gc
 from engram.logbook.artifact_store import LocalArtifactsStore
+from scripts.artifact_audit import ArtifactAuditor
+from scripts.artifact_migrate import MigrationItem, MigrationResult
+
+sys.modules.setdefault("artifact_gc", _artifact_gc_module)
 
 # =============================================================================
 # Fixtures

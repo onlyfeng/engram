@@ -228,15 +228,7 @@ def migrated_db(test_db_info: dict) -> Generator[dict, None, None]:
     使用 db_migrate.run_migrate 执行迁移脚本，确保自检通过。
     返回包含 dsn 和数据库信息的字典。
     """
-    import sys
-    from pathlib import Path
-
-    # 确保可以导入 db_migrate
-    scripts_dir = Path(__file__).parent.parent
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-
-    from db_migrate import run_migrate
+    from engram.logbook.migrate import run_migrate
 
     dsn = test_db_info["dsn"]
 
@@ -288,15 +280,8 @@ def temp_schemas(migrated_db: dict) -> Generator[dict, None, None]:
 
     测试完成后自动清理所有临时 schema。
     """
-    import sys
-    from pathlib import Path
 
-    # 确保可以导入 db_migrate
-    scripts_dir = Path(__file__).parent.parent
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-
-    from db_migrate import run_migrate
+    from engram.logbook.migrate import run_migrate
 
     # [路线A 约束] 设置测试模式环境变量，允许使用 schema_prefix
     old_testing = os.environ.get("ENGRAM_TESTING")
@@ -602,15 +587,8 @@ def roles_applied_db(test_db_info: dict) -> Generator[dict, None, None]:
 
     适用于需要测试角色权限边界的集成测试。
     """
-    import sys
-    from pathlib import Path
 
-    # 确保可以导入 db_migrate
-    scripts_dir = Path(__file__).parent.parent
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-
-    from db_migrate import run_migrate
+    from engram.logbook.migrate import run_migrate
 
     dsn = test_db_info["dsn"]
     admin_dsn = test_db_info.get("admin_dsn", dsn)

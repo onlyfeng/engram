@@ -138,7 +138,7 @@ def generate_index_md(
         f"> Generated at: {_utc_now_iso_z()}",
         f"> Total items: {len(items)}, Showing: {len(recent_items)}",
         "",
-        "> **⚠️ 注意**: 此文件由工具自动生成，请勿手动编辑。如需更新，请运行 `logbook_cli.py render_views`。",
+        "> **⚠️ 注意**: 此文件由工具自动生成，请勿手动编辑。如需更新，请运行 `engram-logbook render_views`。",
         "",
         "## Recent Items",
         "",

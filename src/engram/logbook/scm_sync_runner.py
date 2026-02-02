@@ -510,13 +510,14 @@ def get_script_path(repo_type: str, job_type: str) -> str:
     job_type = job_type.lower()
     # 计算项目根目录
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    scripts_dir = repo_root / "scripts"
     if repo_type == REPO_TYPE_GITLAB:
         if job_type == JOB_TYPE_COMMITS:
-            return str(repo_root / "scm_sync_gitlab_commits.py")
+            return str(scripts_dir / "scm_sync_gitlab_commits.py")
         if job_type == JOB_TYPE_MRS:
-            return str(repo_root / "scm_sync_gitlab_mrs.py")
+            return str(scripts_dir / "scm_sync_gitlab_mrs.py")
     if repo_type == REPO_TYPE_SVN and job_type == JOB_TYPE_COMMITS:
-        return str(repo_root / "scm_sync_svn.py")
+        return str(scripts_dir / "scm_sync_svn.py")
     raise ValueError("不支持的仓库/任务组合")
 
 

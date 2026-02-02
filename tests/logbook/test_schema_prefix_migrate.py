@@ -18,20 +18,13 @@ schema_prefix 功能仅用于测试环境隔离，生产环境禁用。
 """
 
 import os
-import sys
 import uuid
-from pathlib import Path
 
 import psycopg
 import pytest
 
-# 确保可以导入 db_migrate 和 engram_logbook
-scripts_dir = Path(__file__).parent.parent
-if str(scripts_dir) not in sys.path:
-    sys.path.insert(0, str(scripts_dir))
-
-from db_migrate import is_testing_mode, run_migrate
 from engram.logbook.db import rewrite_sql_for_schema
+from engram.logbook.migrate import is_testing_mode, run_migrate
 from engram.logbook.schema_context import SchemaContext
 
 

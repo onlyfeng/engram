@@ -14,22 +14,18 @@ test_gitlab_review_dedup.py - 测试 GitLab API mock 和 review 事件去重
 - 使用临时 schema（通过 conftest.py 的 migrated_db fixture）
 """
 
-import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from scm_repo import build_mr_id
-from scm_sync_gitlab_commits import (
+from engram.logbook.scm_sync_tasks.gitlab_commits import (
     GitLabClient,
     format_diff_content,
     parse_commit,
 )
+from scm_repo import build_mr_id
 from scm_sync_gitlab_mrs import (
     map_gitlab_state_to_status,
     parse_merge_request,

@@ -1990,7 +1990,7 @@ class TestGitLabBackfillCLI:
     def test_backfill_does_not_update_watermark_by_default(self):
         """Backfill 默认不更新游标"""
         from engram.logbook.scm_auth import TokenProvider
-        from scm_sync_gitlab_commits import (
+        from engram.logbook.scm_sync_tasks.gitlab_commits import (
             DiffMode,
             SyncConfig,
             backfill_gitlab_commits,
@@ -2009,7 +2009,9 @@ class TestGitLabBackfillCLI:
         )
 
         # Mock GitLabClient
-        with patch("scm_sync_gitlab_commits.GitLabClient") as mock_client_class:
+        with patch(
+            "engram.logbook.scm_sync_tasks.gitlab_commits.GitLabClient"
+        ) as mock_client_class:
             mock_client = MagicMock()
             mock_client.get_commits.return_value = [
                 {
@@ -2024,14 +2026,22 @@ class TestGitLabBackfillCLI:
             ]
             mock_client_class.return_value = mock_client
 
-            with patch("scm_sync_gitlab_commits.scm_repo.ensure_repo", return_value=1):
-                with patch("scm_sync_gitlab_commits.get_connection") as mock_conn:
+            with patch(
+                "engram.logbook.scm_sync_tasks.gitlab_commits.scm_repo.ensure_repo",
+                return_value=1,
+            ):
+                with patch(
+                    "engram.logbook.scm_sync_tasks.gitlab_commits.get_connection"
+                ) as mock_conn:
                     mock_conn.return_value = MagicMock()
                     mock_conn.return_value.close = MagicMock()
 
-                    with patch("scm_sync_gitlab_commits.insert_git_commits", return_value=1):
+                    with patch(
+                        "engram.logbook.scm_sync_tasks.gitlab_commits.insert_git_commits",
+                        return_value=1,
+                    ):
                         with patch(
-                            "scm_sync_gitlab_commits.save_gitlab_cursor"
+                            "engram.logbook.scm_sync_tasks.gitlab_commits.save_gitlab_cursor"
                         ) as mock_save_cursor:
                             result = backfill_gitlab_commits(
                                 sync_config,
@@ -2050,7 +2060,7 @@ class TestGitLabBackfillCLI:
     def test_backfill_updates_watermark_when_flag_set(self):
         """Backfill 在 update_watermark=True 时更新游标"""
         from engram.logbook.scm_auth import TokenProvider
-        from scm_sync_gitlab_commits import (
+        from engram.logbook.scm_sync_tasks.gitlab_commits import (
             DiffMode,
             SyncConfig,
             backfill_gitlab_commits,
@@ -2067,7 +2077,9 @@ class TestGitLabBackfillCLI:
             diff_mode=DiffMode.NONE,
         )
 
-        with patch("scm_sync_gitlab_commits.GitLabClient") as mock_client_class:
+        with patch(
+            "engram.logbook.scm_sync_tasks.gitlab_commits.GitLabClient"
+        ) as mock_client_class:
             mock_client = MagicMock()
             mock_client.get_commits.return_value = [
                 {
@@ -2091,14 +2103,22 @@ class TestGitLabBackfillCLI:
             ]
             mock_client_class.return_value = mock_client
 
-            with patch("scm_sync_gitlab_commits.scm_repo.ensure_repo", return_value=1):
-                with patch("scm_sync_gitlab_commits.get_connection") as mock_conn:
+            with patch(
+                "engram.logbook.scm_sync_tasks.gitlab_commits.scm_repo.ensure_repo",
+                return_value=1,
+            ):
+                with patch(
+                    "engram.logbook.scm_sync_tasks.gitlab_commits.get_connection"
+                ) as mock_conn:
                     mock_conn.return_value = MagicMock()
                     mock_conn.return_value.close = MagicMock()
 
-                    with patch("scm_sync_gitlab_commits.insert_git_commits", return_value=2):
+                    with patch(
+                        "engram.logbook.scm_sync_tasks.gitlab_commits.insert_git_commits",
+                        return_value=2,
+                    ):
                         with patch(
-                            "scm_sync_gitlab_commits.update_sync_cursor"
+                            "engram.logbook.scm_sync_tasks.gitlab_commits.update_sync_cursor"
                         ) as mock_update_cursor:
                             result = backfill_gitlab_commits(
                                 sync_config,
@@ -2118,7 +2138,7 @@ class TestGitLabBackfillCLI:
     def test_backfill_dry_run_no_db_write(self):
         """Backfill dry-run 模式不写入 DB"""
         from engram.logbook.scm_auth import TokenProvider
-        from scm_sync_gitlab_commits import (
+        from engram.logbook.scm_sync_tasks.gitlab_commits import (
             DiffMode,
             SyncConfig,
             backfill_gitlab_commits,
@@ -2135,13 +2155,20 @@ class TestGitLabBackfillCLI:
             diff_mode=DiffMode.NONE,
         )
 
-        with patch("scm_sync_gitlab_commits.GitLabClient") as mock_client_class:
+        with patch(
+            "engram.logbook.scm_sync_tasks.gitlab_commits.GitLabClient"
+        ) as mock_client_class:
             mock_client = MagicMock()
             mock_client.get_commits.return_value = [{"id": "abc123"}]
             mock_client_class.return_value = mock_client
 
-            with patch("scm_sync_gitlab_commits.scm_repo.ensure_repo", return_value=1):
-                with patch("scm_sync_gitlab_commits.insert_git_commits") as mock_insert:
+            with patch(
+                "engram.logbook.scm_sync_tasks.gitlab_commits.scm_repo.ensure_repo",
+                return_value=1,
+            ):
+                with patch(
+                    "engram.logbook.scm_sync_tasks.gitlab_commits.insert_git_commits"
+                ) as mock_insert:
                     result = backfill_gitlab_commits(
                         sync_config,
                         project_key="test",
@@ -2241,7 +2268,7 @@ class TestBackfillArgumentValidation:
         """GitLab backfill 需要 --since 参数"""
         import sys
 
-        from scm_sync_gitlab_commits import parse_args
+        from engram.logbook.scm_sync_tasks.gitlab_commits import parse_args
 
         test_args = ["scm_sync_gitlab_commits.py", "--backfill"]
 
@@ -2295,7 +2322,7 @@ class TestBackfillArgumentValidation:
         """GitLab backfill --until 默认为当前时间"""
         import sys
 
-        from scm_sync_gitlab_commits import parse_args
+        from engram.logbook.scm_sync_tasks.gitlab_commits import parse_args
 
         test_args = ["scm_sync_gitlab_commits.py", "--backfill", "--since", "2024-01-01"]
 

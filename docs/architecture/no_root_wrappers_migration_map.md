@@ -25,20 +25,22 @@
 | `scm_sync_gitlab_commits` | 根目录已移除，scripts/ 弃用入口 | `engram-scm-sync runner` | 仅改引用 | @engram-team | v2.0 |
 | `scm_sync_gitlab_mrs` | 根目录已移除，scripts/ 弃用入口 | `engram-scm-sync runner` | 仅改引用 | @engram-team | v2.0 |
 | `scm_sync_svn` | 根目录已移除，scripts/ 弃用入口 | `engram-scm-sync runner` | 仅改引用 | @engram-team | v2.0 |
-| `scm_materialize_patch_blob` | 根目录 wrapper 存在 | `engram.logbook.materialize_patch_blob` | 移动代码 | @engram-team | v2.0 |
-| `artifact_audit` | 根目录 wrapper 存在，运维脚本保留 | `scripts/artifact_audit.py` | 仅改引用 | @engram-team | v2.0 |
-| `artifact_cli` | 根目录 wrapper 存在 | `engram-artifacts` | 仅改引用 | @engram-team | v2.0 |
-| `artifact_gc` | 根目录 wrapper 存在 | `engram-artifacts gc` | 仅改引用 | @engram-team | v2.0 |
-| `artifact_migrate` | 根目录 wrapper 存在 | `engram-artifacts migrate` | 仅改引用 | @engram-team | v2.0 |
-| `db_bootstrap` | 根目录 wrapper 存在 | `engram-bootstrap-roles` | 仅改引用 | @engram-team | v2.0 |
-| `db_migrate` | 根目录 wrapper 存在 | `engram-migrate` | 仅改引用 | @engram-team | v2.0 |
-| `logbook_cli_main` | 根目录 wrapper 存在 | `engram-logbook` | 仅改引用 | @engram-team | v2.0 |
-| `logbook_cli` | 根目录 wrapper 存在 | `engram-logbook` | 仅改引用 | @engram-team | v2.0 |
-| `identity_sync` | 根目录 wrapper 存在 | `engram-identity-sync` | 仅改引用 | @engram-team | v2.0 |
+| `scm_materialize_patch_blob` | 根目录已移除 | `engram.logbook.materialize_patch_blob` | 已移除 | @engram-team | v2.0 |
+| `artifact_audit` | 根目录已移除，运维脚本保留 | `scripts/artifact_audit.py` | 已移除 | @engram-team | v2.0 |
+| `artifact_cli` | 根目录已移除 | `engram-artifacts` | 已移除 | @engram-team | v2.0 |
+| `artifact_gc` | 根目录已移除 | `engram-artifacts gc` | 已移除 | @engram-team | v2.0 |
+| `artifact_migrate` | 根目录已移除 | `engram-artifacts migrate` | 已移除 | @engram-team | v2.0 |
+| `db_bootstrap` | 根目录已移除 | `engram-bootstrap-roles` | 已移除 | @engram-team | v2.0 |
+| `db_migrate` | 根目录已移除 | `engram-migrate` | 已移除 | @engram-team | v2.0 |
+| `logbook_cli_main` | 根目录已移除 | `engram-logbook` | 已移除 | @engram-team | v2.0 |
+| `logbook_cli` | 根目录已移除 | `engram-logbook` | 已移除 | @engram-team | v2.0 |
+| `identity_sync` | 根目录已移除 | `engram-identity-sync` | 已移除 | @engram-team | v2.0 |
 
 ---
 
 ## 详细迁移计划
+
+> 注：v2.0 已移除根目录 wrappers，若下方细项与「迁移映射总览」不一致，以总览表为准。
 
 ### 1. SCM Sync 相关模块
 

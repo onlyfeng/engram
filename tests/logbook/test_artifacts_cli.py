@@ -11,24 +11,19 @@ test_artifacts_cli.py - Artifacts CLI 子命令测试
 6. audit 命令参数测试
 7. gc 命令参数测试
 8. migrate 命令参数测试
-9. artifact_cli.py 兼容入口测试
+9. artifacts CLI 模块测试
 """
 
 import json
 import os
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-# 添加 scripts 目录到 path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from typer.testing import CliRunner
 
-from logbook_cli_main import app, artifacts_app
+from scripts.logbook_cli_main import app, artifacts_app
 
 # =============================================================================
 # Fixtures
@@ -302,10 +297,10 @@ class TestArtifactsGcCommand:
         result = runner.invoke(app, ["artifacts", "gc"])
         assert result.exit_code != 0  # Typer 会因缺少必需参数而失败
 
-    @patch("artifact_gc.run_gc")
+    @patch("engram.logbook.artifact_gc.run_gc")
     def test_gc_dry_run_by_default(self, mock_run_gc, runner):
         """测试默认 dry-run 模式"""
-        from artifact_gc import GCResult
+        from engram.logbook.artifact_gc import GCResult
 
         mock_run_gc.return_value = GCResult(
             scanned_count=10,
@@ -356,12 +351,13 @@ class TestArtifactsMigrateCommand:
         assert "INVALID_ARGS" in output["code"]
 
 
-class TestArtifactCliCompatibility:
-    """artifact_cli.py 兼容入口测试"""
+class TestArtifactsCliModule:
+    """engram.logbook.cli.artifacts 模块测试"""
 
     def test_artifact_cli_imports_correctly(self):
-        """测试兼容入口可以正确导入"""
-        from artifact_cli import artifacts_app, main
+        """测试 CLI 模块可正确导入"""
+        from engram.logbook.cli.artifacts import app as artifacts_app
+        from engram.logbook.cli.artifacts import main
 
         assert callable(main)
         assert artifacts_app is not None

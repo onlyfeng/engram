@@ -16,7 +16,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from artifact_migrate import (
+from engram.logbook.artifact_store import (
+    LocalArtifactsStore,
+)
+from scripts.artifact_migrate import (
     ArtifactMigrator,
     MigrationDbUpdateError,
     MigrationItem,
@@ -24,9 +27,6 @@ from artifact_migrate import (
     MigrationResult,
     create_migrator,
     run_migration,
-)
-from engram.logbook.artifact_store import (
-    LocalArtifactsStore,
 )
 
 # =============================================================================
@@ -364,7 +364,7 @@ class TestDbUpdate:
 
     def test_preview_db_update_sql(self, source_store, target_store, sample_files):
         """测试数据库更新预览生成正确的映射"""
-        from artifact_migrate import DB_UPDATE_MODE_TO_ARTIFACT_KEY
+        from scripts.artifact_migrate import DB_UPDATE_MODE_TO_ARTIFACT_KEY
 
         migrator = ArtifactMigrator(
             source_store=source_store,

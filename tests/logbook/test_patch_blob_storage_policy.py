@@ -2123,7 +2123,7 @@ class TestGitLabDegradedPatchHandling:
 
     def test_gitlab_fetch_diff_result_structure(self):
         """测试 FetchDiffResult 数据结构"""
-        from scm_sync_gitlab_commits import (
+        from engram.logbook.scm_sync_tasks.gitlab_commits import (
             FetchDiffResult,
             PatchFetchTimeoutError,
         )
@@ -2161,7 +2161,7 @@ class TestGitLabDegradedPatchHandling:
 
     def test_gitlab_patch_fetch_error_hierarchy(self):
         """测试 GitLab 异常类层次结构"""
-        from scm_sync_gitlab_commits import (
+        from engram.logbook.scm_sync_tasks.gitlab_commits import (
             PatchFetchContentTooLargeError,
             PatchFetchError,
             PatchFetchHttpError,
@@ -2183,7 +2183,7 @@ class TestGitLabDegradedPatchHandling:
 
     def test_generate_ministat_from_stats(self):
         """测试从 stats 生成 ministat"""
-        from scm_sync_gitlab_commits import generate_ministat_from_stats
+        from engram.logbook.scm_sync_tasks.gitlab_commits import generate_ministat_from_stats
 
         stats = {"additions": 50, "deletions": 20, "total": 5}
         result = generate_ministat_from_stats(stats, commit_sha="abc123def456")
@@ -2197,7 +2197,7 @@ class TestGitLabDegradedPatchHandling:
 
     def test_generate_ministat_from_stats_empty(self):
         """测试空 stats 生成 ministat"""
-        from scm_sync_gitlab_commits import generate_ministat_from_stats
+        from engram.logbook.scm_sync_tasks.gitlab_commits import generate_ministat_from_stats
 
         stats = {}
         result = generate_ministat_from_stats(stats)
@@ -2213,7 +2213,7 @@ class TestGitLabMockApiDegradation:
     def test_gitlab_client_diff_safe_timeout(self):
         """测试 GitLab client diff 获取超时"""
         from engram.logbook.gitlab_client import GitLabErrorCategory
-        from scm_sync_gitlab_commits import GitLabClient
+        from engram.logbook.scm_sync_tasks.gitlab_commits import GitLabClient
 
         with patch.object(requests.Session, "request") as mock_request:
             mock_request.side_effect = requests.exceptions.Timeout("Connection timed out")
@@ -2233,7 +2233,7 @@ class TestGitLabMockApiDegradation:
     def test_gitlab_client_diff_safe_http_error(self):
         """测试 GitLab client diff HTTP 错误"""
         from engram.logbook.gitlab_client import GitLabErrorCategory
-        from scm_sync_gitlab_commits import GitLabClient
+        from engram.logbook.scm_sync_tasks.gitlab_commits import GitLabClient
 
         with patch.object(requests.Session, "request") as mock_request:
             mock_response = MagicMock()
@@ -2259,7 +2259,7 @@ class TestGitLabMockApiDegradation:
 
     def test_gitlab_client_diff_safe_content_too_large(self):
         """测试 GitLab client diff 内容过大"""
-        from scm_sync_gitlab_commits import GitLabClient
+        from engram.logbook.scm_sync_tasks.gitlab_commits import GitLabClient
 
         with patch.object(requests.Session, "request") as mock_request:
             # 生成超过限制的大响应
@@ -2289,7 +2289,7 @@ class TestGitLabMockApiDegradation:
         import json as json_module
 
         from engram.logbook.gitlab_client import GitLabErrorCategory
-        from scm_sync_gitlab_commits import GitLabClient
+        from engram.logbook.scm_sync_tasks.gitlab_commits import GitLabClient
 
         with patch.object(requests.Session, "request") as mock_request:
             mock_response = MagicMock()
@@ -2323,13 +2323,15 @@ class TestPatchBlobMetaJsonDegraded:
 
     def test_insert_patch_blob_with_degraded_metadata(self, db_conn, tmp_path: Path):
         """测试写入带降级元数据的 patch_blob"""
-        from scm_sync_gitlab_commits import insert_patch_blob
+        from engram.logbook.scm_sync_tasks.gitlab_commits import insert_patch_blob
 
         # 创建临时 artifacts
         tmp_path / "artifacts"
 
         # Mock write_text_artifact
-        with patch("scm_sync_gitlab_commits.write_text_artifact") as mock_write:
+        with patch(
+            "engram.logbook.scm_sync_tasks.gitlab_commits.write_text_artifact"
+        ) as mock_write:
             mock_write.return_value = {
                 "uri": "scm/1/git/commits/abc123.ministat",
                 "sha256": "a" * 64,
@@ -2337,7 +2339,9 @@ class TestPatchBlobMetaJsonDegraded:
             }
 
             # Mock scm_db.upsert_patch_blob
-            with patch("scm_sync_gitlab_commits.scm_db.upsert_patch_blob") as mock_upsert:
+            with patch(
+                "engram.logbook.scm_sync_tasks.gitlab_commits.scm_db.upsert_patch_blob"
+            ) as mock_upsert:
                 mock_upsert.return_value = 1
 
                 blob_id = insert_patch_blob(
@@ -2365,16 +2369,20 @@ class TestPatchBlobMetaJsonDegraded:
 
     def test_insert_patch_blob_without_degraded_metadata(self, db_conn, tmp_path: Path):
         """测试正常写入（非降级）的 patch_blob"""
-        from scm_sync_gitlab_commits import insert_patch_blob
+        from engram.logbook.scm_sync_tasks.gitlab_commits import insert_patch_blob
 
-        with patch("scm_sync_gitlab_commits.write_text_artifact") as mock_write:
+        with patch(
+            "engram.logbook.scm_sync_tasks.gitlab_commits.write_text_artifact"
+        ) as mock_write:
             mock_write.return_value = {
                 "uri": "scm/1/git/commits/def456.diff",
                 "sha256": "b" * 64,
                 "size_bytes": 500,
             }
 
-            with patch("scm_sync_gitlab_commits.scm_db.upsert_patch_blob") as mock_upsert:
+            with patch(
+                "engram.logbook.scm_sync_tasks.gitlab_commits.scm_db.upsert_patch_blob"
+            ) as mock_upsert:
                 mock_upsert.return_value = 2
 
                 blob_id = insert_patch_blob(
@@ -2401,7 +2409,7 @@ class TestDiffstatFormats:
 
     def test_gitlab_diffstat_generation(self):
         """测试 GitLab diffstat 生成"""
-        from scm_sync_gitlab_commits import generate_diffstat
+        from engram.logbook.scm_sync_tasks.gitlab_commits import generate_diffstat
 
         diffs = [
             {
@@ -2426,7 +2434,7 @@ class TestDiffstatFormats:
 
     def test_gitlab_diffstat_empty_diffs(self):
         """测试空 diffs 列表"""
-        from scm_sync_gitlab_commits import generate_diffstat
+        from engram.logbook.scm_sync_tasks.gitlab_commits import generate_diffstat
 
         result = generate_diffstat([])
         assert result == ""
@@ -4346,7 +4354,7 @@ class TestMaterializeBlobFormats:
         """测试 diff 格式：写入完整 diff 内容"""
         from unittest.mock import MagicMock, patch
 
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             MaterializeStatus,
             PatchBlobRecord,
             materialize_blob,
@@ -4375,23 +4383,27 @@ index 1234567..abcdefg 100644
 
         mock_conn = MagicMock()
 
-        with patch("scm_materialize_patch_blob.mark_blob_in_progress"):
-            with patch("scm_materialize_patch_blob.get_repo_info") as mock_repo:
+        with patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"):
+            with patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_repo:
                 mock_repo.return_value = {
                     "repo_id": 1,
                     "url": "https://gitlab.example.com/test/project",
                     "project_key": "test",
                     "repo_type": "git",
                 }
-                with patch("scm_materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg:
+                with patch(
+                    "engram.logbook.materialize_patch_blob.get_gitlab_config"
+                ) as mock_gitlab_cfg:
                     mock_gitlab_cfg.return_value = {"url": "https://gitlab.example.com"}
-                    with patch("scm_materialize_patch_blob.create_gitlab_token_provider"):
+                    with patch(
+                        "engram.logbook.materialize_patch_blob.create_gitlab_token_provider"
+                    ):
                         with patch(
-                            "scm_materialize_patch_blob.fetch_gitlab_commit_diff"
+                            "engram.logbook.materialize_patch_blob.fetch_gitlab_commit_diff"
                         ) as mock_fetch:
                             mock_fetch.return_value = diff_content
                             with patch(
-                                "scm_materialize_patch_blob.write_text_artifact"
+                                "engram.logbook.materialize_patch_blob.write_text_artifact"
                             ) as mock_write:
                                 mock_write.return_value = {
                                     "uri": "scm/test/1/git/abc1234/abc.diff",  # 至少 7 位 SHA
@@ -4399,7 +4411,7 @@ index 1234567..abcdefg 100644
                                     "size_bytes": len(diff_content),
                                 }
                                 with patch(
-                                    "scm_materialize_patch_blob.mark_blob_done"
+                                    "engram.logbook.materialize_patch_blob.mark_blob_done"
                                 ) as mock_done:
                                     mock_done.return_value = True
                                     result = materialize_blob(mock_conn, record, config=None)
@@ -4414,7 +4426,7 @@ index 1234567..abcdefg 100644
         """测试 diffstat 格式：从 diff 生成 diffstat"""
         from unittest.mock import MagicMock, patch
 
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             MaterializeStatus,
             PatchBlobRecord,
             materialize_blob,
@@ -4444,23 +4456,27 @@ index 1234567..abcdefg 100644
 
         mock_conn = MagicMock()
 
-        with patch("scm_materialize_patch_blob.mark_blob_in_progress"):
-            with patch("scm_materialize_patch_blob.get_repo_info") as mock_repo:
+        with patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"):
+            with patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_repo:
                 mock_repo.return_value = {
                     "repo_id": 1,
                     "url": "svn://...",
                     "project_key": "test",
                     "repo_type": "svn",
                 }
-                with patch("scm_materialize_patch_blob.fetch_svn_diff") as mock_fetch:
+                with patch("engram.logbook.materialize_patch_blob.fetch_svn_diff") as mock_fetch:
                     mock_fetch.return_value = diff_content
-                    with patch("scm_materialize_patch_blob.write_text_artifact") as mock_write:
+                    with patch(
+                        "engram.logbook.materialize_patch_blob.write_text_artifact"
+                    ) as mock_write:
                         mock_write.return_value = {
                             "uri": "scm/test/1/svn/101/abc.diffstat",
                             "sha256": "b" * 64,
                             "size_bytes": 100,
                         }
-                        with patch("scm_materialize_patch_blob.mark_blob_done") as mock_done:
+                        with patch(
+                            "engram.logbook.materialize_patch_blob.mark_blob_done"
+                        ) as mock_done:
                             mock_done.return_value = True
                             result = materialize_blob(mock_conn, record, config=None)
 
@@ -4478,7 +4494,7 @@ index 1234567..abcdefg 100644
         """测试 ministat 格式 (Git)：从 meta_json.stats 生成"""
         from unittest.mock import MagicMock, patch
 
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             MaterializeStatus,
             PatchBlobRecord,
             materialize_blob,
@@ -4497,29 +4513,33 @@ index 1234567..abcdefg 100644
 
         mock_conn = MagicMock()
 
-        with patch("scm_materialize_patch_blob.mark_blob_in_progress"):
-            with patch("scm_materialize_patch_blob.get_repo_info") as mock_repo:
+        with patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"):
+            with patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_repo:
                 mock_repo.return_value = {
                     "repo_id": 1,
                     "url": "https://gitlab.example.com/test/project",
                     "project_key": "test",
                     "repo_type": "git",
                 }
-                with patch("scm_materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg:
+                with patch(
+                    "engram.logbook.materialize_patch_blob.get_gitlab_config"
+                ) as mock_gitlab_cfg:
                     mock_gitlab_cfg.return_value = {"url": "https://gitlab.example.com"}
-                    with patch("scm_materialize_patch_blob.create_gitlab_token_provider"):
+                    with patch(
+                        "engram.logbook.materialize_patch_blob.create_gitlab_token_provider"
+                    ):
                         with patch(
-                            "scm_materialize_patch_blob.fetch_gitlab_commit_diff"
+                            "engram.logbook.materialize_patch_blob.fetch_gitlab_commit_diff"
                         ) as mock_fetch:
                             mock_fetch.return_value = ""  # 空 diff，使用 meta stats
                             with patch(
-                                "scm_materialize_patch_blob.get_git_commit_meta"
+                                "engram.logbook.materialize_patch_blob.get_git_commit_meta"
                             ) as mock_meta:
                                 mock_meta.return_value = {
                                     "stats": {"additions": 50, "deletions": 20, "total": 5}
                                 }
                                 with patch(
-                                    "scm_materialize_patch_blob.write_text_artifact"
+                                    "engram.logbook.materialize_patch_blob.write_text_artifact"
                                 ) as mock_write:
                                     mock_write.return_value = {
                                         "uri": "scm/test/1/git/def4567/abc.ministat",  # 至少 7 位 SHA
@@ -4527,7 +4547,7 @@ index 1234567..abcdefg 100644
                                         "size_bytes": 80,
                                     }
                                     with patch(
-                                        "scm_materialize_patch_blob.mark_blob_done"
+                                        "engram.logbook.materialize_patch_blob.mark_blob_done"
                                     ) as mock_done:
                                         mock_done.return_value = True
                                         result = materialize_blob(mock_conn, record, config=None)
@@ -4544,7 +4564,7 @@ index 1234567..abcdefg 100644
         """测试 ministat 格式 (SVN)：从 changed_paths 生成"""
         from unittest.mock import MagicMock, patch
 
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             MaterializeStatus,
             PatchBlobRecord,
             materialize_blob,
@@ -4569,25 +4589,31 @@ index 1234567..abcdefg 100644
             {"path": "/trunk/docs/readme.txt", "action": "D", "kind": "file"},
         ]
 
-        with patch("scm_materialize_patch_blob.mark_blob_in_progress"):
-            with patch("scm_materialize_patch_blob.get_repo_info") as mock_repo:
+        with patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"):
+            with patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_repo:
                 mock_repo.return_value = {
                     "repo_id": 1,
                     "url": "svn://...",
                     "project_key": "test",
                     "repo_type": "svn",
                 }
-                with patch("scm_materialize_patch_blob.fetch_svn_diff") as mock_fetch:
+                with patch("engram.logbook.materialize_patch_blob.fetch_svn_diff") as mock_fetch:
                     mock_fetch.return_value = ""  # 空 diff，使用 changed_paths
-                    with patch("scm_materialize_patch_blob.get_svn_revision_meta") as mock_meta:
+                    with patch(
+                        "engram.logbook.materialize_patch_blob.get_svn_revision_meta"
+                    ) as mock_meta:
                         mock_meta.return_value = {"changed_paths": changed_paths}
-                        with patch("scm_materialize_patch_blob.write_text_artifact") as mock_write:
+                        with patch(
+                            "engram.logbook.materialize_patch_blob.write_text_artifact"
+                        ) as mock_write:
                             mock_write.return_value = {
                                 "uri": "scm/test/1/svn/200/abc.ministat",
                                 "sha256": "d" * 64,
                                 "size_bytes": 150,
                             }
-                            with patch("scm_materialize_patch_blob.mark_blob_done") as mock_done:
+                            with patch(
+                                "engram.logbook.materialize_patch_blob.mark_blob_done"
+                            ) as mock_done:
                                 mock_done.return_value = True
                                 result = materialize_blob(mock_conn, record, config=None)
 
@@ -5230,7 +5256,7 @@ class TestGenerateArtifactUri:
 
     def test_svn_auto_add_r_prefix(self):
         """测试 SVN 纯数字自动加 r 前缀"""
-        from scm_materialize_patch_blob import generate_artifact_uri
+        from engram.logbook.materialize_patch_blob import generate_artifact_uri
 
         result = generate_artifact_uri(
             source_type="svn",
@@ -5244,7 +5270,7 @@ class TestGenerateArtifactUri:
 
     def test_svn_keep_existing_r_prefix(self):
         """测试 SVN 已有 r 前缀保持不变"""
-        from scm_materialize_patch_blob import generate_artifact_uri
+        from engram.logbook.materialize_patch_blob import generate_artifact_uri
 
         result = generate_artifact_uri(
             source_type="svn",
@@ -5260,7 +5286,7 @@ class TestGenerateArtifactUri:
 
     def test_git_no_r_prefix(self):
         """测试 Git 不加 r 前缀"""
-        from scm_materialize_patch_blob import generate_artifact_uri
+        from engram.logbook.materialize_patch_blob import generate_artifact_uri
 
         result = generate_artifact_uri(
             source_type="git",
@@ -5289,7 +5315,7 @@ class TestShaMismatchPolicy:
         - 返回失败状态
         - actual_sha256 记录在结果中
         """
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             ErrorCategory,
             MaterializeStatus,
             PatchBlobRecord,
@@ -5329,13 +5355,15 @@ class TestShaMismatchPolicy:
 
         # Mock get_repo_info
         with (
-            patch("scm_materialize_patch_blob.get_repo_info") as mock_get_repo,
-            patch("scm_materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
-            patch("scm_materialize_patch_blob.mark_blob_in_progress"),
-            patch("scm_materialize_patch_blob.mark_blob_failed") as mock_failed,
-            patch("scm_materialize_patch_blob.create_gitlab_token_provider") as mock_token,
-            patch("scm_materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
-            patch("scm_materialize_patch_blob.write_text_artifact") as mock_write,
+            patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_get_repo,
+            patch("engram.logbook.materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
+            patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"),
+            patch("engram.logbook.materialize_patch_blob.mark_blob_failed") as mock_failed,
+            patch(
+                "engram.logbook.materialize_patch_blob.create_gitlab_token_provider"
+            ) as mock_token,
+            patch("engram.logbook.materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
+            patch("engram.logbook.materialize_patch_blob.write_text_artifact") as mock_write,
         ):
             mock_get_repo.return_value = {
                 "repo_id": 1,
@@ -5378,7 +5406,7 @@ class TestShaMismatchPolicy:
         - 返回失败状态但包含 mirror_uri
         - meta_json 中记录了 mirror_uri 和 actual_sha256
         """
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             ErrorCategory,
             MaterializeStatus,
             PatchBlobRecord,
@@ -5412,13 +5440,15 @@ class TestShaMismatchPolicy:
         mock_conn.cursor.return_value = mock_cursor
 
         with (
-            patch("scm_materialize_patch_blob.get_repo_info") as mock_get_repo,
-            patch("scm_materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
-            patch("scm_materialize_patch_blob.mark_blob_in_progress"),
-            patch("scm_materialize_patch_blob.mark_blob_failed") as mock_failed,
-            patch("scm_materialize_patch_blob.create_gitlab_token_provider") as mock_token,
-            patch("scm_materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
-            patch("scm_materialize_patch_blob.write_text_artifact") as mock_write,
+            patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_get_repo,
+            patch("engram.logbook.materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
+            patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"),
+            patch("engram.logbook.materialize_patch_blob.mark_blob_failed") as mock_failed,
+            patch(
+                "engram.logbook.materialize_patch_blob.create_gitlab_token_provider"
+            ) as mock_token,
+            patch("engram.logbook.materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
+            patch("engram.logbook.materialize_patch_blob.write_text_artifact") as mock_write,
         ):
             mock_get_repo.return_value = {
                 "repo_id": 1,
@@ -5472,7 +5502,7 @@ class TestShaMismatchPolicy:
         - 返回成功状态
         - 制品被写入
         """
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             MaterializeStatus,
             PatchBlobRecord,
             ShaMismatchPolicy,
@@ -5504,14 +5534,16 @@ class TestShaMismatchPolicy:
         mock_conn.cursor.return_value = mock_cursor
 
         with (
-            patch("scm_materialize_patch_blob.get_repo_info") as mock_get_repo,
-            patch("scm_materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
-            patch("scm_materialize_patch_blob.mark_blob_in_progress"),
-            patch("scm_materialize_patch_blob.mark_blob_done") as mock_done,
-            patch("scm_materialize_patch_blob.mark_blob_failed") as mock_failed,
-            patch("scm_materialize_patch_blob.create_gitlab_token_provider") as mock_token,
-            patch("scm_materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
-            patch("scm_materialize_patch_blob.write_text_artifact") as mock_write,
+            patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_get_repo,
+            patch("engram.logbook.materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
+            patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"),
+            patch("engram.logbook.materialize_patch_blob.mark_blob_done") as mock_done,
+            patch("engram.logbook.materialize_patch_blob.mark_blob_failed") as mock_failed,
+            patch(
+                "engram.logbook.materialize_patch_blob.create_gitlab_token_provider"
+            ) as mock_token,
+            patch("engram.logbook.materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
+            patch("engram.logbook.materialize_patch_blob.write_text_artifact") as mock_write,
         ):
             mock_get_repo.return_value = {
                 "repo_id": 1,
@@ -5559,7 +5591,7 @@ class TestShaMismatchPolicy:
         - 返回成功状态
         - 制品被写入
         """
-        from scm_materialize_patch_blob import (
+        from engram.logbook.materialize_patch_blob import (
             MaterializeStatus,
             PatchBlobRecord,
             ShaMismatchPolicy,
@@ -5589,13 +5621,15 @@ class TestShaMismatchPolicy:
         mock_conn.cursor.return_value = mock_cursor
 
         with (
-            patch("scm_materialize_patch_blob.get_repo_info") as mock_get_repo,
-            patch("scm_materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
-            patch("scm_materialize_patch_blob.mark_blob_in_progress"),
-            patch("scm_materialize_patch_blob.mark_blob_done") as mock_done,
-            patch("scm_materialize_patch_blob.create_gitlab_token_provider") as mock_token,
-            patch("scm_materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
-            patch("scm_materialize_patch_blob.write_text_artifact") as mock_write,
+            patch("engram.logbook.materialize_patch_blob.get_repo_info") as mock_get_repo,
+            patch("engram.logbook.materialize_patch_blob.fetch_gitlab_commit_diff") as mock_fetch,
+            patch("engram.logbook.materialize_patch_blob.mark_blob_in_progress"),
+            patch("engram.logbook.materialize_patch_blob.mark_blob_done") as mock_done,
+            patch(
+                "engram.logbook.materialize_patch_blob.create_gitlab_token_provider"
+            ) as mock_token,
+            patch("engram.logbook.materialize_patch_blob.get_gitlab_config") as mock_gitlab_cfg,
+            patch("engram.logbook.materialize_patch_blob.write_text_artifact") as mock_write,
         ):
             mock_get_repo.return_value = {
                 "repo_id": 1,

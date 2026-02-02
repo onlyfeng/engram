@@ -648,7 +648,7 @@ bootstrap_roles → migrate → verify
 | 2. migrate | `engram-migrate --apply-roles --apply-openmemory-grants` | `logbook_migrate` | 执行迁移 |
 | 3. verify | `engram-migrate --verify` | `permissions_verify` | 验证权限 |
 
-> **弃用说明**: `python scripts/db_bootstrap.py` 已弃用，将在 v1.0 移除。请使用 `engram-bootstrap-roles`。
+> **弃用说明**: `python scripts/db_bootstrap.py` 已弃用，并在 v2.0 移除。请使用 `engram-bootstrap-roles`。
 
 ### 工具选择
 
@@ -661,7 +661,7 @@ bootstrap_roles → migrate → verify
 
 ### 废弃脚本
 
-以下脚本是**兼容入口，已弃用**，将在 v1.0 版本移除：
+以下脚本是**兼容入口，已弃用**，已在 v2.0 版本移除：
 
 | 废弃脚本 | 替代方案 |
 |---------|---------|
@@ -675,4 +675,4 @@ bootstrap_roles → migrate → verify
 | `python scm_sync_runner.py` | `engram-scm run` |
 | `python artifact_cli.py` | `engram-artifacts` |
 
-> **迁移窗口**: 旧命令在 v0.x 版本期间仍可使用，但会输出弃用警告。建议尽快迁移到新入口。
+> **迁移窗口**: 旧命令已在 v2.0 移除，请使用新入口。

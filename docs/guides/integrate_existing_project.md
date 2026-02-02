@@ -442,7 +442,7 @@ cp -r "$ENGRAM_SRC/src" src/
 cp -r "$ENGRAM_SRC/sql" sql/
 cp -r "$ENGRAM_SRC/logbook_postgres" logbook_postgres/
 cp -r "$ENGRAM_SRC/engram_logbook" engram_logbook/
-cp "$ENGRAM_SRC/db_bootstrap.py" ./
+cp -r "$ENGRAM_SRC/scripts" scripts/
 cp "$ENGRAM_SRC/pyproject.toml" ./
 cp "$ENGRAM_SRC/requirements.txt" ./
 cp "$ENGRAM_SRC/README.md" ./
@@ -471,7 +471,7 @@ your-project/
 ├── sql/                              # Logbook SQL 迁移脚本
 ├── logbook_postgres/                 # 迁移与工具脚本
 ├── engram_logbook/                   # 兼容包
-├── db_bootstrap.py                   # 服务账号初始化
+├── scripts/                          # 运维/迁移脚本
 ├── pyproject.toml
 ├── requirements.txt
 ├── README.md
@@ -736,7 +736,7 @@ COPY src ./src
 COPY sql ./sql
 COPY logbook_postgres ./logbook_postgres
 COPY engram_logbook ./engram_logbook
-COPY db_bootstrap.py ./
+COPY scripts ./scripts
 ```
 
 **关键约束**：
@@ -821,7 +821,7 @@ ls -la docker/engram.Dockerfile
 - `sql/`
 - `logbook_postgres/`
 - `engram_logbook/`
-- `db_bootstrap.py`
+- `scripts/db_bootstrap.py`
 - `pyproject.toml`
 - `requirements.txt`
 
@@ -891,7 +891,7 @@ Gateway 和 Worker 服务的 Dockerfile 从项目根目录 COPY 以下路径：
 | `sql/` | `/app/sql/` | 迁移脚本 |
 | `logbook_postgres/` | `/app/logbook_postgres/` | 迁移与工具脚本 |
 | `engram_logbook/` | `/app/engram_logbook/` | 兼容包 |
-| `db_bootstrap.py` | `/app/db_bootstrap.py` | 服务账号初始化 |
+| `scripts/db_bootstrap.py` | `/app/scripts/db_bootstrap.py` | 服务账号初始化 |
 
 ### 分步部署 Compose 文件依赖
 
@@ -981,7 +981,7 @@ cp -r "$ENGRAM_SRC/src" src/
 cp -r "$ENGRAM_SRC/sql" sql/
 cp -r "$ENGRAM_SRC/logbook_postgres" logbook_postgres/
 cp -r "$ENGRAM_SRC/engram_logbook" engram_logbook/
-cp "$ENGRAM_SRC/db_bootstrap.py" ./
+cp -r "$ENGRAM_SRC/scripts" scripts/
 cp "$ENGRAM_SRC/pyproject.toml" ./
 cp "$ENGRAM_SRC/requirements.txt" ./
 cp "$ENGRAM_SRC/README.md" ./

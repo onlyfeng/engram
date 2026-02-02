@@ -10,7 +10,6 @@ test_identity_sync.py - 身份同步功能测试
 - 目录不存在时的错误处理
 """
 
-import sys
 import tempfile
 from pathlib import Path
 from typing import Generator
@@ -18,12 +17,7 @@ from typing import Generator
 import pytest
 import yaml
 
-# 确保可以导入 scripts 目录下的模块
-scripts_dir = Path(__file__).parent.parent
-if str(scripts_dir) not in sys.path:
-    sys.path.insert(0, str(scripts_dir))
-
-from identity_sync import (
+from engram.logbook.identity_sync import (
     AgentXDirectoryNotFoundError,
     SyncStats,
     UserConfig,

@@ -18,18 +18,11 @@ db_bootstrap.py 单元测试和集成测试
 """
 
 import os
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# 确保可以导入 db_bootstrap
-scripts_dir = Path(__file__).parent.parent
-if str(scripts_dir) not in sys.path:
-    sys.path.insert(0, str(scripts_dir))
-
-from db_bootstrap import (
+from engram.logbook.cli.db_bootstrap import (
     ENV_LOGBOOK_MIGRATOR_PASSWORD,
     ENV_LOGBOOK_SVC_PASSWORD,
     ENV_OPENMEMORY_MIGRATOR_PASSWORD,
@@ -378,7 +371,7 @@ class TestDeploymentModeErrorCodes:
 
     def test_error_codes_have_remediation(self):
         """测试：新错误码有对应的修复命令"""
-        from db_bootstrap import REMEDIATION_COMMANDS
+        from engram.logbook.cli.db_bootstrap import REMEDIATION_COMMANDS
 
         assert BootstrapErrorCode.SKIP_MODE_ACTIVE in REMEDIATION_COMMANDS
         assert BootstrapErrorCode.CONFIG_PARTIAL_PASSWORD in REMEDIATION_COMMANDS
@@ -449,7 +442,7 @@ def bootstrap_test_db(test_db_info: dict):
     if should_skip_integration_tests():
         pytest.skip("Bootstrap 集成测试已通过环境变量禁用")
 
-    from db_migrate import run_migrate
+    from engram.logbook.migrate import run_migrate
 
     dsn = test_db_info["dsn"]
     admin_dsn = test_db_info.get("admin_dsn", dsn)
@@ -769,7 +762,7 @@ class TestMissingItemsErrorStructure:
     def test_error_code_remediation_mapping(self):
         """测试错误码与修复命令映射"""
         # 从 db_bootstrap 导入 REMEDIATION_COMMANDS
-        from db_bootstrap import REMEDIATION_COMMANDS
+        from engram.logbook.cli.db_bootstrap import REMEDIATION_COMMANDS
 
         # 验证关键错误码有对应的修复命令
         key_error_codes = [

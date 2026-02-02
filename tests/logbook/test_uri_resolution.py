@@ -1147,8 +1147,8 @@ class TestAuditS3UriResolution:
         monkeypatch.setenv("ENGRAM_S3_ACCESS_KEY", "test-key")
         monkeypatch.setenv("ENGRAM_S3_SECRET_KEY", "test-secret")
 
-        from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ObjectStore
+        from scripts.artifact_audit import ArtifactAuditor
 
         auditor = ArtifactAuditor()
 
@@ -1168,8 +1168,8 @@ class TestAuditS3UriResolution:
         # 设置环境变量
         monkeypatch.setenv("ENGRAM_S3_BUCKET", "my-artifacts")
 
-        from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ArtifactReadError
+        from scripts.artifact_audit import ArtifactAuditor
 
         auditor = ArtifactAuditor()
 
@@ -1192,8 +1192,8 @@ class TestAuditS3UriResolution:
         config_module._global_config = None
         config_module._global_app_config = None
 
-        from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ArtifactReadError
+        from scripts.artifact_audit import ArtifactAuditor
 
         auditor = ArtifactAuditor()
 
@@ -1206,8 +1206,8 @@ class TestAuditS3UriResolution:
         """测试 S3 URI 缺少 key 时抛出错误"""
         monkeypatch.setenv("ENGRAM_S3_BUCKET", "my-artifacts")
 
-        from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ArtifactReadError
+        from scripts.artifact_audit import ArtifactAuditor
 
         auditor = ArtifactAuditor()
 
@@ -1225,8 +1225,8 @@ class TestAuditS3UriResolution:
         monkeypatch.setenv("ENGRAM_S3_ACCESS_KEY", "test-key")
         monkeypatch.setenv("ENGRAM_S3_SECRET_KEY", "test-secret")
 
-        from artifact_audit import ArtifactAuditor
         from engram.logbook.artifact_store import ObjectStore
+        from scripts.artifact_audit import ArtifactAuditor
 
         auditor = ArtifactAuditor()
 

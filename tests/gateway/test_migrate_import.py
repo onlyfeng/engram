@@ -115,33 +115,15 @@ class TestLogbookAdapterNoSysPathInjection:
         assert isinstance(_DB_MIGRATE_AVAILABLE, bool)
 
 
-class TestDbMigrateCliBackwardCompatibility:
-    """db_migrate.py CLI 向后兼容性测试
+class TestDbMigrateCliRemoval:
+    """db_migrate.py 兼容入口已移除（v2.0）"""
 
-    通过源码分析验证根目录 db_migrate.py 兼容入口正确导入 engram.logbook.migrate。
-    注意: logbook_postgres/scripts/ 目录已在 v1.0 中移除，测试直接检查根目录入口。
-    """
-
-    def test_db_migrate_imports_from_migrate_module(self):
-        """测试根目录 db_migrate.py 从 engram.logbook.cli.db_migrate 导入
-
-        通过源码分析验证，避免 sys.path 注入。
-        db_migrate.py 是薄包装器，转发到权威入口。
-        """
+    def test_db_migrate_wrapper_removed(self):
+        """测试根目录 db_migrate.py 已移除"""
         repo_root = _get_repo_root()
         db_migrate_path = repo_root / "db_migrate.py"
 
-        assert db_migrate_path.exists(), f"根目录 db_migrate.py 不存在: {db_migrate_path}"
-
-        # 读取源代码
-        source = db_migrate_path.read_text()
-
-        # 验证导入语句指向 engram.logbook.cli.db_migrate（权威入口）
-        assert "from engram.logbook.cli.db_migrate import" in source, (
-            "db_migrate.py 应从 engram.logbook.cli.db_migrate 导入"
-        )
-        # 薄包装器只转发 main
-        assert "main" in source
+        assert not db_migrate_path.exists(), f"根目录 db_migrate.py 仍存在: {db_migrate_path}"
 
     def test_db_migrate_exports_backward_compatible_names(self):
         """测试 engram.logbook.migrate 导出向后兼容的名称
