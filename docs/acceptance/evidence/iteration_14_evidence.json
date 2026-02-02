@@ -1,0 +1,23 @@
+{
+  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "iteration_number": 14,
+  "recorded_at": "2026-02-01T23:06:19Z",
+  "commit_sha": "abc1234567890",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.13.2",
+    "arch": "x86_64"
+  },
+  "commands": [
+    {
+      "name": "ci",
+      "command": "make ci",
+      "result": "PASS"
+    }
+  ],
+  "overall_result": "PASS",
+  "sensitive_data_declaration": true,
+  "links": {
+    "regression_doc_url": "docs/acceptance/iteration_14_regression.md"
+  }
+}
