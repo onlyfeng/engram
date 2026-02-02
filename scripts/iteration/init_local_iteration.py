@@ -312,6 +312,9 @@ def main() -> int:
         print(f"  1. 编辑 .iteration/{iteration_number}/plan.md 起草迭代计划")
         print(f"  2. 编辑 .iteration/{iteration_number}/regression.md 记录回归测试")
         print("  3. 计划成熟后，参照 docs/dev/iteration_local_drafts.md 晋升到 docs/acceptance/")
+        print()
+        print("同步自动生成区块（晋升后执行）:")
+        print(f"  python scripts/iteration/sync_iteration_regression.py {iteration_number} --write")
 
         return 0
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
   "iteration_number": 8,
-  "recorded_at": "2026-02-01T23:00:36Z",
+  "recorded_at": "2026-02-01T23:06:19Z",
   "commit_sha": "abc1234567890",
   "runner": {
     "os": "darwin-24.6.0",
@@ -18,5 +18,8 @@
   ],
   "overall_result": "PASS",
   "sensitive_data_declaration": true,
+  "links": {
+    "regression_doc_url": "docs/acceptance/iteration_8_regression.md"
+  },
   "notes": "[REDACTED]"
 }

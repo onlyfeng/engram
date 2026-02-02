@@ -3,6 +3,13 @@
 > **使用说明**：复制本模板到 `docs/acceptance/iteration_N_regression.md`，替换 `{PLACEHOLDER}` 占位符。
 >
 > **索引关系**：创建回归记录后，需在 [00_acceptance_matrix.md](../00_acceptance_matrix.md) 的「迭代回归记录索引」表中添加对应条目。
+>
+> **自动生成区块**：本模板包含两个由脚本自动生成/刷新的区块（`min_gate_block` 和 `evidence_snippet`），请勿手动编辑这些区块内容。使用以下命令同步：
+>
+> ```bash
+> # 同步所有自动生成区块
+> python scripts/iteration/sync_iteration_regression.py <N> --write
+> ```
 
 ---
 

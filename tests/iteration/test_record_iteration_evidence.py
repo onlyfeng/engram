@@ -488,6 +488,110 @@ class TestRecordEvidence:
             finally:
                 record_iteration_evidence.EVIDENCE_DIR = original_dir
 
+    def test_regression_doc_url_written_by_default_without_ci_run_url(self) -> None:
+        """测试未传 ci_run_url 时也默认写入 regression_doc_url。"""
+        schema = load_evidence_schema()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import record_iteration_evidence
+
+            original_dir = record_iteration_evidence.EVIDENCE_DIR
+            record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+
+            try:
+                commands = [CommandEntry(name="ci", command="make ci", result="PASS")]
+                # 不传任何 links 相关参数
+                result = record_evidence(
+                    iteration_number=14,
+                    commit_sha="abc1234567890",
+                    commands=commands,
+                )
+
+                with open(result.output_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # 验证 links 存在且包含 regression_doc_url
+                assert "links" in data
+                assert (
+                    data["links"]["regression_doc_url"]
+                    == "docs/acceptance/iteration_14_regression.md"
+                )
+                # 验证其他 links 字段不存在（因为未传入）
+                assert "ci_run_url" not in data["links"]
+                assert "pr_url" not in data["links"]
+                assert "artifact_url" not in data["links"]
+
+                # 验证通过 schema 校验
+                jsonschema.validate(instance=data, schema=schema)
+
+            finally:
+                record_iteration_evidence.EVIDENCE_DIR = original_dir
+
+    def test_no_regression_doc_url_flag(self) -> None:
+        """测试 include_regression_doc_url=False 时不写入默认 regression_doc_url。"""
+        schema = load_evidence_schema()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import record_iteration_evidence
+
+            original_dir = record_iteration_evidence.EVIDENCE_DIR
+            record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+
+            try:
+                commands = [CommandEntry(name="ci", command="make ci", result="PASS")]
+                # 显式关闭 regression_doc_url
+                result = record_evidence(
+                    iteration_number=14,
+                    commit_sha="abc1234567890",
+                    commands=commands,
+                    include_regression_doc_url=False,
+                )
+
+                with open(result.output_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # 验证 links 不存在（因为没有任何 links 字段）
+                assert "links" not in data
+
+                # 验证通过 schema 校验
+                jsonschema.validate(instance=data, schema=schema)
+
+            finally:
+                record_iteration_evidence.EVIDENCE_DIR = original_dir
+
+    def test_explicit_regression_doc_url_overrides_default(self) -> None:
+        """测试显式传入 regression_doc_url 时覆盖默认值。"""
+        schema = load_evidence_schema()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import record_iteration_evidence
+
+            original_dir = record_iteration_evidence.EVIDENCE_DIR
+            record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+
+            try:
+                commands = [CommandEntry(name="ci", command="make ci", result="PASS")]
+                # 显式传入自定义 regression_doc_url
+                result = record_evidence(
+                    iteration_number=14,
+                    commit_sha="abc1234567890",
+                    commands=commands,
+                    regression_doc_url="docs/custom/my_regression.md",
+                )
+
+                with open(result.output_path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # 验证使用了显式传入的值
+                assert "links" in data
+                assert data["links"]["regression_doc_url"] == "docs/custom/my_regression.md"
+
+                # 验证通过 schema 校验
+                jsonschema.validate(instance=data, schema=schema)
+
+            finally:
+                record_iteration_evidence.EVIDENCE_DIR = original_dir
+
 
 # ============================================================================
 # 测试敏感信息脱敏

@@ -368,6 +368,186 @@ git commit -m "evidence: Iteration <N> 验收证据"
 
 ---
 
+## 7. 历史文件批量迁移（Migration Runbook）
+
+> **背景**：由于迭代工作流在 Iteration 8 之后才引入 evidence 文件和标准化模板，历史 regression 文件（Iteration 2-7, 10-12）缺失 evidence 文件和标准化段落。本章节提供批量修复策略。
+
+### 当前状态盘点
+
+截至 2026-02-02，文件状态如下：
+
+| 迭代编号 | regression 文件 | evidence 文件 | 状态 |
+|----------|-----------------|---------------|------|
+| 2-7 | ✅ 存在 | ❌ 缺失 | 需补充 evidence |
+| 8, 9 | ✅ 存在 | ✅ 存在 | 已完成 |
+| 10-12 | ✅ 存在 | ❌ 缺失 | 需补充 evidence |
+| 13, 14 | ✅ 存在 | ✅ 存在 | 已完成 |
+
+**缺失 evidence 的迭代**：2, 3, 4, 5, 6, 7, 10, 11, 12（共 9 个）
+
+### 批量执行策略
+
+#### 步骤 1：生成最小 evidence 文件
+
+对缺失 evidence 的迭代，使用 `record_iteration_evidence.py` 生成最小 evidence：
+
+```bash
+# 批量生成最小 evidence（使用当前 commit，标记为历史补录）
+for N in 2 3 4 5 6 7 10 11 12; do
+  echo "=== 生成 Iteration $N evidence ==="
+  python scripts/iteration/record_iteration_evidence.py $N \
+    --add-command "historical_record:(historical backfill):PASS" \
+    --notes "历史迭代补录：原始验收时未记录 evidence 文件，此为 2026-02-02 补录。"
+done
+```
+
+**说明**：
+- `--add-command` 格式：`NAME:COMMAND:RESULT`
+- 使用 `historical_record` 作为命令名，标识这是历史补录
+- `--notes` 记录补录原因和时间
+
+#### 步骤 2：补充真实命令结果（可选）
+
+如有历史 CI 运行记录，可补充真实命令结果：
+
+```bash
+# 示例：补充真实的 make ci 结果
+python scripts/iteration/record_iteration_evidence.py <N> \
+  --add-command 'ci:make ci:PASS' \
+  --ci-run-url https://github.com/<org>/<repo>/actions/runs/<run_id> \
+  --notes "补充历史 CI 运行结果"
+```
+
+#### 步骤 3：同步 regression 文档的证据段落
+
+使用同步脚本批量更新 regression 文档：
+
+```bash
+# 批量同步证据段落到 regression 文档
+for N in 2 3 4 5 6 7 10 11 12; do
+  echo "=== 同步 Iteration $N regression 文档 ==="
+  python scripts/iteration/sync_iteration_regression.py $N
+done
+```
+
+**同步内容**：
+- 补充"验收证据"段落（如缺失）
+- 更新 evidence 文件引用路径
+- 确保段落格式符合模板规范
+
+#### 步骤 4：验证与提交
+
+```bash
+# 1. 校验所有 evidence 文件
+make check-iteration-evidence
+
+# 2. 校验迭代文档规范（warn-only 模式）
+make check-iteration-docs
+
+# 3. 查看变更
+git status
+git diff docs/acceptance/
+
+# 4. 分批提交（建议按迭代编号分组）
+git add docs/acceptance/evidence/iteration_{2,3,4}_evidence.json
+git add docs/acceptance/iteration_{2,3,4}_regression.md
+git commit -m "evidence: 补录 Iteration 2-4 历史证据文件"
+
+git add docs/acceptance/evidence/iteration_{5,6,7}_evidence.json
+git add docs/acceptance/iteration_{5,6,7}_regression.md
+git commit -m "evidence: 补录 Iteration 5-7 历史证据文件"
+
+git add docs/acceptance/evidence/iteration_{10,11,12}_evidence.json
+git add docs/acceptance/iteration_{10,11,12}_regression.md
+git commit -m "evidence: 补录 Iteration 10-12 历史证据文件"
+```
+
+### CI 门禁切换策略
+
+#### 当前状态（warn-only）
+
+Makefile 中 `check-iteration-docs` 使用 `--warn-only` 模式：
+
+```makefile
+check-iteration-docs:
+	$(PYTHON) -m scripts.ci.check_iteration_docs_placeholders --verbose --warn-only
+```
+
+此模式下，历史文件的占位符/标题缺失仅产生警告，不阻断 CI。
+
+#### 切换为阻断模式
+
+当所有历史文件补齐后，修改 Makefile 切换为阻断模式：
+
+```bash
+# 1. 验证所有文件已补齐
+make check-iteration-docs-headings  # 阻断模式测试
+
+# 2. 如无错误，更新 Makefile
+# 将 check-iteration-docs 目标中的 --warn-only 移除：
+# 旧：$(PYTHON) -m scripts.ci.check_iteration_docs_placeholders --verbose --warn-only
+# 新：$(PYTHON) -m scripts.ci.check_iteration_docs_placeholders --verbose
+
+# 3. 验证 CI 通过
+make ci
+```
+
+**切换条件**：
+- 所有 evidence 文件已生成（`docs/acceptance/evidence/iteration_*_evidence.json`）
+- 所有 regression 文档包含"验收证据"段落
+- `make check-iteration-docs-headings` 无错误
+
+### 一键修复脚本（推荐）
+
+可创建一次性批量修复脚本：
+
+```bash
+#!/bin/bash
+# scripts/ops/backfill_historical_evidence.sh
+# 一次性批量补录历史迭代 evidence 文件
+
+set -e
+
+MISSING_ITERATIONS="2 3 4 5 6 7 10 11 12"
+
+echo "========== 历史迭代 Evidence 批量补录 =========="
+echo "将为以下迭代生成 evidence 文件: $MISSING_ITERATIONS"
+echo ""
+
+for N in $MISSING_ITERATIONS; do
+  echo ">>> Iteration $N"
+  
+  # 生成最小 evidence
+  python scripts/iteration/record_iteration_evidence.py $N \
+    --add-command "historical_record:(historical backfill):PASS" \
+    --notes "历史迭代补录：原始验收时未记录 evidence 文件，此为 $(date +%Y-%m-%d) 补录。"
+  
+  # 同步 regression 文档（如脚本存在）
+  if [ -f scripts/iteration/sync_iteration_regression.py ]; then
+    python scripts/iteration/sync_iteration_regression.py $N || echo "  [WARN] 同步脚本执行失败，请手动检查"
+  fi
+  
+  echo ""
+done
+
+echo "========== 批量补录完成 =========="
+echo ""
+echo "下一步："
+echo "  1. make check-iteration-evidence  # 校验 evidence 文件"
+echo "  2. make check-iteration-docs      # 校验文档规范"
+echo "  3. git status && git diff         # 查看变更"
+echo "  4. 分批提交变更"
+```
+
+### 注意事项
+
+1. **不要伪造历史**：evidence 文件的 `commit_sha` 使用当前 commit，`notes` 中明确标注为补录
+2. **分批提交**：建议按迭代编号分组提交，便于代码审查和回滚
+3. **保持一致性**：使用相同的补录格式和说明文字
+4. **验证后再切换**：确保所有文件补齐后再移除 `--warn-only`，避免 CI 频繁失败
+
+---
+
 ## 相关文档
 
 | 文档 | 说明 |
@@ -380,4 +560,4 @@ git commit -m "evidence: Iteration <N> 验收证据"
 
 ---
 
-更新时间：2026-02-02（补充 evidence 生成/校验/引用推荐流程）
+更新时间：2026-02-02（新增历史文件批量迁移章节）

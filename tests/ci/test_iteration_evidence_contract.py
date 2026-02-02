@@ -26,12 +26,15 @@ from scripts.ci.check_iteration_evidence_contract import (
     SNAPSHOT_PATTERN,
     SNAPSHOT_SHA_PATTERN,
     EvidenceViolation,
+    EvidenceWarning,
     get_evidence_files,
     load_schema,
     parse_evidence_filename,
     scan_evidence_files,
+    validate_bidirectional_reference,
     validate_filename,
     validate_json_content,
+    validate_regression_doc_link,
 )
 
 # ============================================================================
@@ -379,16 +382,17 @@ class TestScanEvidenceFiles:
 
     def test_scans_valid_files(self, temp_evidence_dir: Path, canonical_evidence_file: Path):
         """测试扫描有效文件"""
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
         assert total_files == 1
         assert len(violations) == 0
+        # 可能有缺少 links 的警告
 
     def test_detects_naming_violations(self, temp_evidence_dir: Path, valid_evidence_content: dict):
         """测试检测命名违规"""
         filepath = temp_evidence_dir / "bad_name.json"
         filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
 
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
         assert total_files == 1
         naming_violations = [v for v in violations if v.violation_type == "naming"]
         assert len(naming_violations) == 1
@@ -399,16 +403,17 @@ class TestScanEvidenceFiles:
         # 缺少必需字段
         filepath.write_text('{"iteration_number": 13}', encoding="utf-8")
 
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
         assert total_files == 1
         # 应该有 schema 违规（如果 jsonschema 可用）
         # 测试不假定 jsonschema 一定可用
 
     def test_empty_directory(self, temp_evidence_dir: Path):
         """测试空目录"""
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
         assert total_files == 0
         assert len(violations) == 0
+        assert len(warnings) == 0
 
 
 # ============================================================================
@@ -500,7 +505,7 @@ class TestIntegration:
             json.dumps(mismatched_content), encoding="utf-8"
         )
 
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
 
         assert total_files == 3
 
@@ -515,7 +520,7 @@ class TestIntegration:
     def test_real_evidence_directory(self):
         """测试真实的证据目录（如果存在）"""
         if EVIDENCE_DIR.exists():
-            violations, total_files = scan_evidence_files(evidence_dir=EVIDENCE_DIR)
+            violations, warnings, total_files = scan_evidence_files(evidence_dir=EVIDENCE_DIR)
             # 真实目录应该没有违规（或者已知违规数量）
             # 这里只验证脚本能正常运行
             assert total_files >= 0
@@ -560,9 +565,10 @@ class TestEdgeCases:
             json.dumps(valid_evidence_content, ensure_ascii=False), encoding="utf-8"
         )
 
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
         assert total_files == 1
         assert len(violations) == 0
+        # 可能有缺少 links 的警告
 
     def test_large_iteration_number(self, temp_evidence_dir: Path, valid_evidence_content: dict):
         """测试大迭代编号"""
@@ -570,9 +576,10 @@ class TestEdgeCases:
         filepath = temp_evidence_dir / "iteration_999_evidence.json"
         filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
 
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
         assert total_files == 1
         assert len(violations) == 0
+        # 可能有缺少 links 的警告
 
     def test_zero_iteration_number_in_filename(
         self, temp_evidence_dir: Path, valid_evidence_content: dict
@@ -582,7 +589,7 @@ class TestEdgeCases:
         filepath = temp_evidence_dir / "iteration_0_evidence.json"
         filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
 
-        violations, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
+        violations, warnings, total_files = scan_evidence_files(evidence_dir=temp_evidence_dir)
         # 文件名可以解析，但 schema 可能要求正整数
         # 这里主要验证脚本不会崩溃
         assert total_files == 1
@@ -606,3 +613,381 @@ class TestConstants:
         """测试 SCHEMA_PATH 路径格式"""
         assert SCHEMA_PATH.name == "iteration_evidence_v1.schema.json"
         assert SCHEMA_PATH.parent.name == "schemas"
+
+
+# ============================================================================
+# validate_regression_doc_link 测试
+# ============================================================================
+
+
+@pytest.fixture
+def temp_project_root():
+    """创建临时项目目录结构（含 regression 文档）"""
+    with tempfile.TemporaryDirectory(prefix="test_project_") as tmpdir:
+        root = Path(tmpdir)
+        # 创建目录结构
+        evidence_dir = root / "docs" / "acceptance" / "evidence"
+        evidence_dir.mkdir(parents=True)
+        yield root
+
+
+@pytest.fixture
+def valid_evidence_content_with_links() -> dict:
+    """带 links 的有效证据文件内容"""
+    return {
+        "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+        "iteration_number": 13,
+        "recorded_at": "2026-02-01T20:46:36Z",
+        "commit_sha": "abc1234567890",
+        "runner": {
+            "os": "darwin-24.6.0",
+            "python": "3.13.2",
+            "arch": "x86_64",
+        },
+        "commands": [
+            {
+                "name": "ci",
+                "command": "make ci",
+                "result": "PASS",
+            }
+        ],
+        "overall_result": "PASS",
+        "sensitive_data_declaration": True,
+        "links": {"regression_doc_url": "docs/acceptance/iteration_13_regression.md"},
+    }
+
+
+class TestValidateRegressionDocLink:
+    """validate_regression_doc_link 函数测试"""
+
+    def test_valid_link(self, temp_project_root: Path, valid_evidence_content_with_links: dict):
+        """测试有效的 regression_doc_url"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+
+        # 创建 regression 文档
+        regression_doc = temp_project_root / "docs" / "acceptance" / "iteration_13_regression.md"
+        regression_doc.write_text("# Iteration 13 Regression\n", encoding="utf-8")
+
+        violations, warnings = validate_regression_doc_link(
+            filepath, valid_evidence_content_with_links, temp_project_root
+        )
+
+        assert len(violations) == 0
+        assert len(warnings) == 0
+
+    def test_missing_links_canonical(self, temp_project_root: Path, valid_evidence_content: dict):
+        """测试 canonical 文件缺少 links 字段（应产生警告）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
+
+        violations, warnings = validate_regression_doc_link(
+            filepath, valid_evidence_content, temp_project_root
+        )
+
+        assert len(violations) == 0
+        assert len(warnings) == 1
+        assert warnings[0].warning_type == "missing_links"
+        assert "缺少 links 字段" in warnings[0].message
+
+    def test_missing_links_snapshot(self, temp_project_root: Path, valid_evidence_content: dict):
+        """测试 snapshot 文件缺少 links 字段（不产生警告）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        # snapshot 格式
+        filepath = evidence_dir / "iteration_13_20260201_204636.json"
+        filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
+
+        violations, warnings = validate_regression_doc_link(
+            filepath, valid_evidence_content, temp_project_root
+        )
+
+        assert len(violations) == 0
+        assert len(warnings) == 0
+
+    def test_missing_regression_doc_url(
+        self, temp_project_root: Path, valid_evidence_content: dict
+    ):
+        """测试 canonical 文件 links 中缺少 regression_doc_url（应产生警告）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        content = valid_evidence_content.copy()
+        content["links"] = {"ci_run_url": "https://example.com"}
+        filepath.write_text(json.dumps(content), encoding="utf-8")
+
+        violations, warnings = validate_regression_doc_link(filepath, content, temp_project_root)
+
+        assert len(violations) == 0
+        assert len(warnings) == 1
+        assert warnings[0].warning_type == "missing_links"
+        assert "缺少 regression_doc_url" in warnings[0].message
+
+    def test_nonexistent_regression_doc(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试 regression_doc_url 指向不存在的文件（应产生违规）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+        # 不创建 regression 文档
+
+        violations, warnings = validate_regression_doc_link(
+            filepath, valid_evidence_content_with_links, temp_project_root
+        )
+
+        assert len(violations) == 1
+        assert violations[0].violation_type == "link"
+        assert "不存在" in violations[0].message
+
+    def test_invalid_regression_doc_filename(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试 regression_doc_url 指向文件名格式错误的文件（应产生违规）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+
+        content = valid_evidence_content_with_links.copy()
+        content["links"] = {"regression_doc_url": "docs/acceptance/bad_name.md"}
+        filepath.write_text(json.dumps(content), encoding="utf-8")
+
+        # 创建错误命名的文档
+        bad_doc = temp_project_root / "docs" / "acceptance" / "bad_name.md"
+        bad_doc.write_text("# Bad Name\n", encoding="utf-8")
+
+        violations, warnings = validate_regression_doc_link(filepath, content, temp_project_root)
+
+        assert len(violations) == 1
+        assert violations[0].violation_type == "link"
+        assert "不符合规范" in violations[0].message
+
+    def test_mismatched_iteration_number(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试 regression_doc_url 迭代编号不一致（应产生违规）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+
+        # evidence 的 iteration_number 是 13，但链接指向 14
+        content = valid_evidence_content_with_links.copy()
+        content["links"] = {"regression_doc_url": "docs/acceptance/iteration_14_regression.md"}
+        filepath.write_text(json.dumps(content), encoding="utf-8")
+
+        # 创建 iteration 14 regression 文档
+        regression_doc = temp_project_root / "docs" / "acceptance" / "iteration_14_regression.md"
+        regression_doc.write_text("# Iteration 14 Regression\n", encoding="utf-8")
+
+        violations, warnings = validate_regression_doc_link(filepath, content, temp_project_root)
+
+        assert len(violations) == 1
+        assert violations[0].violation_type == "link"
+        assert "迭代编号不一致" in violations[0].message
+        assert "13" in violations[0].message
+        assert "14" in violations[0].message
+
+    def test_url_format_skipped(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试 URL 格式的 regression_doc_url（应跳过校验）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+
+        content = valid_evidence_content_with_links.copy()
+        content["links"] = {"regression_doc_url": "https://example.com/docs/iteration_13.md"}
+        filepath.write_text(json.dumps(content), encoding="utf-8")
+
+        violations, warnings = validate_regression_doc_link(filepath, content, temp_project_root)
+
+        assert len(violations) == 0
+        assert len(warnings) == 0
+
+
+# ============================================================================
+# validate_bidirectional_reference 测试
+# ============================================================================
+
+
+class TestValidateBidirectionalReference:
+    """validate_bidirectional_reference 函数测试"""
+
+    def test_valid_bidirectional_reference(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试有效的双向引用"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+
+        # 创建引用 evidence 的 regression 文档
+        regression_doc = temp_project_root / "docs" / "acceptance" / "iteration_13_regression.md"
+        regression_doc.write_text(
+            "# Iteration 13 Regression\n\n"
+            "## 验收证据\n\n"
+            "- [证据文件](evidence/iteration_13_evidence.json)\n",
+            encoding="utf-8",
+        )
+
+        violations = validate_bidirectional_reference(
+            filepath, valid_evidence_content_with_links, temp_project_root
+        )
+
+        assert len(violations) == 0
+
+    def test_missing_reference_in_regression_doc(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试 regression 文档未引用 evidence 文件（应产生违规）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+
+        # 创建未引用 evidence 的 regression 文档
+        regression_doc = temp_project_root / "docs" / "acceptance" / "iteration_13_regression.md"
+        regression_doc.write_text(
+            "# Iteration 13 Regression\n\n## 执行结果\n\n所有测试通过。\n",
+            encoding="utf-8",
+        )
+
+        violations = validate_bidirectional_reference(
+            filepath, valid_evidence_content_with_links, temp_project_root
+        )
+
+        assert len(violations) == 1
+        assert violations[0].violation_type == "link"
+        assert "双向引用不一致" in violations[0].message
+
+    def test_snapshot_file_skipped(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试 snapshot 文件跳过双向校验"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        # snapshot 格式
+        filepath = evidence_dir / "iteration_13_20260201_204636.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+
+        violations = validate_bidirectional_reference(
+            filepath, valid_evidence_content_with_links, temp_project_root
+        )
+
+        # snapshot 文件不进行双向校验
+        assert len(violations) == 0
+
+    def test_missing_regression_doc_skipped(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试 regression 文档不存在时跳过双向校验"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+        # 不创建 regression 文档
+
+        violations = validate_bidirectional_reference(
+            filepath, valid_evidence_content_with_links, temp_project_root
+        )
+
+        # regression 文档不存在时不进行双向校验
+        assert len(violations) == 0
+
+
+# ============================================================================
+# scan_evidence_files 扩展测试（含 warnings）
+# ============================================================================
+
+
+class TestScanEvidenceFilesExtended:
+    """scan_evidence_files 扩展测试（含 warnings 返回值）"""
+
+    def test_returns_warnings_for_missing_links(
+        self, temp_project_root: Path, valid_evidence_content: dict
+    ):
+        """测试返回缺少 links 的警告"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
+
+        violations, warnings, total_files = scan_evidence_files(
+            evidence_dir=evidence_dir,
+            project_root=temp_project_root,
+        )
+
+        assert total_files == 1
+        assert len(violations) == 0
+        assert len(warnings) == 1
+        assert warnings[0].warning_type == "missing_links"
+
+    def test_returns_violations_for_bad_link(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试返回坏链接的违规"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+        # 不创建 regression 文档
+
+        violations, warnings, total_files = scan_evidence_files(
+            evidence_dir=evidence_dir,
+            project_root=temp_project_root,
+        )
+
+        assert total_files == 1
+        # 应该有 link 违规（文件不存在）
+        link_violations = [v for v in violations if v.violation_type == "link"]
+        assert len(link_violations) >= 1
+
+    def test_full_valid_setup(
+        self, temp_project_root: Path, valid_evidence_content_with_links: dict
+    ):
+        """测试完整有效设置（无违规无警告）"""
+        evidence_dir = temp_project_root / "docs" / "acceptance" / "evidence"
+        filepath = evidence_dir / "iteration_13_evidence.json"
+        filepath.write_text(json.dumps(valid_evidence_content_with_links), encoding="utf-8")
+
+        # 创建引用 evidence 的 regression 文档
+        regression_doc = temp_project_root / "docs" / "acceptance" / "iteration_13_regression.md"
+        regression_doc.write_text(
+            "# Iteration 13 Regression\n\n"
+            "## 验收证据\n\n"
+            "- [证据文件](evidence/iteration_13_evidence.json)\n",
+            encoding="utf-8",
+        )
+
+        violations, warnings, total_files = scan_evidence_files(
+            evidence_dir=evidence_dir,
+            project_root=temp_project_root,
+        )
+
+        assert total_files == 1
+        assert len(violations) == 0
+        assert len(warnings) == 0
+
+
+# ============================================================================
+# EvidenceWarning 数据类测试
+# ============================================================================
+
+
+class TestEvidenceWarning:
+    """EvidenceWarning 数据类测试"""
+
+    def test_str_format_missing_links(self):
+        """测试缺少 links 警告的字符串格式"""
+        warning = EvidenceWarning(
+            file=Path("iteration_8_evidence.json"),
+            warning_type="missing_links",
+            message="缺少 links 字段",
+        )
+        str_repr = str(warning)
+        assert "iteration_8_evidence.json" in str_repr
+        assert "[missing_links]" in str_repr
+        assert "缺少 links 字段" in str_repr
+
+    def test_str_format_suggestion(self):
+        """测试建议警告的字符串格式"""
+        warning = EvidenceWarning(
+            file=Path("iteration_8_evidence.json"),
+            warning_type="suggestion",
+            message="建议添加 regression_doc_url",
+        )
+        str_repr = str(warning)
+        assert "[suggestion]" in str_repr
+        assert "建议添加" in str_repr

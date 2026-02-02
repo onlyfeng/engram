@@ -737,6 +737,7 @@ def record_evidence(
     regression_doc_url: Optional[str] = None,
     pr_url: Optional[str] = None,
     artifact_url: Optional[str] = None,
+    include_regression_doc_url: bool = True,
     *,
     dry_run: bool = False,
 ) -> RecordResult:
@@ -749,9 +750,10 @@ def record_evidence(
         ci_run_url: CI 运行 URL（可选）
         notes: 补充说明（可选）
         runner_label: CI runner 标签（可选）
-        regression_doc_url: 回归文档 URL（可选）
+        regression_doc_url: 回归文档 URL（可选，默认自动生成）
         pr_url: Pull Request URL（可选）
         artifact_url: CI Artifacts 下载 URL（可选）
+        include_regression_doc_url: 是否包含 regression_doc_url（默认 True）
         dry_run: 是否为预览模式
 
     Returns:
@@ -774,12 +776,22 @@ def record_evidence(
     runner = get_runner_info(runner_label)
 
     # 构建 links 对象
+    # 默认总是写入 regression_doc_url，除非 include_regression_doc_url=False
+    actual_regression_doc_url: Optional[str] = None
+    if include_regression_doc_url:
+        actual_regression_doc_url = (
+            regression_doc_url
+            or f"docs/acceptance/iteration_{iteration_number}_regression.md"
+        )
+    else:
+        # 如果用户关闭自动生成但仍显式传入，则使用传入值
+        actual_regression_doc_url = regression_doc_url
+
     links: Optional[Links] = None
-    if ci_run_url or regression_doc_url or pr_url or artifact_url:
+    if ci_run_url or actual_regression_doc_url or pr_url or artifact_url:
         links = Links(
             ci_run_url=ci_run_url,
-            regression_doc_url=regression_doc_url
-            or f"docs/acceptance/iteration_{iteration_number}_regression.md",
+            regression_doc_url=actual_regression_doc_url,
             pr_url=pr_url,
             artifact_url=artifact_url,
         )
@@ -972,7 +984,12 @@ def main() -> int:
         "--regression-doc-url",
         type=str,
         default=None,
-        help="回归文档 URL 或相对路径（如 'docs/acceptance/iteration_13_regression.md'）",
+        help="回归文档 URL 或相对路径（默认自动生成 'docs/acceptance/iteration_<N>_regression.md'）",
+    )
+    parser.add_argument(
+        "--no-regression-doc-url",
+        action="store_true",
+        help="不自动添加 regression_doc_url（默认会自动添加）",
     )
     parser.add_argument(
         "--pr-url",
@@ -1118,6 +1135,7 @@ def main() -> int:
             regression_doc_url=args.regression_doc_url,
             pr_url=args.pr_url,
             artifact_url=args.artifact_url,
+            include_regression_doc_url=not args.no_regression_doc_url,
             dry_run=args.dry_run,
         )
     except SchemaValidationError as e:
