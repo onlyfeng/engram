@@ -8,7 +8,7 @@
 
 | 迭代 | 日期 | 状态 | 计划 | 详细记录 | 说明 |
 |------|------|------|------|----------|------|
-| **Iteration 14** | 2026-02-02 | 🔄 PLANNING | [iteration_14_plan.md](iteration_14_plan.md) | [iteration_14_regression.md](iteration_14_regression.md) | Iteration 14 计划 |
+| **Iteration 14** | 2026-02-02 | ✅ PASS | [iteration_14_plan.md](iteration_14_plan.md) | [iteration_14_regression.md](iteration_14_regression.md) | make ci ✅，check-iteration-docs ✅，CI 测试 1351 passed，iteration 测试 440 passed |
 | **Iteration 13** | 2026-02-02 | ✅ PASS | [iteration_13_plan.md](iteration_13_plan.md) | [iteration_13_regression.md](iteration_13_regression.md) | 所有最小门禁通过：Workflow 合约 (v2.13.0)、Gateway Public API、CI 测试 (608 passed)、Gateway 测试 (1042 passed) |
 | Iteration 12 | 2026-02-02 | ✅ PASS | [iteration_12_plan.md](iteration_12_plan.md) | [iteration_12_regression.md](iteration_12_regression.md) | Gateway 测试全绿（1005 通过/206 跳过），修复 ImportError/patch 路径/状态隔离等问题 |
 | Iteration 11 | 2026-02-01 | 🔄 SUPERSEDED | [iteration_11_plan.md](iteration_11_plan.md) | [iteration_11_regression.md](iteration_11_regression.md) | 已被 Iteration 12 取代 |

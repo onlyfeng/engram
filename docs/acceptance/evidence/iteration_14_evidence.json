@@ -1,8 +1,8 @@
 {
   "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
   "iteration_number": 14,
-  "recorded_at": "2026-02-01T23:06:19Z",
-  "commit_sha": "abc1234567890",
+  "recorded_at": "2026-02-02T01:15:50Z",
+  "commit_sha": "2633ebb8528406f5d3602675b2e438a9c7505b91",
   "runner": {
     "os": "darwin-24.6.0",
     "python": "3.13.2",
@@ -12,6 +12,21 @@
     {
       "name": "ci",
       "command": "make ci",
+      "result": "PASS"
+    },
+    {
+      "name": "doc_check",
+      "command": "make check-iteration-docs",
+      "result": "PASS"
+    },
+    {
+      "name": "ci_tests",
+      "command": "pytest tests/ci/ -q",
+      "result": "PASS"
+    },
+    {
+      "name": "iteration_tests",
+      "command": "pytest tests/iteration/ -q",
       "result": "PASS"
     }
   ],
