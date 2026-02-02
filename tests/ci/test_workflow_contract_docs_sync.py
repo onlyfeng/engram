@@ -1207,6 +1207,7 @@ targets_required
             "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
             "frozen_job_names": {"allowlist": ["Test"]},
         }
+        # 只有一个 marker，其他预期块会产生 BLOCK_MARKER_MISSING error
         doc = """
 # Workflow Contract
 
@@ -1242,6 +1243,53 @@ targets_required
         # 有 markers，使用 block mode
         assert result.block_mode_used is True
         assert len(result.checked_blocks) > 0
+        # 其他预期块缺失 markers 会产生 error（6 个块中只有 1 个有 marker）
+        missing_marker_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.BLOCK_MARKER_MISSING
+        ]
+        assert len(missing_marker_errors) == 5  # NIGHTLY, FROZEN_JOB, FROZEN_STEP, MAKE, LABELS
+
+    def test_missing_expected_block_markers_error(self) -> None:
+        """当预期块的 markers 缺失时，应报 BLOCK_MARKER_MISSING error"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        # 有任意 marker 触发 block mode，但 CI_JOB_TABLE 缺失 markers
+        doc = """
+# Workflow Contract
+
+<!-- BEGIN:OTHER_BLOCK -->
+some content
+<!-- END:OTHER_BLOCK -->
+
+## 冻结的 Step 文本
+
+无
+
+## Make Targets
+
+targets_required
+
+## SemVer Policy
+
+版本策略
+"""
+        contract_path, doc_path = create_temp_files(contract, doc)
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        # 应该有 BLOCK_MARKER_MISSING error（所有 6 个预期块都缺失）
+        missing_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.BLOCK_MARKER_MISSING
+        ]
+        assert len(missing_errors) == 6
+        # 验证错误信息包含修复指引
+        for error in missing_errors:
+            assert "BEGIN:" in error.message
+            assert "END:" in error.message
+            assert error.category == "block"
 
     def test_duplicate_begin_marker_error(self) -> None:
         """当存在重复的 BEGIN marker 时，应报错"""
@@ -1994,6 +2042,12 @@ class TestBothCheckersMarkerModePass:
                 "file": ".github/workflows/ci.yml",
                 "job_ids": ["test", "lint"],
                 "job_names": ["Test Job", "Lint Job"],
+                "labels": ["ci-label"],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["nightly-verify"],
+                "job_names": ["Nightly Verify"],
             },
             "frozen_job_names": {"allowlist": ["Test Job"]},
             "frozen_step_text": {"allowlist": ["Run tests"]},
@@ -2011,7 +2065,7 @@ class TestBothCheckersMarkerModePass:
         contract_blocks = renderer.render_contract_blocks()
         coupling_blocks = renderer.render_coupling_map_blocks()
 
-        # 创建 contract.md（包含 markers）
+        # 创建 contract.md（包含所有 6 个预期 markers）
         contract_doc = f"""# Workflow Contract
 
 Version: 1.0.0
@@ -2022,23 +2076,35 @@ Version: 1.0.0
 {contract_blocks["CI_JOB_TABLE"].content}
 <!-- END:CI_JOB_TABLE -->
 
+### 2.2 Nightly Workflow (`nightly.yml`)
+
+<!-- BEGIN:NIGHTLY_JOB_TABLE -->
+{contract_blocks["NIGHTLY_JOB_TABLE"].content}
+<!-- END:NIGHTLY_JOB_TABLE -->
+
+## 3. PR Label 列表与语义
+
+<!-- BEGIN:LABELS_TABLE -->
+{contract_blocks["LABELS_TABLE"].content}
+<!-- END:LABELS_TABLE -->
+
 ## 冻结的 Step 文本
 
-| Step Name |
-|-----------|
-| `Run tests` |
+<!-- BEGIN:FROZEN_STEP_NAMES_TABLE -->
+{contract_blocks["FROZEN_STEP_NAMES_TABLE"].content}
+<!-- END:FROZEN_STEP_NAMES_TABLE -->
 
 ### Frozen Job Names
 
-| Job Name |
-|----------|
-| `Test Job` |
+<!-- BEGIN:FROZEN_JOB_NAMES_TABLE -->
+{contract_blocks["FROZEN_JOB_NAMES_TABLE"].content}
+<!-- END:FROZEN_JOB_NAMES_TABLE -->
 
 ## Make Targets
 
-targets_required:
-- ci
-- lint
+<!-- BEGIN:MAKE_TARGETS_TABLE -->
+{contract_blocks["MAKE_TARGETS_TABLE"].content}
+<!-- END:MAKE_TARGETS_TABLE -->
 
 ## SemVer Policy
 
@@ -2047,7 +2113,7 @@ targets_required:
         contract_doc_path = temp_dir / "contract.md"
         contract_doc_path.write_text(contract_doc, encoding="utf-8")
 
-        # 创建 coupling_map.md（包含 markers）
+        # 创建 coupling_map.md（包含所有 3 个预期 markers）
         coupling_map_doc = f"""# Coupling Map
 
 ## CI Jobs
@@ -2056,12 +2122,17 @@ targets_required:
 {coupling_blocks["CI_JOBS_LIST"].content}
 <!-- END:CI_JOBS_LIST -->
 
+## Nightly Jobs
+
+<!-- BEGIN:NIGHTLY_JOBS_LIST -->
+{coupling_blocks["NIGHTLY_JOBS_LIST"].content}
+<!-- END:NIGHTLY_JOBS_LIST -->
+
 ## Make Targets
 
-| Target | 说明 |
-|--------|------|
-| `ci` | CI target |
-| `lint` | Lint target |
+<!-- BEGIN:MAKE_TARGETS_LIST -->
+{coupling_blocks["MAKE_TARGETS_LIST"].content}
+<!-- END:MAKE_TARGETS_LIST -->
 """
         coupling_map_path = temp_dir / "coupling_map.md"
         coupling_map_path.write_text(coupling_map_doc, encoding="utf-8")

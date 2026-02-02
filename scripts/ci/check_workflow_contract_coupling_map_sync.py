@@ -410,10 +410,17 @@ class WorkflowContractCouplingMapSyncChecker:
 
             # 检查 markers 是否存在
             if block_name not in marker_map:
-                # Marker 缺失 - 这是 warning 而非 error，允许渐进式迁移
-                self.result.add_warning(
-                    f"Block '{block_name}' markers not found in document. "
-                    f"Add markers to enable block comparison."
+                # Marker 缺失 - 预期块必须存在 markers
+                self.result.add_error(
+                    SyncError(
+                        error_type=CouplingMapSyncErrorTypes.BLOCK_MARKER_MISSING,
+                        category="block",
+                        value=block_name,
+                        message=(
+                            f"Block '{block_name}' markers not found in document. "
+                            f"Add <!-- BEGIN:{block_name} --> and <!-- END:{block_name} --> markers."
+                        ),
+                    )
                 )
                 continue
 

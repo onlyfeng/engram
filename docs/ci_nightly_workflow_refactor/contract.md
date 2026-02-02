@@ -170,25 +170,25 @@ Drift Report 使用 `|| true` 的原因：
 <!-- BEGIN:CI_JOB_TABLE -->
 | Job ID | Job Name | 说明 |
 |--------|----------|------|
-| `test` | Test (Python ${{ matrix.python-version }}) | 10 个必需步骤 |
-| `lint` | Lint | 7 个必需步骤 |
-| `no-iteration-tracked` | No .iteration/ Tracked Files | 2 个必需步骤 |
-| `env-var-consistency` | Environment Variable Consistency | 3 个必需步骤 |
-| `schema-validate` | Schema Validation | 5 个必需步骤 |
-| `logbook-consistency` | Logbook Consistency Check | 3 个必需步骤 |
-| `migration-sanity` | Migration Sanity Check | 3 个必需步骤 |
-| `sql-safety` | SQL Migration Safety Check | 4 个必需步骤 |
-| `gateway-di-boundaries` | Gateway DI Boundaries Check | 3 个必需步骤 |
-| `scm-sync-consistency` | SCM Sync Consistency Check | 4 个必需步骤 |
-| `gateway-error-reason-usage` | Gateway ErrorReason Usage Check | 3 个必需步骤 |
-| `gateway-import-surface` | Gateway Import Surface Check | 3 个必需步骤 |
-| `gateway-public-api-surface` | Gateway Public API Import Surface Check | 4 个必需步骤 |
-| `gateway-correlation-id-single-source` | Gateway correlation_id Single Source Check | 3 个必需步骤 |
-| `mcp-error-contract` | MCP Error Contract Check | 9 个必需步骤 |
-| `iteration-docs-check` | Iteration Docs Check | 3 个必需步骤 |
-| `ci-test-isolation` | CI Test Isolation Check | 5 个必需步骤 |
-| `iteration-tools-test` | Iteration Tools Test | 4 个必需步骤 |
-| `workflow-contract` | Workflow Contract Validation | 17 个必需步骤 |
+| `test` | Test (Python ${{ matrix.python-version }}) | 单元测试、集成测试和验收测试（含数据库迁移验证） |
+| `lint` | Lint | 代码风格检查（ruff）和类型检查（mypy baseline + strict-island 双层策略） |
+| `no-iteration-tracked` | No .iteration/ Tracked Files | 检查 .iteration/ 目录下无被 Git 追踪的文件 |
+| `env-var-consistency` | Environment Variable Consistency | 环境变量配置一致性检查 |
+| `schema-validate` | Schema Validation | JSON Schema 校验 |
+| `logbook-consistency` | Logbook Consistency Check | Logbook 配置一致性检查 |
+| `migration-sanity` | Migration Sanity Check | SQL 迁移文件存在性和基础语法检查 |
+| `sql-safety` | SQL Migration Safety Check | SQL 迁移安全性检查 |
+| `gateway-di-boundaries` | Gateway DI Boundaries Check | Gateway DI 边界检查（禁止 deps.db 直接使用） |
+| `scm-sync-consistency` | SCM Sync Consistency Check | SCM Sync 配置一致性检查 |
+| `gateway-error-reason-usage` | Gateway ErrorReason Usage Check | Gateway ErrorReason 使用规范检查 |
+| `gateway-import-surface` | Gateway Import Surface Check | Gateway __init__.py 懒加载策略检查（禁止 eager-import） |
+| `gateway-public-api-surface` | Gateway Public API Import Surface Check | Gateway Public API 导入表面（__all__ 与实际导出一致性）及文档同步检查 |
+| `gateway-correlation-id-single-source` | Gateway correlation_id Single Source Check | Gateway correlation_id 单一来源（SSOT 模块）检查 |
+| `mcp-error-contract` | MCP Error Contract Check | MCP JSON-RPC 错误码合约与文档同步检查 |
+| `iteration-docs-check` | Iteration Docs Check | 迭代文档规范检查（.iteration/ 链接和 SUPERSEDED 一致性） |
+| `ci-test-isolation` | CI Test Isolation Check | CI 测试隔离检查（tests/ci/ 测试文件禁止被外部导入） |
+| `iteration-tools-test` | Iteration Tools Test | 迭代工具脚本测试（无数据库依赖） |
+| `workflow-contract` | Workflow Contract Validation | Workflow 合约校验（strict 模式）、文档同步、版本策略和内部一致性检查 |
 <!-- END:CI_JOB_TABLE -->
 
 ### 2.2 Nightly Workflow (`nightly.yml`)
@@ -197,8 +197,8 @@ Drift Report 使用 `|| true` 的原因：
 | Job ID | Job Name | 说明 |
 |--------|----------|------|
 | `unified-stack-full` | Unified Stack Full Verification | 完整验证流程：环境检测 -> Gate Contract 校验 -> Docker Compose 启动 -> 服务健康检查 -> 集成测试 -> 验证 -> 清理 -> 记录 -> 上传 |
-| `iteration-audit` | Iteration Docs Audit | 4 个必需步骤 |
-| `notify-results` | Notify Results | 1 个必需步骤 |
+| `iteration-audit` | Iteration Docs Audit | 迭代文档审计（轻量级检查） |
+| `notify-results` | Notify Results | Nightly 运行结果通知 |
 <!-- END:NIGHTLY_JOB_TABLE -->
 
 ### 2.3 Release Workflow (`release.yml`) - Phase 2 预留

@@ -40,7 +40,15 @@
 | `make check-workflow-contract-version-policy` | 版本策略检查 | Exit 0，版本已更新 |
 | `make check-workflow-contract-doc-anchors` | 文档锚点检查 | Exit 0，锚点有效 |
 | `make check-workflow-contract-coupling-map-sync` | Coupling Map 同步检查 | Exit 0，job_ids/artifacts/targets 已同步 |
+| `make check-workflow-contract-docs-generated` | 受控块生成状态检查 | Exit 0，docs-sync + coupling-map-sync 通过 |
 | `pytest tests/ci/ -q` | CI 脚本测试 | 全部 PASSED |
+
+**受控块渲染工具**（可选，用于预览和更新）：
+
+| 命令 | 用途 | 说明 |
+|------|------|------|
+| `make render-workflow-contract-docs` | 渲染受控块（仅预览） | 输出渲染内容到 stdout，不修改文件 |
+| `make update-workflow-contract-docs` | 更新受控块（就地写入） | 将渲染内容写入 contract.md 和 coupling_map.md |
 
 **一键验证命令**：
 
@@ -51,6 +59,7 @@ make check-workflow-contract-docs-sync && \
 make check-workflow-contract-version-policy && \
 make check-workflow-contract-doc-anchors && \
 make check-workflow-contract-coupling-map-sync && \
+make check-workflow-contract-docs-generated && \
 pytest tests/ci/ -q
 ```
 
@@ -464,6 +473,7 @@ make check-workflow-contract-docs-sync      # 文档同步检查
 make check-workflow-contract-coupling-map-sync  # Coupling Map 同步检查
 make check-workflow-contract-doc-anchors    # 文档锚点检查
 make check-workflow-contract-version-policy # 版本策略检查
+make check-workflow-contract-docs-generated # 受控块生成状态检查（综合）
 ```
 
 **一键验证命令**：
@@ -473,7 +483,8 @@ make validate-workflows-strict && \
 make check-workflow-contract-docs-sync && \
 make check-workflow-contract-coupling-map-sync && \
 make check-workflow-contract-doc-anchors && \
-make check-workflow-contract-version-policy
+make check-workflow-contract-version-policy && \
+make check-workflow-contract-docs-generated
 ```
 
 **或使用完整 CI 检查**：
@@ -483,6 +494,21 @@ make ci
 ```
 
 #### 2.3.5 受控块渲染工具使用
+
+**通过 Make 目标（推荐）**：
+
+```bash
+# 渲染所有受控块（仅预览输出，不修改文件）
+make render-workflow-contract-docs
+
+# 更新所有受控块（就地写入 contract.md 和 coupling_map.md）
+make update-workflow-contract-docs
+
+# 检查受控块生成状态（docs-sync + coupling-map-sync）
+make check-workflow-contract-docs-generated
+```
+
+**通过 Python 脚本**：
 
 ```bash
 # 渲染 contract.md 所有受控块
@@ -499,6 +525,9 @@ python scripts/ci/render_workflow_contract_docs.py --block CI_JOB_TABLE --with-m
 
 # JSON 格式输出（用于脚本处理）
 python scripts/ci/render_workflow_contract_docs.py --json
+
+# 更新文档中的受控块（就地写入）
+python scripts/ci/render_workflow_contract_docs.py --write --target all
 ```
 
 #### 2.3.6 如何更新受控区块（SOP）

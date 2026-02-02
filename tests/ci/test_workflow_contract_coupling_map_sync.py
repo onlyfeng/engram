@@ -738,6 +738,7 @@ class TestControlledBlocksMarkerMode:
             "version": "1.0.0",
             "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
         }
+        # 只有一个 marker，其他预期块会产生 BLOCK_MARKER_MISSING error
         coupling_map = """
 # CI/Nightly Workflow 耦合映射
 
@@ -755,6 +756,47 @@ class TestControlledBlocksMarkerMode:
         # 有 markers，使用 block mode
         assert result.block_mode_used is True
         assert len(result.checked_blocks) > 0
+        # 其他预期块缺失 markers 会产生 error（3 个块中只有 1 个有 marker）
+        missing_marker_errors = [
+            e
+            for e in result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_MARKER_MISSING
+        ]
+        assert len(missing_marker_errors) == 2  # NIGHTLY_JOBS_LIST, MAKE_TARGETS_LIST
+
+    def test_missing_expected_block_markers_error(self) -> None:
+        """当预期块的 markers 缺失时，应报 BLOCK_MARKER_MISSING error"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {"file": ".github/workflows/ci.yml", "job_ids": ["test"], "job_names": ["Test"]},
+        }
+        # 有任意 marker 触发 block mode，但 CI_JOBS_LIST 缺失 markers
+        coupling_map = """
+# CI/Nightly Workflow 耦合映射
+
+<!-- BEGIN:OTHER_BLOCK -->
+some content
+<!-- END:OTHER_BLOCK -->
+
+## Some Section
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
+        # 应该有 BLOCK_MARKER_MISSING error（所有 3 个预期块都缺失）
+        missing_errors = [
+            e
+            for e in result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.BLOCK_MARKER_MISSING
+        ]
+        assert len(missing_errors) == 3
+        # 验证错误信息包含修复指引
+        for error in missing_errors:
+            assert "BEGIN:" in error.message
+            assert "END:" in error.message
+            assert error.category == "block"
 
     def test_duplicate_begin_marker_error(self) -> None:
         """当存在重复的 BEGIN marker 时，应报错"""

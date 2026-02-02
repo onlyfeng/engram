@@ -24,6 +24,21 @@
 - [ ] 未修改 CI baseline 文件（除非是清理专项 PR）
 - [ ] **大型变更按主题拆分为独立提交**（详见 [提交拆分策略](docs/architecture/iteration_3_plan.md)）
 
+### CI Baseline 变更检查
+
+> 如修改 `scripts/ci/mypy_baseline.txt` 且导致**净增**错误，请填写此节（门禁脚本 `check_mypy_baseline_policy.py` 会自动检查）。
+
+- **净增原因**：<!-- 简述为何需要增加 baseline 错误，如：新模块引入、外部依赖类型缺失等 -->
+- **关联 Issue**：<!-- 填写 #123 或完整 issue URL，用于追踪后续修复 -->
+- **Labels**（净增 > 5 时必填）：<!-- 添加 `tech-debt` 或 `type-coverage` 标签 -->
+
+> **阈值说明**：
+> - 净增 > 0：需填写本节 + 关联 Issue
+> - 净增 > 5：需添加 `tech-debt` 或 `type-coverage` 标签
+> - 净增 > 10：需额外审批（建议拆分 PR）
+>
+> 如未修改 baseline 文件或为净减少，可跳过此节。
+
 ### Logbook 相关变更（如适用）
 
 > 详见 [Definition of Done](docs/logbook/05_definition_of_done.md)

@@ -84,6 +84,7 @@
       {
         "id": "test",
         "name": "Test (Python ${{ matrix.python-version }})",
+        "_comment": "单元测试、集成测试和验收测试（含数据库迁移验证）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -100,6 +101,7 @@
       {
         "id": "lint",
         "name": "Lint",
+        "_comment": "代码风格检查（ruff）和类型检查（mypy baseline + strict-island 双层策略）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -113,6 +115,7 @@
       {
         "id": "no-iteration-tracked",
         "name": "No .iteration/ Tracked Files",
+        "_comment": "检查 .iteration/ 目录下无被 Git 追踪的文件",
         "required_steps": [
           "Checkout repository",
           "Check no .iteration files tracked"
@@ -121,6 +124,7 @@
       {
         "id": "env-var-consistency",
         "name": "Environment Variable Consistency",
+        "_comment": "环境变量配置一致性检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -130,6 +134,7 @@
       {
         "id": "schema-validate",
         "name": "Schema Validation",
+        "_comment": "JSON Schema 校验",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -141,6 +146,7 @@
       {
         "id": "logbook-consistency",
         "name": "Logbook Consistency Check",
+        "_comment": "Logbook 配置一致性检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -150,6 +156,7 @@
       {
         "id": "migration-sanity",
         "name": "Migration Sanity Check",
+        "_comment": "SQL 迁移文件存在性和基础语法检查",
         "required_steps": [
           "Checkout repository",
           "Check SQL migration files exist",
@@ -159,6 +166,7 @@
       {
         "id": "sql-safety",
         "name": "SQL Migration Safety Check",
+        "_comment": "SQL 迁移安全性检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -169,6 +177,7 @@
       {
         "id": "gateway-di-boundaries",
         "name": "Gateway DI Boundaries Check",
+        "_comment": "Gateway DI 边界检查（禁止 deps.db 直接使用）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -178,6 +187,7 @@
       {
         "id": "scm-sync-consistency",
         "name": "SCM Sync Consistency Check",
+        "_comment": "SCM Sync 配置一致性检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -188,6 +198,7 @@
       {
         "id": "gateway-error-reason-usage",
         "name": "Gateway ErrorReason Usage Check",
+        "_comment": "Gateway ErrorReason 使用规范检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -197,6 +208,7 @@
       {
         "id": "gateway-import-surface",
         "name": "Gateway Import Surface Check",
+        "_comment": "Gateway __init__.py 懒加载策略检查（禁止 eager-import）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -206,6 +218,7 @@
       {
         "id": "gateway-public-api-surface",
         "name": "Gateway Public API Import Surface Check",
+        "_comment": "Gateway Public API 导入表面（__all__ 与实际导出一致性）及文档同步检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -216,6 +229,7 @@
       {
         "id": "gateway-correlation-id-single-source",
         "name": "Gateway correlation_id Single Source Check",
+        "_comment": "Gateway correlation_id 单一来源（SSOT 模块）检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -225,6 +239,7 @@
       {
         "id": "mcp-error-contract",
         "name": "MCP Error Contract Check",
+        "_comment": "MCP JSON-RPC 错误码合约与文档同步检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -240,6 +255,7 @@
       {
         "id": "iteration-docs-check",
         "name": "Iteration Docs Check",
+        "_comment": "迭代文档规范检查（.iteration/ 链接和 SUPERSEDED 一致性）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -249,6 +265,7 @@
       {
         "id": "ci-test-isolation",
         "name": "CI Test Isolation Check",
+        "_comment": "CI 测试隔离检查（tests/ci/ 测试文件禁止被外部导入）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -260,6 +277,7 @@
       {
         "id": "iteration-tools-test",
         "name": "Iteration Tools Test",
+        "_comment": "迭代工具脚本测试（无数据库依赖）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -270,6 +288,7 @@
       {
         "id": "workflow-contract",
         "name": "Workflow Contract Validation",
+        "_comment": "Workflow 合约校验（strict 模式）、文档同步、版本策略和内部一致性检查",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -350,6 +369,7 @@
       {
         "id": "iteration-audit",
         "name": "Iteration Docs Audit",
+        "_comment": "迭代文档审计（轻量级检查）",
         "required_steps": [
           "Checkout repository",
           "Set up Python",
@@ -360,6 +380,7 @@
       {
         "id": "notify-results",
         "name": "Notify Results",
+        "_comment": "Nightly 运行结果通知",
         "required_steps": [
           "Check job results"
         ]
