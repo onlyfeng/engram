@@ -23,6 +23,7 @@ from typing import Generator
 from unittest.mock import patch
 
 import psycopg
+import psycopg.errors
 import pytest
 
 # ---------- 环境变量名 ----------
@@ -143,7 +144,52 @@ def test_db_info(request) -> Generator[dict, None, None]:
     - 数据库名格式: engram_test_<uuid>
     - 测试结束后自动删除
     - 支持 pytest -n auto 并发测试
+
+    环境配置说明:
+    ==============
+    此 fixture 需要 PostgreSQL 管理员权限来创建/删除测试数据库。
+
+    环境变量配置:
+    - TEST_PG_ADMIN_DSN: 具有 CREATE/DROP DATABASE 权限的管理员 DSN
+      示例: postgresql://postgres:postgres@localhost:5432/postgres
+    - TEST_PG_DSN: 测试数据库基础 DSN（可选，作为 admin DSN 的回退）
+
+    常见 skip 原因:
+    ===============
+    1. PostgreSQL 服务未启动
+       解决: 启动 PostgreSQL 服务或使用 Docker
+       docker run -d --name engram-test-pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:15
+
+    2. 权限不足 (permission denied / CREATE DATABASE)
+       解决: 确保使用的用户有 CREATEDB 权限
+       ALTER USER your_user CREATEDB;
+
+    3. 连接被拒绝 (connection refused)
+       解决: 检查 PostgreSQL 是否在指定端口监听，检查 pg_hba.conf
+
+    4. 认证失败 (authentication failed)
+       解决: 检查 DSN 中的用户名/密码是否正确
+
+    5. CI 环境无 PostgreSQL
+       解决: CI 配置中添加 PostgreSQL service，或设置 SKIP_DB_TESTS=1 跳过
+
+    跳过数据库测试:
+    ==============
+    如果不需要数据库测试，可以设置环境变量:
+    SKIP_DB_TESTS=1 pytest tests/gateway/
+
+    参考文档:
+    ========
+    - docs/dev/testing_database_setup.md (如存在)
+    - tests/gateway/conftest.py 中的环境变量说明
     """
+    # 允许通过环境变量跳过数据库测试
+    if os.environ.get("SKIP_DB_TESTS", "").lower() in ("1", "true", "yes"):
+        pytest.skip(
+            "SKIP_DB_TESTS=1 已设置，跳过数据库测试。"
+            "如需运行数据库测试，请取消设置此环境变量并确保 PostgreSQL 可用。"
+        )
+
     admin_dsn = get_admin_dsn()
     worker_id = get_worker_id()
     db_name = generate_db_name()
@@ -151,8 +197,54 @@ def test_db_info(request) -> Generator[dict, None, None]:
     # 创建测试数据库
     try:
         test_dsn = create_test_database(admin_dsn, db_name)
+    except psycopg.OperationalError as e:
+        error_msg = str(e).lower()
+        if "connection refused" in error_msg:
+            skip_reason = (
+                f"PostgreSQL 连接被拒绝 (worker={worker_id})\n"
+                f"请确保 PostgreSQL 服务正在运行。\n\n"
+                f"快速启动 (Docker):\n"
+                f"  docker run -d --name engram-test-pg -p 5432:5432 "
+                f"-e POSTGRES_PASSWORD=postgres postgres:15\n\n"
+                f"详细错误: {e}"
+            )
+        elif "authentication failed" in error_msg:
+            skip_reason = (
+                f"PostgreSQL 认证失败 (worker={worker_id})\n"
+                f"请检查 TEST_PG_ADMIN_DSN 中的用户名/密码是否正确。\n\n"
+                f"当前 DSN (已隐藏密码): {admin_dsn.split('@')[0]}@...\n\n"
+                f"详细错误: {e}"
+            )
+        else:
+            skip_reason = (
+                f"PostgreSQL 连接失败 (worker={worker_id})\n"
+                f"请检查 PostgreSQL 服务状态和连接配置。\n\n"
+                f"详细错误: {e}"
+            )
+        pytest.skip(skip_reason)
+        return
+    except psycopg.errors.InsufficientPrivilege as e:
+        pytest.skip(
+            f"PostgreSQL 权限不足，无法创建数据库 (worker={worker_id})\n"
+            f"请确保使用的用户有 CREATEDB 权限。\n\n"
+            f"修复方法 (以 superuser 身份):\n"
+            f"  ALTER USER your_user CREATEDB;\n\n"
+            f"或设置 TEST_PG_ADMIN_DSN 指向具有管理员权限的用户。\n\n"
+            f"详细错误: {e}"
+        )
+        return
     except Exception as e:
-        pytest.skip(f"无法创建测试数据库 (worker={worker_id}): {e}")
+        error_type = type(e).__name__
+        pytest.skip(
+            f"无法创建测试数据库 (worker={worker_id})\n"
+            f"错误类型: {error_type}\n"
+            f"详细错误: {e}\n\n"
+            f"常见解决方案:\n"
+            f"1. 确保 PostgreSQL 服务正在运行\n"
+            f"2. 检查 TEST_PG_ADMIN_DSN 环境变量配置\n"
+            f"3. 确保用户有 CREATE DATABASE 权限\n"
+            f"4. 如不需要数据库测试，设置 SKIP_DB_TESTS=1"
+        )
         return
 
     yield {
@@ -244,14 +336,36 @@ def db_conn(migrated_db: dict) -> Generator[psycopg.Connection, None, None]:
 
     使用标准 schema（identity, logbook, scm, analysis, governance），
     每个测试函数使用独立的事务，测试结束后自动回滚。
+
+    此 fixture 依赖 migrated_db，如果数据库创建/迁移失败，
+    会自动跳过使用此 fixture 的测试。
     """
     dsn = migrated_db["dsn"]
     schemas = migrated_db["schemas"]
 
     try:
         conn = psycopg.connect(dsn, autocommit=False)
+    except psycopg.OperationalError as e:
+        error_msg = str(e).lower()
+        if "connection refused" in error_msg:
+            pytest.skip(
+                f"数据库连接被拒绝\n"
+                f"测试数据库可能已被删除或 PostgreSQL 服务已停止。\n"
+                f"详细错误: {e}"
+            )
+        else:
+            pytest.skip(
+                f"无法连接测试数据库\n"
+                f"DSN: {dsn.split('@')[0]}@...\n"
+                f"详细错误: {e}"
+            )
+        return
     except Exception as e:
-        pytest.skip(f"无法连接测试数据库: {e}")
+        pytest.skip(
+            f"无法连接测试数据库\n"
+            f"错误类型: {type(e).__name__}\n"
+            f"详细错误: {e}"
+        )
         return
 
     try:
@@ -271,14 +385,36 @@ def db_conn_committed(migrated_db: dict) -> Generator[psycopg.Connection, None, 
     提供一个会提交的数据库连接
 
     使用标准 schema。注意：使用此 fixture 的测试需要自行清理数据。
+
+    此 fixture 依赖 migrated_db，如果数据库创建/迁移失败，
+    会自动跳过使用此 fixture 的测试。
     """
     dsn = migrated_db["dsn"]
     schemas = migrated_db["schemas"]
 
     try:
         conn = psycopg.connect(dsn, autocommit=False)
+    except psycopg.OperationalError as e:
+        error_msg = str(e).lower()
+        if "connection refused" in error_msg:
+            pytest.skip(
+                f"数据库连接被拒绝\n"
+                f"测试数据库可能已被删除或 PostgreSQL 服务已停止。\n"
+                f"详细错误: {e}"
+            )
+        else:
+            pytest.skip(
+                f"无法连接测试数据库\n"
+                f"DSN: {dsn.split('@')[0]}@...\n"
+                f"详细错误: {e}"
+            )
+        return
     except Exception as e:
-        pytest.skip(f"无法连接测试数据库: {e}")
+        pytest.skip(
+            f"无法连接测试数据库\n"
+            f"错误类型: {type(e).__name__}\n"
+            f"详细错误: {e}"
+        )
         return
 
     try:

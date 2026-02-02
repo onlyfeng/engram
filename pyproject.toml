@@ -95,6 +95,7 @@ include = ["engram*"]
 
 [tool.setuptools.package-data]
 engram = ["py.typed"]
+engram_logbook = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

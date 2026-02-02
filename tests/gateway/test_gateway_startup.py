@@ -933,6 +933,19 @@ class TestOpenMemoryClientConfigPropagation:
     2. 不传入 config 时，从环境变量获取（OPENMEMORY_BASE_URL, OPENMEMORY_API_KEY/OM_API_KEY）
     3. Container 构造的 client 必须使用 config 的配置
 
+    HTTP 安全性说明:
+    ====================
+    本测试类中的测试仅验证 OpenMemoryClient 的属性（base_url/api_key），
+    不调用任何会触发真实 HTTP 请求的方法（如 add_memory/store/search/health_check）。
+
+    OpenMemoryClient 构造函数不会发起 HTTP 请求，只有以下方法才会：
+    - add_memory(): POST /memory/add
+    - store(): POST /memory/add
+    - search(): POST /memory/search
+    - health_check(): GET /health
+
+    因此这些测试在 CI 环境下是安全的，不依赖 OpenMemory 服务。
+
     注意:
     - 全局状态重置由 conftest.py 的 auto_reset_gateway_state fixture 自动处理
     - 此处仅保留环境变量管理逻辑
@@ -1145,6 +1158,130 @@ class TestOpenMemoryClientConfigPropagation:
         assert client.api_key is None, (
             f"config.openmemory_api_key=None 时 client.api_key 应为 None，实际: {client.api_key}"
         )
+
+
+# ======================== OpenMemoryClient HTTP 安全性测试 ========================
+
+
+class TestOpenMemoryClientNoHttpOnConstruction:
+    """
+    验证 OpenMemoryClient 构造不触发 HTTP 请求
+
+    此测试类确保：
+    1. OpenMemoryClient 构造函数不会发起任何 HTTP 请求
+    2. 仅访问 client.base_url/api_key 属性不会触发 HTTP
+    3. CI 环境下不依赖 OpenMemory 服务
+    """
+
+    def test_construction_does_not_trigger_http(self):
+        """
+        验证 OpenMemoryClient 构造不触发 HTTP 请求
+
+        即使 base_url 指向不存在的服务，构造也应该成功。
+        """
+        from engram.gateway.openmemory_client import OpenMemoryClient
+
+        # 使用不存在的 URL 构造 client
+        client = OpenMemoryClient(
+            base_url="http://nonexistent-host:9999",
+            api_key="test_key",
+        )
+
+        # 验证构造成功，属性正确设置
+        assert client.base_url == "http://nonexistent-host:9999"
+        assert client.api_key == "test_key"
+        # 构造不应该抛出网络异常
+
+    def test_construction_with_mock_httpx_not_called(self):
+        """
+        使用 mock 显式验证构造时 httpx.Client 未被调用
+
+        此测试作为额外的安全保护，确保构造函数不会意外触发 HTTP。
+        """
+        from unittest.mock import MagicMock, patch
+
+        mock_httpx_client = MagicMock()
+
+        with patch("httpx.Client", mock_httpx_client):
+            from engram.gateway.openmemory_client import OpenMemoryClient
+
+            # 构造 client
+            client = OpenMemoryClient(
+                base_url="http://test:8080",
+                api_key="key",
+            )
+
+            # 访问属性
+            _ = client.base_url
+            _ = client.api_key
+            _ = client.timeout
+            _ = client.retry_config
+
+        # 验证 httpx.Client 未被调用
+        mock_httpx_client.assert_not_called()
+
+    def test_get_client_with_config_no_http(self):
+        """
+        验证 get_client(config) 不触发 HTTP 请求
+
+        此测试确保通过 config 获取 client 时也不会触发 HTTP。
+        """
+        from unittest.mock import MagicMock, patch
+
+        from engram.gateway.config import GatewayConfig
+        from engram.gateway.openmemory_client import get_client
+
+        mock_httpx_client = MagicMock()
+
+        config = GatewayConfig(
+            project_key="test",
+            postgres_dsn="postgresql://test:test@localhost/test",
+            openmemory_base_url="http://test:8080",
+            openmemory_api_key="test_key",
+        )
+
+        with patch("httpx.Client", mock_httpx_client):
+            client = get_client(config)
+
+            # 访问属性
+            assert client.base_url == "http://test:8080"
+            assert client.api_key == "test_key"
+
+        # 验证 httpx.Client 未被调用
+        mock_httpx_client.assert_not_called()
+
+    def test_container_openmemory_client_no_http(self):
+        """
+        验证 Container.openmemory_client 属性访问不触发 HTTP 请求
+
+        此测试确保通过 container 获取 client 时也不会触发 HTTP。
+        """
+        from unittest.mock import MagicMock, patch
+
+        from engram.gateway.config import GatewayConfig
+        from engram.gateway.container import GatewayContainer
+
+        mock_httpx_client = MagicMock()
+
+        config = GatewayConfig(
+            project_key="test",
+            postgres_dsn="postgresql://test:test@localhost/test",
+            openmemory_base_url="http://container-test:7070",
+            openmemory_api_key="container_key",
+        )
+
+        with patch("httpx.Client", mock_httpx_client):
+            container = GatewayContainer.create(config=config)
+
+            # 访问 openmemory_client 属性
+            client = container.openmemory_client
+
+            # 验证属性
+            assert client.base_url == "http://container-test:7070"
+            assert client.api_key == "container_key"
+
+        # 验证 httpx.Client 未被调用
+        mock_httpx_client.assert_not_called()
 
 
 if __name__ == "__main__":

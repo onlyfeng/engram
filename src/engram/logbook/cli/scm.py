@@ -63,6 +63,7 @@ def _get_dsn(args: argparse.Namespace) -> str:
 
     # 2. 配置文件
     if hasattr(args, "config") and args.config:
+        # Python 3.11+ 内置 tomllib，3.10 需要 tomli
         try:
             import tomllib  # type: ignore[import-not-found]
         except ImportError:

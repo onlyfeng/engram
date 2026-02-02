@@ -266,8 +266,8 @@ def run_precheck(
     schema_check = check_om_schema_not_public(om_schema)
     checks["om_schema_not_public"] = schema_check
     if not schema_check.get("ok"):
-        code = schema_check.get("code", "")
-        if isinstance(code, str) and code:
+        code: str = schema_check.get("code", "")
+        if code:
             failed_codes.append(code)
 
     if skip_db_check or not admin_dsn:
@@ -289,9 +289,9 @@ def run_precheck(
             )
         checks["admin_privileges"] = admin_check
         if not admin_check.get("ok"):
-            code = admin_check.get("code", BootstrapErrorCode.PRECHECK_NO_CREATEROLE)
-            if isinstance(code, str) and code:
-                failed_codes.append(code)
+            admin_code: str = admin_check.get("code", BootstrapErrorCode.PRECHECK_NO_CREATEROLE)
+            if admin_code:
+                failed_codes.append(admin_code)
 
     return PrecheckResult(
         ok=len(failed_codes) == 0,
@@ -379,8 +379,8 @@ def create_all_login_roles(
             quiet=quiet,
         )
         if not result.get("ok"):
-            code = result.get("code", "")
-            if isinstance(code, str) and code:
+            code: str = result.get("code", "")
+            if code:
                 failed_codes.append(code)
     return AllRolesResult(
         ok=len(failed_codes) == 0,
@@ -483,7 +483,7 @@ def main() -> None:
         quiet=args.quiet,
         skip_db_check=args.skip_db_check,
     )
-    if not precheck.get("ok"):
+    if not precheck["ok"]:
         print("[ERROR] 预检失败", file=sys.stderr)
         if not args.quiet:
             print(precheck, file=sys.stderr)
@@ -515,7 +515,7 @@ def main() -> None:
         print(f"[ERROR] 连接数据库失败: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    if not result.get("ok"):
+    if not result["ok"]:
         print("[ERROR] 服务账号创建失败", file=sys.stderr)
         if not args.quiet:
             print(result, file=sys.stderr)

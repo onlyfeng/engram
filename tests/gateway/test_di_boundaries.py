@@ -1185,3 +1185,460 @@ class TestContainerCheckWithoutEnvSideEffects:
                 get_container()
         finally:
             reset_all_singletons()
+
+
+# ============================================================================
+# Config 无副作用检查测试：验证检查 config 是否存在不会触发 load_config
+# ============================================================================
+
+
+class TestConfigCheckWithoutEnvSideEffects:
+    """
+    无环境变量时检查 config 不触发 load_config 的测试
+
+    此测试类验证 config.py 中的无副作用检查函数：
+    - get_config_or_none(): 返回配置或 None
+
+    关键约束：
+    - 这些函数不应触发 load_config()
+    - 即使 PROJECT_KEY/POSTGRES_DSN 未设置也可安全调用
+    - 用于 lifespan 早期检查、测试 setup 等场景
+    """
+
+    def test_get_config_or_none_does_not_trigger_load_config(self, monkeypatch) -> None:
+        """
+        验证 get_config_or_none() 不触发 load_config()
+
+        即使 PROJECT_KEY/POSTGRES_DSN 未设置，
+        调用 get_config_or_none() 也不应触发 ConfigError 或 load_config()。
+        """
+        from unittest.mock import MagicMock, patch
+
+        # 清除环境变量
+        monkeypatch.delenv("PROJECT_KEY", raising=False)
+        monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+        # 重置全局单例
+        from engram.gateway.config import get_config_or_none, reset_config
+
+        reset_config()
+
+        # 创建 mock load_config
+        mock_load_config = MagicMock()
+
+        try:
+            with patch("engram.gateway.config.load_config", mock_load_config):
+                # 调用 get_config_or_none 不应触发 load_config
+                result = get_config_or_none()
+
+            # 验证 load_config 未被调用
+            mock_load_config.assert_not_called()
+
+            # 结果应该是 None（因为 config 未初始化）
+            assert result is None
+        finally:
+            reset_config()
+
+    def test_get_config_triggers_load_config_contrast(self, monkeypatch) -> None:
+        """
+        对比测试：get_config() 会触发 load_config()
+
+        此测试验证 get_config() 与无副作用函数的区别：
+        - get_config() 会触发 load_config()
+        - 如果环境变量未设置，会抛出 ConfigError
+        """
+        # 清除环境变量
+        monkeypatch.delenv("PROJECT_KEY", raising=False)
+        monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+        from engram.gateway.config import ConfigError, get_config, reset_config
+
+        reset_config()
+
+        try:
+            # get_config() 应该触发 ConfigError（因为环境变量未设置）
+            with pytest.raises(ConfigError):
+                get_config()
+        finally:
+            reset_config()
+
+    def test_config_check_sequence_safe_without_env(self, monkeypatch) -> None:
+        """
+        验证安全检查序列：先用 get_config_or_none() 检查，再决定是否调用 get_config()
+
+        此测试模拟 main.py::lifespan 中的安全检查模式：
+        1. 先用 get_config_or_none() 检查是否已注入
+        2. 如果已注入，直接使用
+        3. 如果未注入，再调用 get_config() 触发加载
+        """
+        # 清除环境变量
+        monkeypatch.delenv("PROJECT_KEY", raising=False)
+        monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+        from engram.gateway.config import (
+            ConfigError,
+            get_config,
+            get_config_or_none,
+            reset_config,
+        )
+
+        reset_config()
+
+        try:
+            # 第一步：安全检查，不抛出异常
+            config = get_config_or_none()
+            assert config is None
+
+            # 第二步：如果需要实际配置，才调用 get_config()（此时会抛出）
+            with pytest.raises(ConfigError):
+                get_config()
+        finally:
+            reset_config()
+
+
+# ============================================================================
+# OpenMemoryClient 无副作用检查测试：验证检查 client 是否存在不会触发构造
+# ============================================================================
+
+
+class TestOpenMemoryClientCheckWithoutEnvSideEffects:
+    """
+    无环境变量时检查 openmemory_client 不触发构造的测试
+
+    此测试类验证 openmemory_client.py 中的无副作用检查函数：
+    - get_client_or_none(): 返回客户端或 None
+
+    关键约束：
+    - 这些函数不应触发 OpenMemoryClient 构造
+    - 即使 OPENMEMORY_BASE_URL 未设置也可安全调用
+    - 用于检查全局单例状态
+    """
+
+    def test_get_client_or_none_does_not_trigger_construction(self, monkeypatch) -> None:
+        """
+        验证 get_client_or_none() 不触发 OpenMemoryClient 构造
+
+        即使环境变量未设置，
+        调用 get_client_or_none() 也不应触发客户端构造。
+        """
+        from unittest.mock import MagicMock, patch
+
+        # 清除环境变量
+        monkeypatch.delenv("OPENMEMORY_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENMEMORY_API_KEY", raising=False)
+        monkeypatch.delenv("OM_API_KEY", raising=False)
+
+        # 重置全局单例
+        from engram.gateway.openmemory_client import get_client_or_none, reset_client
+
+        reset_client()
+
+        # 创建 mock OpenMemoryClient.__init__
+        mock_init = MagicMock(return_value=None)
+
+        try:
+            with patch(
+                "engram.gateway.openmemory_client.OpenMemoryClient.__init__", mock_init
+            ):
+                # 调用 get_client_or_none 不应触发构造
+                result = get_client_or_none()
+
+            # 验证 __init__ 未被调用
+            mock_init.assert_not_called()
+
+            # 结果应该是 None（因为 client 未初始化）
+            assert result is None
+        finally:
+            reset_client()
+
+    def test_get_client_triggers_construction_contrast(self, monkeypatch) -> None:
+        """
+        对比测试：get_client() 会触发 OpenMemoryClient 构造
+
+        此测试验证 get_client() 与无副作用函数的区别：
+        - get_client() 会触发 OpenMemoryClient 构造
+        - 使用默认环境变量值构造客户端
+        """
+        # 清除环境变量（使用默认值）
+        monkeypatch.delenv("OPENMEMORY_BASE_URL", raising=False)
+
+        # 重置全局单例
+        from engram.gateway.openmemory_client import get_client, reset_client
+
+        reset_client()
+
+        try:
+            # get_client() 应该触发构造（使用默认值）
+            client = get_client()
+
+            # 验证客户端已构造
+            assert client is not None
+            # 默认 base_url 是 http://127.0.0.1:8080
+            assert "127.0.0.1" in client.base_url or "localhost" in client.base_url
+        finally:
+            reset_client()
+
+    def test_client_check_sequence_safe_without_http(self, monkeypatch) -> None:
+        """
+        验证安全检查序列不触发真实 HTTP
+
+        此测试确保：
+        1. get_client_or_none() 不触发 HTTP
+        2. 仅构造 OpenMemoryClient 不触发 HTTP（只有 add_memory/search 等方法才会）
+        """
+        from unittest.mock import MagicMock, patch
+
+        # 清除环境变量
+        monkeypatch.delenv("OPENMEMORY_BASE_URL", raising=False)
+
+        from engram.gateway.openmemory_client import get_client_or_none, reset_client
+
+        reset_client()
+
+        # Mock httpx.Client 确保不会发起真实请求
+        mock_httpx_client = MagicMock()
+
+        try:
+            with patch("httpx.Client", mock_httpx_client):
+                # 检查全局单例状态 - 不应触发任何 HTTP
+                result = get_client_or_none()
+                assert result is None
+
+            # 验证 httpx.Client 未被调用
+            mock_httpx_client.assert_not_called()
+        finally:
+            reset_client()
+
+
+# ============================================================================
+# LogbookAdapter 无副作用检查测试：验证检查 adapter 是否存在不会触发构造
+# ============================================================================
+
+
+class TestLogbookAdapterCheckWithoutEnvSideEffects:
+    """
+    无环境变量时检查 logbook_adapter 不触发构造的测试
+
+    此测试类验证 logbook_adapter.py 中的无副作用检查函数：
+    - get_adapter_or_none(): 返回适配器或 None
+
+    关键约束：
+    - 这些函数不应触发 LogbookAdapter 构造
+    - 即使 POSTGRES_DSN 未设置也可安全调用
+    - 用于检查全局单例状态
+    """
+
+    def test_get_adapter_or_none_does_not_trigger_construction(self, monkeypatch) -> None:
+        """
+        验证 get_adapter_or_none() 不触发 LogbookAdapter 构造
+
+        即使 POSTGRES_DSN 未设置，
+        调用 get_adapter_or_none() 也不应触发适配器构造。
+        """
+        from unittest.mock import MagicMock, patch
+
+        # 清除环境变量
+        monkeypatch.delenv("POSTGRES_DSN", raising=False)
+        monkeypatch.delenv("TEST_PG_DSN", raising=False)
+
+        # 重置全局单例
+        from engram.gateway.logbook_adapter import get_adapter_or_none, reset_adapter
+
+        reset_adapter()
+
+        # 创建 mock LogbookAdapter.__init__
+        mock_init = MagicMock(return_value=None)
+
+        try:
+            with patch("engram.gateway.logbook_adapter.LogbookAdapter.__init__", mock_init):
+                # 调用 get_adapter_or_none 不应触发构造
+                result = get_adapter_or_none()
+
+            # 验证 __init__ 未被调用
+            mock_init.assert_not_called()
+
+            # 结果应该是 None（因为 adapter 未初始化）
+            assert result is None
+        finally:
+            reset_adapter()
+
+    def test_get_adapter_triggers_construction_contrast(self, monkeypatch) -> None:
+        """
+        对比测试：get_adapter() 会触发 LogbookAdapter 构造
+
+        此测试验证 get_adapter() 与无副作用函数的区别：
+        - get_adapter() 会触发 LogbookAdapter 构造
+        - 构造时会设置 POSTGRES_DSN 环境变量
+        """
+        # 清除环境变量
+        monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+        # 重置全局单例
+        from engram.gateway.logbook_adapter import get_adapter, reset_adapter
+
+        reset_adapter()
+
+        try:
+            # get_adapter() 应该触发构造
+            # 注意：LogbookAdapter 构造时不会立即连接数据库，只是保存 DSN
+            adapter = get_adapter()
+
+            # 验证适配器已构造
+            assert adapter is not None
+        finally:
+            reset_adapter()
+
+    def test_adapter_check_sequence_safe_without_db_connection(self, monkeypatch) -> None:
+        """
+        验证安全检查序列不触发数据库连接
+
+        此测试确保：
+        1. get_adapter_or_none() 不触发数据库连接
+        2. 仅构造 LogbookAdapter 不触发数据库连接
+        """
+        from unittest.mock import MagicMock, patch
+
+        # 清除环境变量
+        monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+        from engram.gateway.logbook_adapter import get_adapter_or_none, reset_adapter
+
+        reset_adapter()
+
+        # Mock get_connection 确保不会发起真实数据库连接
+        mock_get_connection = MagicMock()
+
+        try:
+            with patch("engram.gateway.logbook_adapter.get_connection", mock_get_connection):
+                # 检查全局单例状态 - 不应触发任何数据库连接
+                result = get_adapter_or_none()
+                assert result is None
+
+            # 验证 get_connection 未被调用
+            mock_get_connection.assert_not_called()
+        finally:
+            reset_adapter()
+
+
+# ============================================================================
+# 综合无副作用测试：验证所有模块的检查函数可以安全组合使用
+# ============================================================================
+
+
+class TestAllModulesNoSideEffectsOnCheck:
+    """
+    综合测试：验证所有模块的检查函数可以安全组合使用
+
+    此测试类模拟真实的 lifespan 早期检查场景：
+    - 检查所有单例是否已注入
+    - 不触发任何配置加载、HTTP 请求或数据库连接
+    """
+
+    def test_all_checks_safe_without_env(self, monkeypatch) -> None:
+        """
+        验证所有检查函数在无环境变量时都安全
+
+        此测试同时调用所有模块的检查函数，
+        确保它们可以安全组合使用，不会触发副作用。
+        """
+        from unittest.mock import MagicMock, patch
+
+        # 清除所有相关环境变量
+        for key in [
+            "PROJECT_KEY",
+            "POSTGRES_DSN",
+            "TEST_PG_DSN",
+            "OPENMEMORY_BASE_URL",
+            "OPENMEMORY_API_KEY",
+            "OM_API_KEY",
+        ]:
+            monkeypatch.delenv(key, raising=False)
+
+        # 重置所有全局单例
+        from engram.gateway.config import get_config_or_none, reset_config
+        from engram.gateway.container import (
+            get_container_or_none,
+            is_container_set,
+            reset_all_singletons,
+        )
+        from engram.gateway.logbook_adapter import get_adapter_or_none, reset_adapter
+        from engram.gateway.openmemory_client import get_client_or_none, reset_client
+
+        reset_all_singletons()
+        reset_config()
+        reset_adapter()
+        reset_client()
+
+        # 创建所有相关的 mock
+        mock_load_config = MagicMock()
+        mock_httpx_client = MagicMock()
+        mock_get_connection = MagicMock()
+
+        try:
+            with (
+                patch("engram.gateway.config.load_config", mock_load_config),
+                patch("httpx.Client", mock_httpx_client),
+                patch("engram.gateway.logbook_adapter.get_connection", mock_get_connection),
+            ):
+                # 执行所有检查函数
+                container_set = is_container_set()
+                container = get_container_or_none()
+                config = get_config_or_none()
+                client = get_client_or_none()
+                adapter = get_adapter_or_none()
+
+                # 验证所有结果都是 None/False
+                assert container_set is False
+                assert container is None
+                assert config is None
+                assert client is None
+                assert adapter is None
+
+            # 验证没有触发任何副作用
+            mock_load_config.assert_not_called()
+            mock_httpx_client.assert_not_called()
+            mock_get_connection.assert_not_called()
+        finally:
+            reset_all_singletons()
+            reset_config()
+            reset_adapter()
+            reset_client()
+
+    def test_lifespan_early_check_pattern(self, monkeypatch) -> None:
+        """
+        验证 lifespan 早期检查模式的正确用法
+
+        此测试模拟 main.py::lifespan 中的检查逻辑：
+        1. 先检查是否已注入（测试场景）
+        2. 如果未注入，再执行初始化（生产场景）
+        """
+        from unittest.mock import MagicMock, patch
+
+        # 清除环境变量
+        monkeypatch.delenv("PROJECT_KEY", raising=False)
+        monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+        from engram.gateway.config import ConfigError
+        from engram.gateway.container import (
+            get_container,
+            is_container_set,
+            reset_all_singletons,
+        )
+
+        reset_all_singletons()
+
+        mock_load_config = MagicMock()
+
+        try:
+            # 第一阶段：安全检查（不触发副作用）
+            with patch("engram.gateway.config.load_config", mock_load_config):
+                container_ready = is_container_set()
+                assert container_ready is False
+                mock_load_config.assert_not_called()
+
+            # 第二阶段：如果需要初始化，才调用 get_container()
+            # 在无环境变量时会抛出 ConfigError
+            with pytest.raises(ConfigError):
+                get_container()
+        finally:
+            reset_all_singletons()
