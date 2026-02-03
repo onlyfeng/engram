@@ -186,33 +186,43 @@
     },
     {
       "old_module": "db",
-      "import_target": "engram.logbook.db",
+      "import_target": "engram.logbook.scm_db",
       "cli_target": null,
-      "notes": "数据库连接工具模块，被多个脚本依赖",
-      "deprecated": false,
-      "status": "preserved",
+      "notes": "根目录模块已移除；请使用 engram.logbook.scm_db",
+      "deprecated": true,
+      "status": "removed",
       "owner": "@engram-team",
-      "target_version": null
+      "target_version": "v2.0"
     },
     {
       "old_module": "kv",
       "import_target": "engram.logbook.kv",
       "cli_target": null,
-      "notes": "KV 存储工具模块，被多个脚本依赖",
-      "deprecated": false,
-      "status": "preserved",
+      "notes": "根目录模块已移除；请使用 engram.logbook.kv",
+      "deprecated": true,
+      "status": "removed",
       "owner": "@engram-team",
-      "target_version": null
+      "target_version": "v2.0"
     },
     {
       "old_module": "artifacts",
       "import_target": "engram.logbook.scm_artifacts",
       "cli_target": null,
-      "notes": "SCM 路径与制品工具，工具模块保留",
-      "deprecated": false,
-      "status": "preserved",
+      "notes": "根目录模块已移除；请使用 engram.logbook.scm_artifacts",
+      "deprecated": true,
+      "status": "removed",
       "owner": "@engram-team",
-      "target_version": null
+      "target_version": "v2.0"
+    },
+    {
+      "old_module": "scm_repo",
+      "import_target": "engram.logbook.scm_repo",
+      "cli_target": null,
+      "notes": "根目录模块已移除；请使用 engram.logbook.scm_repo",
+      "deprecated": true,
+      "status": "removed",
+      "owner": "@engram-team",
+      "target_version": "v2.0"
     }
   ]
 }

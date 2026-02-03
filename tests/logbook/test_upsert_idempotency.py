@@ -29,12 +29,12 @@ from engram.logbook.scm_db import (
     upsert_repo,
     upsert_svn_revision,
 )
+from engram.logbook.scm_repo import build_mr_id
 from engram.logbook.source_id import (
     build_git_source_id,
     build_mr_source_id,
     build_svn_source_id,
 )
-from scm_repo import build_mr_id
 
 
 class TestUpsertRepoIdempotency:

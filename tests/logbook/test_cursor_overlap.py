@@ -1259,8 +1259,8 @@ class TestOverlapIdempotency:
 
     def test_mrs_upsert_idempotent_on_overlap(self, db_conn):
         """MRs upsert 在 overlap 重复扫描时保持幂等"""
-        from db import upsert_mr, upsert_repo
-        from scm_repo import build_mr_id
+        from engram.logbook.scm_db import upsert_mr, upsert_repo
+        from engram.logbook.scm_repo import build_mr_id
 
         # 创建 repo
         ts = datetime.now().timestamp()
@@ -1314,7 +1314,7 @@ class TestOverlapIdempotency:
 
     def test_review_events_unique_on_overlap(self, db_conn):
         """review_events 在 overlap 重复扫描时保持幂等"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建 repo 和 MR
         ts = datetime.now().timestamp()
@@ -1568,7 +1568,7 @@ class TestReviewsOverlapIdempotency:
 
     def test_multi_mr_review_events_overlap_dedup(self, db_conn):
         """多个 MR 的 review_events 在 overlap 时正确去重"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建 repo 和多个 MR
         ts = datetime.now().timestamp()
@@ -1653,7 +1653,7 @@ class TestSvnSyncRepeatExecution:
 
     def test_sync_twice_no_duplicate_revisions(self, mock_subprocess):
         """重复执行同步时，相同 revision 通过 upsert 保持幂等"""
-        from scm_sync_svn import (
+        from engram.logbook.scm_sync_tasks.svn import (
             SyncConfig,
             sync_svn_revisions,
         )
@@ -1765,9 +1765,7 @@ class TestSvnSyncRepeatExecution:
 
     def test_sync_with_overlap_upsert_idempotent(self, mock_subprocess):
         """使用 overlap 策略时，重复的 revision 通过 upsert 保持幂等"""
-        from scm_sync_svn import (
-            parse_svn_log_xml,
-        )
+        from engram.logbook.scm_sync_tasks.svn import parse_svn_log_xml
 
         # 测试 upsert 幂等性的核心逻辑
         # 同一个 revision 多次 upsert 应该返回相同的 ID
@@ -1807,7 +1805,7 @@ class TestSvnSyncRepeatExecution:
 
     def test_cursor_advances_to_max_revision(self, mock_subprocess):
         """游标应该推进到批次中最大的 revision"""
-        from scm_sync_svn import parse_svn_log_xml
+        from engram.logbook.scm_sync_tasks.svn import parse_svn_log_xml
 
         # 模拟乱序返回的 revision（虽然 SVN 通常是有序的）
         xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -1835,7 +1833,7 @@ class TestSvnBackfillCLI:
 
     def test_backfill_does_not_update_watermark_by_default(self, mock_subprocess):
         """Backfill 默认不更新游标"""
-        from scm_sync_svn import SyncConfig, backfill_svn_revisions
+        from engram.logbook.scm_sync_tasks.svn import SyncConfig, backfill_svn_revisions
 
         # Mock subprocess 返回有效的 SVN log
         mock_subprocess.return_value = MagicMock(
@@ -1882,7 +1880,7 @@ class TestSvnBackfillCLI:
 
     def test_backfill_updates_watermark_when_flag_set(self, mock_subprocess):
         """Backfill 在 update_watermark=True 时更新游标"""
-        from scm_sync_svn import SyncConfig, backfill_svn_revisions
+        from engram.logbook.scm_sync_tasks.svn import SyncConfig, backfill_svn_revisions
 
         # Mock subprocess
         mock_subprocess.return_value = MagicMock(
@@ -1932,7 +1930,7 @@ class TestSvnBackfillCLI:
 
     def test_backfill_dry_run_no_db_write(self, mock_subprocess):
         """Backfill dry-run 模式不写入 DB"""
-        from scm_sync_svn import SyncConfig, backfill_svn_revisions
+        from engram.logbook.scm_sync_tasks.svn import SyncConfig, backfill_svn_revisions
 
         # Mock HEAD revision
         mock_subprocess.return_value = MagicMock(
@@ -1968,9 +1966,8 @@ class TestSvnBackfillCLI:
 
     def test_backfill_range_validation(self):
         """Backfill 范围验证：start_rev > end_rev 报错"""
-        from scm_sync_svn import SyncConfig, backfill_svn_revisions
-
         from engram.logbook.errors import ValidationError
+        from engram.logbook.scm_sync_tasks.svn import SyncConfig, backfill_svn_revisions
 
         sync_config = SyncConfig(
             svn_url="svn://example.com/repo",
@@ -2342,7 +2339,7 @@ class TestBackfillWithPatches:
 
     def test_svn_backfill_with_fetch_patches(self, mock_subprocess):
         """SVN backfill 可以同时获取 patches"""
-        from scm_sync_svn import SyncConfig, backfill_svn_revisions
+        from engram.logbook.scm_sync_tasks.svn import SyncConfig, backfill_svn_revisions
 
         mock_subprocess.return_value = MagicMock(
             stdout="""<?xml version="1.0" encoding="UTF-8"?>

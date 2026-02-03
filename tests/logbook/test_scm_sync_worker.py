@@ -28,7 +28,7 @@ class TestHeartbeatManager:
 
     def test_heartbeat_starts_and_stops(self):
         """心跳线程可以正常启动和停止"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = True
@@ -50,7 +50,7 @@ class TestHeartbeatManager:
 
     def test_heartbeat_context_manager(self):
         """心跳线程可以通过 context manager 使用"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = True
@@ -72,7 +72,7 @@ class TestHeartbeatManager:
 
     def test_heartbeat_renews_lease_periodically(self):
         """心跳线程定期续租"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         renew_count = []
 
@@ -96,7 +96,7 @@ class TestHeartbeatManager:
 
     def test_heartbeat_sets_abort_on_max_failures(self):
         """续租失败超过阈值时设置 should_abort"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = False  # 续租一直失败
@@ -116,7 +116,7 @@ class TestHeartbeatManager:
 
     def test_heartbeat_resets_failure_count_on_success(self):
         """续租成功后重置失败计数"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         call_count = [0]
 
@@ -140,7 +140,7 @@ class TestHeartbeatManager:
 
     def test_do_final_renew(self):
         """do_final_renew 执行最后一次续租"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = True
@@ -231,7 +231,7 @@ class TestLockedSkippedBehavior:
                 mock_renew.return_value = True
                 mock_ack.return_value = True
 
-                from scm_sync_worker import process_one_job
+                from engram.logbook.scm_sync_worker_core import process_one_job
 
                 result = process_one_job(
                     worker_id="worker-test",
@@ -317,7 +317,7 @@ class TestLockedSkippedBehavior:
                 mock_renew.return_value = True
                 mock_fail_retry.return_value = True
 
-                from scm_sync_worker import process_one_job
+                from engram.logbook.scm_sync_worker_core import process_one_job
 
                 result = process_one_job(
                     worker_id="worker-test",
@@ -518,7 +518,7 @@ class TestErrorRedaction:
             mock_renew.return_value = True
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -557,7 +557,7 @@ class TestProcessOneJob:
                 "max_renew_failures": 3,
             }
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -598,7 +598,7 @@ class TestProcessOneJob:
             mock_renew.return_value = True
             mock_ack.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -651,7 +651,7 @@ class TestProcessOneJob:
 
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             # 模拟 execute_sync_job 执行后检测到 should_abort
             with patch("scm_sync_worker.execute_sync_job") as mock_execute:
@@ -677,9 +677,8 @@ class TestHeartbeatManagerLeaseLost:
 
     def test_lease_lost_uses_shared_error_category(self):
         """续租失败使用共享的 ErrorCategory.LEASE_LOST 常量"""
-        from scm_sync_worker import HeartbeatManager
-
         from engram.logbook.scm_sync_errors import ErrorCategory
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = False  # 续租一直失败
@@ -735,9 +734,8 @@ class TestHeartbeatManagerLeaseLost:
 
     def test_lease_lost_structured_error_info(self):
         """续租失败时记录结构化错误信息"""
-        from scm_sync_worker import HeartbeatManager
-
         from engram.logbook.scm_sync_errors import ErrorCategory
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             # 第一次成功，后面失败
@@ -774,7 +772,7 @@ class TestHeartbeatManagerLeaseLost:
 
     def test_lease_lost_last_error_captured(self):
         """续租失败时捕获最后一次的错误信息"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             # 模拟抛出异常的续租失败
@@ -837,7 +835,7 @@ class TestHeartbeatManagerLeaseLost:
 
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             with patch("scm_sync_worker.execute_sync_job") as mock_execute:
                 mock_execute.return_value = {"success": True}
@@ -876,9 +874,8 @@ class TestHeartbeatManagerLeaseLost:
 
     def test_default_max_renew_failures_from_shared_module(self):
         """验证默认 max_failures 使用共享模块的常量"""
-        from scm_sync_worker import HeartbeatManager
-
         from engram.logbook.scm_sync_errors import DEFAULT_MAX_RENEW_FAILURES
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = True
@@ -909,7 +906,7 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_long_task_multiple_renews(self):
         """长任务执行期间心跳线程正确多次续租"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         renew_calls = []
 
@@ -949,7 +946,7 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_renew_partial_failure_then_recovery(self):
         """续租部分失败后恢复，计数正确重置"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         call_count = [0]
 
@@ -978,9 +975,8 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_renew_consecutive_failures_cause_abort(self):
         """连续续租失败超过阈值导致任务中止"""
-        from scm_sync_worker import HeartbeatManager
-
         from engram.logbook.scm_sync_errors import ErrorCategory
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = False  # 所有续租都失败
@@ -1006,7 +1002,7 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_renew_failure_with_exception(self):
         """续租时抛出异常正确处理"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         call_count = [0]
 
@@ -1033,9 +1029,8 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_process_one_job_with_heartbeat_abort(self):
         """process_one_job 中心跳中止导致 fail_retry 调用"""
-        from scm_sync_worker import process_one_job
-
         from engram.logbook.scm_sync_errors import ErrorCategory
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -1098,7 +1093,7 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_heartbeat_renew_interval_respected(self):
         """验证续租间隔被正确遵守"""
-        from scm_sync_worker import HeartbeatManager
+        from engram.logbook.scm_sync_worker_core import HeartbeatManager
 
         renew_times = []
 
@@ -1130,7 +1125,7 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_worker_config_overrides_default_renew_params(self):
         """worker_cfg 中的参数正确覆盖默认值"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -1551,7 +1546,7 @@ class TestErrorBackoffInProcessOneJob:
             mock_renew.return_value = True
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -1600,7 +1595,7 @@ class TestErrorBackoffInProcessOneJob:
             mock_renew.return_value = True
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -1649,7 +1644,7 @@ class TestErrorBackoffInProcessOneJob:
             mock_renew.return_value = True
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -1698,7 +1693,7 @@ class TestErrorBackoffInProcessOneJob:
             mock_renew.return_value = True
             mock_mark_dead.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -1744,7 +1739,7 @@ class TestErrorBackoffInProcessOneJob:
             mock_renew.return_value = True
             mock_mark_dead.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -1790,7 +1785,7 @@ class TestErrorBackoffInProcessOneJob:
             mock_renew.return_value = True
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             result = process_one_job(
                 worker_id="worker-test",
@@ -1942,9 +1937,8 @@ class TestSVNAuthFallback:
             os.environ["SVN_USERNAME"] = "test-user"
             os.environ["SVN_PASSWORD"] = "test-pass"
 
-            from scm_sync_svn import run_svn_cmd
-
             from engram.logbook.config import Config
+            from engram.logbook.scm_sync_tasks.svn import run_svn_cmd
 
             # 模拟 subprocess.run
             with patch("subprocess.run") as mock_run:
@@ -1993,7 +1987,7 @@ class TestSVNAuthFallback:
 
     def test_run_svn_cmd_masks_password_in_log(self):
         """run_svn_cmd 在日志中脱敏密码"""
-        from scm_sync_svn import _mask_svn_command_for_log
+        from engram.logbook.scm_sync_tasks.svn import _mask_svn_command_for_log
 
         cmd = [
             "svn",
@@ -2016,7 +2010,7 @@ class TestSVNAuthFallback:
 
     def test_run_svn_cmd_masks_password_equals_format(self):
         """run_svn_cmd 脱敏 --password=value 格式"""
-        from scm_sync_svn import _mask_svn_command_for_log
+        from engram.logbook.scm_sync_tasks.svn import _mask_svn_command_for_log
 
         cmd = ["svn", "info", "--password=supersecret", "svn://test.example.com"]
 
@@ -2189,7 +2183,7 @@ class TestSVNEnvInjection:
 
             from unittest.mock import MagicMock, patch
 
-            from scm_sync_svn import run_svn_cmd
+            from engram.logbook.scm_sync_tasks.svn import run_svn_cmd
 
             with patch("subprocess.run") as mock_run:
                 mock_result = MagicMock()
@@ -2366,7 +2360,7 @@ class TestBackoffSecondsPassthrough:
             mock_renew.return_value = True
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             process_one_job(
                 worker_id="test-worker",
@@ -2410,7 +2404,7 @@ class TestBackoffSecondsPassthrough:
             mock_renew.return_value = True
             mock_fail_retry.return_value = True
 
-            from scm_sync_worker import process_one_job
+            from engram.logbook.scm_sync_worker_core import process_one_job
 
             process_one_job(
                 worker_id="test-worker",
@@ -2427,7 +2421,7 @@ class TestBackoffSecondsPassthrough:
 
     def test_backoff_seconds_from_result_retry_after(self):
         """使用结果中的 retry_after 作为 backoff_seconds"""
-        from scm_sync_worker import _get_transient_error_backoff
+        from engram.logbook.scm_sync_worker_core import _get_transient_error_backoff
 
         # 当有 retry_after 时应该使用它
         # 注意：这里测试 _get_transient_error_backoff 的行为
@@ -2528,7 +2522,7 @@ class TestRetryAfterFieldUsage:
 
     def test_retry_after_preferred_over_computed_backoff(self):
         """当 retry_after 存在时，优先使用它作为 backoff_seconds"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -2570,7 +2564,7 @@ class TestRetryAfterFieldUsage:
 
     def test_computed_backoff_when_retry_after_absent(self):
         """当 retry_after 不存在时，使用计算的 backoff"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -2611,7 +2605,7 @@ class TestRetryAfterFieldUsage:
 
     def test_retry_after_zero_uses_computed_backoff(self):
         """当 retry_after=None 时使用计算的 backoff（None 视为无效）"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -2655,7 +2649,7 @@ class TestCountsFieldInSyncResult:
 
     def test_counts_field_present_in_success_result(self):
         """成功结果应包含 counts 字段"""
-        from scm_sync_worker import default_sync_handler
+        from engram.logbook.scm_sync_worker_core import default_sync_handler
 
         result = default_sync_handler("unknown_type", 1, "incremental", {})
 
@@ -2664,7 +2658,7 @@ class TestCountsFieldInSyncResult:
 
     def test_default_handler_includes_error_category(self):
         """默认处理器应包含 error_category 字段"""
-        from scm_sync_worker import default_sync_handler
+        from engram.logbook.scm_sync_worker_core import default_sync_handler
 
         result = default_sync_handler("unknown_type", 1, "incremental", {})
 
@@ -2677,7 +2671,7 @@ class TestCircuitBreakerWithRetryAfter:
 
     def test_circuit_breaker_receives_retry_after(self):
         """熔断器应该接收 retry_after 参数"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -2727,7 +2721,7 @@ class TestStandardFieldsErrorCategories:
 
     def test_transient_error_with_retry_after(self):
         """临时性错误带 retry_after 字段时使用该值"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -2765,7 +2759,7 @@ class TestStandardFieldsErrorCategories:
 
     def test_unknown_error_with_retry_after(self):
         """未知错误类型带 retry_after 字段时使用该值"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -2803,7 +2797,7 @@ class TestStandardFieldsErrorCategories:
 
     def test_permanent_error_ignores_retry_after(self):
         """永久性错误应调用 mark_dead 而非 fail_retry（不管是否有 retry_after）"""
-        from scm_sync_worker import process_one_job
+        from engram.logbook.scm_sync_worker_core import process_one_job
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -3242,7 +3236,7 @@ class TestExecutorInjection:
 
     def test_set_executor_injection(self):
         """测试 set_executor 注入自定义执行器"""
-        from scm_sync_worker import execute_sync_job, get_executor, set_executor
+        from engram.logbook.scm_sync_worker_core import execute_sync_job, get_executor, set_executor
 
         # 保存原始执行器
         get_executor()
@@ -3265,7 +3259,7 @@ class TestExecutorInjection:
 
     def test_reset_executor_to_default(self):
         """测试重置为默认执行器"""
-        from scm_sync_worker import get_executor, set_executor
+        from engram.logbook.scm_sync_worker_core import get_executor, set_executor
 
         # 注入自定义执行器
         custom_executor = MagicMock()

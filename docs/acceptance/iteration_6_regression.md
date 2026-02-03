@@ -53,13 +53,13 @@
 测试文件中存在格式错误的导入语句，例如：
 ```python
 # 错误格式（函数名被放入注释）:
-from db import (
-    get_conn,  # ROOT-WRAPPER-ALLOW: 测试内部实现, list_expired_running_jobs  # ...
+from engram.logbook.scm_db import (
+    get_conn,  # list_expired_running_jobs  # ...
 )
 # 正确格式应为:
-from db import (
-    get_conn,  # ROOT-WRAPPER-ALLOW: 测试内部实现
-    list_expired_running_jobs,  # ROOT-WRAPPER-ALLOW: 测试内部实现
+from engram.logbook.scm_db import (
+    get_conn,
+    list_expired_running_jobs,
 )
 ```
 

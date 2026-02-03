@@ -525,7 +525,7 @@ class TestPatchBlobDbIntegration:
 
     def test_upsert_patch_blob_uri_resolvable(self, db_conn, tmp_path: Path):
         """测试写入 patch_blob 后 URI 可解析"""
-        from db import upsert_patch_blob
+        from engram.logbook.scm_db import upsert_patch_blob
 
         # 创建临时 artifacts
         artifacts_root = tmp_path / "artifacts"
@@ -569,7 +569,7 @@ class TestPatchBlobDbIntegration:
 
     def test_upsert_patch_blob_sha256_matches_file(self, db_conn, tmp_path: Path):
         """测试 patch_blob.sha256 与文件实际哈希一致"""
-        from db import upsert_patch_blob
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1057,8 +1057,8 @@ class TestEvidenceResolverDbIntegration:
 
     def test_resolve_patch_blob_by_source_type_source_id(self, db_conn, tmp_path: Path):
         """测试按 source_type/source_id 解析 patch_blob"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         # 创建 artifacts
         artifacts_root = tmp_path / "artifacts"
@@ -1095,8 +1095,8 @@ class TestEvidenceResolverDbIntegration:
 
     def test_resolve_patch_blob_by_sha256(self, db_conn, tmp_path: Path):
         """测试按 sha256 解析 patch_blob"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1128,8 +1128,8 @@ class TestEvidenceResolverDbIntegration:
 
     def test_resolve_patch_blob_by_blob_id(self, db_conn, tmp_path: Path):
         """测试按 blob_id 解析 patch_blob"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1181,8 +1181,8 @@ class TestSha256Verification:
 
     def test_sha256_mismatch_raises_error(self, db_conn, tmp_path: Path):
         """测试 SHA256 不匹配时抛出错误"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1225,8 +1225,8 @@ class TestSha256Verification:
 
     def test_sha256_verification_can_be_disabled(self, db_conn, tmp_path: Path):
         """测试可以禁用 SHA256 校验"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1263,8 +1263,8 @@ class TestSha256Verification:
 
     def test_verify_evidence_sha256_helper(self, db_conn, tmp_path: Path):
         """测试 verify_evidence_sha256 辅助函数"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import verify_evidence_sha256
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1347,8 +1347,8 @@ class TestGetEvidenceInfo:
 
     def test_get_patch_blob_info(self, db_conn, tmp_path: Path):
         """测试获取 patch_blob 元数据"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import get_evidence_info
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1396,8 +1396,8 @@ class TestCanonicalUriResolve:
 
     def test_resolve_canonical_uri_by_sha256_lookup(self, db_conn, tmp_path: Path):
         """测试 Canonical URI 优先按 sha256 查找并校验 source_type/source_id 一致"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1433,8 +1433,8 @@ class TestCanonicalUriResolve:
 
     def test_resolve_canonical_uri_fallback_to_source_lookup(self, db_conn, tmp_path: Path):
         """测试 Canonical URI 当 sha256 未找到时，按 source_type+source_id 查找并校验 sha256"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1468,8 +1468,8 @@ class TestCanonicalUriResolve:
 
     def test_canonical_uri_source_mismatch_raises_error(self, db_conn, tmp_path: Path):
         """测试 Canonical URI 当 source_type/source_id 不匹配时抛出错误"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1505,8 +1505,8 @@ class TestCanonicalUriResolve:
 
     def test_canonical_uri_sha256_mismatch_raises_error(self, db_conn, tmp_path: Path):
         """测试 Canonical URI 当 sha256 不匹配时抛出错误"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1544,8 +1544,8 @@ class TestCanonicalUriResolve:
 
     def test_get_evidence_info_canonical_uri(self, db_conn, tmp_path: Path):
         """测试 get_evidence_info 支持 Canonical URI"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import get_evidence_info
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1577,8 +1577,8 @@ class TestCanonicalUriResolve:
 
     def test_get_evidence_info_canonical_uri_mismatch_returns_none(self, db_conn, tmp_path: Path):
         """测试 get_evidence_info Canonical URI 不匹配时返回 None"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import get_evidence_info
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1606,8 +1606,8 @@ class TestCanonicalUriResolve:
 
     def test_legacy_uri_still_works_with_verify_sha256(self, db_conn, tmp_path: Path):
         """测试旧格式 URI 在 verify_sha256=True 时仍能正确校验内容哈希"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1642,8 +1642,8 @@ class TestCanonicalUriResolve:
 
     def test_legacy_uri_tampered_file_raises_sha256_mismatch(self, db_conn, tmp_path: Path):
         """测试旧格式 URI 文件被篡改时抛出 Sha256MismatchError"""
-        from db import upsert_patch_blob
         from engram.logbook.evidence_resolver import resolve_memory_uri
+        from engram.logbook.scm_db import upsert_patch_blob
 
         artifacts_root = tmp_path / "artifacts"
         store = LocalArtifactsStore(root=artifacts_root)
@@ -1687,7 +1687,7 @@ class TestConcurrentMaterializeSelection:
 
     def test_for_update_skip_locked_prevents_duplicate_selection(self, db_conn):
         """测试 FOR UPDATE SKIP LOCKED 防止重复选择"""
-        from db import (
+        from engram.logbook.scm_db import (
             MATERIALIZE_STATUS_PENDING,
             select_pending_blobs_for_materialize,
             upsert_patch_blob,
@@ -1767,7 +1767,7 @@ class TestConcurrentMaterializeSelection:
 
     def test_retry_failed_includes_failed_status(self, db_conn):
         """测试 retry_failed=True 时包含失败状态的记录"""
-        from db import (
+        from engram.logbook.scm_db import (
             MATERIALIZE_STATUS_FAILED,
             MATERIALIZE_STATUS_PENDING,
             select_pending_blobs_for_materialize,
@@ -1816,7 +1816,7 @@ class TestConcurrentMaterializeSelection:
 
     def test_max_attempts_excludes_exhausted_records(self, db_conn):
         """测试超过最大重试次数的记录被排除"""
-        from db import (
+        from engram.logbook.scm_db import (
             MATERIALIZE_STATUS_FAILED,
             select_pending_blobs_for_materialize,
             upsert_patch_blob,
@@ -1993,7 +1993,7 @@ class TestMaterializeStatusUpdate:
 
     def test_mark_blob_done_updates_meta_json(self, db_conn):
         """测试标记完成时更新 meta_json"""
-        from db import (
+        from engram.logbook.scm_db import (
             MATERIALIZE_STATUS_DONE,
             get_patch_blob,
             mark_blob_done,
@@ -2035,7 +2035,7 @@ class TestMaterializeStatusUpdate:
 
     def test_mark_blob_failed_records_error(self, db_conn):
         """测试标记失败时记录错误信息"""
-        from db import (
+        from engram.logbook.scm_db import (
             MATERIALIZE_STATUS_FAILED,
             get_patch_blob,
             mark_blob_failed,
@@ -2070,7 +2070,7 @@ class TestMaterializeStatusUpdate:
 
     def test_optimistic_lock_with_sha256(self, db_conn):
         """测试 sha256 乐观锁"""
-        from db import (
+        from engram.logbook.scm_db import (
             mark_blob_done,
             upsert_patch_blob,
         )
@@ -2441,7 +2441,7 @@ class TestDiffstatFormats:
 
     def test_patch_format_file_extensions(self):
         """测试 patch 格式对应的文件扩展名"""
-        from artifacts import SCM_TYPE_GIT, get_scm_path
+        from engram.logbook.scm_artifacts import SCM_TYPE_GIT, get_scm_path
 
         # diff 格式
         path_diff = get_scm_path("1", SCM_TYPE_GIT, "commits", "abc123.diff")
@@ -2683,7 +2683,7 @@ class TestArtifactsModuleIntegration:
         """测试 artifacts.get_artifacts_root 使用统一配置入口"""
         import engram_logbook.config as config_module
 
-        from artifacts import get_artifacts_root
+        from engram.logbook.scm_artifacts import get_artifacts_root
 
         # 设置环境变量
         env_root = str(tmp_path / "env_artifacts")
@@ -2698,7 +2698,7 @@ class TestArtifactsModuleIntegration:
 
     def test_get_artifacts_root_fallback_without_config_module(self, tmp_path: Path, monkeypatch):
         """测试环境变量作为配置回退"""
-        from artifacts import get_artifacts_root
+        from engram.logbook.scm_artifacts import get_artifacts_root
 
         # 设置环境变量
         test_root = str(tmp_path / "fallback_root")
@@ -4991,7 +4991,7 @@ class TestScmPathNormalization:
 
     def test_build_scm_artifact_path_svn_with_r_prefix(self):
         """测试 SVN 路径构建：rev_or_sha 必须以 r 前缀"""
-        from artifacts import build_scm_artifact_path
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
 
         # 正确格式：r<rev>
         result = build_scm_artifact_path(
@@ -5007,7 +5007,7 @@ class TestScmPathNormalization:
 
     def test_build_scm_artifact_path_svn_missing_r_prefix_raises(self):
         """测试 SVN 路径构建：缺少 r 前缀应报错"""
-        from artifacts import build_scm_artifact_path
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
 
         with pytest.raises(ValueError) as exc_info:
             build_scm_artifact_path(
@@ -5023,7 +5023,7 @@ class TestScmPathNormalization:
 
     def test_build_scm_artifact_path_svn_invalid_r_format_raises(self):
         """测试 SVN 路径构建：r 后非数字应报错"""
-        from artifacts import build_scm_artifact_path
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
 
         with pytest.raises(ValueError) as exc_info:
             build_scm_artifact_path(
@@ -5038,7 +5038,7 @@ class TestScmPathNormalization:
 
     def test_build_scm_artifact_path_git_full_sha(self):
         """测试 Git 路径构建：完整 40 位 SHA"""
-        from artifacts import build_scm_artifact_path
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
 
         full_sha = "abc123def456789012345678901234567890abcd"
         result = build_scm_artifact_path(
@@ -5053,7 +5053,7 @@ class TestScmPathNormalization:
 
     def test_build_scm_artifact_path_git_short_sha(self):
         """测试 Git 路径构建：7 位短 SHA"""
-        from artifacts import build_scm_artifact_path
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
 
         short_sha = "abc123d"  # 7 位
         result = build_scm_artifact_path(
@@ -5068,7 +5068,7 @@ class TestScmPathNormalization:
 
     def test_build_scm_artifact_path_git_too_short_sha_raises(self):
         """测试 Git 路径构建：SHA 少于 7 位应报错"""
-        from artifacts import build_scm_artifact_path
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
 
         with pytest.raises(ValueError) as exc_info:
             build_scm_artifact_path(
@@ -5084,7 +5084,7 @@ class TestScmPathNormalization:
 
     def test_build_scm_artifact_path_git_invalid_hex_raises(self):
         """测试 Git 路径构建：非十六进制字符应报错"""
-        from artifacts import build_scm_artifact_path
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
 
         with pytest.raises(ValueError) as exc_info:
             build_scm_artifact_path(
@@ -5669,7 +5669,7 @@ class TestMarkBlobFailedWithMirror:
         """
         测试 mark_blob_failed 正确记录 mirror_uri 和 actual_sha256
         """
-        from db import mark_blob_failed
+        from engram.logbook.scm_db import mark_blob_failed
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -5705,7 +5705,7 @@ class TestMarkBlobFailedWithMirror:
         """
         测试 mark_blob_failed 不传 mirror 参数时的兼容性
         """
-        from db import mark_blob_failed
+        from engram.logbook.scm_db import mark_blob_failed
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -5749,8 +5749,8 @@ class TestV2PathMigration:
 
     def test_v2_svn_path_write_and_read(self, tmp_path: Path):
         """测试 V2 SVN 路径写入和读取"""
-        from artifacts import build_scm_artifact_path
         from engram.logbook.hashing import sha256 as compute_sha256
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
         from engram.logbook.uri import resolve_scm_artifact_path
 
         artifacts_root = tmp_path / "artifacts"
@@ -5796,8 +5796,8 @@ class TestV2PathMigration:
 
     def test_v2_git_path_write_and_read(self, tmp_path: Path):
         """测试 V2 Git 路径写入和读取"""
-        from artifacts import build_scm_artifact_path
         from engram.logbook.hashing import sha256 as compute_sha256
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
         from engram.logbook.uri import resolve_scm_artifact_path
 
         artifacts_root = tmp_path / "artifacts"
@@ -5928,8 +5928,8 @@ class TestV2PathMigration:
 
     def test_diffstat_format_v2_path(self, tmp_path: Path):
         """测试 diffstat 格式的 V2 路径"""
-        from artifacts import build_scm_artifact_path
         from engram.logbook.hashing import sha256 as compute_sha256
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
         from engram.logbook.uri import resolve_scm_artifact_path
 
         artifacts_root = tmp_path / "artifacts"
@@ -5973,8 +5973,8 @@ class TestV2PathMigration:
 
     def test_ministat_format_v2_path(self, tmp_path: Path):
         """测试 ministat 格式的 V2 路径"""
-        from artifacts import build_scm_artifact_path
         from engram.logbook.hashing import sha256 as compute_sha256
+        from engram.logbook.scm_artifacts import build_scm_artifact_path
         from engram.logbook.uri import resolve_scm_artifact_path
 
         artifacts_root = tmp_path / "artifacts"

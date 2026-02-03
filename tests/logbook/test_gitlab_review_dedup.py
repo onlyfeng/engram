@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+from engram.logbook.scm_repo import build_mr_id
 from engram.logbook.scm_sync_tasks.gitlab_commits import (
     GitLabClient,
     format_diff_content,
@@ -29,7 +30,6 @@ from engram.logbook.scm_sync_tasks.gitlab_mrs import (
     map_gitlab_state_to_status,
     parse_merge_request,
 )
-from scm_repo import build_mr_id
 
 # ---------- GitLab API Client Mock 测试 ----------
 
@@ -363,7 +363,7 @@ class TestReviewEventsDedup:
 
     def test_duplicate_source_event_id_not_inserted(self, db_conn):
         """相同 source_event_id 不重复插入（幂等性验证）"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建必要的 repo 和 MR（使用 search_path，无需指定 schema）
         url = f"https://test.example.com/review-test-{datetime.now().timestamp()}"
@@ -414,7 +414,7 @@ class TestReviewEventsDedup:
 
     def test_different_source_event_ids_both_inserted(self, db_conn):
         """不同 source_event_id 都能插入"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         url = f"https://test.example.com/diff-event-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
@@ -453,7 +453,7 @@ class TestReviewEventsDedup:
 
     def test_insert_multiple_event_types(self, db_conn):
         """插入多种类型的 review events（使用不同 source_event_id）"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         url = f"https://test.example.com/multi-event-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
@@ -486,7 +486,7 @@ class TestReviewEventsDedup:
 
     def test_reviewer_user_id_null_when_not_resolved(self, db_conn):
         """验证解析失败时 reviewer_user_id 为 NULL"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         url = f"https://test.example.com/null-user-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
@@ -523,7 +523,7 @@ class TestReviewEventsUniqueConstraint:
 
     def test_unique_constraint_skips_duplicate_insert(self, db_conn):
         """验证 UNIQUE(mr_id, source_event_id) 约束导致第二次插入被跳过"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         url = f"https://test.example.com/unique-constraint-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
@@ -578,7 +578,7 @@ class TestReviewEventsUniqueConstraint:
 
     def test_unique_constraint_allows_same_event_id_different_mr(self, db_conn):
         """验证相同 source_event_id 可以在不同 mr_id 下插入"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         url = f"https://test.example.com/unique-diff-mr-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
@@ -623,7 +623,7 @@ class TestReviewEventsUniqueConstraint:
     def test_unique_constraint_direct_sql_verification(self, db_conn):
         """通过直接 SQL 验证 UNIQUE 约束存在且生效"""
 
-        from db import upsert_mr, upsert_repo
+        from engram.logbook.scm_db import upsert_mr, upsert_repo
 
         url = f"https://test.example.com/direct-sql-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
@@ -689,7 +689,7 @@ class TestBackfillIdempotency:
 
     def test_backfill_twice_no_duplicate_events(self, db_conn):
         """回填执行两次，第二次不应插入重复事件（验证幂等性）"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建必要的 repo 和 MR
         url = f"https://test.example.com/backfill-test-{datetime.now().timestamp()}"
@@ -784,7 +784,7 @@ class TestBackfillIdempotency:
 
     def test_approval_source_event_id_stable(self, db_conn):
         """验证 approval 事件的 source_event_id 格式稳定（无时间戳事件）"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建 repo 和 MR
         url = f"https://test.example.com/approval-stable-{datetime.now().timestamp()}"
@@ -838,7 +838,7 @@ class TestBackfillIdempotency:
 
     def test_backfill_mixed_new_and_existing(self, db_conn):
         """回填场景：部分事件已存在，部分事件是新的"""
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         url = f"https://test.example.com/mixed-backfill-{datetime.now().timestamp()}"
         repo_id = upsert_repo(db_conn, "git", url, "test_project")
@@ -1073,8 +1073,8 @@ class TestCommitsIdempotentOnError:
         """commit diff 获取失败时继续处理其他 commits"""
         from datetime import datetime
 
-        from db import upsert_repo
         from engram.logbook.gitlab_client import GitLabClient, HttpConfig, StaticTokenProvider
+        from engram.logbook.scm_db import upsert_repo
 
         # 创建 repo
         url = f"https://gitlab.example.com/test/commits-error-{datetime.now().timestamp()}"
@@ -1130,8 +1130,8 @@ class TestMRsIdempotentOnError:
         """MR 处理失败时继续处理其他 MRs"""
         from datetime import datetime
 
-        from db import upsert_mr, upsert_repo
-        from scm_repo import build_mr_id
+        from engram.logbook.scm_db import upsert_mr, upsert_repo
+        from engram.logbook.scm_repo import build_mr_id
 
         # 创建 repo
         url = f"https://gitlab.example.com/test/mrs-error-{datetime.now().timestamp()}"
@@ -1183,7 +1183,7 @@ class TestReviewsIdempotentOnError:
         """review 事件部分失败时继续处理"""
         from datetime import datetime
 
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建 repo 和 MR
         url = f"https://gitlab.example.com/test/reviews-error-{datetime.now().timestamp()}"
@@ -1230,7 +1230,7 @@ class TestReviewsIdempotentOnError:
         """429 错误后重试仍保持幂等"""
         from datetime import datetime
 
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建 repo 和 MR
         url = f"https://gitlab.example.com/test/reviews-429-{datetime.now().timestamp()}"
@@ -1325,7 +1325,7 @@ class TestMaterializeIdempotentOnError:
         """API 错误后继续处理其他 blobs"""
         from datetime import datetime
 
-        from db import upsert_repo
+        from engram.logbook.scm_db import upsert_repo
 
         # 创建 repo
         url = f"https://gitlab.example.com/test/materialize-error-{datetime.now().timestamp()}"

@@ -1009,8 +1009,8 @@ WHERE status = 'running'
 # 查看所有熔断器状态
 python -c "
 import json
-import db as db_api
-with db_api.get_connection() as conn:
+from engram.logbook.db import get_connection
+with get_connection() as conn:
     with conn.cursor() as cur:
         cur.execute(\"SELECT key, value_json FROM logbook.kv WHERE namespace = 'scm.sync_health'\")
         for row in cur.fetchall():
@@ -1023,16 +1023,17 @@ with db_api.get_connection() as conn:
 ```bash
 # 强制熔断所有同步
 python -c "
-from src.engram.logbook.scm_sync_policy import CircuitBreakerController
+from engram.logbook.scm_sync_policy import CircuitBreakerController
+from engram.logbook.db import get_connection
+from engram.logbook.kv import kv_set_json
 
 controller = CircuitBreakerController(key='default:global')
 controller.force_open(reason='manual_pause_for_maintenance')
 
 # 持久化状态
-import json
-import db as db_api
-with db_api.get_connection() as conn:
-    db_api.kv_set(conn, 'scm.sync_health', 'default:global', json.dumps(controller.get_state_dict()))
+with get_connection() as conn:
+    kv_set_json(conn, 'scm.sync_health', 'default:global', controller.get_state_dict())
+    conn.commit()
     print('Circuit breaker opened')
 "
 ```
@@ -1042,16 +1043,17 @@ with db_api.get_connection() as conn:
 ```bash
 # 强制恢复同步
 python -c "
-from src.engram.logbook.scm_sync_policy import CircuitBreakerController
+from engram.logbook.scm_sync_policy import CircuitBreakerController
+from engram.logbook.db import get_connection
+from engram.logbook.kv import kv_set_json
 
 controller = CircuitBreakerController(key='default:global')
 controller.force_close()
 
 # 持久化状态
-import json
-import db as db_api
-with db_api.get_connection() as conn:
-    db_api.kv_set(conn, 'scm.sync_health', 'default:global', json.dumps(controller.get_state_dict()))
+with get_connection() as conn:
+    kv_set_json(conn, 'scm.sync_health', 'default:global', controller.get_state_dict())
+    conn.commit()
     print('Circuit breaker closed')
 "
 ```
@@ -1102,8 +1104,8 @@ engram-scm-sync admin pauses list --json
 # 暂停特定 (repo_id, job_type) 组合
 python -c "
 import time
-import json
-import db as db_api
+from engram.logbook.db import get_connection
+from engram.logbook.kv import kv_set_json
 
 repo_id = <REPO_ID>
 job_type = 'commits'
@@ -1118,8 +1120,9 @@ pause_data = {
     'paused_until': time.time() + pause_seconds,
 }
 
-with db_api.get_connection() as conn:
-    db_api.kv_set(conn, 'scm.sync_pauses', f'{repo_id}:{job_type}', json.dumps(pause_data))
+with get_connection() as conn:
+    kv_set_json(conn, 'scm.sync_pauses', f'{repo_id}:{job_type}', pause_data)
+    conn.commit()
     print(f'Paused repo_id={repo_id}, job_type={job_type} for {pause_seconds}s')
 "
 ```
@@ -1157,8 +1160,8 @@ engram-scm-sync admin cursors list --json
 ```bash
 # 查看所有游标
 python -c "
-import db as db_api
-with db_api.get_connection() as conn:
+from engram.logbook.db import get_connection
+with get_connection() as conn:
     with conn.cursor() as cur:
         cur.execute(\"SELECT key, value_json FROM logbook.kv WHERE namespace = 'scm.sync' AND key LIKE '%_cursor:%'\")
         for row in cur.fetchall():
@@ -1481,8 +1484,8 @@ engram-scm-status --json | jq '.error_budget'
 ```bash
 # 检查 running 任务时长
 python -c "
-import db as db_api
-with db_api.get_connection() as conn:
+from engram.logbook.db import get_connection
+with get_connection() as conn:
     with conn.cursor() as cur:
         cur.execute('''
             SELECT job_id, repo_id, locked_by, locked_at, 
@@ -1512,8 +1515,8 @@ ps aux | grep scm_sync_worker
    
    # 重置卡住的任务
    python -c "
-   import db as db_api
-   with db_api.get_connection() as conn:
+   from engram.logbook.db import get_connection
+   with get_connection() as conn:
        with conn.cursor() as cur:
            cur.execute('''
                UPDATE scm.sync_jobs 

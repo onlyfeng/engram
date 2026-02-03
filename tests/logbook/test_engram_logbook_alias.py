@@ -317,9 +317,9 @@ class TestNoImplicitDbImport:
     规则：
     - 禁止在模块顶层使用 `import db` 或 `from db import xxx`
     - 这些是隐式依赖根目录的 db.py，不是包内模块
-    - 允许 `from engram.logbook import db` 或 `from engram.logbook.db import xxx`（包内导入）
+    - 允许 `from engram.logbook import scm_db` 或 `from engram.logbook.scm_db import xxx`（包内导入）
     - 函数内的延迟导入 `import db as db_api`（支持测试注入）目前允许，
-      但建议迁移到 `from engram.logbook import db as db_api`
+      但建议迁移到 `from engram.logbook import scm_db as db_api`
 
     契约来源：
     - 打包独立性要求：pip 安装后应不依赖项目根目录的任何文件
@@ -368,8 +368,8 @@ class TestNoImplicitDbImport:
             "src/engram/** 中发现顶层 import db（这些会引用根目录的 db.py）：\n"
             + "\n".join(f"  {v}" for v in violations)
             + "\n\n修复方法："
-            "\n  - 使用包内导入: from engram.logbook import db"
-            "\n  - 或使用完整路径: from engram.logbook.db import get_connection"
+            "\n  - 使用包内导入: from engram.logbook import scm_db"
+            "\n  - 或使用完整路径: from engram.logbook.scm_db import <function>"
         )
 
     def test_no_toplevel_from_db_import(self, engram_source_files):
@@ -404,8 +404,8 @@ class TestNoImplicitDbImport:
                 f"发现 {len(violations)} 处顶层 from db import（需迁移到包内导入）:\n"
                 + "\n".join(f"  {v}" for v in violations)
                 + "\n\n修复方法："
-                "\n  - 使用 from engram.logbook.db import get_connection"
-                "\n  - 或 from engram.logbook import db",
+                "\n  - 使用 from engram.logbook.scm_db import <function>"
+                "\n  - 或 from engram.logbook import scm_db",
                 UserWarning,
             )
 

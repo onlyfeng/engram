@@ -23,7 +23,7 @@ import pytest
 # 添加 scripts 目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from artifacts import (
+from engram.logbook.scm_artifacts import (
     SCM_EXT_DIFF,
     SCM_EXT_DIFFSTAT,
     SCM_EXT_MINISTAT,

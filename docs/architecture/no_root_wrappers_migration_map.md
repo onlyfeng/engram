@@ -277,18 +277,18 @@ Allowlist 用于管理**弃用模块（deprecated）** 的临时导入例外，�
 | **tests/ 中测试弃用模块的行为** | 验证弃用警告正确发出、向后兼容性测试 | ✅ 需要 |
 | **scripts/ 中运维脚本过渡期** | 运维脚本暂未迁移到新 CLI | ✅ 需要 |
 | **兼容层内部实现** | wrapper 模块本身的导入 | ✅ 需要 |
-| **长期保留模块（preserved）** | db, kv, artifacts 等 | ❌ **不需要** |
+| **长期保留模块（preserved）** | 当前无（db/kv/artifacts 已改为 deprecated） | ❌ **不需要** |
 
 ### Deprecated vs Preserved 治理差异
 
 | 模块类型 | CI 检查行为 | Allowlist 要求 | 移除计划 |
 |----------|-------------|----------------|----------|
 | **Deprecated 模块** | 禁止导入，除非有有效 allowlist/inline marker | 必须带 `expires_on` 和 `owner` | 有明确到期日期 |
-| **Preserved 模块** | 允许导入，**不检查** | **不需要 allowlist** | 无移除计划 |
+| **Preserved 模块** | 允许导入，**不检查**（当前无此类模块） | **不需要 allowlist** | 无移除计划 |
 
 **关键规则**：
 1. `configs/import_migration_map.json` 中 `deprecated: true` 的模块受 CI 检查约束
-2. `deprecated: false`（preserved）的模块不受检查，直接导入即可
+2. `deprecated: false`（preserved）的模块不受检查，直接导入即可（当前无此类模块）
 3. Allowlist 条目必须设置 `expires_on`（最长 6 个月），过期后 CI 失败
 4. Inline marker 同样必须带 `expires=` 和 `owner=`
 
@@ -300,7 +300,7 @@ Allowlist 用于管理**弃用模块（deprecated）** 的临时导入例外，�
 |------|----------|----------|----------|
 | 测试 legacy import | 17 | artifact_*, scm_sync_*, db_*, logbook_cli_* | 2026-06-30 |
 
-> **注意**：长期保留模块（db, kv, artifacts）在 `import_migration_map.json` 中标记为 `deprecated: false`，**无需 allowlist 条目**。
+> **注意**：当前无 preserved 模块；`db/kv/artifacts` 已标记为 `deprecated: true`，需要按弃用模块治理。
 
 ### 为何 Preserved 模块不需要 Allowlist？
 
@@ -309,10 +309,10 @@ Allowlist 用于管理**弃用模块（deprecated）** 的临时导入例外，�
 - **Preserved 模块**：标记为 `deprecated: false`，CI 检查脚本**跳过**这些模块，因此不需要任何豁免机制
 
 ```python
-# ✅ Preserved 模块：直接导入，无需 allowlist
-import db
-import kv
-import artifacts
+# ✅ 推荐：使用包内导入（不涉及 allowlist）
+from engram.logbook.scm_db import upsert_repo
+from engram.logbook.kv import kv_set_json
+from engram.logbook.scm_artifacts import build_scm_artifact_path
 
 # ⚠️ Deprecated 模块：需要 allowlist 或 inline marker
 import artifact_cli  # ROOT-WRAPPER-ALLOW: test-artifact-cli-v1
@@ -470,10 +470,10 @@ from engram.logbook.cli.db_migrate import main as migrate_main
 from engram.logbook.cli.scm_sync import worker_main
 from engram.logbook.identity_sync import main as identity_sync_main
 
-# ✅ 允许：import 长期保留模块（db, kv, artifacts）
-import db  # 长期保留的工具模块
-import kv  # 长期保留的 KV 存储模块
-import artifacts  # 长期保留的制品工具模块
+# ✅ 允许：使用包内模块（root wrapper 已移除）
+from engram.logbook.scm_db import upsert_repo
+from engram.logbook.kv import kv_set_json
+from engram.logbook.scm_artifacts import build_scm_artifact_path
 
 # ✅ 允许：在 scripts/ 目录中 import 任意模块（不受 CI 检查）
 # scripts/ 目录不在 check_no_root_wrappers_usage.py 的检查范围内
@@ -483,10 +483,10 @@ import artifacts  # 长期保留的制品工具模块
 
 ```python
 # ✅ 允许：使用 Allowlist 引用
-import db  # ROOT-WRAPPER-ALLOW: import-db-scm-sync-integration
+import artifact_cli  # ROOT-WRAPPER-ALLOW: test-artifact-cli-v1
 
 # ✅ 允许：使用 Inline 声明（需包含 reason、expires、owner）
-import artifact_cli  # ROOT-WRAPPER-ALLOW: 兼容性测试; expires=2026-06-30; owner=@engram-team
+import db_migrate  # ROOT-WRAPPER-ALLOW: 迁移测试; expires=2026-06-30; owner=@engram-team
 
 # ✅ 允许：上一行声明
 # ROOT-WRAPPER-ALLOW: 验收测试需要验证兼容行为; expires=2026-06-30; owner=@engram-team
@@ -534,9 +534,10 @@ import artifact_gc  # 测试目标：验证弃用警告正确发出
 # ✅ 推荐：使用 fixture 提供模块引用
 @pytest.fixture
 def artifacts_module():
-    """提供 artifacts 模块引用，避免顶层 import。"""
-    import artifacts
-    return artifacts
+    """提供 scm_artifacts 模块引用，避免顶层 import。"""
+    from engram.logbook import scm_artifacts
+
+    return scm_artifacts
 
 # ❌ 避免：在测试中直接 import 弃用模块（除非是测试弃用行为本身）
 ```

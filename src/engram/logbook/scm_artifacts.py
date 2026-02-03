@@ -134,6 +134,49 @@ def build_legacy_scm_path(
     return f"scm/{repo_id}/git/commits/{rev_or_sha}.{ext}"
 
 
+def get_artifact_path(
+    *,
+    repo_id: Union[str, int],
+    source_type: str,
+    rev_or_sha: str,
+    ext: str = SCM_EXT_DIFF,
+    project_key: Optional[str] = None,
+    sha256: Optional[str] = None,
+    legacy: Optional[bool] = None,
+) -> str:
+    """
+    构建 SCM 制品路径（兼容入口）
+
+    行为：
+    - 当提供 project_key 与 sha256，且 legacy != True 时，返回新版路径（带 project_key/sha256）
+    - 否则返回旧版路径（不带 project_key/sha256）
+
+    备注：
+    - SVN 的新版路径要求 rev_or_sha 为 r<rev> 格式；本函数会在 rev_or_sha 为纯数字时自动补齐 'r' 前缀
+    """
+    normalized_source_type = source_type.strip().lower()
+    normalized_rev_or_sha = rev_or_sha
+    if normalized_source_type == SCM_TYPE_SVN and rev_or_sha.isdigit():
+        normalized_rev_or_sha = f"r{rev_or_sha}"
+
+    if legacy is True or not project_key or not sha256:
+        return build_legacy_scm_path(
+            repo_id=repo_id,
+            source_type=source_type,
+            rev_or_sha=rev_or_sha,
+            ext=ext,
+        )
+
+    return build_scm_artifact_path(
+        project_key=project_key,
+        repo_id=repo_id,
+        source_type=source_type,
+        rev_or_sha=normalized_rev_or_sha,
+        sha256=sha256,
+        ext=ext,
+    )
+
+
 def get_scm_path(repo_id: Union[str, int], source_type: str, subdir: str, filename: str) -> str:
     """
     获取 SCM 路径

@@ -952,7 +952,7 @@ class TestDbInvariant_CircuitBreakerState:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        import db as scm_db
+        from engram.logbook import scm_db
 
         test_key = "test:circuit_breaker:state_test"
         test_state = {
@@ -989,7 +989,7 @@ class TestDbInvariant_CircuitBreakerState:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        import db as scm_db
+        from engram.logbook import scm_db
 
         key1 = "test:circuit_breaker:isolation_1"
         key2 = "test:circuit_breaker:isolation_2"
@@ -1044,7 +1044,7 @@ class TestDbInvariant_RateLimitBucket:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        import db as scm_db
+        from engram.logbook import scm_db
 
         instance_key = "test-bucket.gitlab.com"
 

@@ -702,6 +702,9 @@ class ImportVisitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         """处理 from xxx import ... 语句"""
+        if node.level and node.level > 0:
+            # 相对导入属于包内引用，不参与根目录 wrapper 检查
+            return
         if node.module:
             # 获取顶层模块名
             top_module = node.module.split(".")[0]

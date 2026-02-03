@@ -7,7 +7,7 @@ scm_db - SCM/Logbook 数据库访问层
 设计说明:
 - 迁移自根目录 db.py，供包内模块使用
 - 所有 SCM sync 相关的 DB 操作应使用此模块
-- 根目录 db.py 将成为薄包装器，输出 deprecation 提示
+- 根目录 db.py 为薄包装器（兼容入口），实际实现以此模块为准
 """
 
 from __future__ import annotations
@@ -698,6 +698,62 @@ def enqueue_sync_job(
         )
         job_id = cur.fetchone()[0]
     return str(job_id)
+
+
+def enqueue_sync_jobs_batch(conn, jobs: List[Dict[str, Any]]) -> List[Optional[str]]:
+    """
+    批量入队 sync_jobs。
+
+    返回值：
+    - 与输入 jobs 等长的 job_id 列表
+    - 若某个任务因唯一约束冲突未入队，则对应位置返回 None
+
+    说明：
+    - 使用 `ON CONFLICT DO NOTHING` 处理冲突（典型冲突：active job 唯一索引）
+    - 不负责提交事务（由调用方 conn.commit()）
+    """
+    if not jobs:
+        return []
+
+    normalized_rows: List[Tuple[int, str, str, int, str]] = []
+    for job in jobs:
+        repo_id = int(job["repo_id"])
+        job_type = str(job["job_type"])
+        mode = str(job.get("mode") or "incremental")
+        priority = int(job.get("priority", 100))
+        payload_json = cast(Optional[Dict[str, Any]], job.get("payload_json")) or {}
+        normalized_rows.append((repo_id, job_type, mode, priority, json.dumps(payload_json)))
+
+    values_sql = ", ".join(["(%s, %s, %s, %s, %s)"] * len(normalized_rows))
+    params: List[object] = []
+    for row in normalized_rows:
+        params.extend(row)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO scm.sync_jobs (repo_id, job_type, mode, priority, payload_json)
+            VALUES {values_sql}
+            ON CONFLICT DO NOTHING
+            RETURNING repo_id, job_type, mode, job_id
+            """,
+            params,
+        )
+        inserted_rows = cur.fetchall()
+
+    inserted_map: Dict[Tuple[int, str, str], List[str]] = {}
+    for repo_id, job_type, mode, job_id in inserted_rows:
+        key = (int(repo_id), str(job_type), str(mode))
+        inserted_map.setdefault(key, []).append(str(job_id))
+
+    results: List[Optional[str]] = []
+    for repo_id, job_type, mode, _priority, _payload_json in normalized_rows:
+        key = (repo_id, job_type, mode)
+        if key in inserted_map and inserted_map[key]:
+            results.append(inserted_map[key].pop(0))
+        else:
+            results.append(None)
+    return results
 
 
 def list_sync_jobs(

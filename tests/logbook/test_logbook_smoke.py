@@ -2065,7 +2065,7 @@ class TestIdempotentOnErrorCommits:
         from unittest.mock import MagicMock, patch
 
         from engram.logbook.gitlab_client import GitLabClient, HttpConfig, StaticTokenProvider
-        from scm_repo import ensure_repo
+        from engram.logbook.scm_repo import ensure_repo
 
         # 创建 repo
         repo_url = (
@@ -2125,8 +2125,8 @@ class TestIdempotentOnErrorMRs:
         """
         from datetime import datetime
 
-        from db import upsert_mr
-        from scm_repo import build_mr_id, ensure_repo
+        from engram.logbook.scm_db import upsert_mr
+        from engram.logbook.scm_repo import build_mr_id, ensure_repo
 
         # 创建 repo
         repo_url = f"https://gitlab.example.com/test/mrs-idempotent-{datetime.now().timestamp()}"
@@ -2184,7 +2184,7 @@ class TestIdempotentOnErrorReviews:
         """
         from datetime import datetime
 
-        from db import insert_review_event, upsert_mr, upsert_repo
+        from engram.logbook.scm_db import insert_review_event, upsert_mr, upsert_repo
 
         # 创建必要的 repo 和 MR
         url = f"https://test.example.com/reviews-idempotent-{datetime.now().timestamp()}"

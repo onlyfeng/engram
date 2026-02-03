@@ -55,7 +55,7 @@ v2.0 已移除根目录兼容入口，以下清单仅用于历史追溯：
 
 | 脚本 | 功能描述 | 对应新入口 | 状态 |
 |------|----------|------------|------|
-| `db.py` | 数据库连接工具 | `engram.logbook.db` | 兼容保留 |
+| `db.py` | SCM Sync 数据库访问层 | `engram.logbook.scm_db` | 已移除（v2.0） |
 | `db_bootstrap.py` | 数据库初始化 | `engram-bootstrap-roles` | 已移除（v2.0） |
 | `db_migrate.py` | 数据库迁移 | `engram-migrate` | 已移除（v2.0） |
 | `logbook_cli.py` | Logbook CLI | `engram-logbook` | 已移除（v2.0） |
@@ -65,8 +65,8 @@ v2.0 已移除根目录兼容入口，以下清单仅用于历史追溯：
 | `artifact_migrate.py` | Artifact 迁移 | `engram-artifacts migrate` | 已移除（v2.0） |
 | `artifact_audit.py` | Artifact 审计 | `scripts/artifact_audit.py` | 已移除（v2.0） |
 | `identity_sync.py` | 身份同步工具 | `engram-identity-sync` | 已移除（v2.0） |
-| `kv.py` | KV 存储工具 | `engram.logbook.kv` | 兼容保留 |
-| `scm_repo.py` | SCM 仓库工具 | `engram.logbook.scm_repo` | 兼容保留 |
+| `kv.py` | KV 存储工具 | `engram.logbook.kv` | 已移除（v2.0） |
+| `scm_repo.py` | SCM 仓库工具 | `engram.logbook.scm_repo` | 已移除（v2.0） |
 | `scm_sync_runner.py` | SCM Sync 运行器 | `engram-scm-runner` | 已移除（v2.0） |
 | `scm_sync_status.py` | SCM Sync 状态 | `engram-scm-status` | 已移除（v2.0） |
 | `scm_sync_reaper.py` | SCM Sync 清理器 | `engram-scm-reaper` | 已移除（v2.0） |
@@ -331,16 +331,17 @@ engram-scm get-repo --dsn "..." --repo-type git --repo-url https://gitlab.com/ns
 
 1. **禁止新增 `from db import` 或 `import db`**
    - 新代码必须使用 `from engram.logbook.scm_db import ...`
-   - 例外：`tests/logbook/test_scm_sync_integration.py` 作为验收测试保留
+   - 无例外
 
 2. **禁止新增 `from kv import` 或 `import kv`**
-   - KV 操作应使用 `engram.logbook.scm_db` 中的相关函数
-   - 例外：同上验收测试
+   - KV 操作应使用 `engram.logbook.kv` 中的相关函数
+   - 无例外
 
-3. **允许列表**（不受门禁约束的文件）：
-   - `db.py` - 兼容包装器本身
-   - `kv.py` - 兼容包装器本身
-   - `tests/logbook/test_scm_sync_integration.py` - 验收测试
+3. **禁止新增 `from artifacts import` 或 `import artifacts`**
+   - 应使用 `engram.logbook.scm_artifacts`
+
+4. **禁止新增 `from scm_repo import` 或 `import scm_repo`**
+   - 应使用 `engram.logbook.scm_repo`
 
 **检查脚本示例**：
 
@@ -352,12 +353,14 @@ LEGACY_PATTERNS = [
     r'^import db as',
     r'^from kv import',
     r'^import kv\s*$',
+    r'^from artifacts import',
+    r'^import artifacts\s*$',
+    r'^from scm_repo import',
+    r'^import scm_repo\s*$',
 ]
 
 ALLOWED_FILES = [
-    'db.py',
-    'kv.py',
-    'tests/logbook/test_scm_sync_integration.py',
+    # 无例外文件
 ]
 
 # 扫描所有 .py 文件，排除 allowed_files，检查是否有 legacy patterns

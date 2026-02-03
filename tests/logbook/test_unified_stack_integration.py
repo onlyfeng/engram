@@ -3506,7 +3506,7 @@ class TestScmSyncStackIntegration:
 
         测试结束后会自动清理
         """
-        import db as scm_db
+        from engram.logbook import scm_db
 
         conn = migrated_database["conn"]
 
@@ -3573,7 +3573,7 @@ class TestScmSyncStackIntegration:
         """
         为测试仓库创建模拟 sync_job
         """
-        import db as scm_db
+        from engram.logbook import scm_db
 
         conn = migrated_database["conn"]
 

@@ -58,7 +58,7 @@ Engram 项目正在将根目录的 CLI wrapper 脚本迁移到 `src/engram/` 包
 | 分类 | 定义位置 | CI 检查 | Allowlist 要求 | 移除时间表 |
 |------|----------|---------|----------------|------------|
 | **Deprecated 模块** | `import_migration_map.json` 中 `deprecated: true` | ✅ 检查 | 必须（带 expiry/owner） | 有（v2.0 等） |
-| **Preserved 模块** | `import_migration_map.json` 中 `deprecated: false` | ❌ 跳过 | **不需要** | 无 |
+| **Preserved 模块** | `import_migration_map.json` 中 `deprecated: false` | ❌ 跳过 | **不需要** | 无（当前无此类模块） |
 
 #### 治理策略差异
 
@@ -70,19 +70,19 @@ Engram 项目正在将根目录的 CLI wrapper 脚本迁移到 `src/engram/` 包
 - 豁免必须设置过期日期（`expires_on`）和负责人（`owner`）
 - 过期后 CI 失败，强制清理或续期
 
-**Preserved 模块**（如 `db`, `kv`, `artifacts`）：
+**Preserved 模块**（当前无）：
 
-- CI 门禁**完全跳过**这些模块
+- 如未来出现 preserved 模块，CI 门禁将**完全跳过**这些模块
 - 可在任何位置自由导入，无需任何声明
 - 不设移除时间表，作为长期工具模块保留
 
 #### 代码示例
 
 ```python
-# ✅ Preserved 模块：直接导入即可
-import db
-import kv
-from artifacts import get_artifact_path
+# ✅ 推荐：使用包内导入（不涉及 allowlist）
+from engram.logbook.scm_db import upsert_repo
+from engram.logbook.kv import kv_set_json
+from engram.logbook.scm_artifacts import get_artifact_path
 
 # ⚠️ Deprecated 模块：必须有豁免声明
 # 方式 1：引用 allowlist 中的条目 ID
@@ -97,7 +97,7 @@ import db_migrate  # ROOT-WRAPPER-ALLOW: 迁移测试; expires=2026-06-30; owner
 | 误区 | 正确理解 |
 |------|----------|
 | "所有根目录模块都需要 allowlist" | ❌ 只有 deprecated 模块需要 |
-| "db/kv/artifacts 需要在 allowlist 中" | ❌ 它们是 preserved，无需任何声明 |
+| "db/kv/artifacts 需要在 allowlist 中" | ❌ 它们已标记为 deprecated，应迁移到包内导入 |
 | "Allowlist 条目可以没有过期日期" | ❌ deprecated 模块必须有 expires_on |
 | "Inline marker 可以省略 owner" | ❌ 必须同时提供 expires 和 owner |
 
@@ -285,7 +285,7 @@ is_expired = today > expires_date  # today == expires_date 仍有效
 
 ```python
 # 格式
-import db  # ROOT-WRAPPER-ALLOW: <reason>; expires=YYYY-MM-DD; owner=<team>
+import artifact_cli  # ROOT-WRAPPER-ALLOW: <reason>; expires=YYYY-MM-DD; owner=<team>
 ```
 
 | 状态 | CI 行为 |
@@ -505,24 +505,24 @@ CI 检查脚本会按分类统计例外数量，便于治理决策：
 
 ```python
 # 行尾声明（推荐）
-import db  # ROOT-WRAPPER-ALLOW: <reason>; expires=YYYY-MM-DD; owner=<team>
+import artifact_cli  # ROOT-WRAPPER-ALLOW: <reason>; expires=YYYY-MM-DD; owner=<team>
 
 # 上一行声明
 # ROOT-WRAPPER-ALLOW: <reason>; expires=YYYY-MM-DD; owner=<team>
-import db
+import artifact_cli
 ```
 
 **禁止的格式**（将在 2026-03-31 后 CI 报错）：
 
 ```python
 # 缺少 expiry
-import db  # ROOT-WRAPPER-ALLOW: 测试需要
+import artifact_cli  # ROOT-WRAPPER-ALLOW: 测试需要
 
 # 缺少 owner
-import db  # ROOT-WRAPPER-ALLOW: 测试需要; expires=2026-06-30
+import artifact_cli  # ROOT-WRAPPER-ALLOW: 测试需要; expires=2026-06-30
 
 # 格式错误
-import db  # ALLOW-ROOT-WRAPPER: 测试需要
+import artifact_cli  # ALLOW-ROOT-WRAPPER: 测试需要
 ```
 
 ---

@@ -2825,7 +2825,7 @@ try:
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
 
-    from db import (
+    from engram.logbook.scm_db import (
         RepoPauseRecord,
         _build_pause_key,
         _parse_pause_key,
