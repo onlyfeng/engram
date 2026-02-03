@@ -2141,6 +2141,7 @@ class ErrorTypes:
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.25.1 | 2026-02-04 | fix: version policy checker handles shallow history conservatively |
 | v2.25.0 | 2026-02-03 | Phase 2: add release workflow |
 | v2.24.0 | 2026-02-03 | 新增 Error Types 文档同步门禁：新增 check_workflow_contract_error_types_docs_sync.py 并接入 CI/Makefile；补全第 13 章表格 |
 | v2.23.0 | 2026-02-03 | 新增 iteration fixtures freshness 检查：CI/Makefile 接入并扩展 iteration-tools-test 步骤 |

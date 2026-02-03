@@ -494,6 +494,25 @@ class LogbookAdapter:
             config=self._config,
         )
 
+    def update_governance_settings(
+        self,
+        project_key: str,
+        team_write_enabled: bool,
+        policy_json: Optional[Dict] = None,
+        updated_by: Optional[str] = None,
+    ) -> bool:
+        """
+        更新治理设置（兼容别名）
+
+        与 upsert_settings 保持一致的语义，供测试与调用方复用。
+        """
+        return self.upsert_settings(
+            project_key=project_key,
+            team_write_enabled=team_write_enabled,
+            policy_json=policy_json,
+            updated_by=updated_by,
+        )
+
     # ======================== governance.write_audit ========================
 
     def insert_audit(

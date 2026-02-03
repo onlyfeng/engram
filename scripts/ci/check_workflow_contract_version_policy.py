@@ -1131,6 +1131,18 @@ class WorkflowContractVersionChecker:
             pass
         return "HEAD~1"
 
+    def _base_ref_exists(self, base: str) -> bool:
+        """检查 base 引用是否存在（防止 shallow clone）"""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--verify", base],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def load_contract(self) -> bool:
         """加载 contract JSON 文件"""
         if not self.contract_path.exists():
@@ -1234,6 +1246,12 @@ class WorkflowContractVersionChecker:
         old_content = get_old_file_content(contract_rel_path, base)
 
         if old_content is None:
+            # shallow clone 或 base 不存在时，保守认为未更新
+            if not self._base_ref_exists(base):
+                if self.verbose:
+                    print("  Base ref missing; treating version as NOT updated")
+                self.result.version_updated = False
+                return False
             # 新文件，视为已更新
             self.result.version_updated = True
             return True
@@ -1270,6 +1288,12 @@ class WorkflowContractVersionChecker:
         old_content = get_old_file_content(contract_rel_path, base)
 
         if old_content is None:
+            # shallow clone 或 base 不存在时，保守认为未更新
+            if not self._base_ref_exists(base):
+                if self.verbose:
+                    print("  Base ref missing; treating last_updated as NOT updated")
+                self.result.last_updated_updated = False
+                return False
             # 新文件，视为已更新
             self.result.last_updated_updated = True
             return True
