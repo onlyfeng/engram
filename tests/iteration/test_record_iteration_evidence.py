@@ -66,6 +66,18 @@ def load_evidence_schema() -> dict:
         return json.load(f)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_evidence_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """隔离证据输出目录，避免写入真实 docs/acceptance/evidence。"""
+    import iteration_evidence_naming as evidence_naming
+    import record_iteration_evidence
+
+    evidence_dir = tmp_path / "evidence"
+    monkeypatch.setattr(record_iteration_evidence, "EVIDENCE_DIR", evidence_dir)
+    monkeypatch.setattr(evidence_naming, "EVIDENCE_DIR", evidence_dir)
+    return evidence_dir
+
+
 # ============================================================================
 # 测试 exit_code_to_result
 # ============================================================================
