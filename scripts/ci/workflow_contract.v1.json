@@ -94,7 +94,7 @@
           "Cache pip dependencies",
           "Install dependencies",
           "Run database migrations",
-          "Verify database migrations (strict mode)",
+          "Verify database migrations",
           "Run unit and integration tests",
           "Run acceptance tests",
           "Upload test results",

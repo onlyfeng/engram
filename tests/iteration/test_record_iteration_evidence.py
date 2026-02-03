@@ -326,12 +326,18 @@ class TestRecordEvidence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """测试 scan_evidence_files 对临时 evidence 目录无违规。"""
-        import iteration_evidence_naming as evidence_naming
-        import record_iteration_evidence
+        import scripts.iteration.iteration_evidence_naming as evidence_naming
+        import scripts.iteration.record_iteration_evidence as record_module
 
         evidence_dir = tmp_path / "evidence"
-        monkeypatch.setattr(record_iteration_evidence, "EVIDENCE_DIR", evidence_dir)
+        # 创建 evidence 目录
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+
+        # 需要 patch 两个地方：
+        # 1. iteration_evidence_naming.EVIDENCE_DIR - 用于 canonical_evidence_path()
+        # 2. record_iteration_evidence.EVIDENCE_DIR - 用于 mkdir()
         monkeypatch.setattr(evidence_naming, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(record_module, "EVIDENCE_DIR", evidence_dir)
 
         commands = [
             CommandEntry(

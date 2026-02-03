@@ -21,6 +21,7 @@ import pytest
 
 from scripts.ci.check_iteration_evidence_contract import (
     CANONICAL_PATTERN,
+    CURRENT_SCHEMA_PATH,
     EVIDENCE_DIR,
     SCHEMA_PATH,
     SNAPSHOT_PATTERN,
@@ -29,6 +30,7 @@ from scripts.ci.check_iteration_evidence_contract import (
     EvidenceWarning,
     get_evidence_files,
     load_schema,
+    load_schemas,
     parse_evidence_filename,
     scan_evidence_files,
     validate_bidirectional_reference,
@@ -55,7 +57,7 @@ def temp_evidence_dir():
 def valid_evidence_content() -> dict:
     """有效的证据文件内容"""
     return {
-        "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+        "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
         "iteration_number": 13,
         "recorded_at": "2026-02-01T20:46:36Z",
         "commit_sha": "abc1234567890",
@@ -247,8 +249,8 @@ class TestValidateJsonContent:
         self, canonical_evidence_file: Path, valid_evidence_content: dict
     ):
         """测试接受有效内容"""
-        schema = load_schema()
-        violations = validate_json_content(canonical_evidence_file, schema)
+        schemas = load_schemas()
+        violations = validate_json_content(canonical_evidence_file, schemas)
         assert len(violations) == 0
 
     def test_detects_invalid_json(self, temp_evidence_dir: Path):
@@ -256,7 +258,7 @@ class TestValidateJsonContent:
         filepath = temp_evidence_dir / "iteration_13_evidence.json"
         filepath.write_text("{invalid json", encoding="utf-8")
 
-        violations = validate_json_content(filepath, None)
+        violations = validate_json_content(filepath, load_schemas())
         assert len(violations) == 1
         assert violations[0].violation_type == "content"
         assert "JSON 解析失败" in violations[0].message
@@ -270,7 +272,7 @@ class TestValidateJsonContent:
         valid_evidence_content["iteration_number"] = 14
         filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
 
-        violations = validate_json_content(filepath, None)
+        violations = validate_json_content(filepath, load_schemas())
         assert len(violations) == 1
         assert violations[0].violation_type == "content"
         assert "iteration_number 不一致" in violations[0].message
@@ -287,9 +289,9 @@ class TestValidateJsonContent:
         }
         filepath.write_text(json.dumps(invalid_content), encoding="utf-8")
 
-        schema = load_schema()
-        if schema is not None:
-            violations = validate_json_content(filepath, schema)
+        schemas = load_schemas()
+        if schemas.get("current") is not None:
+            violations = validate_json_content(filepath, schemas)
             # 应该有 schema 违规
             schema_violations = [v for v in violations if v.violation_type == "schema"]
             assert len(schema_violations) >= 1
@@ -306,9 +308,9 @@ class TestValidateJsonContent:
         }
         filepath.write_text(json.dumps(content), encoding="utf-8")
 
-        schema = load_schema()
-        if schema is not None:
-            violations = validate_json_content(filepath, schema)
+        schemas = load_schemas()
+        if schemas.get("current") is not None:
+            violations = validate_json_content(filepath, schemas)
             schema_violations = [v for v in violations if v.violation_type == "schema"]
             assert len(schema_violations) >= 1
 
@@ -321,9 +323,9 @@ class TestValidateJsonContent:
         valid_evidence_content["iteration_number"] = "13"
         filepath.write_text(json.dumps(valid_evidence_content), encoding="utf-8")
 
-        schema = load_schema()
-        if schema is not None:
-            violations = validate_json_content(filepath, schema)
+        schemas = load_schemas()
+        if schemas.get("current") is not None:
+            violations = validate_json_content(filepath, schemas)
             schema_violations = [v for v in violations if v.violation_type == "schema"]
             assert len(schema_violations) >= 1
 
@@ -470,8 +472,8 @@ class TestLoadSchema:
     def test_loads_schema_from_default_path(self):
         """测试从默认路径加载 Schema"""
         # 只有当实际 schema 文件存在时才运行
-        if SCHEMA_PATH.exists():
-            schema = load_schema()
+        if CURRENT_SCHEMA_PATH.exists():
+            schema = load_schema(CURRENT_SCHEMA_PATH)
             assert schema is not None
             assert "properties" in schema
             assert "iteration_number" in schema["properties"]
@@ -540,7 +542,7 @@ class TestEdgeCases:
         filepath = temp_evidence_dir / "iteration_13_evidence.json"
         filepath.write_text("", encoding="utf-8")
 
-        violations = validate_json_content(filepath, None)
+        violations = validate_json_content(filepath, load_schemas())
         assert len(violations) == 1
         assert violations[0].violation_type == "content"
         assert "JSON 解析失败" in violations[0].message
@@ -550,9 +552,9 @@ class TestEdgeCases:
         filepath = temp_evidence_dir / "iteration_13_evidence.json"
         filepath.write_text("[]", encoding="utf-8")
 
-        schema = load_schema()
-        if schema is not None:
-            violations = validate_json_content(filepath, schema)
+        schemas = load_schemas()
+        if schemas.get("current") is not None:
+            violations = validate_json_content(filepath, schemas)
             # 应该有 schema 违规（期望对象，得到数组）
             schema_violations = [v for v in violations if v.violation_type == "schema"]
             assert len(schema_violations) >= 1
@@ -635,7 +637,7 @@ def temp_project_root():
 def valid_evidence_content_with_links() -> dict:
     """带 links 的有效证据文件内容"""
     return {
-        "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+        "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
         "iteration_number": 13,
         "recorded_at": "2026-02-01T20:46:36Z",
         "commit_sha": "abc1234567890",

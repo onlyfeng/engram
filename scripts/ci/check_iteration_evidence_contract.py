@@ -245,10 +245,13 @@ def load_schemas() -> dict[str, Optional[dict[str, Any]]]:
 
 
 def resolve_schema_for_content(
-    content: dict[str, Any],
+    content: Any,
     schemas: dict[str, Optional[dict[str, Any]]],
 ) -> tuple[Optional[dict[str, Any]], str]:
     """根据 evidence 内容选择应使用的 schema。"""
+    # 如果 content 不是字典，使用当前 schema
+    if not isinstance(content, dict):
+        return schemas.get("current"), CURRENT_SCHEMA_FILENAME
     schema_value = content.get("$schema") if isinstance(content.get("$schema"), str) else None
     schema_name = resolve_schema_name(schema_value)
     if schema_name == LEGACY_SCHEMA_FILENAME:
