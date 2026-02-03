@@ -235,8 +235,8 @@ class TestRecordEvidence:
         """测试输出包含 schema 要求的必需字段。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             # 临时修改输出目录
-            import record_iteration_evidence
             import iteration_evidence_naming as evidence_naming
+            import record_iteration_evidence
 
             original_dir = record_iteration_evidence.EVIDENCE_DIR
             original_naming_dir = evidence_naming.EVIDENCE_DIR
