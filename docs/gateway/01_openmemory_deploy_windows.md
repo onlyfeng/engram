@@ -196,9 +196,42 @@ sudo systemctl reload postgresql
 
 ### B.4 初始化数据库与角色
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+# 选择 Python 环境（二选一）：
+#
+# A) venv（示例）
+# python3 -m venv .venv
+# source .venv/bin/activate
+#
+# B) conda（示例）
+# conda create -n engram python=3.11 -y
+# conda activate engram
+#
+# 不管用哪种方式，确保当前 shell 已激活环境后再安装：
 pip install -e ".[full]"
+
+# 解析当前环境的 python 路径（venv / conda）
+if [ -n "${VIRTUAL_ENV:-}" ]; then
+  PYTHON_BIN="$VIRTUAL_ENV/bin/python"
+elif [ -n "${CONDA_PREFIX:-}" ]; then
+  PYTHON_BIN="$CONDA_PREFIX/bin/python"
+else
+  PYTHON_BIN="python3"
+fi
+
+# 若你使用 conda 且安装在 $HOME 下，常见问题是：
+#   sudo -u postgres 无法执行/读取 $CONDA_PREFIX（Permission denied）
+# 原因：postgres 用户无法 traverse 你的家目录或 miniconda 目录（权限 700/750）。
+#
+# 推荐修复（更安全，使用 ACL 仅放行给 postgres 用户）：
+#   sudo apt-get update && sudo apt-get install -y acl
+#   sudo setfacl -m u:postgres:rx "$HOME" "$CONDA_PREFIX" \
+#     "$(dirname "$CONDA_PREFIX")" "$(dirname "$(dirname "$CONDA_PREFIX")")"
+#   sudo setfacl -R -m u:postgres:rX "$CONDA_PREFIX"
+#   # 若你使用了 `pip install -e`（editable），postgres 还需要读取本仓库目录：
+#   sudo setfacl -R -m u:postgres:rX "$(pwd)"
+#
+# 快速但更“粗”的修复（不推荐，可能过度放宽权限）：
+#   chmod o+rx "$HOME" && chmod -R o+rX "$CONDA_PREFIX"
 
 # 必须设置服务账号密码
 export LOGBOOK_MIGRATOR_PASSWORD=changeme1
@@ -210,19 +243,27 @@ export OM_PG_SCHEMA="openmemory"
 sudo -u postgres createdb engram
 sudo -u postgres psql -d engram -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
-python logbook_postgres/scripts/db_bootstrap.py \
-  --dsn "postgresql://postgres:postgres@localhost:5432/postgres"
+# 创建/更新服务账号（需要 superuser 或 CREATEROLE 权限）
+# - 建议在 WSL2 本机 PostgreSQL 下使用 unix socket + peer auth：sudo -u postgres + postgresql:///...
+# - 不要使用 postgresql://postgres:postgres@... 这种“默认密码=postgres”的假设（Debian/Ubuntu 默认并非如此）
+# 注意：`sudo` 默认会重置 PATH，因此这里用绝对路径调用当前环境的 python（不依赖 PATH）。
+sudo -u postgres "$PYTHON_BIN" -m engram.logbook.cli.db_bootstrap \
+  --dsn "postgresql:///postgres" \
+  --om-schema "$OM_PG_SCHEMA"
 
-python logbook_postgres/scripts/db_migrate.py \
-  --dsn "postgresql://postgres:postgres@localhost:5432/engram" \
+# 执行迁移 + 角色/权限脚本（04 + 05）
+# 其中 05_openmemory_roles_and_grants.sql 会：
+# - CREATE SCHEMA IF NOT EXISTS <OM_PG_SCHEMA>
+# - 设置 schema owner=openmemory_migrator
+# - 用 "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator ..." 正确配置默认权限
+sudo -u postgres "$PYTHON_BIN" -m engram.logbook.cli.db_migrate \
+  --dsn "postgresql:///engram" \
   --apply-roles --apply-openmemory-grants
 
-# 补充 OpenMemory 运行时权限
-sudo -u postgres psql -d engram -c "
-GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
-"
+# 如需“只重跑 OpenMemory schema/权限脚本”，可以单独执行：
+# sudo -u postgres psql -d engram -v ON_ERROR_STOP=1 \
+#   -c "SET om.target_schema = '$OM_PG_SCHEMA';" \
+#   -f sql/05_openmemory_roles_and_grants.sql
 ```
 
 ### B.5 部署 OpenMemory（WSL2 内）
