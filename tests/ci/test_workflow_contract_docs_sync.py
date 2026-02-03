@@ -1416,6 +1416,98 @@ targets_required
         assert mismatch_errors[0].expected_block is not None
         assert "BEGIN:CI_JOB_TABLE" in mismatch_errors[0].expected_block
 
+    def test_unknown_block_marker_reports_error(self) -> None:
+        """当存在未知 marker 时，应报错并提示修复步骤"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["ci-job"],
+                "job_names": ["CI Job"],
+                "labels": ["ci-label"],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["nightly-job"],
+                "job_names": ["Nightly Job"],
+                "labels": ["nightly-label"],
+            },
+            "frozen_job_names": {"allowlist": ["CI Job"]},
+            "frozen_step_text": {"allowlist": ["Run tests"]},
+            "make": {"targets_required": ["ci"]},
+        }
+
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_contract_blocks()
+
+        doc = f"""# Workflow Contract
+
+Version: 1.0.0
+
+<!-- BEGIN:UNKNOWN_BLOCK -->
+unexpected content
+<!-- END:UNKNOWN_BLOCK -->
+
+### 2.1 CI Workflow (`ci.yml`)
+
+<!-- BEGIN:CI_JOB_TABLE -->
+{blocks["CI_JOB_TABLE"].content}
+<!-- END:CI_JOB_TABLE -->
+
+### 2.2 Nightly Workflow (`nightly.yml`)
+
+<!-- BEGIN:NIGHTLY_JOB_TABLE -->
+{blocks["NIGHTLY_JOB_TABLE"].content}
+<!-- END:NIGHTLY_JOB_TABLE -->
+
+## 3. PR Label 列表与语义
+
+<!-- BEGIN:LABELS_TABLE -->
+{blocks["LABELS_TABLE"].content}
+<!-- END:LABELS_TABLE -->
+
+## 冻结的 Step 文本
+
+<!-- BEGIN:FROZEN_STEP_NAMES_TABLE -->
+{blocks["FROZEN_STEP_NAMES_TABLE"].content}
+<!-- END:FROZEN_STEP_NAMES_TABLE -->
+
+### Frozen Job Names
+
+<!-- BEGIN:FROZEN_JOB_NAMES_TABLE -->
+{blocks["FROZEN_JOB_NAMES_TABLE"].content}
+<!-- END:FROZEN_JOB_NAMES_TABLE -->
+
+## Make Targets
+
+<!-- BEGIN:MAKE_TARGETS_TABLE -->
+{blocks["MAKE_TARGETS_TABLE"].content}
+<!-- END:MAKE_TARGETS_TABLE -->
+
+## SemVer Policy
+
+版本策略说明
+"""
+        doc_path = temp_dir / "contract.md"
+        doc_path.write_text(doc, encoding="utf-8")
+
+        checker = WorkflowContractDocsSyncChecker(contract_path, doc_path)
+        result = checker.check()
+
+        unknown_errors = [
+            e for e in result.errors if e.error_type == DocsSyncErrorTypes.UNKNOWN_BLOCK_MARKER
+        ]
+        assert len(unknown_errors) == 1
+        assert unknown_errors[0].value == "UNKNOWN_BLOCK"
+        assert "Remove the markers" in unknown_errors[0].message
+        assert "renderer support" in unknown_errors[0].message
+
 
 # ============================================================================
 # Test: 渲染稳定性
@@ -1644,6 +1736,7 @@ class TestErrorTypesCompleteness:
         assert DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE in DOCS_SYNC_ERROR_TYPES
         assert DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED in DOCS_SYNC_ERROR_TYPES
         assert DocsSyncErrorTypes.BLOCK_CONTENT_MISMATCH in DOCS_SYNC_ERROR_TYPES
+        assert DocsSyncErrorTypes.UNKNOWN_BLOCK_MARKER in DOCS_SYNC_ERROR_TYPES
 
     def test_error_types_class_matches_set(self) -> None:
         """DocsSyncErrorTypes 类的所有属性应在集合中"""

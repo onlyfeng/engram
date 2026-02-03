@@ -1,8 +1,11 @@
 {
   "$schema": "workflow_contract.v1.schema.json",
-  "version": "2.22.1",
+  "version": "2.25.0",
   "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
-  "last_updated": "2026-02-02",
+  "last_updated": "2026-02-03",
+  "_changelog_v2.25.0": "Phase 2: add release workflow",
+  "_changelog_v2.24.0": "新增 Error Types 文档同步门禁：新增 check_workflow_contract_error_types_docs_sync.py 并接入 CI/Makefile；补全第 13 章表格",
+  "_changelog_v2.23.0": "新增 iteration fixtures freshness 检查：iteration-tools-test job 添加检查步骤；新增 Makefile/CI 入口",
   "_changelog_v2.22.1": "docs: enable controlled blocks for contract.md/coupling_map.md",
   "_changelog_v2.22.0": "新增 ci-test-isolation job 到 CI workflow 合约：CI 测试隔离检查；新增 make.targets_required: 'check-ci-test-isolation'；修复 MAKE_TARGET_IGNORE_LIST 添加 'targets'（echo 中的 false positive）",
   "_changelog_v2.21.0": "新增 workflow make targets 一致性检查：workflow-contract job required_steps 添加 'Check workflow make targets consistency'；make.targets_required 添加 'check-workflow-make-targets-consistency'",
@@ -282,7 +285,8 @@
           "Checkout repository",
           "Set up Python",
           "Install dependencies",
-          "Run iteration tools tests"
+          "Run iteration tools tests",
+          "Check iteration fixtures freshness"
         ]
       },
       {
@@ -296,6 +300,7 @@
           "Run CI script tests",
           "Validate workflow contract",
           "Check workflow contract docs sync",
+          "Check workflow contract error types docs sync",
           "Check workflow contract version policy",
           "Check workflow contract doc anchors",
           "Check workflow contract internal consistency",
@@ -401,6 +406,63 @@
       ]
     }
   },
+  "release": {
+    "file": ".github/workflows/release.yml",
+    "_comment": "Release workflow 合约（Phase 2）：核心步骤沿用冻结名称，其余步骤允许演进",
+    "job_ids": [
+      "build",
+      "publish",
+      "notify"
+    ],
+    "job_names": [
+      "Build Release",
+      "Publish Release Artifacts",
+      "Notify Release"
+    ],
+    "required_jobs": [
+      {
+        "id": "build",
+        "name": "Build Release",
+        "_comment": "构建发布产物（wheel/sdist）并归档",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Build package",
+          "Upload release artifacts"
+        ]
+      },
+      {
+        "id": "publish",
+        "name": "Publish Release Artifacts",
+        "_comment": "发布产物到目标仓库（默认 dry-run）",
+        "required_steps": [
+          "Download release artifacts",
+          "Publish release artifacts"
+        ]
+      },
+      {
+        "id": "notify",
+        "name": "Notify Release",
+        "_comment": "发布完成通知",
+        "required_steps": [
+          "Notify release status"
+        ]
+      }
+    ],
+    "required_env_vars": [],
+    "artifact_archive": {
+      "_comment": "Release workflow 产物归档（wheel/sdist）",
+      "required_artifact_paths": [
+        "dist/*.whl",
+        "dist/*.tar.gz"
+      ],
+      "artifact_step_names": [
+        "Upload release artifacts"
+      ]
+    },
+    "labels": []
+  },
   "make": {
     "targets_required": [
       "ci",
@@ -419,9 +481,11 @@
       "check-gateway-import-surface",
       "check-gateway-correlation-id-single-source",
       "check-iteration-docs",
+      "check-iteration-fixtures-freshness",
       "iteration-audit",
       "validate-workflows-strict",
       "check-workflow-contract-docs-sync",
+      "check-workflow-contract-error-types-docs-sync",
       "check-workflow-contract-version-policy",
       "check-workflow-contract-doc-anchors",
       "check-workflow-contract-internal-consistency",

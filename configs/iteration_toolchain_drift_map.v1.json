@@ -1,0 +1,53 @@
+{
+  "$schema": "../schemas/iteration_toolchain_drift_map_v1.schema.json",
+  "version": "1.0.0",
+  "description": "Iteration toolchain drift map (SSOT)",
+  "rules": [
+    {
+      "id": "iteration-toolchain",
+      "description": "Iteration tooling or fixture generator changes",
+      "triggers": {
+        "prefixes": [
+          "scripts/iteration/",
+          "configs/iteration_gate_profiles.v1.json",
+          "configs/iteration_toolchain_drift_map.v1.json"
+        ],
+        "globs": [
+          "docs/acceptance/_templates/**",
+          "tests/iteration/fixtures/**"
+        ]
+      },
+      "actions": {
+        "fixture_refresh_commands": [
+          "python scripts/iteration/update_iteration_fixtures.py --all"
+        ],
+        "minimal_tests": [
+          "pytest tests/iteration/test_update_iteration_fixtures.py -q",
+          "pytest tests/iteration/test_iteration_cycle_smoke.py -q"
+        ],
+        "minimal_gates": [
+          "make check-iteration-docs",
+          "make check-iteration-evidence"
+        ]
+      }
+    },
+    {
+      "id": "iteration-docs",
+      "description": "Iteration acceptance docs changes",
+      "triggers": {
+        "prefixes": [
+          "docs/acceptance/"
+        ],
+        "globs": []
+      },
+      "actions": {
+        "fixture_refresh_commands": [],
+        "minimal_tests": [],
+        "minimal_gates": [
+          "make check-iteration-docs",
+          "make check-iteration-evidence"
+        ]
+      }
+    }
+  ]
+}

@@ -5,8 +5,9 @@
 功能:
 1. 扫描 docs/acceptance/evidence/ 下的 evidence JSON 文件
 2. 校验文件名符合命名规范（canonical 或 snapshot 格式）
-3. 使用 schemas/iteration_evidence_v1.schema.json 校验 JSON 内容
-4. （可选）检查 evidence 文件中的 iteration_number 与文件名一致性
+3. 使用当前 schema 校验 JSON 内容（默认 v2，兼容 v1）
+4. 扫描字符串字段中的模板占位符（如 {PLACEHOLDER}/{N}/TBD）
+5. （可选）检查 evidence 文件中的 iteration_number 与文件名一致性
 
 用法:
     # 检查所有证据文件
@@ -33,6 +34,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional
 
+from scripts.iteration.iteration_evidence_schema import (
+    CURRENT_SCHEMA_FILENAME,
+    CURRENT_SCHEMA_PATH as CURRENT_EVIDENCE_SCHEMA_PATH,
+    CURRENT_SCHEMA_REF,
+    LEGACY_SCHEMA_FILENAME,
+    LEGACY_SCHEMA_PATH as LEGACY_EVIDENCE_SCHEMA_PATH,
+    resolve_schema_name,
+)
+
 # 尝试导入 jsonschema，如果不可用则标记
 try:
     import jsonschema
@@ -56,7 +66,10 @@ def get_project_root() -> Path:
 EVIDENCE_DIR = get_project_root() / "docs" / "acceptance" / "evidence"
 
 # Schema 文件路径
-SCHEMA_PATH = get_project_root() / "schemas" / "iteration_evidence_v1.schema.json"
+CURRENT_SCHEMA_PATH = CURRENT_EVIDENCE_SCHEMA_PATH
+LEGACY_SCHEMA_PATH = LEGACY_EVIDENCE_SCHEMA_PATH
+# 兼容旧测试/调用方：保留 SCHEMA_PATH 指向 v1 schema
+SCHEMA_PATH = LEGACY_SCHEMA_PATH
 
 
 # ============================================================================
@@ -69,7 +82,7 @@ class EvidenceViolation:
     """证据文件违规记录。"""
 
     file: Path
-    violation_type: str  # "naming", "schema", "content", "missing", "link"
+    violation_type: str  # "naming", "schema", "schema_ref", "content", "template", "link"
     message: str
 
     def __str__(self) -> str:
@@ -82,7 +95,7 @@ class EvidenceWarning:
     """证据文件警告记录（不阻断 CI）。"""
 
     file: Path
-    warning_type: str  # "missing_links", "suggestion"
+    warning_type: str  # "missing_links", "schema_ref", "suggestion"
     message: str
 
     def __str__(self) -> str:
@@ -102,6 +115,12 @@ SNAPSHOT_PATTERN = re.compile(r"^iteration_(\d+)_(\d{8}_\d{6})\.json$")
 
 # Snapshot 格式（带 SHA）: iteration_{N}_{timestamp}_{sha7}.json
 SNAPSHOT_SHA_PATTERN = re.compile(r"^iteration_(\d+)_(\d{8}_\d{6})_([a-f0-9]{7})\.json$")
+
+PLACEHOLDER_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("{PLACEHOLDER}", re.compile(r"\{PLACEHOLDER\}")),
+    ("{N}", re.compile(r"\{N\}")),
+    ("TBD", re.compile(r"\bTBD\b", re.IGNORECASE)),
+]
 
 
 def parse_evidence_filename(filename: str) -> Optional[dict[str, Any]]:
@@ -201,20 +220,116 @@ def get_evidence_files(evidence_dir: Path) -> List[Path]:
     return sorted(files)
 
 
-def load_schema() -> Optional[dict[str, Any]]:
+def load_schema(schema_path: Path) -> Optional[dict[str, Any]]:
     """加载 JSON Schema。
 
     Returns:
         Schema 字典，或 None（如果加载失败）
     """
-    if not SCHEMA_PATH.exists():
+    if not schema_path.exists():
         return None
 
     try:
-        with SCHEMA_PATH.open(encoding="utf-8") as f:
+        with schema_path.open(encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def load_schemas() -> dict[str, Optional[dict[str, Any]]]:
+    """加载当前与 legacy JSON Schema。"""
+    return {
+        "current": load_schema(CURRENT_SCHEMA_PATH),
+        "legacy": load_schema(LEGACY_SCHEMA_PATH),
+    }
+
+
+def resolve_schema_for_content(
+    content: dict[str, Any],
+    schemas: dict[str, Optional[dict[str, Any]]],
+) -> tuple[Optional[dict[str, Any]], str]:
+    """根据 evidence 内容选择应使用的 schema。"""
+    schema_value = content.get("$schema") if isinstance(content.get("$schema"), str) else None
+    schema_name = resolve_schema_name(schema_value)
+    if schema_name == LEGACY_SCHEMA_FILENAME:
+        return schemas.get("legacy"), schema_name
+    return schemas.get("current"), schema_name
+
+
+def validate_schema_ref(
+    filepath: Path, content: dict[str, Any], strict_schema_ref: bool
+) -> tuple[List[EvidenceViolation], List[EvidenceWarning]]:
+    """校验证据文件的 $schema 引用版本。"""
+    violations: List[EvidenceViolation] = []
+    warnings: List[EvidenceWarning] = []
+
+    schema_value = content.get("$schema")
+    if not isinstance(schema_value, str):
+        return violations, warnings
+
+    schema_name = resolve_schema_name(schema_value)
+    if schema_name != LEGACY_SCHEMA_FILENAME:
+        return violations, warnings
+
+    message = (
+        f"$schema 仍指向 v1: {schema_value}。"
+        f"建议更新为 v2 引用: {CURRENT_SCHEMA_REF}"
+    )
+    if strict_schema_ref:
+        violations.append(
+            EvidenceViolation(
+                file=filepath,
+                violation_type="schema_ref",
+                message=message,
+            )
+        )
+    else:
+        warnings.append(
+            EvidenceWarning(
+                file=filepath,
+                warning_type="schema_ref",
+                message=message,
+            )
+        )
+
+    return violations, warnings
+
+
+def iter_string_fields(value: Any, path: str = "") -> List[tuple[str, str]]:
+    """递归遍历 JSON 内容中的字符串字段。"""
+    items: List[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key, sub_value in value.items():
+            next_path = f"{path}.{key}" if path else key
+            items.extend(iter_string_fields(sub_value, next_path))
+    elif isinstance(value, list):
+        for index, sub_value in enumerate(value):
+            next_path = f"{path}[{index}]"
+            items.extend(iter_string_fields(sub_value, next_path))
+    elif isinstance(value, str):
+        items.append((path, value))
+    return items
+
+
+def scan_placeholder_strings(filepath: Path, content: Any) -> List[EvidenceViolation]:
+    """扫描字符串字段的模板残留占位符。"""
+    violations: List[EvidenceViolation] = []
+    for field_path, field_value in iter_string_fields(content):
+        matches = [
+            label
+            for label, pattern in PLACEHOLDER_PATTERNS
+            if pattern.search(field_value)
+        ]
+        if not matches:
+            continue
+        violations.append(
+            EvidenceViolation(
+                file=filepath,
+                violation_type="template",
+                message=f"检测到模板占位符 {', '.join(matches)} @ {field_path}",
+            )
+        )
+    return violations
 
 
 def validate_filename(filepath: Path) -> Optional[EvidenceViolation]:
@@ -241,7 +356,7 @@ def validate_filename(filepath: Path) -> Optional[EvidenceViolation]:
 
 
 def validate_json_content(
-    filepath: Path, schema: Optional[dict[str, Any]]
+    filepath: Path, schemas: dict[str, Optional[dict[str, Any]]]
 ) -> List[EvidenceViolation]:
     """校验证据文件的 JSON 内容。
 
@@ -252,7 +367,7 @@ def validate_json_content(
 
     Args:
         filepath: 文件路径
-        schema: JSON Schema 字典（可选）
+        schemas: JSON Schema 字典集合（current/legacy）
 
     Returns:
         违规列表
@@ -283,27 +398,31 @@ def validate_json_content(
         return violations
 
     # 2. JSON Schema 校验
-    if schema is not None and HAS_JSONSCHEMA:
-        try:
-            jsonschema.validate(content, schema)
-        except jsonschema.ValidationError as e:
-            # 提取简短错误信息
-            error_path = ".".join(str(p) for p in e.absolute_path) if e.absolute_path else "(root)"
-            violations.append(
-                EvidenceViolation(
-                    file=filepath,
-                    violation_type="schema",
-                    message=f"Schema 校验失败 @ {error_path}: {e.message}",
+    if HAS_JSONSCHEMA:
+        schema, schema_name = resolve_schema_for_content(content, schemas)
+        if schema is not None:
+            try:
+                jsonschema.validate(content, schema)
+            except jsonschema.ValidationError as e:
+                # 提取简短错误信息
+                error_path = (
+                    ".".join(str(p) for p in e.absolute_path) if e.absolute_path else "(root)"
                 )
-            )
-        except jsonschema.SchemaError as e:
-            violations.append(
-                EvidenceViolation(
-                    file=filepath,
-                    violation_type="schema",
-                    message=f"Schema 本身无效: {e.message}",
+                violations.append(
+                    EvidenceViolation(
+                        file=filepath,
+                        violation_type="schema",
+                        message=f"Schema 校验失败({schema_name}) @ {error_path}: {e.message}",
+                    )
                 )
-            )
+            except jsonschema.SchemaError as e:
+                violations.append(
+                    EvidenceViolation(
+                        file=filepath,
+                        violation_type="schema",
+                        message=f"Schema 本身无效({schema_name}): {e.message}",
+                    )
+                )
 
     # 3. iteration_number 与文件名一致性校验
     # 仅当 content 是字典时执行此校验
@@ -527,6 +646,7 @@ def scan_evidence_files(
     evidence_dir: Optional[Path] = None,
     verbose: bool = False,
     project_root: Optional[Path] = None,
+    strict_schema_ref: bool = False,
 ) -> tuple[List[EvidenceViolation], List[EvidenceWarning], int]:
     """扫描并校验所有证据文件。
 
@@ -534,6 +654,7 @@ def scan_evidence_files(
         evidence_dir: 证据目录（默认使用 EVIDENCE_DIR）
         verbose: 是否显示详细输出
         project_root: 项目根目录（默认自动获取）
+        strict_schema_ref: 是否对 v1 $schema 引用严格阻断
 
     Returns:
         (违规列表, 警告列表, 总扫描文件数)
@@ -562,13 +683,13 @@ def scan_evidence_files(
         print()
 
     # 加载 Schema
-    schema = load_schema()
-    if schema is None:
-        if verbose:
-            print("[WARN] 无法加载 JSON Schema，将跳过 Schema 校验")
-    elif not HAS_JSONSCHEMA:
-        if verbose:
-            print("[WARN] jsonschema 库未安装，将跳过 Schema 校验")
+    schemas = load_schemas()
+    if schemas.get("current") is None and verbose:
+        print(f"[WARN] 无法加载 JSON Schema: {CURRENT_SCHEMA_PATH}")
+    if schemas.get("legacy") is None and verbose:
+        print(f"[WARN] 无法加载 legacy JSON Schema: {LEGACY_SCHEMA_PATH}")
+    if not HAS_JSONSCHEMA and verbose:
+        print("[WARN] jsonschema 库未安装，将跳过 Schema 校验")
 
     # 扫描每个文件
     for filepath in files:
@@ -581,7 +702,7 @@ def scan_evidence_files(
             file_violations.append(naming_violation)
 
         # 2. JSON 内容校验
-        content_violations = validate_json_content(filepath, schema)
+        content_violations = validate_json_content(filepath, schemas)
         file_violations.extend(content_violations)
 
         # 3. regression_doc_url 校验和双向一致性校验
@@ -595,18 +716,29 @@ def scan_evidence_files(
             pass
 
         if content is not None and isinstance(content, dict):
-            # 3a. regression_doc_url 校验
+            # 3a. $schema 引用版本校验（可选严格）
+            schema_ref_violations, schema_ref_warnings = validate_schema_ref(
+                filepath, content, strict_schema_ref
+            )
+            file_violations.extend(schema_ref_violations)
+            file_warnings.extend(schema_ref_warnings)
+
+            # 3b. regression_doc_url 校验
             link_violations, link_warnings = validate_regression_doc_link(
                 filepath, content, project_root
             )
             file_violations.extend(link_violations)
             file_warnings.extend(link_warnings)
 
-            # 3b. 双向一致性校验
+            # 3c. 双向一致性校验
             bidirectional_violations = validate_bidirectional_reference(
                 filepath, content, project_root
             )
             file_violations.extend(bidirectional_violations)
+
+        if content is not None:
+            placeholder_violations = scan_placeholder_strings(filepath, content)
+            file_violations.extend(placeholder_violations)
 
         violations.extend(file_violations)
         warnings.extend(file_warnings)
@@ -652,11 +784,15 @@ def print_report(
     # 按类型统计违规
     naming_count = sum(1 for v in violations if v.violation_type == "naming")
     schema_count = sum(1 for v in violations if v.violation_type == "schema")
+    schema_ref_count = sum(1 for v in violations if v.violation_type == "schema_ref")
     content_count = sum(1 for v in violations if v.violation_type == "content")
+    template_count = sum(1 for v in violations if v.violation_type == "template")
     link_count = sum(1 for v in violations if v.violation_type == "link")
     print(f"  - 命名不合规:  {naming_count}")
     print(f"  - Schema 不合规: {schema_count}")
+    print(f"  - Schema 引用不合规: {schema_ref_count}")
     print(f"  - 内容不合规:  {content_count}")
+    print(f"  - 模板残留:  {template_count}")
     print(f"  - 链接不合规:  {link_count}")
     print()
 
@@ -687,13 +823,20 @@ def print_report(
         print("     - Snapshot+SHA: iteration_{N}_{YYYYMMDD_HHMMSS}_{sha7}.json")
         print()
         print("  2. Schema 不合规:")
-        print("     根据 schemas/iteration_evidence_v1.schema.json 修复 JSON 内容")
+        print(f"     根据 schemas/{CURRENT_SCHEMA_FILENAME} 修复 JSON 内容")
         print("     必需字段: iteration_number, recorded_at, commit_sha, runner, commands")
         print()
-        print("  3. 内容不合规:")
+        print("  3. Schema 引用不合规:")
+        print(f"     将 $schema 更新为 v2 引用: {CURRENT_SCHEMA_REF}")
+        print()
+        print("  4. 内容不合规:")
         print("     确保 JSON 内容与文件名中的迭代编号一致")
         print()
-        print("  4. 链接不合规:")
+        print("  5. 模板残留:")
+        print("     移除 {PLACEHOLDER}、{N}、TBD 等模板占位符")
+        print("     示例字段: notes, commands[].command, commands[].summary")
+        print()
+        print("  6. 链接不合规:")
         print("     - 确保 links.regression_doc_url 指向存在的文件")
         print("     - 文件名应为 iteration_{N}_regression.md 格式")
         print("     - N 应与 evidence 的 iteration_number 一致")
@@ -701,7 +844,7 @@ def print_report(
         print()
         print("  参考:")
         print("     - 命名规范: scripts/iteration/iteration_evidence_naming.py")
-        print("     - Schema 定义: schemas/iteration_evidence_v1.schema.json")
+        print(f"     - Schema 定义: schemas/{CURRENT_SCHEMA_FILENAME}")
         print("     - 模板: docs/acceptance/_templates/iteration_evidence.template.json")
         print()
     else:
@@ -728,15 +871,21 @@ def print_report(
 
         print("修复建议:")
         print()
-        print("  对于历史 evidence 文件缺少 links 的情况:")
-        print("  1. 使用 record script 重新生成（推荐）:")
-        print("     python scripts/iteration/record_iteration_evidence.py --iteration N")
-        print()
-        print("  2. 或手动添加 links 字段:")
-        print('     "links": {')
-        print('       "regression_doc_url": "docs/acceptance/iteration_N_regression.md"')
-        print("     }")
-        print()
+        warning_types = {w.warning_type for w in warnings}
+        if "schema_ref" in warning_types:
+            print("  对于 $schema 仍指向 v1 的证据文件:")
+            print(f"  - 更新为 v2 引用: {CURRENT_SCHEMA_REF}")
+            print()
+        if "missing_links" in warning_types:
+            print("  对于历史 evidence 文件缺少 links 的情况:")
+            print("  1. 使用 record script 重新生成（推荐）:")
+            print("     python scripts/iteration/record_iteration_evidence.py --iteration N")
+            print()
+            print("  2. 或手动添加 links 字段:")
+            print('     "links": {')
+            print('       "regression_doc_url": "docs/acceptance/iteration_N_regression.md"')
+            print("     }")
+            print()
 
 
 # ============================================================================
@@ -767,6 +916,11 @@ def main() -> int:
         default=None,
         help="证据目录路径（默认: docs/acceptance/evidence/）",
     )
+    parser.add_argument(
+        "--strict-schema-ref",
+        action="store_true",
+        help="将 $schema 仍指向 v1 视为违规（默认仅警告）",
+    )
 
     args = parser.parse_args()
 
@@ -780,6 +934,7 @@ def main() -> int:
     violations, warnings, total_files = scan_evidence_files(
         evidence_dir=evidence_dir,
         verbose=args.verbose,
+        strict_schema_ref=args.strict_schema_ref,
     )
 
     print_report(

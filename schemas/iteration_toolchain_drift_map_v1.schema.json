@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/iteration_toolchain_drift_map_v1.schema.json",
+  "title": "Iteration Toolchain Drift Map V1 Schema",
+  "description": "迭代工具链漂移映射配置 Schema，用于定义触发路径与最小门禁动作。",
+  "type": "object",
+  "required": ["version", "description", "rules"],
+  "additionalProperties": false,
+  "definitions": {
+    "string_list": {
+      "type": "array",
+      "description": "字符串列表",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "trigger_block": {
+      "type": "object",
+      "description": "触发条件集合（prefixes/globs 至少一项非空）",
+      "required": ["prefixes", "globs"],
+      "additionalProperties": false,
+      "properties": {
+        "prefixes": {
+          "$ref": "#/definitions/string_list"
+        },
+        "globs": {
+          "$ref": "#/definitions/string_list"
+        }
+      }
+    },
+    "action_block": {
+      "type": "object",
+      "description": "命令与门禁动作集合",
+      "required": ["fixture_refresh_commands", "minimal_tests", "minimal_gates"],
+      "additionalProperties": false,
+      "properties": {
+        "fixture_refresh_commands": {
+          "$ref": "#/definitions/string_list"
+        },
+        "minimal_tests": {
+          "$ref": "#/definitions/string_list"
+        },
+        "minimal_gates": {
+          "$ref": "#/definitions/string_list"
+        }
+      }
+    },
+    "rule_entry": {
+      "type": "object",
+      "description": "单条漂移规则",
+      "required": ["id", "description", "triggers", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "规则标识",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "description": {
+          "type": "string",
+          "description": "规则说明",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "triggers": {
+          "$ref": "#/definitions/trigger_block"
+        },
+        "actions": {
+          "$ref": "#/definitions/action_block"
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "triggers": {
+              "properties": {
+                "prefixes": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "triggers": {
+              "properties": {
+                "globs": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema 引用（可选）",
+      "format": "uri-reference"
+    },
+    "version": {
+      "type": "string",
+      "description": "配置版本（语义化版本号）",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "description": "配置说明",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "rules": {
+      "type": "array",
+      "description": "漂移规则列表",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/rule_entry"
+      }
+    }
+  },
+  "examples": [
+    {
+      "version": "1.0.0",
+      "description": "Iteration toolchain drift map (SSOT)",
+      "rules": [
+        {
+          "id": "iteration-toolchain",
+          "description": "Iteration tooling or fixture generator changes",
+          "triggers": {
+            "prefixes": [
+              "scripts/iteration/",
+              "configs/iteration_gate_profiles.v1.json",
+              "configs/iteration_toolchain_drift_map.v1.json"
+            ],
+            "globs": [
+              "docs/acceptance/_templates/**",
+              "tests/iteration/fixtures/**"
+            ]
+          },
+          "actions": {
+            "fixture_refresh_commands": [
+              "python scripts/iteration/update_iteration_fixtures.py --all"
+            ],
+            "minimal_tests": [
+              "pytest tests/iteration/test_update_iteration_fixtures.py -q"
+            ],
+            "minimal_gates": [
+              "make check-iteration-docs",
+              "make check-iteration-evidence"
+            ]
+          }
+        },
+        {
+          "id": "iteration-docs",
+          "description": "Iteration acceptance docs changes",
+          "triggers": {
+            "prefixes": [
+              "docs/acceptance/"
+            ],
+            "globs": []
+          },
+          "actions": {
+            "fixture_refresh_commands": [],
+            "minimal_tests": [],
+            "minimal_gates": [
+              "make check-iteration-docs",
+              "make check-iteration-evidence"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

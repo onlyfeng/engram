@@ -40,6 +40,7 @@ from scripts.ci.render_workflow_contract_docs import (
     WorkflowContractDocsRenderer,
     extract_block_from_content,
     find_all_markers,
+    get_contract_block_names,
 )
 from scripts.ci.workflow_contract_common import discover_workflow_keys
 
@@ -89,6 +90,7 @@ class DocsSyncErrorTypes:
     BLOCK_MARKER_DUPLICATE = "block_marker_duplicate"
     BLOCK_MARKER_UNPAIRED = "block_marker_unpaired"
     BLOCK_CONTENT_MISMATCH = "block_content_mismatch"
+    UNKNOWN_BLOCK_MARKER = "unknown_block_marker"
 
 
 # 导出所有 error_type 的集合（用于测试覆盖检查）
@@ -114,6 +116,7 @@ DOCS_SYNC_ERROR_TYPES = frozenset({
     DocsSyncErrorTypes.BLOCK_MARKER_DUPLICATE,
     DocsSyncErrorTypes.BLOCK_MARKER_UNPAIRED,
     DocsSyncErrorTypes.BLOCK_CONTENT_MISMATCH,
+    DocsSyncErrorTypes.UNKNOWN_BLOCK_MARKER,
 })
 
 
@@ -129,27 +132,12 @@ DEFAULT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
 # 注意：锚点必须足够精确，避免匹配到其他章节（如关键文件清单中的路径引用）
 #
 # ============================================================================
-# Phase 2 扩展点：纳入 release.yml
+# Release workflow 已纳入合约（Phase 2）
 # ============================================================================
 #
-# 当前 release 的锚点指向 "Phase 2 预留" 章节。当 release.yml 正式纳入合约时：
-#
-# 纳入 release.yml 时的同步 Checklist：
-#
-# 1. [contract.md] 更新 2.3 节为正式章节：
-#    - 标题改为 "### 2.3 Release Workflow (`release.yml`)"
-#    - 添加 Job ID / Job Name 对照表
-#
-# 2. [本脚本] 更新下方 release 锚点（如需）：
-#    - 确保锚点与 contract.md 中的实际章节标题匹配
-#    - 示例: ["### 2.3 Release Workflow", "Release Workflow (`release.yml`)"]
-#
-# 3. [workflow_contract.v1.json] 添加 release 字段定义
-#
-# 4. [验证] 运行以下命令确认 release 文档同步正确：
-#    python scripts/ci/check_workflow_contract_docs_sync.py --verbose
-#
-# 详见 contract.md 2.4.3 节迁移 Checklist
+# 说明：
+# - release 章节锚点对应 contract.md 2.3 节
+# - Job ID / Job Name 必须在该章节内出现
 # ============================================================================
 WORKFLOW_DOC_ANCHORS = {
     "ci": ["### 2.1 CI Workflow", "CI Workflow (`ci.yml`)"],
@@ -834,6 +822,7 @@ class WorkflowContractDocsSyncChecker:
 
         # 只检查 contract.md 相关的块
         rendered_blocks = renderer.render_contract_blocks()
+        expected_block_names = get_contract_block_names()
 
         # 检查 marker 完整性
         marker_map: dict[str, list[tuple[str, int]]] = {}  # block_name -> [(type, line)]
@@ -841,6 +830,21 @@ class WorkflowContractDocsSyncChecker:
             if block_name not in marker_map:
                 marker_map[block_name] = []
             marker_map[block_name].append((marker_type, line_num))
+
+        unknown_blocks = sorted(set(marker_map.keys()) - set(expected_block_names))
+        for block_name in unknown_blocks:
+            self.result.add_error(
+                SyncError(
+                    error_type=DocsSyncErrorTypes.UNKNOWN_BLOCK_MARKER,
+                    category="block",
+                    value=block_name,
+                    message=(
+                        f"Unknown block marker '{block_name}' found in document. "
+                        "Remove the markers or add renderer support in "
+                        "scripts/ci/render_workflow_contract_docs.py and update the expected block list."
+                    ),
+                )
+            )
 
         # 检查每个预期的块
         for block_name, rendered_block in rendered_blocks.items():

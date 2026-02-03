@@ -117,7 +117,7 @@ engram-scm-sync runner <子命令> [args]  # 运行器（手动执行同步）
 python -m engram.logbook.cli.scm_sync <子命令> [args]
 ```
 
-> **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已弃用，将在 v1.0 移除。旧命令在 v0.x 版本期间仍可使用，但会输出弃用警告。请尽快迁移到 `engram-scm-*` 命令。
+> **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已移除。请使用 `engram-scm-*` 命令或 `python -m engram.logbook.cli.scm_sync`。
 
 ### Runner 命令详解
 

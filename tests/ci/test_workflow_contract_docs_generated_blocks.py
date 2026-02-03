@@ -17,6 +17,7 @@ tests/ci/test_workflow_contract_docs_generated_blocks.py
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,11 @@ import pytest
 from scripts.ci.render_workflow_contract_docs import (
     CONTRACT_BLOCK_NAMES,
     COUPLING_MAP_BLOCK_NAMES,
+    COUPLING_MAP_TARGET_REASON_TEXT,
+    FROZEN_JOB_REASON_TEXT,
+    FROZEN_STEP_REASON_TEXT,
+    LABEL_REASON_TEXT,
+    MAKE_TARGET_REASON_TEXT,
     WorkflowContractDocsRenderer,
     extract_block_from_content,
 )
@@ -83,6 +89,32 @@ def coupling_map_md_content(coupling_map_md_path: Path) -> str:
     """coupling_map.md 文档内容"""
     assert coupling_map_md_path.exists(), f"coupling_map.md not found at {coupling_map_md_path}"
     return coupling_map_md_path.read_text(encoding="utf-8")
+
+
+def parse_markdown_table_rows(content: str) -> list[list[str]]:
+    """解析 Markdown 表格内容为行列表（跳过表头与分隔线）"""
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return []
+
+    rows: list[list[str]] = []
+    for line in lines[2:]:
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def build_table_row_map(rows: list[list[str]]) -> dict[str, list[str]]:
+    """将表格行映射为 {首列值: 行}，并去除首列的反引号"""
+    row_map: dict[str, list[str]] = {}
+    for row in rows:
+        if not row:
+            continue
+        row_map[row[0].strip("`")] = row
+    return row_map
 
 
 # ============================================================================
@@ -306,6 +338,72 @@ class TestCouplingMapMdBlocks:
             assert end_marker in coupling_map_md_content, (
                 f"Missing END marker for {block_name} in coupling_map.md"
             )
+
+
+# ============================================================================
+# Test: 受控块列来源策略
+# ============================================================================
+
+
+class TestRenderedColumnPolicy:
+    """验证受控块中固定文案与合约字段来源策略"""
+
+    def test_job_table_description_uses_contract_comments(
+        self, renderer: WorkflowContractDocsRenderer, contract_path: Path
+    ) -> None:
+        """Job 表说明列优先使用 required_jobs[*]._comment"""
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+
+        ci_rows = parse_markdown_table_rows(renderer.render_ci_job_table().content)
+        ci_row_map = build_table_row_map(ci_rows)
+        for job in contract.get("ci", {}).get("required_jobs", []):
+            job_id = job.get("id", "")
+            comment = job.get("_comment", "")
+            if job_id and comment:
+                assert ci_row_map[job_id][2] == comment
+
+        nightly_rows = parse_markdown_table_rows(renderer.render_nightly_job_table().content)
+        nightly_row_map = build_table_row_map(nightly_rows)
+        for job in contract.get("nightly", {}).get("required_jobs", []):
+            job_id = job.get("id", "")
+            comment = job.get("_comment", "")
+            if job_id and comment:
+                assert nightly_row_map[job_id][2] == comment
+
+    def test_fixed_reason_columns_use_renderer_constants(
+        self, renderer: WorkflowContractDocsRenderer
+    ) -> None:
+        """固定文案列应来自渲染器常量"""
+        frozen_job_rows = parse_markdown_table_rows(
+            renderer.render_frozen_job_names_table().content
+        )
+        assert frozen_job_rows, "Expected frozen job names table to have rows"
+        for row in frozen_job_rows:
+            assert row[1] == FROZEN_JOB_REASON_TEXT
+
+        frozen_step_rows = parse_markdown_table_rows(
+            renderer.render_frozen_step_names_table().content
+        )
+        assert frozen_step_rows, "Expected frozen step names table to have rows"
+        for row in frozen_step_rows:
+            assert row[1] == FROZEN_STEP_REASON_TEXT
+
+        make_target_rows = parse_markdown_table_rows(renderer.render_make_targets_table().content)
+        assert make_target_rows, "Expected make targets table to have rows"
+        for row in make_target_rows:
+            assert row[1] == MAKE_TARGET_REASON_TEXT
+
+        label_rows = parse_markdown_table_rows(renderer.render_labels_table().content)
+        assert label_rows, "Expected labels table to have rows"
+        for row in label_rows:
+            assert row[2] == LABEL_REASON_TEXT
+
+        coupling_target_rows = parse_markdown_table_rows(
+            renderer.render_make_targets_list().content
+        )
+        assert coupling_target_rows, "Expected coupling map targets list to have rows"
+        for row in coupling_target_rows:
+            assert row[1] == COUPLING_MAP_TARGET_REASON_TEXT
 
 
 # ============================================================================

@@ -30,9 +30,14 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
+# 项目根目录
+REPO_ROOT = Path(__file__).parent.parent.parent
 
+# 添加脚本目录到 path
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "iteration"))
+sys.path.insert(0, str(REPO_ROOT))
+
+from iteration_evidence_schema import CURRENT_SCHEMA_REF
 from record_iteration_evidence import (
     REDACTED_PLACEHOLDER,
     CommandEntry,
@@ -49,11 +54,10 @@ from record_iteration_evidence import (
     redact_sensitive_data,
 )
 
-# 项目根目录
-REPO_ROOT = Path(__file__).parent.parent.parent
+from scripts.ci.check_iteration_evidence_contract import scan_evidence_files
 
 # Schema 文件路径
-SCHEMA_PATH = REPO_ROOT / "schemas" / "iteration_evidence_v1.schema.json"
+SCHEMA_PATH = REPO_ROOT / "schemas" / "iteration_evidence_v2.schema.json"
 
 
 def load_evidence_schema() -> dict:
@@ -280,6 +284,77 @@ class TestRecordEvidence:
 
             finally:
                 record_iteration_evidence.EVIDENCE_DIR = original_dir
+
+    def test_record_evidence_outputs_v2_schema_and_required_fields(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """测试 record_evidence 输出 v2 schema 且包含必需字段。"""
+        import iteration_evidence_naming as evidence_naming
+        import record_iteration_evidence
+
+        evidence_dir = tmp_path / "evidence"
+        monkeypatch.setattr(record_iteration_evidence, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(evidence_naming, "EVIDENCE_DIR", evidence_dir)
+
+        commands = [
+            CommandEntry(
+                name="ci",
+                command="make ci",
+                result="PASS",
+                exit_code=0,
+            )
+        ]
+        result = record_evidence(
+            iteration_number=21,
+            commit_sha="abc1234567890abc1234567890abc1234567890",
+            commands=commands,
+            include_regression_doc_url=False,
+        )
+
+        with open(result.output_path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert data["$schema"] == CURRENT_SCHEMA_REF
+        assert "runner" in data
+        assert "commands" in data
+        assert data["runner"]["os"]
+        assert data["runner"]["python"]
+        assert data["runner"]["arch"]
+        assert len(data["commands"]) == 1
+
+    def test_scan_evidence_files_has_no_violations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """测试 scan_evidence_files 对临时 evidence 目录无违规。"""
+        import iteration_evidence_naming as evidence_naming
+        import record_iteration_evidence
+
+        evidence_dir = tmp_path / "evidence"
+        monkeypatch.setattr(record_iteration_evidence, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(evidence_naming, "EVIDENCE_DIR", evidence_dir)
+
+        commands = [
+            CommandEntry(
+                name="ci",
+                command="make ci",
+                result="PASS",
+                exit_code=0,
+            )
+        ]
+        record_evidence(
+            iteration_number=22,
+            commit_sha="abc1234567890abc1234567890abc1234567890",
+            commands=commands,
+            include_regression_doc_url=False,
+        )
+
+        violations, warnings, total_files = scan_evidence_files(
+            evidence_dir=evidence_dir,
+            project_root=tmp_path,
+        )
+
+        assert total_files == 1
+        assert violations == []
 
     def test_ci_run_url_mapped_to_links(self) -> None:
         """测试 ci_run_url 正确映射到 links.ci_run_url。"""
@@ -640,7 +715,7 @@ class TestSensitiveDataRedaction:
 
 
 class TestSchemaValidation:
-    """测试输出数据符合 iteration_evidence_v1.schema.json。"""
+    """测试输出数据符合 iteration_evidence_v2.schema.json。"""
 
     def test_record_evidence_output_conforms_to_schema(self) -> None:
         """测试 record_evidence 生成的数据符合 schema。
@@ -986,7 +1061,7 @@ class TestSensitiveDataRedactionWithDeclaration:
 class TestMinimalInputBehavior:
     """测试最小输入时的行为与 schema minItems=1 对齐。
 
-    根据 iteration_evidence_v1.schema.json:
+    根据 iteration_evidence_v2.schema.json:
     - commands 数组 minItems: 1，即至少需要 1 个命令
     - 脚本在未提供 commands 时会创建默认的 manual_record 条目
     """
@@ -1046,7 +1121,7 @@ class TestMinimalInputBehavior:
 
         # 构造一个不符合 schema 的数据（commands 为空数组）
         invalid_data = {
-            "$schema": "./iteration_evidence_v1.schema.json",
+            "$schema": "./iteration_evidence_v2.schema.json",
             "iteration_number": 8,
             "recorded_at": "2026-02-02T14:30:22Z",
             "commit_sha": "abc1234567890",
@@ -1532,7 +1607,7 @@ class TestRedactedDataPassesSchema:
 
         # 构造包含敏感信息的原始数据
         original_data = {
-            "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+            "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
             "iteration_number": 8,
             "recorded_at": "2026-02-02T14:30:22Z",
             "commit_sha": "abc1234567890",

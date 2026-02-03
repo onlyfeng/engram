@@ -2,6 +2,8 @@
 
 > 本文档提供 CI/Nightly workflow 变更时的同步更新 checklist，确保合约文件、文档与实际 workflow 保持一致。
 
+**系统索引入口**：`docs/ci_nightly_workflow_refactor/system_map.md`（SSOT/生成链路/门禁链路/排障顺序/强耦合拆分）
+
 ---
 
 ## 0. 快速变更流程（SSOT-first）
@@ -29,6 +31,27 @@
 - **文档跟随**：`contract.md` 和 `coupling_map.md` 必须在同一 PR 中同步更新
 - **测试兜底**：如果变更涉及新的校验逻辑或错误类型，需要补充对应的测试用例
 
+### 0.1.1 PR 拆分建议
+
+为降低合约漂移风险、提升评审清晰度，建议按以下规则拆分 PR（可执行且必须遵循）：
+
+1. **仅文档受控块修复 → 单独 PR**  
+   仅修复 `contract.md` / `coupling_map.md` 受控块差异时，单独开 PR，使用：
+   `make update-workflow-contract-docs`
+
+2. **合约字段/校验逻辑变更 → 单独 PR（必须 bump）**  
+   仅包含 `workflow_contract.v1.json` 字段变更或 `validate_workflows.py` 等校验逻辑调整时，单独开 PR，必须执行版本 bump。
+
+3. **CI.yml 编排变更 → 单独 PR（必须 bump，附 drift/suggest）**  
+   仅包含 `.github/workflows/ci.yml` job/step/依赖编排变更时，单独开 PR，必须执行版本 bump，并附：
+   - `make workflow-contract-drift-report-all` 输出
+   - `python scripts/ci/suggest_workflow_contract_updates.py --markdown` 输出
+
+4. **Makefile 目标新增/改名 → 单独 PR（同步两处）**  
+   仅包含 Makefile 目标新增/改名时，单独开 PR，必须同步更新：
+   - `workflow_contract.v1.json` 的 `make.targets_required`
+   - `coupling_map.md` 的 Makefile Targets 清单
+
 ### 0.2 最小验证矩阵
 
 变更完成后，必须在本地运行以下验证命令（与 CI 对齐）：
@@ -50,17 +73,11 @@
 | `make render-workflow-contract-docs` | 渲染受控块（仅预览） | 输出渲染内容到 stdout，不修改文件 |
 | `make update-workflow-contract-docs` | 更新受控块（就地写入） | 将渲染内容写入 contract.md 和 coupling_map.md |
 
-**一键验证命令**：
+**一键验证命令（推荐）**：
 
 ```bash
-# 运行所有 workflow 合约相关检查
-make validate-workflows-strict && \
-make check-workflow-contract-docs-sync && \
-make check-workflow-contract-version-policy && \
-make check-workflow-contract-doc-anchors && \
-make check-workflow-contract-coupling-map-sync && \
-make check-workflow-contract-docs-generated && \
-pytest tests/ci/ -q
+# 串行执行 workflow 合约相关门禁 + CI 脚本测试（仅 tests/ci）
+make workflow-contract-preflight
 ```
 
 **或使用完整 CI 检查**：
@@ -418,6 +435,36 @@ some-conditional-job:
 - Runbook 和操作指南
 - 叙述性章节和注意事项
 
+#### 2.3.1.1 列来源策略（固定文案 vs 合约字段）
+
+受控块表格的列来源分两类：**必须来自 contract JSON 的列** 与 **固定文案列**。固定文案集中定义在 `scripts/ci/render_workflow_contract_docs.py`，用于保持受控块一致性。
+
+**必须来自 contract JSON 的列（SSOT）**：
+- `CI_JOB_TABLE` / `NIGHTLY_JOB_TABLE`
+  - `Job ID` ← `<workflow>.job_ids`
+  - `Job Name` ← `<workflow>.job_names`
+  - `说明` ← `<workflow>.required_jobs[*]._comment`（按 id 匹配；若为空则回退为 `{step_count} 个必需步骤`）
+- `FROZEN_JOB_NAMES_TABLE`
+  - `Job Name` ← `frozen_job_names.allowlist`
+- `FROZEN_STEP_NAMES_TABLE`
+  - `Step Name` ← `frozen_step_text.allowlist`
+- `MAKE_TARGETS_TABLE`
+  - `Make Target` ← `make.targets_required`
+- `LABELS_TABLE`
+  - `Label` ← `<workflow>.labels`
+  - `Workflow` ← workflow key（`ci` / `nightly`）
+
+**固定文案列（渲染器常量）**：
+- `FROZEN_JOB_NAMES_TABLE`：`原因` 固定为 `Required Check`
+- `FROZEN_STEP_NAMES_TABLE`：`冻结原因` 固定为 `核心步骤`
+- `MAKE_TARGETS_TABLE`：`用途` 固定为 `CI 必需目标`
+- `LABELS_TABLE`：`语义` 固定为 `PR label`
+- `MAKE_TARGETS_LIST`（coupling_map.md）：`说明` 固定为 `CI/workflow 必需`
+
+**修改方式**：
+- 需要调整固定文案时，修改 `scripts/ci/render_workflow_contract_docs.py` 中对应常量并重新渲染受控块。
+- 不要在 `workflow_contract.v1.json` 中临时添加字段替代固定文案；如需更强表达力，按 schema 变更流程新增字段并执行版本升级。
+
 #### 2.3.2 受控块名称与落点映射
 
 **contract.md 受控块**（来源：`ContractBlockNames`）：
@@ -611,6 +658,9 @@ python scripts/ci/check_workflow_contract_docs_sync.py --json
 # 5. 运行 CI 脚本测试（确保校验脚本本身正常）
 pytest tests/ci/ -q
 
+# 5.1 可选：仅验证版本策略单测
+pytest tests/ci/test_workflow_contract_version_policy.py -q
+
 # 6. 检查输出，确保无 ERROR
 ```
 
@@ -714,6 +764,36 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
   Expected: Run CI precheck
   Actual: Run precheck
 ```
+
+### 3.1.3 变更证据与 PR 描述要求
+
+当修改 `.github/workflows/*.yml`、`scripts/ci/workflow_contract.v1.json` 或相关文档时，必须补充可审计的变更证据：
+
+**方案 A（推荐）：前后快照对比**
+```bash
+# 变更前快照（保存到 artifacts 便于上传/评审）
+python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_before.json
+
+# 进行 workflow/contract 变更...
+
+# 变更后快照
+python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_after.json
+
+# 对比关键差异（任选其一）
+diff artifacts/workflow_snapshot_before.json artifacts/workflow_snapshot_after.json
+# 或使用 JSON diff 工具（如 jd）
+jd artifacts/workflow_snapshot_before.json artifacts/workflow_snapshot_after.json
+```
+
+**方案 B（最小替代）：drift + suggest**
+```bash
+make workflow-contract-drift-report-all
+make workflow-contract-suggest
+```
+
+**PR 描述必须粘贴的内容**：
+1. `suggest_workflow_contract_updates.py` 的建议摘要（counts/summary）。
+2. 关键差异（快照 diff 或 drift report 中最重要的变更项）。
 
 ### 3.2 CI 自动验证
 
@@ -1087,11 +1167,11 @@ python scripts/ci/validate_workflows.py
 **步骤 1: 在修改前生成基线快照**
 
 ```bash
-# 生成所有 workflow 的快照
-python scripts/ci/generate_workflow_contract_snapshot.py --output /tmp/before.json
+# 生成所有 workflow 的快照（保存到 artifacts 便于评审/上传）
+python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_before.json
 
 # 或只生成特定 workflow 的快照
-python scripts/ci/generate_workflow_contract_snapshot.py --workflow ci --output /tmp/before.json
+python scripts/ci/generate_workflow_contract_snapshot.py --workflow ci --output artifacts/workflow_snapshot_before.json
 ```
 
 **步骤 2: 进行 workflow 修改**
@@ -1101,18 +1181,18 @@ python scripts/ci/generate_workflow_contract_snapshot.py --workflow ci --output 
 **步骤 3: 生成修改后的快照**
 
 ```bash
-python scripts/ci/generate_workflow_contract_snapshot.py --output /tmp/after.json
+python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_after.json
 ```
 
 **步骤 4: 对比差异**
 
 ```bash
 # 使用 diff 对比
-diff /tmp/before.json /tmp/after.json
+diff artifacts/workflow_snapshot_before.json artifacts/workflow_snapshot_after.json
 
 # 或使用更友好的 JSON diff 工具
 # 例如: jd (https://github.com/josephburnett/jd)
-jd /tmp/before.json /tmp/after.json
+jd artifacts/workflow_snapshot_before.json artifacts/workflow_snapshot_after.json
 ```
 
 **步骤 5: 根据差异更新合约**
@@ -1175,7 +1255,7 @@ jd /tmp/before.json /tmp/after.json
 
 1. **每次修改 workflow 前**都先生成基线快照
 2. 修改完成后对比差异，**逐项检查**是否需要更新合约
-3. 在 PR 描述中附上关键差异摘要
+3. 在 PR 描述中附上建议摘要（counts）与关键差异摘要
 4. 运行 `make validate-workflows-strict` 验证合约一致性
 
 ### 7.6 智能更新建议工具

@@ -262,7 +262,67 @@ from engram.gateway.result_error_codes import ToolResultErrorCode
   - `TestErrorDataFields` - 必需字段完整性
   - `TestCorrelationIdTracking` - correlation_id 追踪
 
-## 8. 版本历史
+## 8. ADR-2026-02-03：JSON-RPC error response 的 HTTP 状态码策略
+
+> 状态：草案（评审中）
+
+### 背景
+
+- 目前 `JsonRpcDispatchResult.http_status` 仅对 `PARSE_ERROR/INVALID_REQUEST` 返回 400，其余 JSON-RPC error 统一 200。
+- `/mcp` 入口在 `routes.py` 使用 `result.http_status` 作为 HTTP 状态码；解析失败在入口层直接返回 400。
+- 解析/非法输入的 400/422 与业务/依赖错误的 200 混用，既保证 JSON-RPC 客户端兼容，也弱化了 HTTP 语义。
+
+### 方案 A：保持现状（JSON-RPC error 统一 200；解析/非法输入为 400/422）
+
+**描述**
+- 保持现有 `http_status` 规则：仅 `PARSE_ERROR/INVALID_REQUEST` 使用 400，其余 JSON-RPC error 仍 200。
+- 继续依赖 `error.data` 与 `error.code` 表达错误语义，HTTP 状态码只用于解析/格式错误。
+
+**对 `tests/gateway/test_mcp_jsonrpc_contract.py` 的改动点**
+- 无需改动（现有断言已覆盖 `method_not_found/invalid_params/internal/dependency` 等场景均为 200）。
+- 如需强化回归，可补充显式断言：除解析/非法输入外的 JSON-RPC error 必须为 200。
+
+**对 `scripts/ops/mcp_doctor.py` 的影响**
+- 无影响：`_check_unknown_method_error` 仍期望 200；其余检查逻辑保持不变。
+
+**Cursor/MCP 客户端兼容风险与灰度/开关方案**
+- 兼容风险低：维持当前协议行为，避免客户端把 JSON-RPC error 当作 transport error。
+- 灰度/开关：不需要；如未来需要切换，可提前预埋策略字段（见方案 B 的开关建议）。
+
+### 方案 B：迁移到 HTTP 映射（dependency=503、method_not_found=404 等）
+
+**描述**
+- 将 JSON-RPC error 映射为更具语义的 HTTP 状态码，示例策略：
+  - `PARSE_ERROR/INVALID_REQUEST` → 400
+  - `METHOD_NOT_FOUND` → 404
+  - `INVALID_PARAMS/UNKNOWN_TOOL` → 422
+  - `dependency` 类（如 OpenMemory 不可用）→ 503
+  - `internal` 类 → 500
+  - `business` 类 → 409（或鉴权失败场景使用 403）
+- 实现集中在 `JsonRpcDispatchResult.http_status` 或统一的映射函数中，`routes.py` 继续使用 `result.http_status`。
+
+**对 `tests/gateway/test_mcp_jsonrpc_contract.py` 的改动点**
+- 更新所有 “JSON-RPC 错误仍返回 200” 的断言：
+  - `test_method_not_found` 期望 404；
+  - `test_tools_call_unknown_tool`/`test_tools_call_missing_name` 期望 422；
+  - 工具执行异常与内部错误场景期望 500；
+  - 依赖错误/不可用场景期望 503；
+  - 任何依赖 HTTP 200 的错误测试需同步调整。
+- 更新说明性注释（如 “JSON-RPC 错误仍返回 200”）与参数化用例中的 `expected_status`。
+
+**对 `scripts/ops/mcp_doctor.py` 的影响**
+- `_check_unknown_method_error` 需接受 404（或根据映射策略调整预期状态码）。
+- 若未来增加依赖错误诊断，需允许 503 同时仍解析 JSON-RPC error body。
+- 输出提示需强调：非 200 仍可能是合法 JSON-RPC error 响应。
+
+**Cursor/MCP 客户端兼容风险与灰度/开关方案**
+- 兼容风险中高：部分客户端/SDK 可能在非 200 时直接抛出异常，导致丢失 JSON-RPC error 细节。
+- 灰度/开关建议（至少二选一）：
+  - 环境变量：`MCP_JSONRPC_HTTP_STATUS_STRATEGY=legacy|mapped`（默认 legacy）。
+  - 协议版本化：新增 `/mcp/v2` 或请求头 `Mcp-Http-Status-Mode: mapped` 显式 opt-in。
+  - 响应头提示：`X-MCP-HTTP-STATUS-STRATEGY: legacy|mapped` 便于客户端观测与回滚。
+
+## 9. 版本历史
 
 | 版本 | 日期 | 变更 |
 |------|------|------|

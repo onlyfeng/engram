@@ -1,5 +1,5 @@
 {
-  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
   "iteration_number": 1,
   "recorded_at": "2026-01-01T00:00:00Z",
   "commit_sha": "0000000000000000000000000000000000000000",
@@ -8,6 +8,11 @@
     "python": "3.13.2",
     "arch": "x86_64",
     "runner_label": "local"
+  },
+  "source": {
+    "source_path": "docs/acceptance/iteration_1_regression.md",
+    "source_type": "manual",
+    "source_ref": "iteration-1"
   },
   "commands": [
     {
@@ -24,5 +29,12 @@
   },
   "notes": "模板占位值，实际使用时请替换为迭代执行结果。",
   "overall_result": "PASS",
+  "redaction_applied": true,
+  "redaction_summary": "命令输出已脱敏",
+  "redaction_rules": [
+    "mask-secrets",
+    "truncate-long-lines"
+  ],
+  "redaction_notes": "stdout/stderr 仅保留非敏感摘要。",
   "sensitive_data_declaration": true
 }

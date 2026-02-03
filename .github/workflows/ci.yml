@@ -721,6 +721,12 @@ jobs:
           pytest tests/iteration/ -q
           echo "Iteration tools tests passed"
 
+      - name: Check iteration fixtures freshness
+        run: |
+          echo "=== Iteration Fixtures Freshness Check ==="
+          make check-iteration-fixtures-freshness
+          echo "Iteration fixtures freshness check passed"
+
   # ============================================================================
   # Workflow 合约校验
   # ============================================================================
@@ -767,6 +773,13 @@ jobs:
           echo "检查合约定义与文档是否同步"
           echo ""
           make check-workflow-contract-docs-sync
+
+      - name: Check workflow contract error types docs sync
+        run: |
+          echo "=== Workflow Contract Error Types Docs Sync Check ==="
+          echo "检查第 13 章 Error Types 表格与代码常量是否同步"
+          echo ""
+          make check-workflow-contract-error-types-docs-sync
 
       - name: Check workflow contract version policy
         run: |
@@ -818,7 +831,7 @@ jobs:
         if: always()
         run: |
           mkdir -p artifacts
-          python -m scripts.ci.workflow_contract_drift_report --markdown --output artifacts/workflow_contract_drift.md || true
+          python -m scripts.ci.workflow_contract_drift_report --markdown > artifacts/workflow_contract_drift.md || true
 
       - name: Upload validation report
         if: always()

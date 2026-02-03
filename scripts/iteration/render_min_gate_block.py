@@ -41,22 +41,19 @@ gate_profile 映射（与 AGENTS.md 子代理分工对齐）:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass
-from typing import List, Literal
+from pathlib import Path
+from typing import List, Literal, cast
 
 # gate_profile 类型定义
 GateProfile = Literal["full", "regression", "docs-only", "ci-only", "gateway-only", "sql-only"]
+ALLOWED_PROFILES = ("full", "regression", "docs-only", "ci-only", "gateway-only", "sql-only")
 
-# 支持的 profile 列表
-SUPPORTED_PROFILES: List[GateProfile] = [
-    "full",
-    "regression",
-    "docs-only",
-    "ci-only",
-    "gateway-only",
-    "sql-only",
-]
+# 配置文件路径
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+CONFIG_PATH = REPO_ROOT / "configs" / "iteration_gate_profiles.v1.json"
 
 
 @dataclass
@@ -72,120 +69,107 @@ class GateCommand:
 # 门禁命令定义（与 AGENTS.md 和 Makefile 对齐）
 # ============================================================================
 
+
+def _require_str(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"配置字段缺失或为空: {context}")
+    return value
+
+
+def _load_profiles_config(
+    path: Path,
+) -> tuple[List[GateProfile], dict[GateProfile, str], dict[GateProfile, List[GateCommand]]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"未找到门禁 profile 配置: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"门禁 profile 配置 JSON 解析失败: {path}: {exc}") from exc
+
+    profiles = payload.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        raise ValueError(f"门禁 profile 配置缺少 profiles: {path}")
+
+    order = payload.get("profiles_order")
+    if not isinstance(order, list) or not order or not all(isinstance(p, str) for p in order):
+        raise ValueError(f"门禁 profile 配置缺少 profiles_order 或格式错误: {path}")
+    if len(order) != len(set(order)):
+        raise ValueError(f"profiles_order 存在重复项: {path}")
+
+    missing_in_order = set(profiles.keys()) - set(order)
+    extra_in_order = set(order) - set(profiles.keys())
+    if missing_in_order or extra_in_order:
+        raise ValueError(
+            f"profiles_order 与 profiles 不一致: missing={sorted(missing_in_order)}, "
+            f"extra={sorted(extra_in_order)}"
+        )
+
+    missing_allowed = set(ALLOWED_PROFILES) - set(order)
+    extra_allowed = set(order) - set(ALLOWED_PROFILES)
+    if missing_allowed or extra_allowed:
+        raise ValueError(
+            "profiles_order 与内置 GateProfile 不一致: "
+            f"missing={sorted(missing_allowed)}, extra={sorted(extra_allowed)}"
+        )
+
+    supported_profiles: List[GateProfile] = []
+    profile_descriptions: dict[GateProfile, str] = {}
+    profile_commands: dict[GateProfile, List[GateCommand]] = {}
+
+    for profile in order:
+        raw_profile = profiles.get(profile)
+        if not isinstance(raw_profile, dict):
+            raise ValueError(f"profile 定义格式错误: {profile}")
+
+        description = _require_str(raw_profile.get("description"), f"{profile}.description")
+        raw_commands = raw_profile.get("commands")
+        if not isinstance(raw_commands, list) or not raw_commands:
+            raise ValueError(f"profile commands 缺失或为空: {profile}")
+
+        commands: List[GateCommand] = []
+        for idx, raw_cmd in enumerate(raw_commands, 1):
+            if not isinstance(raw_cmd, dict):
+                raise ValueError(f"profile command 格式错误: {profile}[{idx}]")
+            command = _require_str(raw_cmd.get("command"), f"{profile}.commands[{idx}].command")
+            check_item = _require_str(raw_cmd.get("check_item"), f"{profile}.commands[{idx}].check_item")
+            pass_criterion = _require_str(
+                raw_cmd.get("pass_criterion"), f"{profile}.commands[{idx}].pass_criterion"
+            )
+            commands.append(
+                GateCommand(
+                    command=command,
+                    check_item=check_item,
+                    pass_criterion=pass_criterion,
+                )
+            )
+
+        profile_key = cast(GateProfile, profile)
+        supported_profiles.append(profile_key)
+        profile_descriptions[profile_key] = description
+        profile_commands[profile_key] = commands
+
+    return supported_profiles, profile_descriptions, profile_commands
+
+
+SUPPORTED_PROFILES, PROFILE_DESCRIPTIONS, PROFILE_COMMANDS = _load_profiles_config(CONFIG_PATH)
+
 # 完整 CI 门禁（make ci 依赖链）
-FULL_GATE_COMMANDS: List[GateCommand] = [
-    GateCommand("make lint", "代码风格检查", "退出码 0"),
-    GateCommand("make format-check", "格式检查", "退出码 0"),
-    GateCommand("make typecheck", "mypy 类型检查", "退出码 0"),
-    GateCommand("make check-schemas", "JSON Schema 校验", "退出码 0"),
-    GateCommand("make check-env-consistency", "环境变量一致性检查", "退出码 0"),
-    GateCommand("make check-logbook-consistency", "Logbook 配置一致性检查", "退出码 0"),
-    GateCommand("make check-migration-sanity", "SQL 迁移文件检查", "退出码 0"),
-    GateCommand("make check-scm-sync-consistency", "SCM Sync 一致性检查", "退出码 0"),
-    GateCommand(
-        "make check-gateway-error-reason-usage", "Gateway ErrorReason 使用规范检查", "退出码 0"
-    ),
-    GateCommand(
-        "make check-gateway-public-api-surface", "Gateway Public API 导入表面检查", "退出码 0"
-    ),
-    GateCommand(
-        "make check-gateway-public-api-docs-sync", "Gateway Public API 文档同步检查", "退出码 0"
-    ),
-    GateCommand("make check-gateway-di-boundaries", "Gateway DI 边界检查", "退出码 0"),
-    GateCommand("make check-gateway-import-surface", "Gateway 懒加载策略检查", "退出码 0"),
-    GateCommand(
-        "make check-gateway-correlation-id-single-source",
-        "Gateway correlation_id 单一来源检查",
-        "退出码 0",
-    ),
-    GateCommand("make check-iteration-docs", "迭代文档规范检查", "退出码 0"),
-    GateCommand("make validate-workflows-strict", "Workflow 合约校验", "退出码 0"),
-    GateCommand("make check-workflow-contract-docs-sync", "Workflow 合约文档同步检查", "退出码 0"),
-    GateCommand(
-        "make check-workflow-contract-version-policy", "Workflow 合约版本策略检查", "退出码 0"
-    ),
-    GateCommand("make check-mcp-error-contract", "MCP 错误码合约检查", "退出码 0"),
-    GateCommand("make check-mcp-error-docs-sync", "MCP 错误码文档同步检查", "退出码 0"),
-]
+FULL_GATE_COMMANDS: List[GateCommand] = PROFILE_COMMANDS["full"]
 
 # 回归最小集（用于迭代回归验证，与 iteration_N_regression.md 对齐）
-REGRESSION_GATE_COMMANDS: List[GateCommand] = [
-    GateCommand("make validate-workflows-strict", "Workflow 合约校验", "退出码 0"),
-    GateCommand("make check-workflow-contract-docs-sync", "Workflow 合约文档同步检查", "退出码 0"),
-    GateCommand(
-        "make check-gateway-public-api-surface", "Gateway Public API 导入表面检查", "退出码 0"
-    ),
-    GateCommand(
-        "make check-gateway-public-api-docs-sync", "Gateway Public API 文档同步检查", "退出码 0"
-    ),
-    GateCommand("make check-iteration-docs", "迭代文档规范检查", "退出码 0"),
-    GateCommand("pytest tests/ci/ -q", "CI 脚本测试", "无 FAILED，退出码 0"),
-]
+REGRESSION_GATE_COMMANDS: List[GateCommand] = PROFILE_COMMANDS["regression"]
 
 # 文档代理门禁
-DOCS_GATE_COMMANDS: List[GateCommand] = [
-    GateCommand("make check-env-consistency", "环境变量一致性检查", "退出码 0"),
-    GateCommand("make check-iteration-docs", "迭代文档规范检查", "退出码 0"),
-]
+DOCS_GATE_COMMANDS: List[GateCommand] = PROFILE_COMMANDS["docs-only"]
 
 # CI 代理门禁（与 AGENTS.md 对齐）
-CI_GATE_COMMANDS: List[GateCommand] = [
-    GateCommand("make typecheck", "mypy 类型检查", "退出码 0"),
-    GateCommand("make validate-workflows-strict", "Workflow 合约校验", "退出码 0"),
-    GateCommand("make check-workflow-contract-docs-sync", "Workflow 合约文档同步检查", "退出码 0"),
-    GateCommand(
-        "make check-workflow-contract-version-policy", "Workflow 合约版本策略检查", "退出码 0"
-    ),
-    GateCommand(
-        "make check-workflow-contract-doc-anchors", "Workflow 合约文档锚点检查", "退出码 0"
-    ),
-]
+CI_GATE_COMMANDS: List[GateCommand] = PROFILE_COMMANDS["ci-only"]
 
 # Gateway 代理门禁（与 AGENTS.md 对齐）
-GATEWAY_GATE_COMMANDS: List[GateCommand] = [
-    GateCommand("make lint", "代码风格检查", "退出码 0"),
-    GateCommand("make check-gateway-di-boundaries", "Gateway DI 边界检查", "退出码 0"),
-    GateCommand(
-        "make check-gateway-public-api-surface", "Gateway Public API 导入表面检查", "退出码 0"
-    ),
-    GateCommand(
-        "make check-gateway-public-api-docs-sync", "Gateway Public API 文档同步检查", "退出码 0"
-    ),
-    GateCommand("make check-gateway-import-surface", "Gateway 懒加载策略检查", "退出码 0"),
-    GateCommand(
-        "make check-gateway-correlation-id-single-source",
-        "Gateway correlation_id 单一来源检查",
-        "退出码 0",
-    ),
-    GateCommand("make check-mcp-error-contract", "MCP 错误码合约检查", "退出码 0"),
-    GateCommand("make check-mcp-error-docs-sync", "MCP 错误码文档同步检查", "退出码 0"),
-]
+GATEWAY_GATE_COMMANDS: List[GateCommand] = PROFILE_COMMANDS["gateway-only"]
 
 # SQL 代理门禁
-SQL_GATE_COMMANDS: List[GateCommand] = [
-    GateCommand("make check-migration-sanity", "SQL 迁移文件检查", "退出码 0"),
-    GateCommand("make verify-permissions", "数据库权限验证", "退出码 0"),
-]
-
-# profile 到命令列表的映射
-PROFILE_COMMANDS: dict[GateProfile, List[GateCommand]] = {
-    "full": FULL_GATE_COMMANDS,
-    "regression": REGRESSION_GATE_COMMANDS,
-    "docs-only": DOCS_GATE_COMMANDS,
-    "ci-only": CI_GATE_COMMANDS,
-    "gateway-only": GATEWAY_GATE_COMMANDS,
-    "sql-only": SQL_GATE_COMMANDS,
-}
-
-# profile 描述
-PROFILE_DESCRIPTIONS: dict[GateProfile, str] = {
-    "full": "完整 CI 门禁（make ci）",
-    "regression": "回归最小集",
-    "docs-only": "文档代理最小门禁",
-    "ci-only": "CI 代理最小门禁",
-    "gateway-only": "Gateway 代理最小门禁",
-    "sql-only": "SQL 代理最小门禁",
-}
+SQL_GATE_COMMANDS: List[GateCommand] = PROFILE_COMMANDS["sql-only"]
 
 
 # ============================================================================

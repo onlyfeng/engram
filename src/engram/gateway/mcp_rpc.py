@@ -52,6 +52,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+# MCP 基础信息（用于 initialize 响应）
+from . import __version__ as GATEWAY_VERSION
+
 # correlation_id 函数从统一模块导入（单一来源原则）
 # 重新导出以保持向后兼容
 from .correlation_id import CORRELATION_ID_PATTERN as CORRELATION_ID_PATTERN
@@ -63,8 +66,21 @@ from .correlation_id import normalize_correlation_id as normalize_correlation_id
 # 提供向后兼容别名：JsonRpcErrorCode, ErrorCategory, ErrorReason
 # 参见: docs/contracts/mcp_jsonrpc_error_v1.md
 from .error_codes import McpErrorCategory, McpErrorCode, McpErrorReason
+from .error_redaction import (
+    DEFAULT_PUBLIC_ERROR_MESSAGE,
+    sanitize_error_details,
+    sanitize_error_message,
+)
 
 logger = logging.getLogger("gateway.mcp_rpc")
+
+# MCP 协议与能力声明（initialize 响应使用）
+MCP_PROTOCOL_VERSION = "2025-03-26"
+MCP_SERVER_INFO = {"name": "engram-gateway", "version": GATEWAY_VERSION}
+MCP_SERVER_CAPABILITIES = {
+    # 本 Gateway 仅暴露 tools 能力，且不发送 listChanged 通知
+    "tools": {"listChanged": False}
+}
 
 # ===================== 可选依赖导入（避免循环导入）=====================
 
@@ -340,11 +356,13 @@ def make_jsonrpc_error(
     data: Optional[Any] = None,
 ) -> JsonRpcResponse:
     """构造 JSON-RPC 错误响应"""
+    redacted_message = sanitize_error_message(message)
+    redacted_data = sanitize_error_details(data)
     return JsonRpcResponse(
         jsonrpc="2.0",
         id=id,
         result=None,
-        error=JsonRpcError(code=code, message=message, data=data),
+        error=JsonRpcError(code=code, message=redacted_message, data=redacted_data),
     )
 
 
@@ -451,6 +469,8 @@ class JsonRpcRouter:
         self,
         request: JsonRpcRequest,
         correlation_id: Optional[str] = None,
+        *,
+        strict_correlation_id: bool = False,
     ) -> JsonRpcResponse:
         """
         分发 JSON-RPC 请求到对应的处理器
@@ -487,6 +507,9 @@ class JsonRpcRouter:
             correlation_id: 关联 ID，用于追踪。
                            在真实链路中由 HTTP 入口层传入（必传）。
                            若为 None，dispatch 会自动生成（用于独立测试）。
+            strict_correlation_id: 严格模式开关。
+                                   为 True 时要求 correlation_id 已设置且合规，
+                                   用于入口链路断言；否则兼容模式自动归一化。
 
         Returns:
             JSON-RPC 响应（成功或错误）
@@ -495,8 +518,19 @@ class JsonRpcRouter:
         params = request.params or {}
         req_id = request.id
 
-        # 归一化 correlation_id（确保符合 schema 格式，不合规则重新生成）
-        corr_id = normalize_correlation_id(correlation_id)
+        if strict_correlation_id:
+            assert correlation_id is not None, (
+                "契约违反: dispatch(strict_correlation_id=True) 要求 correlation_id 必须已设置。"
+                "在真实入口链路中，correlation_id 应由 HTTP 入口层生成并传入。"
+            )
+            assert is_valid_correlation_id(correlation_id), (
+                f"契约违反: correlation_id 格式不合规: {correlation_id!r}。"
+                "期望格式: corr-{16位十六进制}"
+            )
+            corr_id = correlation_id
+        else:
+            # 归一化 correlation_id（确保符合 schema 格式，不合规则重新生成）
+            corr_id = normalize_correlation_id(correlation_id)
 
         # 提取工具名（如果是 tools/call）
         tool_name = params.get("name") if method == "tools/call" else None
@@ -514,7 +548,7 @@ class JsonRpcRouter:
                 req_id,
                 JsonRpcErrorCode.METHOD_NOT_FOUND,
                 f"未知方法: {method}",
-                data=error_data.to_dict(),
+                data=error_data.to_dict(strict=strict_correlation_id),
             )
 
         # 执行处理器
@@ -532,6 +566,7 @@ class JsonRpcRouter:
                 req_id=req_id,
                 tool_name=tool_name,
                 correlation_id=corr_id,
+                strict_correlation_id=strict_correlation_id,
             )
         finally:
             # 恢复之前的 correlation_id（支持嵌套调用）
@@ -786,6 +821,7 @@ def to_jsonrpc_error(
     req_id: Optional[Any] = None,
     tool_name: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    strict_correlation_id: bool = False,
 ) -> JsonRpcResponse:
     """
     将异常转换为 JSON-RPC 响应
@@ -815,6 +851,7 @@ def to_jsonrpc_error(
         req_id: JSON-RPC 请求 ID
         tool_name: 工具名称（可选，用于上下文）
         correlation_id: 关联 ID（可选，用于追踪）
+        strict_correlation_id: 严格模式开关。为 True 时要求 correlation_id 已设置且合规。
 
     Returns:
         JsonRpcResponse - 包含结构化 error.data 的错误响应
@@ -828,9 +865,20 @@ def to_jsonrpc_error(
         >>> to_jsonrpc_error(OpenMemoryConnectionError("连接超时"), req_id=1)
         JsonRpcResponse(error={"code": -32001, "message": "...", "data": {"category": "dependency", "retryable": true, ...}})
     """
-    # 归一化 correlation_id（确保符合 schema 格式: corr-{16位十六进制}）
-    # 对外返回（HTTP/JSON-RPC/audit）必须是合规格式
-    corr_id = normalize_correlation_id(correlation_id)
+    if strict_correlation_id:
+        assert correlation_id is not None, (
+            "契约违反: to_jsonrpc_error(strict_correlation_id=True) 要求 correlation_id 必须已设置。"
+            "在真实入口链路中，correlation_id 应由 HTTP 入口层生成并传入。"
+        )
+        assert is_valid_correlation_id(correlation_id), (
+            f"契约违反: correlation_id 格式不合规: {correlation_id!r}。"
+            "期望格式: corr-{16位十六进制}"
+        )
+        corr_id = correlation_id
+    else:
+        # 归一化 correlation_id（确保符合 schema 格式: corr-{16位十六进制}）
+        # 对外返回（HTTP/JSON-RPC/audit）必须是合规格式
+        corr_id = normalize_correlation_id(correlation_id)
 
     # 构建 details 基础信息
     base_details: Dict[str, Any] = {}
@@ -872,7 +920,7 @@ def to_jsonrpc_error(
             req_id,
             code,
             error.message,
-            data=error_data.to_dict(),
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     # ===== 2. 处理 OpenMemory 异常 =====
@@ -893,7 +941,7 @@ def to_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
             f"OpenMemory 连接失败: {error.message if hasattr(error, 'message') else str(error)}",
-            data=error_data.to_dict(),
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     if OpenMemoryAPIError is not None and isinstance(error, OpenMemoryAPIError):
@@ -920,7 +968,7 @@ def to_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
             f"OpenMemory API 错误: {error.message if hasattr(error, 'message') else str(error)}",
-            data=error_data.to_dict(),
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     if OpenMemoryError is not None and isinstance(error, OpenMemoryError):
@@ -940,7 +988,7 @@ def to_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
             f"OpenMemory 错误: {error.message if hasattr(error, 'message') else str(error)}",
-            data=error_data.to_dict(),
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     # ===== 3. 处理 Logbook DB 异常 =====
@@ -961,7 +1009,7 @@ def to_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
             f"Logbook DB 检查失败: {error.message if hasattr(error, 'message') else str(error)}",
-            data=error_data.to_dict(),
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     # ===== 4. 处理 ValueError → 参数校验错误 =====
@@ -990,7 +1038,7 @@ def to_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.INVALID_PARAMS,
             error_msg,
-            data=error_data.to_dict(),
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     # ===== 5. 处理 RuntimeError → 内部错误 =====
@@ -1014,8 +1062,8 @@ def to_jsonrpc_error(
         return make_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.INTERNAL_ERROR,
-            error_msg,
-            data=error_data.to_dict(),
+            DEFAULT_PUBLIC_ERROR_MESSAGE,
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     # ===== 6. 处理 psycopg2/数据库异常 =====
@@ -1037,7 +1085,7 @@ def to_jsonrpc_error(
             req_id,
             JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE,
             f"数据库错误: {str(error)}",
-            data=error_data.to_dict(),
+            data=error_data.to_dict(strict=strict_correlation_id),
         )
 
     # ===== 7. 其他未知异常 → 内部错误 =====
@@ -1050,16 +1098,14 @@ def to_jsonrpc_error(
         reason=ErrorReason.UNHANDLED_EXCEPTION,
         retryable=False,
         correlation_id=corr_id,
-        details={**base_details, "exception_type": error_type_name}
-        if base_details
-        else {"exception_type": error_type_name},
+        details={"exception_type": error_type_name},
     )
 
     return make_jsonrpc_error(
         req_id,
         JsonRpcErrorCode.INTERNAL_ERROR,
-        f"内部错误: {str(error)}",
-        data=error_data.to_dict(),
+        DEFAULT_PUBLIC_ERROR_MESSAGE,
+        data=error_data.to_dict(strict=strict_correlation_id),
     )
 
 
@@ -1388,6 +1434,41 @@ async def handle_tools_list(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"tools": get_tool_definitions()}
 
 
+# ===================== MCP Lifecycle/Utilities Handlers =====================
+
+
+async def handle_initialize(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    处理 initialize JSON-RPC 请求
+
+    兼容策略：
+    - params 允许为空或缺省（dispatch 会传入 {}）
+    - 当 params 提供 protocolVersion/capabilities/clientInfo 时，当前实现不做强校验
+
+    返回最小字段集合（对齐 MCP/Cursor 预期）：
+    - protocolVersion
+    - capabilities
+    - serverInfo
+    """
+    _ = params  # 兼容：允许空 params，不强制使用
+    return {
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": MCP_SERVER_CAPABILITIES,
+        "serverInfo": MCP_SERVER_INFO,
+    }
+
+
+async def handle_ping(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    处理 ping JSON-RPC 请求
+
+    兼容策略：
+    - params 允许为空或缺省（dispatch 会传入 {}）
+    """
+    _ = params  # 兼容：允许空 params
+    return {}
+
+
 # ===================== MCP JSON-RPC 路由器初始化 =====================
 
 
@@ -1396,6 +1477,8 @@ def create_mcp_router() -> JsonRpcRouter:
     创建并初始化 MCP JSON-RPC 路由器
 
     注册 MCP 标准方法：
+    - initialize: 初始化握手
+    - ping: 连接保活
     - tools/list: 返回可用工具清单
     - tools/call: 调用工具
 
@@ -1403,6 +1486,8 @@ def create_mcp_router() -> JsonRpcRouter:
         配置好的 JsonRpcRouter 实例
     """
     router = JsonRpcRouter()
+    router.register("initialize", handle_initialize)
+    router.register("ping", handle_ping)
     router.register("tools/list", handle_tools_list)
     router.register("tools/call", handle_tools_call)
     return router
@@ -1451,37 +1536,19 @@ class JsonRpcDispatchResult(BaseModel):
         - 无错误 → 200 OK
         - PARSE_ERROR (-32700) → 400 Bad Request
         - INVALID_REQUEST (-32600) → 400 Bad Request
-        - METHOD_NOT_FOUND (-32601) → 404 Not Found
-        - INVALID_PARAMS (-32602) → 400 Bad Request
-        - INTERNAL_ERROR (-32603) → 500 Internal Server Error
-        - 其他错误 → 500 Internal Server Error
+        - 其他 JSON-RPC 错误 → 200 OK（保持协议兼容）
         """
         if self.response.error is None:
             return 200
 
         error_code = self.response.error.code
 
-        # JSON-RPC 标准错误码映射
-        if error_code == JsonRpcErrorCode.PARSE_ERROR:
+        # JSON-RPC 解析/格式错误仍使用 400
+        if error_code in (JsonRpcErrorCode.PARSE_ERROR, JsonRpcErrorCode.INVALID_REQUEST):
             return 400
-        elif error_code == JsonRpcErrorCode.INVALID_REQUEST:
-            return 400
-        elif error_code == JsonRpcErrorCode.METHOD_NOT_FOUND:
-            return 404
-        elif error_code == JsonRpcErrorCode.INVALID_PARAMS:
-            return 400
-        elif error_code == JsonRpcErrorCode.INTERNAL_ERROR:
-            return 500
-        # 自定义服务器错误 (-32000 to -32099)
-        elif error_code == JsonRpcErrorCode.TOOL_EXECUTION_ERROR:
-            return 500
-        elif error_code == JsonRpcErrorCode.DEPENDENCY_UNAVAILABLE:
-            return 503
-        elif error_code == JsonRpcErrorCode.BUSINESS_REJECTION:
-            return 400
-        else:
-            # 其他未知错误
-            return 500
+
+        # 其他 JSON-RPC 错误保持 200，避免客户端误判为非 JSON-RPC 响应
+        return 200
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -1495,13 +1562,15 @@ class JsonRpcDispatchResult(BaseModel):
 async def dispatch_jsonrpc_request(
     body: Dict[str, Any],
     correlation_id: Optional[str] = None,
+    *,
+    strict_correlation_id: bool = False,
 ) -> JsonRpcDispatchResult:
     """
     分发 JSON-RPC 请求（便捷入口函数）
 
     此函数是 mcp_router.dispatch 的稳定包装，提供：
     1. 自动解析请求体
-    2. 自动归一化 correlation_id
+    2. strict=False 时自动归一化 correlation_id
     3. 返回结构化结果（包含 response 和 correlation_id）
 
     使用场景：
@@ -1510,7 +1579,8 @@ async def dispatch_jsonrpc_request(
 
     Args:
         body: JSON-RPC 请求体 dict，应包含 jsonrpc, method, params, id 字段
-        correlation_id: 关联 ID（可选）。若不提供或格式不合规，则自动生成。
+        correlation_id: 关联 ID（可选）。strict=False 时若不提供或格式不合规，则自动生成。
+        strict_correlation_id: 严格模式开关。为 True 时要求 correlation_id 已设置且合规。
 
     Returns:
         JsonRpcDispatchResult 包含：
@@ -1533,8 +1603,19 @@ async def dispatch_jsonrpc_request(
         )
         assert result.correlation_id == "corr-abc123def456789a"
     """
-    # 归一化 correlation_id（确保符合 schema 格式）
-    corr_id = normalize_correlation_id(correlation_id)
+    if strict_correlation_id:
+        assert correlation_id is not None, (
+            "契约违反: dispatch_jsonrpc_request(strict_correlation_id=True) 要求 correlation_id 必须已设置。"
+            "在真实入口链路中，correlation_id 应由 HTTP 入口层生成并传入。"
+        )
+        assert is_valid_correlation_id(correlation_id), (
+            f"契约违反: correlation_id 格式不合规: {correlation_id!r}。"
+            "期望格式: corr-{16位十六进制}"
+        )
+        corr_id = correlation_id
+    else:
+        # 归一化 correlation_id（确保符合 schema 格式）
+        corr_id = normalize_correlation_id(correlation_id)
 
     # 解析请求
     request, error_response = parse_jsonrpc_request(body)
@@ -1545,5 +1626,9 @@ async def dispatch_jsonrpc_request(
 
     # 分发到默认路由器
     assert request is not None  # parse_jsonrpc_request 保证 request 或 error_response 其一非空
-    response = await mcp_router.dispatch(request, correlation_id=corr_id)
+    response = await mcp_router.dispatch(
+        request,
+        correlation_id=corr_id,
+        strict_correlation_id=strict_correlation_id,
+    )
     return JsonRpcDispatchResult(response=response, correlation_id=corr_id)

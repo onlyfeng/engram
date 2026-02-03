@@ -75,6 +75,8 @@ engram-migrate = "engram.logbook.cli.db_migrate:main"
 engram-bootstrap-roles = "engram.logbook.cli.db_bootstrap:main"
 # Gateway（需要 gateway 依赖）
 engram-gateway = "engram.gateway.main:main"
+# Iteration tools
+engram-iteration = "engram.iteration.cli:main"
 # SCM Sync 子系统（统一入口）
 engram-scm-sync = "engram.logbook.cli.scm_sync:main"
 # SCM Sync 子命令快捷入口

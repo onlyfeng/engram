@@ -1,0 +1,26 @@
+{
+  "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
+  "iteration_number": 13,
+  "recorded_at": "2026-02-01T22:50:45Z",
+  "commit_sha": "f442a3eb08a3ec2879109923d216d2b19bfd8f32",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.12.1",
+    "arch": "arm64",
+    "runner_label": "local"
+  },
+  "source": {
+    "source_path": "docs/acceptance/iteration_13_regression.md",
+    "source_type": "manual",
+    "source_ref": "iteration-13"
+  },
+  "overall_result": "PASS",
+  "commands": [
+    {
+      "name": "ci",
+      "command": "make ci",
+      "result": "PASS"
+    }
+  ],
+  "sensitive_data_declaration": true
+}

@@ -10,10 +10,17 @@ SCM Sync Worker 单元测试
 """
 
 import os
+import sys
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from engram.logbook import scm_sync_worker_core as _scm_sync_worker_core
+from engram.logbook.scm_sync_tasks import svn as _scm_sync_svn
+
+sys.modules.setdefault("scm_sync_worker", _scm_sync_worker_core)
+sys.modules.setdefault("scm_sync_svn", _scm_sync_svn)
 
 
 class TestHeartbeatManager:
@@ -670,8 +677,9 @@ class TestHeartbeatManagerLeaseLost:
 
     def test_lease_lost_uses_shared_error_category(self):
         """续租失败使用共享的 ErrorCategory.LEASE_LOST 常量"""
-        from engram.logbook.scm_sync_errors import ErrorCategory
         from scm_sync_worker import HeartbeatManager
+
+        from engram.logbook.scm_sync_errors import ErrorCategory
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = False  # 续租一直失败
@@ -727,8 +735,9 @@ class TestHeartbeatManagerLeaseLost:
 
     def test_lease_lost_structured_error_info(self):
         """续租失败时记录结构化错误信息"""
-        from engram.logbook.scm_sync_errors import ErrorCategory
         from scm_sync_worker import HeartbeatManager
+
+        from engram.logbook.scm_sync_errors import ErrorCategory
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             # 第一次成功，后面失败
@@ -867,8 +876,9 @@ class TestHeartbeatManagerLeaseLost:
 
     def test_default_max_renew_failures_from_shared_module(self):
         """验证默认 max_failures 使用共享模块的常量"""
-        from engram.logbook.scm_sync_errors import DEFAULT_MAX_RENEW_FAILURES
         from scm_sync_worker import HeartbeatManager
+
+        from engram.logbook.scm_sync_errors import DEFAULT_MAX_RENEW_FAILURES
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = True
@@ -968,8 +978,9 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_renew_consecutive_failures_cause_abort(self):
         """连续续租失败超过阈值导致任务中止"""
-        from engram.logbook.scm_sync_errors import ErrorCategory
         from scm_sync_worker import HeartbeatManager
+
+        from engram.logbook.scm_sync_errors import ErrorCategory
 
         with patch("scm_sync_worker.renew_lease") as mock_renew:
             mock_renew.return_value = False  # 所有续租都失败
@@ -1022,8 +1033,9 @@ class TestHeartbeatLongTaskAndRenewFailure:
 
     def test_process_one_job_with_heartbeat_abort(self):
         """process_one_job 中心跳中止导致 fail_retry 调用"""
-        from engram.logbook.scm_sync_errors import ErrorCategory
         from scm_sync_worker import process_one_job
+
+        from engram.logbook.scm_sync_errors import ErrorCategory
 
         with (
             patch("scm_sync_worker.claim") as mock_claim,
@@ -1930,8 +1942,9 @@ class TestSVNAuthFallback:
             os.environ["SVN_USERNAME"] = "test-user"
             os.environ["SVN_PASSWORD"] = "test-pass"
 
-            from engram.logbook.config import Config
             from scm_sync_svn import run_svn_cmd
+
+            from engram.logbook.config import Config
 
             # 模拟 subprocess.run
             with patch("subprocess.run") as mock_run:

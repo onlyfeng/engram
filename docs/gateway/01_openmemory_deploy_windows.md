@@ -160,7 +160,39 @@ sudo -u postgres psql -c "ALTER SYSTEM SET listen_addresses='localhost';"
 sudo -u postgres psql -c "ALTER SYSTEM SET port=5432;"
 sudo systemctl restart postgresql
 ```
-如需 Windows 访问，可将 `listen_addresses` 设为 `0.0.0.0` 并在 `pg_hba.conf` 添加允许规则。
+默认仅在 WSL2 内访问（更安全）。如需 **Windows 主机** 访问 Postgres（例如 Windows 上用 `psql`/GUI 客户端连库），可按下述方式放行（不建议对局域网/公网开放 `5432`）：
+
+```bash
+# 1) 让 Postgres 在 WSL2 内监听所有网卡
+sudo -u postgres psql -c "ALTER SYSTEM SET listen_addresses='0.0.0.0';"
+sudo systemctl restart postgresql
+
+# 2) 获取 Windows 主机 IP（从 WSL2 视角，通常是 resolv.conf 的 nameserver）
+WIN_IP=$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf)
+echo "WIN_IP=$WIN_IP"
+
+# 3) 找到 pg_hba.conf 路径（不同发行版/版本路径可能不同）
+sudo -u postgres psql -Atc "SHOW hba_file;"
+```
+
+编辑 `pg_hba.conf`（在文件较靠前位置添加更具体的 allow 规则；把 `<WIN_IP>` 换成上一步的值）：
+
+```conf
+# 仅放行 Windows 主机访问（推荐：按库/用户收敛，不要写 0.0.0.0/0）
+host    engram    logbook_svc     <WIN_IP>/32    scram-sha-256
+host    engram    openmemory_svc  <WIN_IP>/32    scram-sha-256
+
+# （可选）Windows 上用 postgres 管理时再放开
+# host  all       postgres        <WIN_IP>/32    scram-sha-256
+```
+
+保存后重载：
+
+```bash
+sudo systemctl reload postgresql
+```
+
+> 备注：若客户端不支持 `scram-sha-256`，可将 `METHOD` 改为 `md5`；但不要使用 `trust`。
 
 ### B.4 初始化数据库与角色
 ```bash
@@ -329,10 +361,76 @@ sudo systemctl restart openmemory engram-gateway engram-outbox
 sudo journalctl -u engram-gateway -n 200 --no-pager
 ```
 
-### B.9 Windows 访问说明
-- Windows 侧可优先使用 `http://localhost:8787` / `http://localhost:8080`  
-- 若 `localhost` 不通，使用 WSL2 IP（`hostname -I`）  
-- 注意 Windows 防火墙放行端口
+### B.9 Windows / 局域网访问说明
+
+#### B.9.1 Windows 本机访问（从 Windows 访问 WSL2 服务）
+- Windows 侧可优先使用 `http://localhost:8787`（Gateway）/ `http://localhost:8080`（OpenMemory）
+- 若 `localhost` 不通：在 WSL2 内执行 `hostname -I` 拿到 WSL2 IP，然后在 Windows 侧访问 `http://<wsl-ip>:8787`
+- 注意 Windows 防火墙放行端口（至少 `8787`；如需访问 OpenMemory 再放行 `8080`）
+
+#### B.9.2 局域网其它机器访问（让其它电脑能连到 Gateway/MCP）
+
+WSL2 默认网络模式是 NAT，**WSL2 的 IP 通常只对 Windows 主机可达**。要让局域网其它机器访问 Gateway，需要把端口暴露到 **Windows 主机的局域网 IP**（例如 `192.168.x.x`）。
+
+**客户端（其它机器）要改什么？**
+- `.cursor/mcp.json`（或 `~/.cursor/mcp.json`）把 `url` 改为：`http://<windows-lan-ip>:8787/mcp`
+
+**Windows 主机的局域网 IP 怎么看？**
+- Windows 侧执行 `ipconfig`，找当前网卡（Wi-Fi/以太网）的 `IPv4 Address`
+
+**方案 1（优先）：启用 WSL2 mirrored networking（Windows 11 新版 WSL）**
+
+1) Windows 侧创建/编辑 `C:\Users\<你>\.wslconfig`：
+
+```ini
+[wsl2]
+networkingMode=mirrored
+firewall=true
+```
+
+2) Windows 侧执行 `wsl --shutdown`，再重新启动 Debian/WSL
+3) 确认 Gateway 已启动并监听 `8787`（本项目默认绑定 `0.0.0.0:8787`）
+4) 在其它机器验证：
+
+```bash
+curl -sf http://<windows-lan-ip>:8787/health && echo "Gateway OK"
+```
+
+**方案 2（兼容性最好）：Windows 端口转发（portproxy）**
+
+以 **管理员 PowerShell** 执行（注意：WSL2 IP 每次重启可能变化，必要时需重跑）：
+
+```powershell
+# 1) 获取 WSL2 IP（每次 wsl --shutdown / 重启后可能变化）
+$WslIp = (wsl -d Debian -e sh -lc "hostname -I | awk '{print $1}'").Trim()
+Write-Host "WSL IP = $WslIp"
+
+# 2) 将 Windows 侧 8787 转发到 WSL2 的 8787（Gateway）
+netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=8787 | Out-Null
+netsh interface portproxy add    v4tov4 listenaddress=0.0.0.0 listenport=8787 connectaddress=$WslIp connectport=8787
+
+# （可选）如需从局域网访问 OpenMemory Web/API，再转发 8080
+# netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=8080 | Out-Null
+# netsh interface portproxy add    v4tov4 listenaddress=0.0.0.0 listenport=8080 connectaddress=$WslIp connectport=8080
+
+# 3) Windows 防火墙放行（建议仅 Private 网络 + LocalSubnet）
+New-NetFirewallRule -DisplayName "Engram Gateway (8787) from LAN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787 -Profile Private -RemoteAddress LocalSubnet | Out-Null
+# （可选）OpenMemory
+# New-NetFirewallRule -DisplayName "OpenMemory (8080) from LAN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8080 -Profile Private -RemoteAddress LocalSubnet | Out-Null
+
+# 4) 查看当前 portproxy 规则
+netsh interface portproxy show v4tov4
+```
+
+其它机器验证：
+
+```bash
+curl -sf http://<windows-lan-ip>:8787/health && echo "Gateway OK"
+```
+
+> 注意：
+> - 若执行过 `wsl --shutdown` / 重启后无法访问，请重新运行上述脚本更新 `connectaddress`。
+> - 不建议暴露到公网；至少把 Windows 防火墙限制为 `Profile Private` + `LocalSubnet`，并按本文 “安全建议” 启用 API Key。
 
 ---
 

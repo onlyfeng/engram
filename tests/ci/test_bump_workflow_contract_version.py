@@ -329,6 +329,46 @@ class TestInsertVersionRowInDoc:
         assert "v2.18.0" in updated
         assert "v2.17.0" in updated
 
+    def test_insert_with_spacing_and_alignment_variants(self) -> None:
+        """测试表头空格与对齐线变体"""
+        doc = """# Contract
+
+## 14. 版本控制
+
+说明段落在表格前。
+
+|  版本  |   日期   |  变更说明  |
+| :---- | ---: | --- |
+| v2.18.0 | 2026-02-01 | 旧版本 |
+
+说明段落在表格后。
+"""
+        updated, success = insert_version_row_in_doc(doc, "2.19.0", "2026-02-02", "新版本")
+
+        assert success is True
+        lines = updated.splitlines()
+        align_index = lines.index("| :---- | ---: | --- |")
+        assert lines[align_index + 1] == "| v2.19.0 | 2026-02-02 | 新版本 |"
+
+    def test_insert_with_section_13_and_description(self) -> None:
+        """测试第 13 章带说明段落"""
+        doc = """# Contract
+
+## 13. 版本控制
+
+这里是说明段落。
+
+| 版本 | 日期 | 变更说明 |
+| --- | --- | --- |
+| v2.18.0 | 2026-02-01 | 旧版本 |
+"""
+        updated, success = insert_version_row_in_doc(doc, "2.19.0", "2026-02-02", "新版本")
+
+        assert success is True
+        lines = updated.splitlines()
+        align_index = lines.index("| --- | --- | --- |")
+        assert lines[align_index + 1] == "| v2.19.0 | 2026-02-02 | 新版本 |"
+
     def test_insert_fails_without_table(self) -> None:
         """测试无版本表时插入失败"""
         doc = "# No Version Table Here"
@@ -534,6 +574,12 @@ class TestBumperWriteFiles:
 
         assert original_contract["version"] == "2.18.0"
 
+        doc_path = project_root / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
+        with open(doc_path, "r", encoding="utf-8") as f:
+            original_doc = f.read()
+
+        assert original_doc == doc
+
 
 class TestBumperErrorHandling:
     """测试 Bumper 错误处理"""
@@ -593,6 +639,30 @@ class TestBumperErrorHandling:
         assert result.success is True
         assert result.errors is not None
         assert any("already exists" in e for e in result.errors)
+
+    def test_existing_version_does_not_duplicate_doc_row(self) -> None:
+        """测试已有版本不重复插入"""
+        contract = make_contract("2.18.0", "2026-02-01")
+        doc = make_doc_with_version_table(
+            [
+                ("2.18.1", "2026-02-02", "新版本"),
+                ("2.18.0", "2026-02-01", "旧版本"),
+            ]
+        )
+        project_root = create_project_structure(contract, doc)
+
+        bumper = WorkflowContractVersionBumper(project_root)
+        result = bumper.bump(bump_type="patch", dry_run=False)
+
+        assert result.success is True
+        assert result.errors is not None
+        assert any("already exists" in e for e in result.errors)
+
+        doc_path = project_root / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
+        with open(doc_path, "r", encoding="utf-8") as f:
+            updated_doc = f.read()
+
+        assert updated_doc.count("v2.18.1") == 1
 
 
 class TestBumperDefaultBehavior:

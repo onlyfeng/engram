@@ -11,12 +11,15 @@
   - [本地最小复现命令集](#本地最小复现命令集)
   - [CI Job/Step 映射表](#ci-jobstep-映射表)
   - [共享文件单代理负责规则](#共享文件单代理负责规则)
+  - [共享文件变更最小验证命令集（ci.yml/Makefile/workflow_contract）](#共享文件变更最小验证命令集ciymlmakefileworkflow_contract)
 - [0. 门禁快速参考](#0-门禁快速参考)
   - [0.1 Makefile 门禁目标汇总](#01-makefile-门禁目标汇总)
   - [0.2 Makefile 与 CI Workflow 差异对照](#02-makefile-与-ci-workflow-差异对照)
   - [0.3 门禁详细参考表](#03-门禁详细参考表)
   - [0.4 CI 测试隔离门禁详解](#04-ci-测试隔离门禁详解)
   - [0.5 缓存清理排障流程](#05-缓存清理排障流程)
+  - [0.6 MCP Doctor 诊断 Runbook](#06-mcp-doctor-诊断-runbook)
+  - [0.6.4 MCP Doctor 检查矩阵（附录）](#064-mcp-doctor-检查矩阵附录)
 - [1. 门禁变量总览](#1-门禁变量总览)
   - [1.1 mypy 门禁变量](#11-mypy-门禁变量)
   - [1.2 ruff 门禁变量](#12-ruff-门禁变量)
@@ -84,46 +87,81 @@ CI 门禁依赖以下 3 条主线的配置文件作为 SSOT：
 
 ### 本地最小复现命令集
 
-以下命令可在本地复现 CI 门禁检查：
+以下命令可在本地复现 CI 门禁检查（注意：`make ci` 为本地聚合，可能包含 CI 未覆盖项，差异见 0.2）：
 
 ```bash
 # ============================================
-# 一键运行所有 CI 检查（推荐）
+# 一键运行所有 CI 检查（本地聚合）
 # ============================================
 make ci
 
 # ============================================
-# 类型检查主线
+# lint job
 # ============================================
-make typecheck-gate              # mypy baseline 模式检查
-make typecheck-strict-island     # mypy strict-island 核心模块检查
-make check-mypy-baseline-policy  # mypy baseline 变更策略（PR only）
-make check-type-ignore-policy    # type: ignore 注释规范检查
+make lint
+make format-check
+make typecheck-gate
+make typecheck-strict-island
 
 # ============================================
-# 代码风格主线
+# Workflow 合约 job
 # ============================================
-make lint                        # ruff lint 检查
-make format-check                # ruff format 检查
-make ruff-lint-island            # ruff lint-island 检查（Phase >= 1）
-make check-noqa-policy           # noqa 注释规范检查
+make validate-workflows-strict
+make check-workflow-contract-docs-sync
+make check-workflow-contract-error-types-docs-sync
+make check-workflow-contract-version-policy
+make check-workflow-contract-doc-anchors
+make check-workflow-contract-internal-consistency
+make check-workflow-make-targets-consistency
 
 # ============================================
-# Workflow 合约主线
+# Gateway/MCP 相关 job
 # ============================================
-make validate-workflows          # Workflow 合约校验（默认模式）
-make validate-workflows-strict   # Workflow 合约校验（严格模式，CI 使用）
+make check-gateway-di-boundaries
+make check-gateway-error-reason-usage
+make check-gateway-import-surface
+make check-gateway-public-api-surface
+make check-gateway-public-api-docs-sync
+make check-gateway-correlation-id-single-source
+make check-mcp-error-contract
+make check-mcp-error-docs-sync
 
 # ============================================
-# 其他门禁
+# 迭代相关 job
 # ============================================
-make check-gateway-di-boundaries # Gateway DI 边界检查
-make check-no-root-wrappers      # 根目录 wrapper 导入检查
-make check-ci-test-isolation     # CI 测试隔离检查
-make check-env-consistency       # 环境变量一致性
-make check-schemas               # JSON Schema 校验
-make check-cli-entrypoints       # CLI 入口点一致性
-make check-migration-sanity      # SQL 迁移计划 Sanity
+make check-iteration-docs
+make test-iteration-tools
+make check-iteration-fixtures-freshness
+
+# ============================================
+# 其他 job
+# ============================================
+make check-env-consistency
+make check-schemas
+make check-logbook-consistency
+make check-migration-sanity
+make check-scm-sync-consistency
+make check-cli-entrypoints
+make check-ci-test-isolation
+pytest tests/logbook/test_sql_migrations_safety.py -v
+git ls-files .iteration  # 期望无输出
+```
+
+#### MCP/Gateway 最小回归矩阵
+
+当修改 `src/engram/gateway/api_models.py`、`src/engram/gateway/routes.py`、`src/engram/gateway/middleware.py` 或 `scripts/ops/mcp_doctor.py` 任一处时，**必须**执行以下最小回归矩阵：
+
+```bash
+pytest scripts/tests/test_mcp_doctor.py -q
+pytest tests/gateway/test_mcp_cors_preflight.py -q
+pytest tests/gateway/test_mcp_jsonrpc_contract.py -q
+
+# 本地运行 Gateway 后执行
+python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787
+
+# 需要鉴权时（示例）
+python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787 \
+  --header "Authorization: Bearer <token>"
 ```
 
 ### CI Job/Step 映射表
@@ -134,26 +172,37 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 |--------|-----------|--------------|------|
 | `lint` | Run ruff check (lint) | `make lint` | 代码风格检查 |
 | | Run ruff format check | `make format-check` | 格式检查 |
-| | Count mypy baseline errors | - | 统计 baseline 错误数（优先 mypy_metrics 口径） |
-| | Resolve mypy gate | - | 根据 phase/分支/阈值解析 gate |
-| | Run mypy type check | `make typecheck-gate` | mypy 检查（使用解析后的 gate） |
+| | Count/resolve mypy gate | - | baseline_count + gate 解析在 CI 内部完成 |
+| | Run mypy type check | `make typecheck-gate` | mypy 检查（baseline gate） |
 | | Run mypy strict-island check | `make typecheck-strict-island` | 核心模块零错误 |
-| | Check mypy baseline changes | `make check-mypy-baseline-policy` | 仅 PR 时运行 |
-| | Check type ignore policy | `make check-type-ignore-policy` | type: ignore 规范 |
-| | Check noqa policy | `make check-noqa-policy` | noqa 注释规范 |
-| | Check no_root_wrappers | `make check-no-root-wrappers` | 禁止根目录导入 |
-| | Check CI test isolation | `make check-ci-test-isolation` | CI 测试隔离 |
+| `no-iteration-tracked` | Check no .iteration files tracked | `git ls-files .iteration` | 期望无输出 |
 | `env-var-consistency` | Check environment variable consistency | `make check-env-consistency` | 环境变量一致性 |
 | `schema-validate` | Run schema validation | `make check-schemas` | JSON Schema 校验 |
 | `logbook-consistency` | Check logbook configuration consistency | `make check-logbook-consistency` | Logbook 配置一致性 |
 | `migration-sanity` | Check SQL migration plan sanity | `make check-migration-sanity` | SQL 迁移计划 Sanity |
-| `sql-safety` | Run SQL safety check | pytest 静态测试 | 高危语句检测（仅 CI） |
+| `sql-safety` | Run SQL safety check | `pytest tests/logbook/test_sql_migrations_safety.py -v` | 高危语句检测（仅 CI） |
 | `gateway-di-boundaries` | Check Gateway DI boundaries | `make check-gateway-di-boundaries` | DI 边界检查 |
+| `gateway-error-reason-usage` | Check Gateway ErrorReason usage | `make check-gateway-error-reason-usage` | ErrorReason 使用规范 |
+| `gateway-import-surface` | Check Gateway import surface | `make check-gateway-import-surface` | __init__ 懒加载策略 |
+| `gateway-public-api-surface` | Check Gateway Public API import surface | `make check-gateway-public-api-surface` | Public API 导入表面 |
+| | Check Gateway Public API docs sync | `make check-gateway-public-api-docs-sync` | Public API 文档同步 |
+| `gateway-correlation-id-single-source` | Check correlation_id single source | `make check-gateway-correlation-id-single-source` | correlation_id 单一来源 |
+| `mcp-error-contract` | Check MCP JSON-RPC error contract | `make check-mcp-error-contract` | MCP 错误码合约 |
+| | Check MCP JSON-RPC error docs sync | `make check-mcp-error-docs-sync` | MCP 错误码文档同步 |
+| `iteration-docs-check` | Check iteration docs consistency | `make check-iteration-docs` | 本地为超集（含占位符/本地产物链接检查） |
+| `ci-test-isolation` | Check CI test isolation | `make check-ci-test-isolation` | CI 测试隔离 |
+| `iteration-tools-test` | Run iteration tools tests | `make test-iteration-tools` | tests/iteration |
+| | Check iteration fixtures freshness | `make check-iteration-fixtures-freshness` | fixtures 新鲜度 |
 | `scm-sync-consistency` | Check SCM Sync consistency | `make check-scm-sync-consistency` | SCM Sync 一致性 |
 | `cli-entrypoints-consistency` | Check CLI entrypoints consistency | `make check-cli-entrypoints` | CLI 入口点一致性 |
-| `sql-inventory-consistency` | Check SQL migration inventory consistency | `make check-sql-inventory-consistency` | SQL 清单文档一致性 |
 | `workflow-contract` | Validate workflow contract | `make validate-workflows-strict` | Workflow 合约校验 |
-| `test` | Run unit and integration tests | `make test` | 需要数据库 |
+| | Check workflow contract docs sync | `make check-workflow-contract-docs-sync` | 文档同步 |
+| | Check workflow contract error types docs sync | `make check-workflow-contract-error-types-docs-sync` | Error Types 同步 |
+| | Check workflow contract version policy | `make check-workflow-contract-version-policy` | 版本策略 |
+| | Check workflow contract doc anchors | `make check-workflow-contract-doc-anchors` | 文档锚点 |
+| | Check workflow contract internal consistency | `make check-workflow-contract-internal-consistency` | 合约不变量 |
+| | Check workflow make targets consistency | `make check-workflow-make-targets-consistency` | Make targets 一致性 |
+| `test` | Run unit and integration tests | `pytest tests/gateway/ -v` + `pytest tests/acceptance/ -v` | 需要数据库 |
 
 ### 共享文件单代理负责规则
 
@@ -165,8 +214,16 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 | `Makefile` | CI 代理 | 构建和门禁目标定义 | 中：目标名称变更影响文档和 CI |
 | `.github/workflows/ci.yml` | CI 代理 | CI 流水线定义 | 高：与 workflow_contract 强关联 |
 | `scripts/ci/mypy_baseline.txt` | CI 代理 | mypy 基线文件 | 高：行级冲突难以解决 |
-| `scripts/ci/workflow_contract.v1.json` | CI 代理 | CI 合约定义 | 中：需与 ci.yml 同步更新 |
+| `scripts/ci/workflow_contract.v1.json` | CI 代理 | CI 合约定义（合约系统关键路径，建议单 PR/单 owner 串行修改） | 高：与 ci.yml/文档/校验脚本强耦合 |
+| `scripts/ci/check_workflow_contract_version_policy.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：版本策略与合约字段同步 |
+| `scripts/ci/check_workflow_contract_docs_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：文档/合约同步风险 |
+| `scripts/ci/check_workflow_contract_coupling_map_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：耦合映射同步风险 |
+| `scripts/ci/render_workflow_contract_docs.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：生成文档一致性风险 |
+| `scripts/ci/workflow_contract_common.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：共享逻辑影响多脚本 |
 | `docs/reference/environment_variables.md` | 文档代理 | 环境变量 SSOT | 中：多处文档引用 |
+
+这些路径由 CODEOWNERS 强制双审。
+即使是非 CI 相关的 `Makefile` 变更也会触发双审，这是有意的保守策略。
 
 **协作规则**：
 
@@ -176,6 +233,41 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
    - 修改 `ci.yml` 时，同步更新 `workflow_contract.v1.json`
    - 修改 `pyproject.toml` 中的 mypy/ruff 配置时，同步更新本文档
    - 新增环境变量时，同步更新 `docs/reference/environment_variables.md`
+
+### 共享文件变更最小验证命令集（ci.yml/Makefile/workflow_contract）
+
+当修改 `.github/workflows/ci.yml`、`Makefile`、`scripts/ci/workflow_contract.v1.json` 或其相关文档时，至少执行以下命令以确保合约与文档一致。
+
+**上位规则**：任何变更完成后**必须**运行 `make ci`。更完整的流程与顺序请参见 [维护指南：0-快速变更流程（SSOT-first）](../ci_nightly_workflow_refactor/maintenance.md#0-快速变更流程ssot-first)。
+
+```bash
+# 核心合约校验（CI 使用的严格模式）
+make validate-workflows-strict
+
+# 合约与文档同步（contract.md、maintenance.md 等）
+make check-workflow-contract-docs-sync
+
+# 合约版本策略（版本升级规则、兼容性）
+make check-workflow-contract-version-policy
+
+# 文档锚点一致性（contract.md 内部锚点）
+make check-workflow-contract-doc-anchors
+
+# 依赖耦合映射一致性（coupling map 同步）
+make check-workflow-contract-coupling-map-sync
+
+# 文档生成一致性（生成块/片段与源数据一致）
+make check-workflow-contract-docs-generated
+
+# 合约内部一致性（字段结构、交叉引用）
+make check-workflow-contract-internal-consistency
+
+# Makefile 目标一致性（合约声明的目标必须存在）
+make check-workflow-make-targets-consistency
+
+# CI 脚本测试（验证脚本逻辑与契约行为）
+pytest tests/ci/ -q
+```
 
 ---
 
@@ -187,41 +279,51 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 |------|-----------|------|-------------|
 | **代码风格** | `lint` | ruff check（lint 规则检查） | `lint` |
 | | `format-check` | ruff format（格式检查） | `lint` |
-| | `ruff-gate` | ruff 门禁（current 模式） | `lint` |
-| | `ruff-gate-future` | ruff 门禁（future-baseline 模式） | - |
-| | `ruff-lint-island` | ruff P1 规则 lint-island 检查 | `lint` |
-| | `ruff-metrics` | 收集 ruff 指标 | `lint` |
-| | `check-ruff-metrics-thresholds` | 检查 ruff 指标阈值（warn only，Phase 0） | `lint` |
-| | `check-ruff-metrics-thresholds-fail` | 检查 ruff 指标阈值（fail 模式，Phase 1） | - |
-| **类型检查** | `typecheck` | mypy 原始调用 | - |
+| **类型检查** | `typecheck` | mypy 直接检查 | - |
 | | `typecheck-gate` | mypy baseline 模式（推荐） | `lint` |
 | | `typecheck-strict-island` | mypy strict-island 模式 | `lint` |
-| | `typecheck-strict` | mypy strict 模式 | - |
 | | `mypy-baseline-update` | 更新 mypy 基线文件 | - |
-| | `mypy-metrics` | 收集 mypy 指标 | `lint` |
-| | `check-mypy-metrics-thresholds` | 检查 mypy 指标阈值（warn only，Phase 0） | `lint` |
-| | `check-mypy-metrics-thresholds-fail` | 检查 mypy 指标阈值（fail 模式，Phase 1） | - |
-| | `check-mypy-baseline-policy` | mypy baseline 变更策略检查 | `lint` (PR only) |
-| | `check-strict-island-admission` | Strict Island 准入检查（本地工具） | - |
-| **策略检查** | `check-noqa-policy` | noqa 注释策略检查（禁止裸 noqa） | `lint` |
-| | `check-noqa-island` | noqa 策略检查（lint-island 严格模式） | - |
-| | `check-type-ignore-policy` | type: ignore 注释策略检查 | `lint` |
-| | `check-no-root-wrappers` | 根目录 wrapper 禁止导入检查（组合） | `lint` |
-| | `check-no-root-wrappers-allowlist` | allowlist 有效性检查 | `lint` |
-| | `check-no-root-wrappers-usage` | 根目录 wrapper 使用检查 | `lint` |
-| | `check-ci-test-isolation` | CI 测试隔离检查（禁止模块级 sys.path 污染） | `lint` |
+| | `mypy-metrics` | 收集 mypy 指标 | `lint`（baseline_count 口径） |
+| | `check-mypy-metrics-thresholds` | 检查 mypy 指标阈值（warn only） | - |
+| | `check-mypy-metrics-thresholds-fail` | 检查 mypy 指标阈值（fail 模式） | - |
 | **一致性检查** | `check-env-consistency` | 环境变量一致性检查 | `env-var-consistency` |
 | | `check-logbook-consistency` | Logbook 配置一致性检查 | `logbook-consistency` |
 | | `check-schemas` | JSON Schema 校验 | `schema-validate` |
 | | `check-cli-entrypoints` | CLI 入口点一致性检查 | `cli-entrypoints-consistency` |
-| | `check-gateway-di-boundaries` | Gateway DI 边界检查（严格模式） | `gateway-di-boundaries` |
-| | `check-gateway-di-boundaries-compat` | Gateway DI 边界检查（compat 模式） | - |
 | | `check-scm-sync-consistency` | SCM Sync 一致性检查 | `scm-sync-consistency` |
-| **SQL 迁移** | `check-migration-sanity` | SQL 迁移计划 Sanity 检查 | `migration-sanity` |
-| | `check-sql-inventory-consistency` | SQL 迁移清单文档一致性 | `sql-inventory-consistency` |
-| **Workflow 合约** | `validate-workflows` | Workflow 合约校验 | `workflow-contract` |
+| **Gateway/MCP** | `check-gateway-error-reason-usage` | Gateway ErrorReason 使用规范 | `gateway-error-reason-usage` |
+| | `check-gateway-public-api-surface` | Gateway Public API 导入表面 | `gateway-public-api-surface` |
+| | `check-gateway-public-api-docs-sync` | Gateway Public API 文档同步 | `gateway-public-api-surface` |
+| | `check-gateway-di-boundaries` | Gateway DI 边界检查（严格模式） | `gateway-di-boundaries` |
+| | `check-gateway-import-surface` | Gateway __init__ 懒加载策略检查 | `gateway-import-surface` |
+| | `check-gateway-correlation-id-single-source` | correlation_id 单一来源检查 | `gateway-correlation-id-single-source` |
+| | `check-mcp-error-contract` | MCP JSON-RPC 错误码合约检查 | `mcp-error-contract` |
+| | `check-mcp-error-docs-sync` | MCP JSON-RPC 错误码文档同步 | `mcp-error-contract` |
+| | `check-mcp-config-docs-sync` | MCP 配置文档与 SSOT 同步 | - |
+| **迭代文档** | `check-iteration-docs` | 迭代文档规范检查 | `iteration-docs-check` |
+| | `check-iteration-evidence` | 迭代证据合约检查 | `iteration-docs-check` |
+| | `check-iteration-fixtures-freshness` | 迭代 fixtures 新鲜度 | `iteration-tools-test` |
+| | `check-min-gate-profiles-consistency` | 最小门禁 profile 一致性 | - |
+| | `check-iteration-gate-profiles-contract` | 迭代门禁 profile 合约 | - |
+| | `check-iteration-toolchain-drift-map-contract` | toolchain drift map 合约 | - |
+| | `check-iteration-docs-generated-blocks` | 回归文档受控块一致性 | - |
+| | `check-iteration-docs-headings` | regression 标题检查（阻断） | - |
+| | `check-iteration-docs-headings-warn` | regression 标题检查（警告） | - |
+| | `check-iteration-docs-superseded-only` | 仅检查 SUPERSEDED 一致性 | - |
+| **Workflow 合约** | `validate-workflows` | Workflow 合约校验（默认模式） | - |
 | | `validate-workflows-strict` | Workflow 合约校验（严格模式） | `workflow-contract` |
-| | `check-workflow-contract-docs-sync` | Workflow 合约与文档同步校验 | `workflow-contract` |
+| | `check-workflow-contract-docs-sync` | 合约与文档同步 | `workflow-contract` |
+| | `check-workflow-contract-error-types-docs-sync` | Error Types 文档同步 | `workflow-contract` |
+| | `check-workflow-contract-version-policy` | 版本策略检查 | `workflow-contract` |
+| | `check-workflow-contract-doc-anchors` | 文档锚点检查 | `workflow-contract` |
+| | `check-workflow-contract-internal-consistency` | 合约内部一致性 | `workflow-contract` |
+| | `check-workflow-contract-coupling-map-sync` | Coupling Map 同步 | - |
+| | `check-workflow-make-targets-consistency` | Make targets 一致性 | `workflow-contract` |
+| | `check-workflow-contract-docs-generated` | 文档受控块生成一致性 | - |
+| **策略/隔离** | `check-noqa-policy` | noqa 注释策略检查 | - |
+| | `check-no-root-wrappers` | 根目录 wrapper 禁止导入检查 | - |
+| | `check-ci-test-isolation` | CI 测试隔离检查 | `ci-test-isolation` |
+| **SQL 迁移** | `check-migration-sanity` | SQL 迁移计划 Sanity 检查 | `migration-sanity` |
 | **综合** | `ci` | 运行所有 CI 检查 | 全部 jobs |
 | | `regression` | 运行回归测试 | - |
 
@@ -229,33 +331,14 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 
 | 门禁 | Makefile 目标 | CI 执行位置 | 差异说明 |
 |------|---------------|-------------|----------|
-| **ruff lint** | `lint` | `lint` job: "Run ruff check" | 一致 |
-| **ruff format** | `format-check` | `lint` job: "Run ruff format check" | 一致 |
-| **ruff metrics** | `ruff-metrics` | `lint` job: "Collect ruff metrics" | CI 设置 `continue-on-error: true` |
-| **ruff metrics thresholds** | `check-ruff-metrics-thresholds` | `lint` job: "Check ruff metrics thresholds" | **Phase 0 观测**：CI 默认 warn-only（`ENGRAM_RUFF_FAIL_ON_THRESHOLD=false`）；**Phase 1 启用**：设为 `true` 可启用 fail 模式；本地复现需先 `make ruff-metrics` |
-| **ruff lint-island** | `ruff-lint-island` | `lint` job: "Check ruff lint-island" | 一致；已纳入 `make ci` |
-| **mypy baseline** | `typecheck-gate` | `lint` job: "Run mypy type check" | CI 先计算 baseline_count（优先 mypy_metrics 口径），再由 `resolve_mypy_gate.py` 动态解析 gate |
-| **mypy strict-island** | `typecheck-strict-island` | `lint` job: "Run mypy strict-island check" | 一致 |
-| **mypy baseline policy** | `check-mypy-baseline-policy` | `lint` job: "Check mypy baseline changes" | **仅 CI PR 时触发**；本地可用 `make check-mypy-baseline-policy BASE_SHA=origin/main` 复现 |
-| **type: ignore policy** | `check-type-ignore-policy` | `lint` job: "Check type ignore policy" | 一致 |
-| **noqa policy** | `check-noqa-policy` | `lint` job: "Check noqa policy" | **CI 与 ENGRAM_RUFF_PHASE 联动**：Phase >= 1 时使用 `--lint-island-strict`，否则使用默认模式 |
-| **noqa policy (island)** | `check-noqa-island` | `lint` job: "Check noqa policy" (Phase >= 1) | 对应 CI 中 Phase >= 1 时的行为 |
-| **mypy metrics** | `mypy-metrics` | `lint` job: "Collect mypy metrics" | 一致 |
-| **mypy metrics thresholds** | `check-mypy-metrics-thresholds` | `lint` job: "Check mypy metrics thresholds" | **Phase 0（默认）**：`ENGRAM_MYPY_METRICS_FAIL_ON_THRESHOLD` 未设置或为 `false`，超阈值仅 warn 不阻断；**Phase 1 启用**：设为 `true` 时超阈值 CI 失败（脚本返回非零退出码） |
-| **env consistency** | `check-env-consistency` | `env-var-consistency` job | 一致 |
-| **schema validation** | `check-schemas` | `schema-validate` job | 一致 |
-| **logbook consistency** | `check-logbook-consistency` | `logbook-consistency` job | 一致 |
-| **migration sanity** | `check-migration-sanity` | `migration-sanity` job | CI 额外运行 pytest sanity 测试 |
-| **sql safety** | - | `sql-safety` job | **仅 CI**，Makefile 无对应目标 |
-| **gateway di** | `check-gateway-di-boundaries` | `gateway-di-boundaries` job | 均使用 `--phase removal --disallow-allow-markers` 严格模式 |
-| **scm sync** | `check-scm-sync-consistency` | `scm-sync-consistency` job | 一致 |
-| **cli entrypoints** | `check-cli-entrypoints` | `cli-entrypoints-consistency` job | 一致 |
-| **sql inventory** | `check-sql-inventory-consistency` | `sql-inventory-consistency` job | 一致 |
-| **workflow contract** | `validate-workflows-strict` | `workflow-contract` job | 一致（CI 使用严格模式） |
-| **workflow contract docs sync** | `check-workflow-contract-docs-sync` | `workflow-contract` job | 一致；已纳入 `make ci` |
-| **no_root_wrappers allowlist** | `check-no-root-wrappers-allowlist` | `lint` job: "Check no_root_wrappers allowlist validity" | 一致 |
-| **no_root_wrappers usage** | `check-no-root-wrappers-usage` | `lint` job: "Check no_root_wrappers usage" | 一致 |
-| **strict-island admission** | `check-strict-island-admission` | - | **本地工具**；默认读取 `configs/mypy_strict_island_candidates.json`；非 CI 必需 |
+| **mypy metrics thresholds** | `check-mypy-metrics-thresholds` | - | 本地可选；CI 仅用 `mypy_metrics` 计算 baseline_count |
+| **iteration docs** | `check-iteration-docs` | `iteration-docs-check` job | CI 仅跑 no-iteration-links + evidence contract；本地额外检查本地产物链接与占位符（warn-only） |
+| **iteration toolchain drift map** | `check-iteration-toolchain-drift-map-contract` | - | 本地可选；CI 未覆盖 |
+| **workflow doc anchors** | `check-workflow-contract-doc-anchors` | `workflow-contract` job | CI 有此检查；`make ci` 当前不包含 |
+| **CI script tests** | `pytest tests/ci/ -q` | `workflow-contract` job | CI 运行 tests/ci（带 ignore 列表）；本地需手动执行 |
+| **no-iteration-tracked** | - | `no-iteration-tracked` job | CI 额外检查 `.iteration/` 未被跟踪；本地可用 `git ls-files .iteration` |
+| **noqa/no_root_wrappers** | `check-noqa-policy` / `check-no-root-wrappers` | - | 当前仅本地可选门禁，未接入 CI |
+| **MCP config docs sync** | `check-mcp-config-docs-sync` | - | 仅本地校验，CI 未覆盖 |
 
 ### 0.3 门禁详细参考表
 
@@ -263,22 +346,21 @@ make check-migration-sanity      # SQL 迁移计划 Sanity
 |----------|----------|--------|------------|----------|--------------|----------|
 | **mypy baseline** | `make typecheck-gate` | `lint` | `ENGRAM_MYPY_GATE`, `ENGRAM_MYPY_MIGRATION_PHASE`, `ENGRAM_MYPY_GATE_OVERRIDE` | 设置 `ENGRAM_MYPY_GATE_OVERRIDE=baseline` | 新增类型错误 | 1) 修复错误 2) 更新 baseline `make mypy-baseline-update` |
 | **mypy strict-island** | `make typecheck-strict-island` | `lint` | `pyproject.toml [tool.engram.mypy].strict_island_paths` | 从 strict_island_paths 移除模块 | 核心模块类型错误 | 修复错误，不建议移除模块 |
-| **mypy baseline policy** | `make check-mypy-baseline-policy` | `lint` (PR only) | - | - | baseline 净增缺少说明/标签 | 在 PR body 添加说明 section 和 issue 引用 |
+| **mypy baseline policy** | `python -m scripts.ci.check_mypy_baseline_policy` | `lint` (PR only) | - | - | baseline 净增缺少说明/标签 | 在 PR body 添加说明 section 和 issue 引用 |
 | **ruff lint** | `make lint` | `lint` | `pyproject.toml [tool.ruff.lint]` | 添加规则到 `ignore` 列表 | 代码风格违规 | `ruff check --fix src/ tests/` |
 | **ruff format** | `make format-check` | `lint` | `pyproject.toml [tool.ruff]` | - | 格式不一致 | `make format` |
 | **noqa policy** | `make check-noqa-policy` | `lint` | `pyproject.toml [tool.engram.ruff].lint_island_paths` | CI 中添加 `\|\| true` | 裸 noqa 注释 | 添加错误码：`# noqa: E501` |
-| **noqa policy (island)** | `make check-noqa-island` | - | 同上 | - | lint-island 路径缺少原因说明 | 添加原因：`# noqa: E501  # 原因` |
-| **type: ignore policy** | `make check-type-ignore-policy` | `lint` | - | CI 中添加 `\|\| true` | strict-island 路径下缺少错误码或说明 | 补充：`# type: ignore[code] - reason` |
+| **noqa policy (island)** | `python -m scripts.ci.check_noqa_policy --lint-island-strict` | - | 同上 | - | lint-island 路径缺少原因说明 | 添加原因：`# noqa: E501  # 原因` |
+| **type: ignore policy** | `python -m scripts.ci.check_type_ignore_policy` | `lint` | - | CI 中添加 `\|\| true` | strict-island 路径下缺少错误码或说明 | 补充：`# type: ignore[code] - reason` |
 | **no_root_wrappers** | `make check-no-root-wrappers` | `lint` | `scripts/ci/no_root_wrappers_allowlist.json` | 添加到 allowlist 或使用 inline marker | 从根目录导入 wrapper 模块 | 1) 改用 `engram.logbook.xxx` 导入 2) 添加到 allowlist 3) 使用 inline marker |
 | **ci test isolation** | `make check-ci-test-isolation` | `lint` | - | - | 模块级 sys.path 污染、顶层 CI 模块导入、双模式导入 | 1) 改用 `scripts.ci.*` 导入 2) 移除模块级 sys.path 修改 3) 参见 [CI 测试隔离规范](./ci_test_isolation.md) |
 | **env consistency** | `make check-env-consistency` | `env-var-consistency` | - | - | 环境变量文档/代码不一致 | 同步 `.env.example`, docs, 代码 |
 | **schema validation** | `make check-schemas` | `schema-validate` | - | - | JSON Schema 校验失败 | 修复 schema 或 fixture |
 | **migration sanity** | `make check-migration-sanity` | `migration-sanity` | - | - | SQL 文件命名/分类违规 | 参见 `docs/logbook/sql_file_inventory.md` |
-| **sql inventory** | `make check-sql-inventory-consistency` | `sql-inventory-consistency` | - | - | 文档与实际 SQL 文件不一致 | 更新 `docs/logbook/sql_file_inventory.md` |
 | **workflow contract** | `make validate-workflows-strict` | `workflow-contract` | `scripts/ci/workflow_contract.v1.json` | 改用非严格模式 `validate-workflows` | job/step 名称变更 | 同步更新合约文件 |
 | **cli entrypoints** | `make check-cli-entrypoints` | `cli-entrypoints-consistency` | - | - | pyproject.toml 与代码/文档不一致 | 同步 CLI 入口点 |
 | **gateway di** | `make check-gateway-di-boundaries` | `gateway-di-boundaries` | `--phase removal --disallow-allow-markers` | 改用 `check-gateway-di-boundaries-compat` | DI 边界违规、残留 allow-markers | 参见 `docs/architecture/adr_gateway_di_and_entry_boundary.md` |
-| **strict-island admission** | `make check-strict-island-admission` | - | `configs/mypy_strict_island_candidates.json`、`CANDIDATE`、`CANDIDATES_FILE` | - | baseline 错误非 0 / 缺少 override / 配置错误 | 参见 `docs/dev/mypy_baseline.md` §5.3 |
+| **strict-island admission** | `python -m scripts.ci.check_strict_island_admission` | - | `configs/mypy_strict_island_candidates.json`、`CANDIDATE`、`CANDIDATES_FILE` | - | baseline 错误非 0 / 缺少 override / 配置错误 | 参见 `docs/dev/mypy_baseline.md` §5.3 |
 
 ### 0.4 CI 测试隔离门禁详解
 
@@ -430,6 +512,94 @@ echo "缓存清理完成"
 
 ---
 
+### 0.6 MCP Doctor 诊断 Runbook
+
+> 用途：定位 Cursor MCP 接入失败、CORS 预检异常、tools/list 返回异常。
+> 脚本：`scripts/ops/mcp_doctor.py`（Make 目标：`make mcp-doctor`）
+
+#### 0.6.1 最小复现命令与预期
+
+```bash
+# 统一入口（建议）
+make mcp-doctor
+
+# JSON 输出（用于字段定位）
+python scripts/ops/mcp_doctor.py --json --pretty
+```
+
+**预期**：
+- 输出 7 个 `[OK]` 且退出码为 0
+- JSON 中 `checks[].passed` 均为 `true`
+
+**最小 curl 复现**：
+
+```bash
+GATEWAY_URL="http://127.0.0.1:8787"
+
+curl -sf "$GATEWAY_URL/health"
+# 预期：HTTP 200 + {"status":"ok",...}
+
+curl -i -X OPTIONS "$GATEWAY_URL/mcp"
+# 预期：HTTP 200/204 + Access-Control-Allow-* 头齐全
+
+curl -sf -X POST "$GATEWAY_URL/mcp" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# 预期：result.tools 为非空数组
+```
+
+**可用环境变量**：
+
+| 变量 | 作用 |
+|------|------|
+| `GATEWAY_URL` | 覆盖 Gateway 地址 |
+| `MCP_DOCTOR_TIMEOUT` | 超时时间（秒） |
+| `MCP_DOCTOR_AUTHORIZATION` | 注入 Authorization 头 |
+
+#### 0.6.2 失败分类（doctor JSON 输出字段）
+
+**字段速览**：
+
+| 字段 | 含义 |
+|------|------|
+| `status_code` | HTTP 状态码（health/options/tools/list） |
+| `missing_headers` | CORS 响应缺失项（Allow-Origin/Allow-Methods/Allow-Headers 或缺失的允许 header 值） |
+| `missing_expose_headers` | Access-Control-Expose-Headers 缺失的值（提示项，不单独导致失败） |
+| `error` | 请求层错误（DNS/连接/超时/解析失败） |
+| `response_preview` | 响应体预览（最多 200 字符） |
+
+**分类与首要定位文件/函数**：
+- **请求失败（`error` 非空）**：多为网络/超时/证书问题。首要定位 `scripts/ops/mcp_doctor.py:_request`（确认错误类型），以及对应入口 `src/engram/gateway/routes.py:health_check`、`src/engram/gateway/routes.py:mcp_options`、`src/engram/gateway/routes.py:mcp_endpoint`。
+- **状态码异常（`status_code` ≠ 200/204）**：401/403 优先看 `src/engram/gateway/middleware.py:GatewayAuthMiddleware`；404/405 优先看 `src/engram/gateway/routes.py:register_routes` 与 `src/engram/gateway/routes.py:mcp_options`/`mcp_endpoint`；5xx 优先看 `src/engram/gateway/mcp_rpc.py:dispatch_jsonrpc_request` 与 `src/engram/gateway/mcp_rpc.py:to_jsonrpc_error`。
+- **CORS 头缺失（`missing_headers`/`missing_expose_headers`）**：优先定位 `src/engram/gateway/api_models.py:MCP_CORS_HEADERS`、`src/engram/gateway/api_models.py:build_mcp_allow_headers`、`src/engram/gateway/routes.py:mcp_options`（OPTIONS 200/204），以及 `src/engram/gateway/middleware.py:_build_mcp_cors_headers`（401/403 注入）。若 `X-Correlation-ID` 或 Expose-Headers 异常，继续检查 `src/engram/gateway/routes.py:_make_cors_headers_with_correlation_id` 与 `src/engram/gateway/middleware.py:CorrelationIdMiddleware`。
+- **响应结构异常（`response_preview` 非预期）**：tools/list 返回非 JSON 或结构不符时，优先定位 `src/engram/gateway/mcp_rpc.py:handle_tools_list`、`src/engram/gateway/mcp_rpc.py:get_tool_definitions`、`src/engram/gateway/routes.py:mcp_endpoint`。
+
+#### 0.6.3 最小回归命令集合
+
+```bash
+make mcp-doctor
+pytest scripts/tests/test_mcp_doctor.py -q
+pytest tests/gateway/test_mcp_cors_preflight.py -q
+pytest tests/gateway/test_mcp_jsonrpc_contract.py -q
+```
+
+#### 0.6.4 MCP Doctor 检查矩阵（附录）
+
+| 检查项 | Doctor 请求/断言 | 通过标准 | 来源 |
+|--------|------------------|----------|------|
+| Gateway 健康检查 | `GET /health` | HTTP 200 | 来源：文档（`docs/gateway/02_mcp_integration_cursor.md`） |
+| CORS 预检响应 | `OPTIONS /mcp` + `Access-Control-Request-Headers` | 200/204；Allow-Origin/Methods/Headers 完整 | 来源：测试（`tests/gateway/test_mcp_cors_preflight.py`） |
+| JSON-RPC initialize | `POST /mcp` method=initialize | `result.protocolVersion`/`capabilities.tools`/`serverInfo` 字段齐全 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| JSON-RPC ping | `POST /mcp` method=ping | `result == {}` | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| tools/list 工具集合 | `POST /mcp` method=tools/list | tools 数量=5；名称集合匹配 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| tools/list 输入 Schema | tools.*.inputSchema.type=object；required 字段匹配 | required 对齐（`memory_store`/`memory_query`/`evidence_upload`） | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| evidence_upload Schema | `evidence_upload.inputSchema.properties` | keys 与 `content`/`content_type` 类型匹配 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| correlation_id 暴露 | tools/list 响应头 | `X-Correlation-ID` 格式 + Expose-Headers 含 `X-Correlation-ID` | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| correlation_id 唯一性 | 连续 tools/list 多次 | `X-Correlation-ID` 不重复 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| 未知方法错误契约 | `POST /mcp` method=unknown/method | `error.code=-32601` 且 `error.data` 必填字段齐全 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+
+---
+
 ## 1. 门禁变量总览
 
 ### 1.1 mypy 门禁变量
@@ -491,13 +661,7 @@ ENGRAM_MYPY_GATE_OVERRIDE: off
 当 PR 修改了 `scripts/ci/mypy_baseline.txt` 时，CI 会检查变更是否符合策略（净增需说明/标签）。
 
 ```bash
-# Make 目标（默认 base 为 origin/master 或 origin/main）
-make check-mypy-baseline-policy
-
-# 指定 base SHA（例如对比 origin/main）
-make check-mypy-baseline-policy BASE_SHA=origin/main
-
-# 直接调用 Python 脚本
+# 直接调用 Python 脚本（默认 base 为 origin/master 或 origin/main）
 python -m scripts.ci.check_mypy_baseline_policy \
   --base-sha origin/main \
   --head-sha HEAD \
@@ -716,12 +880,11 @@ make validate-workflows-strict
 make check-workflow-contract-docs-sync
 
 # JSON 输出（适合脚本处理）
-make validate-workflows-json
+make -s validate-workflows-json
 
-# 直接调用 Python 脚本
-python -m scripts.ci.validate_workflows
-python -m scripts.ci.validate_workflows --strict
-python -m scripts.ci.validate_workflows --json
+# JSON 输出写入文件（与 CI 产物路径一致）
+mkdir -p artifacts
+make -s validate-workflows-json > artifacts/workflow_contract_validation.json
 ```
 
 **检查内容**：
@@ -821,10 +984,6 @@ CI 中的 noqa 检查与 `ENGRAM_RUFF_PHASE` 变量联动：
 # Make 目标（默认模式：禁止裸 noqa）
 make check-noqa-policy
 
-# lint-island 严格模式（lint-island 路径要求原因说明）
-# 对应 CI 中 Phase >= 1 时的行为
-make check-noqa-island
-
 # 直接调用 Python 脚本
 python -m scripts.ci.check_noqa_policy --verbose
 
@@ -848,7 +1007,7 @@ python -m scripts.ci.check_noqa_policy --require-reason --verbose
 | 模式 | CLI 参数 | Make 目标 | CI 触发条件 | 说明 |
 |------|----------|-----------|-------------|------|
 | 默认 | （无） | `check-noqa-policy` | Phase 0 | 仅禁止裸 noqa，必须带错误码 |
-| lint-island-strict | `--lint-island-strict` | `check-noqa-island` | Phase >= 1 | lint-island 路径额外要求原因说明 |
+| lint-island-strict | `--lint-island-strict` | - | Phase >= 1 | lint-island 路径额外要求原因说明 |
 | require-reason | `--require-reason` | - | - | 所有文件都要求原因说明 |
 
 **lint-island 路径配置**：
@@ -1519,10 +1678,10 @@ export ENGRAM_VERIFY_GATE=off
 
 ```yaml
 # 从严格模式
-python -m scripts.ci.validate_workflows --strict
+make validate-workflows-strict
 
 # 改为非严格模式（仅 errors 失败，warnings 忽略）
-python -m scripts.ci.validate_workflows
+make validate-workflows
 ```
 
 **方式 2：临时跳过检查**
@@ -1531,7 +1690,7 @@ python -m scripts.ci.validate_workflows
 # .github/workflows/ci.yml (临时)
 - name: Validate workflow contract
   run: |
-    python -m scripts.ci.validate_workflows --strict || true
+    make validate-workflows-strict || true
 ```
 
 **方式 3：更新合约文件**
@@ -2661,8 +2820,8 @@ make check-workflow-contract-docs-sync
 # 检查 CLI 入口点是否同步
 make check-cli-entrypoints
 
-# 检查 SQL 清单是否同步
-make check-sql-inventory-consistency
+# 检查 SQL 迁移计划是否正常
+make check-migration-sanity
 
 # 检查环境变量是否同步
 make check-env-consistency
@@ -2683,4 +2842,4 @@ make check-env-consistency
 
 ---
 
-> 更新时间：2026-02-02（添加 0.5 缓存清理排障流程，CI 启用 PYTHONDONTWRITEBYTECODE=1）
+> 更新时间：2026-02-03（补充 MCP Doctor 检查矩阵与 JSON-RPC 检查项）

@@ -1186,8 +1186,8 @@ except ImportError:
 | `make_jsonrpc_result(id, result)` | mcp_rpc.py:505-507 | 构造 JSON-RPC 成功响应 |
 | `register_tool_executor(executor)` | mcp_rpc.py:1350-1363 | 注册工具执行器 |
 | `get_tool_executor()` | mcp_rpc.py:1366-1368 | 获取工具执行器 |
-| `generate_correlation_id()` | mcp_rpc.py:298-300 | 生成 correlation_id |
-| `normalize_correlation_id(correlation_id)` | mcp_rpc.py:325-351 | 归一化 correlation_id |
+| `generate_correlation_id()` | correlation_id.py:60-76 | 生成 correlation_id |
+| `normalize_correlation_id(correlation_id)` | correlation_id.py:109-135 | 归一化 correlation_id |
 
 ### 5.8 测试覆盖索引
 
@@ -1983,7 +1983,42 @@ make ci
 
 ---
 
-## 12. 版本历史
+## 12. ADR: Gateway 路由 SSOT 收敛（短）
+
+> **状态**：提案中  
+> **范围**：`src/engram/gateway/main.py` / `src/engram/gateway/app.py` / `src/engram/gateway/routes.py`
+
+### 12.1 现状
+
+- `main.py` 通过 `create_app()` 暴露 app；当前路由主要由 `app.py` 内部注册。
+- 文档与 runbook 多处将 `routes.py:register_routes()` 作为路由 SSOT，导致定位分裂。
+- 双入口并存增加了路由行为与契约说明不一致的风险。
+
+### 12.2 方案 A：以 `routes.py:register_routes()` 为 SSOT
+
+**做法**：`create_app()` 仅负责装配中间件/容器，路由统一由 `register_routes()` 注册。
+
+**影响**：
+- **测试**：`tests/gateway/test_import_safe_entrypoints.py` 继续要求 `routes.py` import-safe；MCP 路由相关测试（如 `tests/gateway/test_mcp_jsonrpc_contract.py`）应保持稳定，仅需核对路由注册位置变化。
+- **脚本/doctor**：`scripts/ops/mcp_doctor.py` 与相关文档无需改动；对外 HTTP 行为不变。
+- **客户端兼容**：已有 `register_routes()` 直调用方不受影响；`create_app()` 仍可作为统一入口。
+
+**回滚点**：将 `create_app()` 恢复为内联注册（或临时双注册）即可回退。
+
+### 12.3 方案 B：以 `app.py:create_app()` 为 SSOT
+
+**做法**：`routes.py` 降级为兼容导出（re-export/shim）或删除；统一修正文档与 doctor 描述。
+
+**影响**：
+- **测试**：若移除 `routes.py`，需更新 `tests/gateway/test_import_safe_entrypoints.py`；若保留 shim，需新增/调整废弃提示断言。
+- **脚本/doctor**：需要同步更新 `scripts/ops/mcp_doctor.py` 及相关文档定位描述。
+- **客户端兼容**：直接依赖 `register_routes()` 的外部集成可能破坏；需提供 shim 与废弃期策略。
+
+**回滚点**：恢复 `routes.py:register_routes()`（或移除 shim 降级）并回退文档/脚本引用即可。
+
+---
+
+## 13. 版本历史
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
@@ -1998,3 +2033,4 @@ make ci
 | v1.8 | 2026-02-02 | SSOT 修正：§5.6 明确 `dispatch_jsonrpc_request`/`JsonRpcDispatchResult` 为 Tier B 导出；§9/§4.3 将 error.data.reason 权威来源更新为三源 SSOT（Schema + error_codes.py:McpErrorReason + 门禁脚本），废弃 `mcp_rpc.py:VALID_ERROR_REASONS` 引用；§11.8 测试锚点更新为真实存在的测试文件 |
 | v1.9 | 2026-02-02 | 新增 §11.6.1 拆分模块时保留旧 import path 的策略（Shim/Re-export 文件策略、废弃期规则）；§11.9 最小验收命令统一引用 Makefile 目标 |
 | v2.0 | 2026-02-02 | 新增 §11.6.0 模块路径是契约的一部分：明确模块路径稳定性承诺、保持路径稳定的两种策略（Re-export Shim / public_api 内部调整）、Tier B 符号的特殊处理 |
+| v2.1 | 2026-02-03 | 新增 §12 Gateway 路由 SSOT 收敛短 ADR（方案 A/B、影响与回滚点） |

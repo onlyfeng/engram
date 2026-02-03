@@ -1293,7 +1293,7 @@ def _build_snapshot_from_fixture(fixture: dict):
         CircuitBreakerDecision,
         RepoSyncState,
     )
-    from scm_sync_scheduler import BuildJobsSnapshot
+    from engram.logbook.scm_sync_scheduler_core import BuildJobsSnapshot
 
     # 构建 candidates
     candidates = [SyncJobCandidate(**c) for c in fixture["candidates_to_enqueue"]]
@@ -1347,7 +1347,7 @@ class TestBuildJobsToInsertReplay:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from scm_sync_scheduler import build_jobs_to_insert
+        from engram.logbook.scm_sync_scheduler_core import build_jobs_to_insert
 
         snapshot = _build_snapshot_from_fixture(FIXTURE_BUCKET_PAUSED)
         result = build_jobs_to_insert(snapshot)
@@ -1379,7 +1379,7 @@ class TestBuildJobsToInsertReplay:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from scm_sync_scheduler import build_jobs_to_insert
+        from engram.logbook.scm_sync_scheduler_core import build_jobs_to_insert
 
         snapshot = _build_snapshot_from_fixture(FIXTURE_HALF_OPEN_PROBE)
         result = build_jobs_to_insert(snapshot)
@@ -1414,7 +1414,7 @@ class TestBuildJobsToInsertReplay:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from scm_sync_scheduler import build_jobs_to_insert
+        from engram.logbook.scm_sync_scheduler_core import build_jobs_to_insert
 
         snapshot = _build_snapshot_from_fixture(FIXTURE_ERROR_BUDGET_PAUSE)
         result = build_jobs_to_insert(snapshot)
@@ -1442,7 +1442,7 @@ class TestBuildJobsToInsertReplay:
         if str(scripts_dir) not in sys.path:
             sys.path.insert(0, str(scripts_dir))
 
-        from scm_sync_scheduler import build_jobs_to_insert
+        from engram.logbook.scm_sync_scheduler_core import build_jobs_to_insert
 
         # 基于 FIXTURE_BUCKET_PAUSED 修改，添加实例熔断
         fixture = dict(FIXTURE_BUCKET_PAUSED)
@@ -1484,7 +1484,7 @@ class TestBuildJobsToInsertReplay:
             CircuitBreakerDecision,
             RepoSyncState,
         )
-        from scm_sync_scheduler import BuildJobsSnapshot, build_jobs_to_insert
+        from engram.logbook.scm_sync_scheduler_core import BuildJobsSnapshot, build_jobs_to_insert
 
         # 构建最简单的正常快照
         snapshot = BuildJobsSnapshot(

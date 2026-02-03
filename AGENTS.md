@@ -13,7 +13,10 @@ make ci
 # 分步执行（按 make ci 依赖顺序）
 make lint                               # 代码风格检查（ruff check）
 make format-check                       # 格式检查（ruff format --check）
-make typecheck                          # mypy 类型检查
+make typecheck-gate                     # mypy baseline 模式检查
+make typecheck-strict-island            # mypy strict-island 核心模块检查
+make mypy-metrics                       # mypy 指标收集（baseline_count 口径）
+make check-mypy-metrics-thresholds      # mypy 指标阈值检查（warn only）
 make check-schemas                      # JSON Schema 校验
 make check-env-consistency              # 环境变量一致性检查
 make check-logbook-consistency          # Logbook 配置一致性检查
@@ -26,18 +29,29 @@ make check-gateway-di-boundaries        # Gateway DI 边界检查（禁止 deps.
 make check-gateway-import-surface       # Gateway __init__.py 懒加载策略检查
 make check-gateway-correlation-id-single-source  # Gateway correlation_id 单一来源检查
 make check-iteration-docs               # 迭代文档规范检查
+make check-iteration-fixtures-freshness # 迭代 fixtures 新鲜度检查
+make check-iteration-toolchain-drift-map-contract # 迭代 toolchain drift map 合约检查
 make validate-workflows-strict          # Workflow 合约校验（严格模式）
 make check-workflow-contract-docs-sync  # Workflow 合约与文档同步检查
-make check-workflow-contract-version-policy  # Workflow 合约版本策略检查
+make check-workflow-contract-error-types-docs-sync # Workflow 合约 Error Types 文档同步检查
+make check-workflow-contract-version-policy       # Workflow 合约版本策略检查
+make check-workflow-contract-internal-consistency # Workflow 合约内部一致性检查
+make check-workflow-make-targets-consistency      # Workflow Make targets 一致性检查
 make check-mcp-error-contract           # MCP JSON-RPC 错误码合约检查
 make check-mcp-error-docs-sync          # MCP JSON-RPC 错误码文档与 Schema 同步检查
+make check-ci-test-isolation            # CI 测试隔离检查
 
 # 可选的独立检查（未包含在 make ci 中）
-make typecheck-gate                     # mypy baseline 模式检查（用于增量修复）
+make typecheck                          # mypy 直接检查
 make check-cli-entrypoints              # CLI 入口点一致性检查
 make check-noqa-policy                  # noqa 注释策略检查
 make check-no-root-wrappers             # 根目录 wrapper 禁止导入检查
+make check-mcp-config-docs-sync         # MCP 配置文档与 SSOT 同步检查
 make check-workflow-contract-doc-anchors  # Workflow 合约文档锚点检查
+make check-workflow-contract-coupling-map-sync  # Workflow 合约耦合映射同步检查
+make check-workflow-contract-docs-generated       # Workflow 合约文档生成一致性检查
+make workflow-contract-preflight        # Workflow 合约预检（含 CI 脚本测试）
+make test-iteration-tools               # 迭代工具脚本测试
 pytest tests/ci/ -q                     # CI 脚本测试
 
 # 建议工具（辅助开发，不阻断 CI）
@@ -77,9 +91,11 @@ ruff check --fix .   # 自动修复 lint 问题
 
 - **设计目的**：用于“迭代计划/回归记录”的草稿与工作追踪（含当前进度/待办/备注），是否纳入版本控制由项目自行决定；迭代成熟后可晋升到 `docs/acceptance/` 作为 SSOT。
 - **推荐工作流**：
-  - 初始化：`make iteration-init-next`（或 `make iteration-init N=<n>`）
+  - 初始化：`make iteration-init N=next`（或 `make iteration-init N=<n>` / `make iteration-init-next`）
   - 编辑：`.iteration/<N>/plan.md` 与 `.iteration/<N>/regression.md`
   - 晋升：`make iteration-promote N=<N>`
+  - 导出：`make iteration-export N=<N>`（分享草稿）
+  - 快照：`make iteration-snapshot N=<N>`（只读副本）
   - 验证：`make check-iteration-docs`
 - **协作/审核边界**：
   - 若 `.iteration/` **不纳入版本控制**：代码评审不可直接看到；需要对外对齐/留痕时，优先“晋升到 SSOT”或“导出分享”。版本化文档中**禁止**出现指向 `.iteration/` 的 Markdown 链接（避免链接失效；CI 也会检查）。
@@ -111,6 +127,8 @@ make ci                 # 完整 CI 检查
 make test              # 可选：运行测试（需数据库）
 ```
 
+补充：仅修改迭代文档或 MCP 配置文档时，可先运行 `make check-iteration-docs`、`make check-mcp-config-docs-sync` 再执行 `make ci`。
+
 **核心原则**：
 - **先复现**：不要假设问题原因，先运行门禁确认实际错误
 - **再修复**：根据错误输出精准修改，避免过度修复
@@ -140,7 +158,12 @@ make test              # 可选：运行测试（需数据库）
 | `pyproject.toml` | CI 代理 | 依赖、入口点、工具配置 |
 | `Makefile` | CI 代理 | 构建和门禁目标 |
 | `scripts/ci/mypy_baseline.txt` | CI 代理 | mypy 基线（需串行更新） |
-| `scripts/ci/workflow_contract.v1.json` | CI 代理 | CI 合约定义（需与 ci.yml 同步） |
+| `scripts/ci/workflow_contract.v1.json` | CI 代理 | CI 合约定义（合约系统关键路径，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/check_workflow_contract_version_policy.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/check_workflow_contract_docs_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/check_workflow_contract_coupling_map_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/render_workflow_contract_docs.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/workflow_contract_common.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
 | `.github/workflows/ci.yml` | CI 代理 | CI 流水线定义 |
 | `docs/reference/environment_variables.md` | 文档代理 | 环境变量 SSOT |
 
@@ -221,15 +244,15 @@ make test              # 可选：运行测试（需数据库）
 | CI 门禁 Runbook | [docs/dev/ci_gate_runbook.md](docs/dev/ci_gate_runbook.md) |
 | 迭代操作手册 | [docs/dev/iteration_runbook.md](docs/dev/iteration_runbook.md) |
 | 迭代本地草稿指南 | [docs/dev/iteration_local_drafts.md](docs/dev/iteration_local_drafts.md) |
-| 迭代回归 Runbook | [docs/acceptance/iteration_13_regression.md](docs/acceptance/iteration_13_regression.md) |
+| 迭代文档 SSOT | [docs/acceptance/00_acceptance_matrix.md](docs/acceptance/00_acceptance_matrix.md) |
 | CI 配置 | `.github/workflows/ci.yml` |
 | Makefile | `Makefile` |
 | mypy 配置 | `pyproject.toml [tool.mypy]` |
 | 环境变量参考 | [docs/reference/environment_variables.md](docs/reference/environment_variables.md) |
 | MCP 配置示例 | [configs/mcp/.mcp.json.example](configs/mcp/.mcp.json.example)（SSOT） |
 
-> **MCP 配置 SSOT**：本仓库的 MCP 配置以 `configs/mcp/.mcp.json.example` 为权威来源，外部文档链接仅作行为参考。
+> **MCP 配置 SSOT**：本仓库的 MCP 配置以 `configs/mcp/.mcp.json.example` 为权威来源，外部文档链接仅作行为参考。更新文档受控块请用 `make update-mcp-config-docs`，校验同步请用 `make check-mcp-config-docs-sync`。
 
 ---
 
-更新时间：2026-02-02（添加 check-workflow-contract-doc-anchors 门禁、suggest_workflow_contract_updates 建议工具）
+更新时间：2026-02-03（对齐 make ci 门禁清单，补充 MCP 配置与迭代文档 SSOT 提示）

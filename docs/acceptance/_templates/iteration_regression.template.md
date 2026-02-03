@@ -4,7 +4,7 @@
 >
 > **索引关系**：创建回归记录后，需在 [00_acceptance_matrix.md](../00_acceptance_matrix.md) 的「迭代回归记录索引」表中添加对应条目。
 >
-> **自动生成区块**：本模板包含两个由脚本自动生成/刷新的区块（`min_gate_block` 和 `evidence_snippet`），请勿手动编辑这些区块内容。使用以下命令同步：
+> **自动生成区块**：本模板包含两个由脚本自动生成/刷新的受控区块（`min_gate_block` 和 `evidence_snippet`），**严禁**手动编辑区块内容或 marker。证据文件 `docs/acceptance/evidence/iteration_{N}_evidence.json` 必须由脚本生成，禁止手工创建或修改。使用以下命令同步：
 >
 > ```bash
 > # 同步所有自动生成区块
@@ -196,6 +196,29 @@
 make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 ```
 
+## Drift Rerun 建议（Toolchain Drift Map）
+
+用于基于 Toolchain Drift Map 生成最小重跑建议，指导回归范围收敛。
+
+**生成建议**：
+
+```bash
+# RANGE/FORMAT 示例（RANGE 为 git range，FORMAT 为 markdown/json）
+make iteration-rerun-advice RANGE=origin/master...HEAD FORMAT=markdown
+make iteration-rerun-advice RANGE=origin/master...HEAD FORMAT=json
+```
+
+**执行建议**：
+
+- 按建议执行 `make iteration-min-regression`。
+- 若建议包含 fixtures refresh，先执行：
+  - `python scripts/iteration/update_iteration_fixtures.py --all`
+  - 再执行建议中的 `make iteration-min-regression` 命令集。
+
+**结果记录**：
+
+将“本次采用的建议命令与执行结果”写入 `执行结果总览` 对应行，或在备注中补充说明。
+
 ## 最小门禁命令块
 
 > **说明**：此区块由脚本自动生成和更新。
@@ -228,12 +251,12 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 
 ## 验收证据
 
-<!-- 此段落由脚本自动生成，请勿手动编辑 -->
+<!-- 此段落由脚本自动生成/受控，禁止手动编辑内容或 marker -->
 
 | 项目 | 值 |
 |------|-----|
 | **证据文件** | [`iteration_{N}_evidence.json`](evidence/iteration_{N}_evidence.json) |
-| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **Schema 版本** | `iteration_evidence_v2.schema.json` |
 | **记录时间** | {YYYY-MM-DDTHH:MM:SSZ} |
 | **Commit SHA** | `{commit_sha}` |
 
@@ -255,6 +278,16 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 > **重要**：证据文件应由脚本自动生成，禁止手工创建或修改 JSON 文件。
 
 ### 证据文件生成与同步流程
+
+**默认推荐命令**：
+
+```bash
+# 生成/更新 evidence JSON（可追加参数）
+python scripts/iteration/record_iteration_evidence.py {N} ...
+
+# 同步回归文档（min_gate_block + evidence_snippet）
+python scripts/iteration/sync_iteration_regression.py {N} --write
+```
 
 **步骤 1: 生成证据文件**
 
@@ -306,7 +339,7 @@ python scripts/iteration/sync_iteration_regression.py {N} --profile regression -
 - 自动收集环境信息（OS、Python 版本、架构）
 - 自动获取当前 git commit SHA
 - 内置敏感信息脱敏（PASSWORD/DSN/TOKEN 等）
-- 输出格式符合 `iteration_evidence_v1.schema.json`
+- 输出格式符合 `iteration_evidence_v2.schema.json`
 
 **文件命名规范**：
 - Canonical path（固定文件名）：`iteration_{N}_evidence.json`
@@ -317,7 +350,7 @@ python scripts/iteration/sync_iteration_regression.py {N} --profile regression -
 证据文件生成后可手动校验格式正确性：
 
 ```bash
-python -m jsonschema -i docs/acceptance/evidence/iteration_{N}_evidence.json schemas/iteration_evidence_v1.schema.json
+python -m jsonschema -i docs/acceptance/evidence/iteration_{N}_evidence.json schemas/iteration_evidence_v2.schema.json
 ```
 
 ---

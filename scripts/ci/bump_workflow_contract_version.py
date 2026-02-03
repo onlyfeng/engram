@@ -303,7 +303,7 @@ def insert_version_row_in_doc(
 ) -> tuple[str, bool]:
     """在文档版本控制表顶部插入新行
 
-    查找第 14 章"版本控制"表格，在表头后插入新版本行。
+    查找第 13/14 章"版本控制"表格，在表头分隔线之后第一行插入新版本行。
 
     Args:
         doc_content: 文档内容
@@ -318,28 +318,64 @@ def insert_version_row_in_doc(
     change_msg = message or "<在此填写变更说明>"
     new_row = f"| v{version} | {date_str} | {change_msg} |"
 
-    # 查找版本控制表格
-    # 模式：## 14. 版本控制 ... | 版本 | 日期 | 变更说明 | ... |------|------|----------|
-    # 然后在分隔行后插入新行
+    def split_table_cells(line: str) -> list[str]:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        return [cell for cell in cells if cell]
 
-    # 匹配表格头部和分隔行
-    # 版本控制表可能在 ## 13. 或 ## 14. 章节
-    table_header_pattern = (
-        r"(##\s+\d+\.\s+版本控制\s*\n+"  # 章节标题
-        r".*?"  # 可能的描述文字
-        r"\|\s*版本\s*\|\s*日期\s*\|\s*变更说明\s*\|\s*\n"  # 表头
-        r"\|[-|\s]+\|\s*\n)"  # 分隔行
-    )
+    def is_version_header(line: str) -> bool:
+        if "|" not in line:
+            return False
+        cells = split_table_cells(line)
+        return cells == ["版本", "日期", "变更说明"]
 
-    match = re.search(table_header_pattern, doc_content, re.DOTALL)
-    if not match:
+    def is_alignment_line(line: str, expected_columns: int) -> bool:
+        if "|" not in line:
+            return False
+        cells = split_table_cells(line)
+        if len(cells) != expected_columns:
+            return False
+        for cell in cells:
+            normalized = cell.replace(" ", "")
+            if not re.fullmatch(r":?-+:?", normalized):
+                return False
+        return True
+
+    def detect_line_ending(line: str) -> str:
+        if line.endswith("\r\n"):
+            return "\r\n"
+        if line.endswith("\n"):
+            return "\n"
+        return "\n"
+
+    lines = doc_content.splitlines(keepends=True)
+    if not lines:
         return doc_content, False
 
-    # 在分隔行后插入新行
-    insert_pos = match.end()
-    updated_content = doc_content[:insert_pos] + new_row + "\n" + doc_content[insert_pos:]
+    section_header_pattern = re.compile(r"^##\s+(?:13|14)\.\s+版本控制\s*$")
+    section_start = None
+    for idx, line in enumerate(lines):
+        if section_header_pattern.match(line.strip()):
+            section_start = idx
+            break
 
-    return updated_content, True
+    if section_start is None:
+        return doc_content, False
+
+    section_end = len(lines)
+    for idx in range(section_start + 1, len(lines)):
+        if re.match(r"^##\s+", lines[idx].lstrip()):
+            section_end = idx
+            break
+
+    for idx in range(section_start + 1, section_end - 1):
+        if is_version_header(lines[idx]):
+            if is_alignment_line(lines[idx + 1], 3):
+                newline = detect_line_ending(lines[idx + 1])
+                insert_at = idx + 2
+                lines.insert(insert_at, new_row + newline)
+                return "".join(lines), True
+
+    return doc_content, False
 
 
 def check_version_in_doc(doc_content: str, version: str) -> bool:
@@ -469,8 +505,10 @@ class WorkflowContractVersionBumper:
         self.doc_content = doc_content or ""
 
         # 5. 检查版本是否已存在
+        version_exists_in_doc = False
         if doc_content and check_version_in_doc(doc_content, new_version):
             errors.append(f"Version {new_version} already exists in documentation")
+            version_exists_in_doc = True
 
         # 6. 更新 contract
         changelog_key = f"_changelog_v{new_version}"
@@ -485,7 +523,7 @@ class WorkflowContractVersionBumper:
         # 7. 更新文档
         updated_doc = self.doc_content
         doc_updated = False
-        if self.doc_content:
+        if self.doc_content and not version_exists_in_doc:
             updated_doc, doc_updated = insert_version_row_in_doc(
                 self.doc_content,
                 new_version,

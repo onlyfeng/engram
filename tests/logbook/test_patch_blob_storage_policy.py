@@ -4633,7 +4633,7 @@ class TestGenerateDiffstatFromDiff:
 
     def test_generate_diffstat_svn_format(self):
         """测试解析 SVN diff 格式生成 diffstat"""
-        from scm_sync_svn import generate_diffstat
+        from engram.logbook.scm_sync_tasks.svn import generate_diffstat
 
         svn_diff = """Index: src/main.py
 ===================================================================
@@ -4663,7 +4663,7 @@ Index: src/config.xml
 
     def test_generate_diffstat_empty_diff(self):
         """测试空 diff 生成空 diffstat"""
-        from scm_sync_svn import generate_diffstat
+        from engram.logbook.scm_sync_tasks.svn import generate_diffstat
 
         result = generate_diffstat("")
         assert result == ""
@@ -4677,7 +4677,7 @@ class TestGenerateMinistatFromChangedPaths:
 
     def test_generate_ministat_mixed_actions(self):
         """测试混合操作类型的 ministat"""
-        from scm_sync_svn import generate_ministat_from_changed_paths
+        from engram.logbook.scm_sync_tasks.svn import generate_ministat_from_changed_paths
 
         changed_paths = [
             {"path": "/trunk/new.py", "action": "A", "kind": "file"},
@@ -4698,7 +4698,7 @@ class TestGenerateMinistatFromChangedPaths:
 
     def test_generate_ministat_empty_paths(self):
         """测试空 changed_paths"""
-        from scm_sync_svn import generate_ministat_from_changed_paths
+        from engram.logbook.scm_sync_tasks.svn import generate_ministat_from_changed_paths
 
         result = generate_ministat_from_changed_paths([])
         assert result == ""

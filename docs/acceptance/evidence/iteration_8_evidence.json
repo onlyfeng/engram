@@ -1,12 +1,15 @@
 {
-  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
   "iteration_number": 8,
-  "recorded_at": "2026-02-01T23:06:19Z",
+  "recorded_at": "2026-02-03T03:19:19Z",
   "commit_sha": "abc1234567890",
   "runner": {
     "os": "darwin-24.6.0",
     "python": "3.13.2",
     "arch": "x86_64"
+  },
+  "source": {
+    "source_path": "docs/acceptance/iteration_8_regression.md"
   },
   "commands": [
     {
@@ -21,5 +24,10 @@
   "links": {
     "regression_doc_url": "docs/acceptance/iteration_8_regression.md"
   },
-  "notes": "[REDACTED]"
+  "notes": "[REDACTED]",
+  "redaction_applied": true,
+  "redaction_summary": "检测并脱敏 1 处敏感信息",
+  "redaction_rules": [
+    "sensitive-value"
+  ]
 }

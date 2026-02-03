@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/workflow_contract_drift_report_v1.schema.json",
+  "title": "Workflow Contract Drift Report V1 Schema",
+  "description": "Workflow contract drift report JSON schema (v1).",
+  "type": "object",
+  "required": [
+    "contract_last_updated",
+    "contract_version",
+    "drift_count",
+    "drift_items",
+    "has_drift",
+    "report_generated_at",
+    "schema_version",
+    "summary",
+    "workflows_checked"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract_last_updated": {
+      "type": "string",
+      "description": "Contract last_updated value from workflow_contract.v1.json"
+    },
+    "contract_version": {
+      "type": "string",
+      "description": "Contract version from workflow_contract.v1.json"
+    },
+    "drift_count": {
+      "$ref": "#/definitions/non_negative_integer",
+      "description": "Number of drift items"
+    },
+    "drift_items": {
+      "type": "array",
+      "description": "List of drift items",
+      "items": {
+        "$ref": "#/definitions/drift_item"
+      }
+    },
+    "has_drift": {
+      "type": "boolean",
+      "description": "Whether any drift exists"
+    },
+    "report_generated_at": {
+      "$ref": "#/definitions/iso8601_datetime",
+      "description": "Report generation time in UTC"
+    },
+    "schema_version": {
+      "const": "1.0.0",
+      "description": "Output schema version (fixed)"
+    },
+    "summary": {
+      "type": "object",
+      "description": "Counts grouped by category_drift_type",
+      "additionalProperties": {
+        "$ref": "#/definitions/non_negative_integer"
+      }
+    },
+    "workflows_checked": {
+      "type": "array",
+      "description": "Workflows analyzed in this report",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "definitions": {
+    "iso8601_datetime": {
+      "type": "string",
+      "description": "ISO8601 datetime string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "non_negative_integer": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nullable_string": {
+      "type": ["string", "null"]
+    },
+    "drift_type": {
+      "type": "string",
+      "enum": ["added", "removed", "changed"]
+    },
+    "drift_category": {
+      "type": "string",
+      "enum": [
+        "workflow",
+        "job_id",
+        "job_name",
+        "step",
+        "env_var",
+        "artifact_path",
+        "make_target",
+        "label"
+      ]
+    },
+    "drift_severity": {
+      "type": "string",
+      "enum": ["info", "warning", "error"]
+    },
+    "drift_item": {
+      "type": "object",
+      "required": [
+        "actual_value",
+        "category",
+        "contract_value",
+        "drift_type",
+        "key",
+        "location",
+        "severity",
+        "workflow"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "actual_value": {
+          "$ref": "#/definitions/nullable_string",
+          "description": "Actual value"
+        },
+        "category": {
+          "$ref": "#/definitions/drift_category",
+          "description": "Drift category"
+        },
+        "contract_value": {
+          "$ref": "#/definitions/nullable_string",
+          "description": "Contract value"
+        },
+        "drift_type": {
+          "$ref": "#/definitions/drift_type",
+          "description": "Drift type"
+        },
+        "key": {
+          "type": "string",
+          "description": "Drift item key"
+        },
+        "location": {
+          "$ref": "#/definitions/nullable_string",
+          "description": "Location hint"
+        },
+        "severity": {
+          "$ref": "#/definitions/drift_severity",
+          "description": "Severity"
+        },
+        "workflow": {
+          "type": "string",
+          "description": "Workflow name"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "contract_last_updated": "2026-02-03",
+      "contract_version": "2.24.0",
+      "drift_count": 1,
+      "drift_items": [
+        {
+          "actual_value": "deploy",
+          "category": "job_id",
+          "contract_value": null,
+          "drift_type": "added",
+          "key": "deploy",
+          "location": "jobs.deploy",
+          "severity": "warning",
+          "workflow": "ci"
+        }
+      ],
+      "has_drift": true,
+      "report_generated_at": "2026-02-03T10:00:00Z",
+      "schema_version": "1.0.0",
+      "summary": {
+        "job_id_added": 1
+      },
+      "workflows_checked": ["ci"]
+    }
+  ]
+}

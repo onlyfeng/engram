@@ -15,6 +15,8 @@
 | **快照** | `make iteration-snapshot N=<old>` | 将 SSOT 复制到本地只读副本 |
 | **证据** | `python scripts/iteration/record_iteration_evidence.py ...` | 记录验收证据 |
 | **验证** | `make check-iteration-docs` | 验证迭代文档规范 |
+| **回归建议** | `make iteration-rerun-advice` | 从 PR diff 生成最小重跑建议 |
+| **最小回归** | `make iteration-min-regression TYPES=cycle DRY_RUN=1` | 预览或执行最小迭代回归 |
 
 ---
 
@@ -152,6 +154,9 @@ python scripts/iteration/record_iteration_evidence.py 13
 python scripts/iteration/record_iteration_evidence.py 13 \
   --ci-run-url https://github.com/org/repo/actions/runs/123
 
+# 同步回归文档受控区块（min_gate_block + evidence_snippet）
+python scripts/iteration/sync_iteration_regression.py 13 --write
+
 # ===== 可选参数 =====
 
 # 指定 commit sha（用于非 HEAD 状态）
@@ -195,14 +200,14 @@ python scripts/iteration/record_iteration_evidence.py 13 --dry-run
 
 在 `iteration_<N>_regression.md` 的末尾添加"验收证据"段落。
 
-**推荐方式**：使用脚本自动渲染（读取 evidence JSON 的 commands）：
+**推荐方式**：使用脚本同步受控区块（读取 evidence JSON 的 commands，禁止手动编辑内容或 marker）：
 
 ```bash
-# 渲染最小门禁块到 regression 文档
-python scripts/iteration/render_min_gate_block.py <N>
+# 预览同步结果
+python scripts/iteration/sync_iteration_regression.py <N>
 
-# 或更新已有文档中的证据块
-python scripts/iteration/update_min_gate_block_in_regression.py <N>
+# 写入同步（更新 min_gate_block + evidence_snippet）
+python scripts/iteration/sync_iteration_regression.py <N> --write
 ```
 
 **生成后的段落示例**：
@@ -211,12 +216,12 @@ python scripts/iteration/update_min_gate_block_in_regression.py <N>
 ## 验收证据
 
 <!-- AUTO-GENERATED EVIDENCE BLOCK START -->
-<!-- 此段落由脚本自动生成，请勿手动编辑 -->
+<!-- 此段落由脚本自动生成/受控，禁止手动编辑内容或 marker -->
 
 | 项目 | 值 |
 |------|-----|
 | **证据文件** | [`iteration_13_evidence.json`](evidence/iteration_13_evidence.json) |
-| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **Schema 版本** | `iteration_evidence_v2.schema.json` |
 | **记录时间** | 2026-02-02T14:30:22Z |
 | **Commit SHA** | `abc1234` |
 
@@ -243,7 +248,7 @@ python scripts/iteration/update_min_gate_block_in_regression.py <N>
 
 ```bash
 # 校验证据文件是否符合 schema（推荐在提交前运行）
-python -m jsonschema -i docs/acceptance/evidence/iteration_<N>_evidence.json schemas/iteration_evidence_v1.schema.json
+python -m jsonschema -i docs/acceptance/evidence/iteration_<N>_evidence.json schemas/iteration_evidence_v2.schema.json
 
 # 校验成功无输出，失败会显示具体错误
 
@@ -253,7 +258,7 @@ make check-iteration-evidence
 # 批量校验所有证据文件
 for f in docs/acceptance/evidence/iteration_*_evidence.json; do
   echo "校验: $f"
-  python -m jsonschema -i "$f" schemas/iteration_evidence_v1.schema.json && echo "✅ 通过" || echo "❌ 失败"
+  python -m jsonschema -i "$f" schemas/iteration_evidence_v2.schema.json && echo "✅ 通过" || echo "❌ 失败"
 done
 ```
 
@@ -262,6 +267,13 @@ done
 - `commands` 数组至少包含 1 个命令记录
 - `result` 必须为 `PASS`、`FAIL`、`SKIP` 或 `ERROR`
 - **禁止**包含敏感信息（密码、API 密钥、DSN 等）
+
+### Evidence v2 演进策略（简版）
+
+- 当前默认 Schema 为 v2（见 `scripts/iteration/iteration_evidence_schema.py`），v1 仅用于历史兼容。
+- **non-breaking**：可选字段新增/校验收紧 → 更新 v2 schema + 模板 + fixtures。
+- **breaking**：结构或字段变更 → 新增 v3 schema，更新脚本默认指向 v3，保留 v2；禁止覆盖旧版本。
+- 如需升级历史证据：用 `record_iteration_evidence.py` 重新生成，避免手工编辑 JSON。
 
 ### 推荐的完整流程（生成 → 校验 → 引用）
 
@@ -276,9 +288,10 @@ python scripts/iteration/record_iteration_evidence.py <N> \
 
 # 3. 校验 Schema 合规性
 python -m jsonschema -i docs/acceptance/evidence/iteration_<N>_evidence.json \
-  schemas/iteration_evidence_v1.schema.json
+  schemas/iteration_evidence_v2.schema.json
 
-# 4. 在 regression 文档中添加引用（参照上方模板或 iteration_evidence_snippet.template.md）
+# 4. 同步 regression 文档受控区块
+python scripts/iteration/sync_iteration_regression.py <N> --write
 
 # 5. 验证迭代文档完整性
 make check-iteration-docs
@@ -302,6 +315,40 @@ make check-iteration-docs
 # 仅检查 SUPERSEDED 一致性
 make check-iteration-docs-superseded-only
 ```
+
+---
+
+## Fixtures 漂移处理
+
+入口： [迭代 fixtures 漂移治理规范](iteration_fixtures_drift_governance.md)
+
+> 受控块契约如有 breaking 变更，必须新增 `docs/contracts/iteration_regression_generated_blocks_v2.md`，禁止覆盖 v1。
+
+**最短路径命令示例**（仅处理 fixtures 漂移）：
+
+```bash
+make iteration-rerun-advice
+make iteration-min-regression TYPES="profiles blocks evidence schema cycle" DRY_RUN=1
+python scripts/iteration/update_iteration_fixtures.py --min-gate --sync-regression --evidence-snippet --iteration-cycle
+pytest tests/iteration/test_render_min_gate_block.py -q
+pytest tests/iteration/test_render_iteration_evidence_snippet.py -q
+pytest tests/iteration/test_sync_iteration_regression.py -q
+pytest tests/iteration/test_update_iteration_fixtures.py -q
+```
+
+### PR diff 场景的最小集合（按 change_type）
+
+> 推荐先执行 `make iteration-rerun-advice RANGE=origin/master...HEAD` 获取类型集合。
+
+| change_type | 适用 diff | 最小集合 |
+|---|---|---|
+| `profiles` | gate profiles / min gate block | `make iteration-min-regression TYPES=profiles` |
+| `blocks` | generated blocks / sync regression | `make iteration-min-regression TYPES=blocks` |
+| `evidence` | evidence snippet / evidence 数据 | `make iteration-min-regression TYPES=evidence` |
+| `schema` | evidence schema | `make iteration-min-regression TYPES=schema` |
+| `cycle` | iteration cycle / fixtures refresh | `make iteration-min-regression TYPES=cycle` |
+
+可组合多个类型：`make iteration-min-regression TYPES="profiles blocks evidence schema cycle" DRY_RUN=0`
 
 ---
 
@@ -359,12 +406,15 @@ python scripts/iteration/record_iteration_evidence.py <N> \
 python scripts/iteration/record_iteration_evidence.py <N> \
   --commands '{"make ci": {"exit_code": 0, "summary": "passed"}}'
 
-# 3. 提交
+# 3. 同步回归文档受控区块
+python scripts/iteration/sync_iteration_regression.py <N> --write
+
+# 4. 提交
 git add docs/acceptance/evidence/iteration_<N>_evidence.json
 git commit -m "evidence: Iteration <N> 验收证据"
 ```
 
-> **注意**：❌ 禁止手动创建草稿证据文件提交，应使用脚本生成。
+> **注意**：❌ 禁止手动创建或修改 evidence JSON；回归文档受控区块（`min_gate_block` / `evidence_snippet`）内容与 marker 也禁止手改，应使用脚本同步。
 
 ---
 

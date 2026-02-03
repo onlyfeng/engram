@@ -25,11 +25,11 @@ from engram.logbook.scm_sync_tasks.gitlab_commits import (
     format_diff_content,
     parse_commit,
 )
-from scm_repo import build_mr_id
-from scm_sync_gitlab_mrs import (
+from engram.logbook.scm_sync_tasks.gitlab_mrs import (
     map_gitlab_state_to_status,
     parse_merge_request,
 )
+from scm_repo import build_mr_id
 
 # ---------- GitLab API Client Mock 测试 ----------
 

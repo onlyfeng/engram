@@ -4,8 +4,8 @@ Gateway 应用工厂 (Application Factory)
 提供 create_app() 函数，负责：
 1. 创建 FastAPI 应用实例
 2. 组装 GatewayContainer（仅用于依赖组装，不作为业务依赖来源）
-3. 从 container 获取 GatewayDeps，作为统一依赖传递给所有 handler
-4. 注册所有路由和中间件
+3. 安装应用级中间件（如鉴权）
+4. 通过 routes.register_routes(app) 统一注册路由
 5. 返回可运行的 FastAPI app
 
 依赖注入设计（ADR：入口层统一 + deps 参数透传）:
@@ -33,22 +33,18 @@ Gateway 应用工厂 (Application Factory)
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from .config import GatewayConfig
 from .container import (
     GatewayContainer,
-    get_container,
     set_container,
 )
-
-logger = logging.getLogger("gateway")
-
+from .middleware import GatewayAuthMiddleware, install_middleware
+from .routes import register_routes
 
 # ===================== 错误码常量 =====================
 
@@ -153,31 +149,6 @@ class GovernanceSettingsUpdateRequest(BaseModel):
     )
 
 
-# CORS 配置常量
-MCP_CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id",
-    "Access-Control-Expose-Headers": "Mcp-Session-Id, X-Correlation-ID",
-    "Access-Control-Max-Age": "86400",
-}
-
-
-def _make_cors_headers_with_correlation_id(correlation_id: str) -> dict:
-    """
-    创建带有 correlation_id 的 CORS 头
-
-    在 MCP_CORS_HEADERS 基础上添加 X-Correlation-ID header，
-    确保每个请求都能通过 header 追踪 correlation_id。
-
-    契约：X-Correlation-ID 必须与业务响应中的 correlation_id 一致（单次生成语义）
-    """
-    return {
-        **MCP_CORS_HEADERS,
-        "X-Correlation-ID": correlation_id,
-    }
-
-
 def create_app(
     config: Optional[GatewayConfig] = None,
     skip_db_check: bool = False,
@@ -189,8 +160,8 @@ def create_app(
 
     这是 Gateway 的应用工厂函数，负责：
     1. 创建 FastAPI 应用
-    2. 注册所有路由（/mcp, /memory/*, /health, /reliability/report, /governance/*）
-    3. 注册 MinIO Audit Webhook 路由
+    2. 安装应用级中间件（如鉴权）
+    3. 调用 routes.register_routes() 统一注册路由
 
     依赖初始化策略（方案 A：延迟初始化）：
     ================================================
@@ -247,387 +218,15 @@ def create_app(
         lifespan=lifespan,
     )
 
-    # 3. 注册 MinIO Audit Webhook 路由
-    from .minio_audit_webhook import router as minio_audit_router
+    # 2.1 安装 Gateway 鉴权中间件（仅在配置 token 时生效）
+    app.add_middleware(GatewayAuthMiddleware)
 
-    app.include_router(minio_audit_router)
+    # 2.2 安装基础中间件（correlation_id、全局异常处理器）
+    # 注意：FastAPI 中间件按添加顺序的逆序执行（LIFO），
+    # 所以 install_middleware 应在 GatewayAuthMiddleware 之后调用
+    install_middleware(app)
 
-    # 4. 导入 handlers 和 MCP 相关模块
-    from .handlers import (
-        GovernanceSettingsUpdateResponse,
-        MemoryQueryResponse,
-        MemoryStoreResponse,
-        execute_evidence_upload,
-        governance_update_impl,
-        memory_query_impl,
-        memory_store_impl,
-    )
-    from .mcp_rpc import (
-        ErrorCategory,
-        ErrorData,
-        ErrorReason,
-        JsonRpcErrorCode,
-        generate_correlation_id,
-        is_jsonrpc_request,
-        make_jsonrpc_error,
-        mcp_router,
-        parse_jsonrpc_request,
-        register_tool_executor,
-    )
-
-    # 5. 定义工具执行器（延迟获取 deps，支持无环境变量 import）
-    # NOTE: 使用位置参数 correlation_id 以匹配 ToolExecutor 类型定义
-    async def _execute_tool(tool: str, args: Dict[str, Any], correlation_id: str) -> Dict[str, Any]:
-        """
-        执行工具调用的内部实现
-
-        此函数实现 ToolExecutor 协议，签名为 (tool_name, tool_args, correlation_id)。
-
-        依赖注入（延迟获取）：
-        - 在每次调用时通过 get_container().deps 获取依赖
-        - 这支持 import-time 不触发 get_config()（方案 A）
-        - lifespan 负责预热，首次请求时依赖已初始化
-
-        契约：所有工具的返回结果都必须包含 correlation_id 字段（单一来源原则）。
-
-        Args:
-            tool: 工具名称
-            args: 工具参数
-            correlation_id: 请求追踪 ID，用于审计日志关联，由 mcp_rpc.handle_tools_call 传入
-
-        Returns:
-            Dict[str, Any]: 工具执行结果，必须包含 correlation_id 字段
-        """
-        logger.debug(f"执行工具: tool={tool}, correlation_id={correlation_id}")
-
-        # 延迟获取 deps（lifespan 中已预热，此处仅获取引用）
-        deps = get_container().deps
-
-        result_dict: Dict[str, Any]
-
-        if tool == "memory_store":
-            store_result = await memory_store_impl(
-                payload_md=args.get("payload_md", ""),
-                target_space=args.get("target_space"),
-                meta_json=args.get("meta_json"),
-                kind=args.get("kind"),
-                evidence_refs=args.get("evidence_refs"),
-                evidence=args.get("evidence"),
-                is_bulk=args.get("is_bulk", False),
-                item_id=args.get("item_id"),
-                actor_user_id=args.get("actor_user_id"),
-                correlation_id=correlation_id,
-                deps=deps,
-            )
-            result_dict = {"ok": store_result.ok, **store_result.model_dump()}
-
-        elif tool == "memory_query":
-            query_result = await memory_query_impl(
-                query=args.get("query", ""),
-                spaces=args.get("spaces"),
-                filters=args.get("filters"),
-                top_k=args.get("top_k", 10),
-                correlation_id=correlation_id,
-                deps=deps,
-            )
-            result_dict = {"ok": query_result.ok, **query_result.model_dump()}
-
-        elif tool == "reliability_report":
-            # 函数内导入：仅在 reliability_report 工具被调用时才导入依赖
-            # 这支持依赖缺失时的优雅降级（返回 ok=false + error_code）
-            try:
-                from .logbook_adapter import get_reliability_report
-
-                report = get_reliability_report()
-                result_dict = {"ok": True, **report}
-            except ImportError as e:
-                logger.warning(f"reliability_report 依赖导入失败: {e}")
-                result_dict = {
-                    "ok": False,
-                    "message": f"reliability_report 依赖不可用: {e}",
-                    "error_code": ReliabilityReportErrorCode.IMPORT_FAILED,
-                    "outbox_stats": {},
-                    "audit_stats": {},
-                    "v2_evidence_stats": {},
-                    "content_intercept_stats": {},
-                    "generated_at": "",
-                }
-            except Exception as e:
-                logger.exception(f"reliability_report 执行失败: {e}")
-                result_dict = {
-                    "ok": False,
-                    "message": f"报告生成失败: {e}",
-                    "error_code": ReliabilityReportErrorCode.EXECUTION_FAILED,
-                    "outbox_stats": {},
-                    "audit_stats": {},
-                    "v2_evidence_stats": {},
-                    "content_intercept_stats": {},
-                    "generated_at": "",
-                }
-
-        elif tool == "governance_update":
-            gov_result = await governance_update_impl(
-                team_write_enabled=args.get("team_write_enabled"),
-                policy_json=args.get("policy_json"),
-                admin_key=args.get("admin_key"),
-                actor_user_id=args.get("actor_user_id"),
-                deps=deps,
-            )
-            result_dict = {"ok": gov_result.ok, **gov_result.model_dump()}
-
-        elif tool == "evidence_upload":
-            result_dict = await execute_evidence_upload(
-                content=args.get("content"),
-                content_type=args.get("content_type"),
-                title=args.get("title"),
-                actor_user_id=args.get("actor_user_id"),
-                project_key=args.get("project_key"),
-                item_id=args.get("item_id"),
-                deps=deps,
-            )
-
-        else:
-            raise ValueError(f"未知工具: {tool}")
-
-        # 契约：确保所有工具结果都包含 correlation_id
-        # 即使响应模型已包含 correlation_id，此处也确保使用入口层生成的值
-        result_dict["correlation_id"] = correlation_id
-        return result_dict
-
-    # 注册工具执行器
-    register_tool_executor(_execute_tool)
-
-    # 6. 注册路由
-
-    @app.get("/health")
-    async def health_check():
-        """健康检查"""
-        return {
-            "ok": True,
-            "status": "ok",
-            "service": "memory-gateway",
-        }
-
-    @app.options("/mcp")
-    async def mcp_options():
-        """MCP 端点的 CORS 预检请求处理"""
-        return JSONResponse(
-            content={"ok": True},
-            headers=MCP_CORS_HEADERS,
-        )
-
-    @app.post("/mcp")
-    async def mcp_endpoint(request: Request):
-        """
-        MCP 统一入口（双协议兼容）
-
-        自动识别请求格式:
-        - JSON-RPC 2.0: {"jsonrpc": "2.0", "method": "...", ...}
-        - 旧格式 (MCPToolCall): {"tool": "...", "arguments": {...}}
-        """
-        correlation_id = generate_correlation_id()
-        mcp_session_id = request.headers.get("Mcp-Session-Id") or request.headers.get(
-            "mcp-session-id"
-        )
-        if mcp_session_id:
-            logger.info(
-                f"MCP 请求: Mcp-Session-Id={mcp_session_id}, correlation_id={correlation_id}"
-            )
-
-        # 创建带 correlation_id 的响应 headers（契约：单次生成语义）
-        response_headers = _make_cors_headers_with_correlation_id(correlation_id)
-
-        # 解析原始请求 JSON
-        try:
-            body = await request.json()
-        except Exception as e:
-            error_data = ErrorData(
-                category=ErrorCategory.PROTOCOL,
-                reason=ErrorReason.PARSE_ERROR,
-                retryable=False,
-                correlation_id=correlation_id,
-                details={"parse_error": str(e)[:200]},
-            )
-            return JSONResponse(
-                content=make_jsonrpc_error(
-                    None,
-                    JsonRpcErrorCode.PARSE_ERROR,
-                    f"JSON 解析失败: {str(e)}",
-                    data=error_data.to_dict(),
-                ).model_dump(exclude_none=True),
-                status_code=400,
-                headers=response_headers,
-            )
-
-        # 自动识别请求格式
-        if is_jsonrpc_request(body):
-            # JSON-RPC 2.0 分支
-            rpc_request, parse_error = parse_jsonrpc_request(body)
-            if parse_error:
-                if parse_error.error and parse_error.error.data is None:
-                    error_data = ErrorData(
-                        category=ErrorCategory.PROTOCOL,
-                        reason=ErrorReason.INVALID_REQUEST,
-                        retryable=False,
-                        correlation_id=correlation_id,
-                        details=None,
-                    )
-                    parse_error.error.data = error_data.to_dict()
-                return JSONResponse(
-                    content=parse_error.model_dump(exclude_none=True),
-                    status_code=400,
-                    headers=response_headers,
-                )
-
-            # rpc_request 已在 parse_error 分支中返回，此处必不为 None
-            assert rpc_request is not None
-            response = await mcp_router.dispatch(rpc_request, correlation_id=correlation_id)
-
-            if response.error and response.error.data:
-                if (
-                    isinstance(response.error.data, dict)
-                    and "correlation_id" not in response.error.data
-                ):
-                    response.error.data["correlation_id"] = correlation_id
-
-            return JSONResponse(
-                content=response.model_dump(exclude_none=True),
-                headers=response_headers,
-            )
-
-        else:
-            # 旧协议分支
-            try:
-                mcp_request = MCPToolCall(**body)
-            except Exception as e:
-                logger.warning(f"旧协议请求格式无效: correlation_id={correlation_id}, error={e}")
-                return JSONResponse(
-                    content={
-                        "ok": False,
-                        "error": f"无效的请求格式: {str(e)}",
-                        "correlation_id": correlation_id,
-                    },
-                    status_code=400,
-                    headers=response_headers,
-                )
-
-            tool = mcp_request.tool
-            args = mcp_request.arguments
-
-            logger.info(f"旧协议请求: tool={tool}, correlation_id={correlation_id}")
-
-            try:
-                result = await _execute_tool(tool, args, correlation_id)
-                result["correlation_id"] = correlation_id
-                return JSONResponse(
-                    content=MCPResponse(ok=result.get("ok", True), result=result).model_dump(),
-                    headers=response_headers,
-                )
-            except ValueError as e:
-                logger.warning(
-                    f"旧协议工具调用参数错误: tool={tool}, correlation_id={correlation_id}, error={e}"
-                )
-                return JSONResponse(
-                    content={"ok": False, "error": str(e), "correlation_id": correlation_id},
-                    headers=response_headers,
-                )
-            except Exception as e:
-                logger.exception(
-                    f"旧协议工具调用失败: tool={tool}, correlation_id={correlation_id}, error={e}"
-                )
-                return JSONResponse(
-                    content={"ok": False, "error": str(e), "correlation_id": correlation_id},
-                    headers=response_headers,
-                )
-
-    @app.post("/memory/store", response_model=MemoryStoreResponse)
-    async def memory_store_endpoint(request: MemoryStoreRequest):
-        """直接调用 memory_store（REST 风格）"""
-        # 在 REST 入口处生成 correlation_id，确保同一请求使用同一 ID
-        correlation_id = generate_correlation_id()
-        # 延迟获取 deps（支持无环境变量 import）
-        deps = get_container().deps
-        return await memory_store_impl(
-            payload_md=request.payload_md,
-            target_space=request.target_space,
-            meta_json=request.meta_json,
-            kind=request.kind,
-            evidence_refs=request.evidence_refs,
-            evidence=request.evidence,
-            is_bulk=request.is_bulk,
-            item_id=request.item_id,
-            actor_user_id=request.actor_user_id,
-            correlation_id=correlation_id,
-            deps=deps,
-        )
-
-    @app.post("/memory/query", response_model=MemoryQueryResponse)
-    async def memory_query_endpoint(request: MemoryQueryRequest):
-        """直接调用 memory_query（REST 风格）"""
-        # 在 REST 入口处生成 correlation_id，确保同一请求使用同一 ID
-        correlation_id = generate_correlation_id()
-        # 延迟获取 deps（支持无环境变量 import）
-        deps = get_container().deps
-        return await memory_query_impl(
-            query=request.query,
-            spaces=request.spaces,
-            filters=request.filters,
-            top_k=request.top_k,
-            correlation_id=correlation_id,
-            deps=deps,
-        )
-
-    @app.get("/reliability/report", response_model=ReliabilityReportResponse)
-    async def reliability_report_endpoint():
-        """
-        获取可靠性统计报告
-
-        降级语义：
-        - 当 logbook_adapter 依赖缺失时，返回 ok=false + IMPORT_FAILED 错误码
-        - 当报告生成执行失败时，返回 ok=false + EXECUTION_FAILED 错误码
-        - 降级响应中各统计字段返回空字典，generated_at 返回空字符串
-        """
-        # 函数内导入：仅在路由触发时才导入依赖
-        # 这支持依赖缺失时的优雅降级
-        try:
-            from .logbook_adapter import get_reliability_report
-        except ImportError as e:
-            logger.warning(f"reliability_report 依赖导入失败: {e}")
-            return ReliabilityReportResponse(
-                ok=False,
-                message=f"reliability_report 依赖不可用: {e}",
-                error_code=ReliabilityReportErrorCode.IMPORT_FAILED,
-            )
-
-        try:
-            report = get_reliability_report()
-            return ReliabilityReportResponse(
-                ok=True,
-                outbox_stats=report["outbox_stats"],
-                audit_stats=report["audit_stats"],
-                v2_evidence_stats=report["v2_evidence_stats"],
-                content_intercept_stats=report["content_intercept_stats"],
-                generated_at=report["generated_at"],
-            )
-        except Exception as e:
-            logger.exception(f"获取可靠性报告失败: {e}")
-            return ReliabilityReportResponse(
-                ok=False,
-                message=f"报告生成失败: {str(e)}",
-                error_code=ReliabilityReportErrorCode.EXECUTION_FAILED,
-            )
-
-    @app.post("/governance/settings/update", response_model=GovernanceSettingsUpdateResponse)
-    async def governance_settings_update_endpoint(request: GovernanceSettingsUpdateRequest):
-        """更新治理设置（受保护端点）"""
-        # 延迟获取 deps（支持无环境变量 import）
-        deps = get_container().deps
-        return await governance_update_impl(
-            team_write_enabled=request.team_write_enabled,
-            policy_json=request.policy_json,
-            admin_key=request.admin_key,
-            actor_user_id=request.actor_user_id,
-            deps=deps,
-        )
+    # 3. 统一注册路由（/mcp, /memory/*, /health, /reliability/report, /governance/* 等）
+    register_routes(app)
 
     return app

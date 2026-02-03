@@ -18,7 +18,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scm_sync_svn import (
+from engram.logbook.scm_sync_tasks import svn as _scm_sync_svn
+
+sys.modules.setdefault("scm_sync_svn", _scm_sync_svn)
+
+from engram.logbook.scm_sync_tasks.svn import (
     FetchDiffResult,
     PatchFetchCommandError,
     PatchFetchContentTooLargeError,
@@ -1964,8 +1968,9 @@ class TestSvnBackfillCLI:
 
     def test_backfill_range_validation(self):
         """Backfill 范围验证：start_rev > end_rev 报错"""
-        from engram.logbook.errors import ValidationError
         from scm_sync_svn import SyncConfig, backfill_svn_revisions
+
+        from engram.logbook.errors import ValidationError
 
         sync_config = SyncConfig(
             svn_url="svn://example.com/repo",
@@ -2254,7 +2259,7 @@ class TestBackfillArgumentValidation:
         """SVN backfill 需要 --start-rev 参数"""
         import sys
 
-        from scm_sync_svn import parse_args
+        from scripts.scm_sync_svn import parse_args
 
         # 模拟命令行参数
         test_args = ["scm_sync_svn.py", "--backfill"]
@@ -2281,7 +2286,7 @@ class TestBackfillArgumentValidation:
         """--dry-run 仅在 --backfill 模式下有效"""
         import sys
 
-        from scm_sync_svn import parse_args
+        from scripts.scm_sync_svn import parse_args
 
         # dry-run 不带 backfill 应该被解析（验证由 main() 处理）
         test_args = ["scm_sync_svn.py", "--dry-run"]
@@ -2295,7 +2300,7 @@ class TestBackfillArgumentValidation:
         """--update-watermark 仅在 --backfill 模式下有效"""
         import sys
 
-        from scm_sync_svn import parse_args
+        from scripts.scm_sync_svn import parse_args
 
         test_args = ["scm_sync_svn.py", "--backfill", "--start-rev", "100", "--update-watermark"]
 
@@ -2309,7 +2314,7 @@ class TestBackfillArgumentValidation:
         """SVN backfill --end-rev 默认为 HEAD"""
         import sys
 
-        from scm_sync_svn import parse_args
+        from scripts.scm_sync_svn import parse_args
 
         test_args = ["scm_sync_svn.py", "--backfill", "--start-rev", "100"]
 

@@ -66,7 +66,12 @@ Alias 生命周期与冻结项交互
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
+
+import yaml
 
 # ============================================================================
 # Constants
@@ -327,6 +332,263 @@ def build_workflows_view(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 # ============================================================================
+# Makefile Parsing Utilities
+# ============================================================================
+
+
+def parse_makefile_targets_from_content(content: str) -> set[str]:
+    """
+    Parse Makefile content to extract all defined target names.
+
+    Handles:
+    - Regular targets: target: dependencies
+    - .PHONY declarations: .PHONY: target1 target2 ...
+    - Targets with pattern rules (%)
+    - Continuation lines (\\)
+
+    Args:
+        content: Makefile file content
+
+    Returns:
+        Set of target names defined in the Makefile content
+    """
+    targets = set()
+
+    # Handle line continuations first
+    content = re.sub(r"\\\n\s*", " ", content)
+
+    for line in content.split("\n"):
+        line = line.strip()
+
+        # Skip comments and empty lines
+        if not line or line.startswith("#"):
+            continue
+
+        # Match .PHONY declarations
+        # .PHONY: target1 target2 target3 ...
+        phony_match = re.match(r"^\.PHONY:\s*(.+)$", line)
+        if phony_match:
+            phony_targets = phony_match.group(1).split()
+            for target in phony_targets:
+                # Skip continuation marker
+                if target != "\\":
+                    targets.add(target)
+            continue
+
+        # Match regular target definitions
+        # target: [dependencies]
+        # target:: [dependencies]
+        target_match = re.match(r"^([a-zA-Z0-9_][a-zA-Z0-9_.-]*)::?\s*", line)
+        if target_match:
+            target_name = target_match.group(1)
+            targets.add(target_name)
+
+    return targets
+
+
+def parse_makefile_targets(makefile_path: Path) -> set[str]:
+    """
+    Parse a Makefile to extract all defined target names.
+
+    Args:
+        makefile_path: Path to the Makefile
+
+    Returns:
+        Set of target names defined in the Makefile
+    """
+    if not makefile_path.exists():
+        return set()
+
+    with open(makefile_path, "r", encoding="utf-8") as file:
+        content = file.read()
+
+    return parse_makefile_targets_from_content(content)
+
+
+# ============================================================================
+# Workflow Make Call Extraction
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class MakeTargetUsage:
+    """记录 make target 使用位置"""
+
+    target: str
+    workflow_file: str
+    job_id: str
+    step_name: str
+    line_content: str
+
+
+def extract_make_targets_from_run(run_content: str) -> list[tuple[str, bool]]:
+    """
+    从 run 命令内容中提取 make targets
+
+    处理场景：
+    - make target
+    - make target1 target2
+    - make -C dir target
+    - cmd1 && make target
+    - cmd1 ; make target
+    - make N=13 target
+    - $(MAKE) target
+    - 变量插值: make ${{ env.TARGET }} (标记为含变量)
+
+    Args:
+        run_content: run 步骤的内容
+
+    Returns:
+        (target, has_variable) 元组列表
+    """
+    targets: list[tuple[str, bool]] = []
+
+    if not run_content:
+        return targets
+
+    # 拆分多行和多命令
+    # 处理 && 和 ; 分隔的命令
+    lines = run_content.replace("\\n", "\n").split("\n")
+
+    for line in lines:
+        # 进一步按 && 和 ; 拆分
+        commands = re.split(r"\s*(?:&&|;)\s*", line)
+
+        for cmd in commands:
+            cmd = cmd.strip()
+            if not cmd:
+                continue
+
+            # 检查是否是 make 命令
+            # 匹配: make, $(MAKE), ${MAKE}
+            make_match = re.match(r"^(?:make|\$\(MAKE\)|\$\{MAKE\})\s*(.*)$", cmd)
+            if not make_match:
+                continue
+
+            args = make_match.group(1)
+
+            # 移除行尾注释（在引号外的 # 开始的内容）
+            # 简单处理：找到第一个 # 并截断
+            comment_idx = args.find("#")
+            if comment_idx != -1:
+                args = args[:comment_idx].strip()
+
+            # 跳过空参数（整行都是注释）
+            if not args:
+                continue
+
+            # 检查是否包含变量插值
+            has_variable = bool(re.search(r"\$\{\{.*?\}\}|\$\(.*?\)|\$\{.*?\}|\$[A-Za-z_]", args))
+
+            # 解析 make 参数
+            # 移除常见选项和变量赋值
+            # -C dir, -f file, -j N, --directory=dir, VAR=value
+            tokens = args.split()
+            i = 0
+            while i < len(tokens):
+                token = tokens[i]
+
+                # 跳过选项
+                if token.startswith("-"):
+                    # -C, -f, -j 等需要参数的选项
+                    if token in ("-C", "-f", "-j", "--directory", "--file", "--jobs"):
+                        i += 2  # 跳过选项和参数
+                        continue
+                    if token.startswith("-C") or token.startswith("-f") or token.startswith("-j"):
+                        # -Cdir, -ffile 等合并形式
+                        i += 1
+                        continue
+                    if "=" in token:
+                        # --directory=dir
+                        i += 1
+                        continue
+                    # 其他选项如 -k, -n 等
+                    i += 1
+                    continue
+
+                # 跳过变量赋值 VAR=value
+                if "=" in token and not token.startswith("$"):
+                    i += 1
+                    continue
+
+                # 跳过变量插值
+                if token.startswith("$"):
+                    # 保守处理：标记为含变量，但不提取
+                    has_variable = True
+                    i += 1
+                    continue
+
+                # 跳过空白和引号内容
+                if not token or token.startswith('"') or token.startswith("'"):
+                    i += 1
+                    continue
+
+                # 这应该是一个 target
+                target = token
+                # 验证 target 格式（字母、数字、下划线、连字符）
+                if re.match(r"^[a-zA-Z_][a-zA-Z0-9_-]*$", target):
+                    targets.append((target, has_variable))
+
+                i += 1
+
+    return targets
+
+
+def extract_make_targets_from_workflow(workflow_path: Path) -> list[MakeTargetUsage]:
+    """
+    从 workflow 文件中提取所有 make target 使用
+
+    Args:
+        workflow_path: workflow 文件路径
+
+    Returns:
+        MakeTargetUsage 列表
+    """
+    usages: list[MakeTargetUsage] = []
+
+    if not workflow_path.exists():
+        return usages
+
+    content = workflow_path.read_text(encoding="utf-8")
+    try:
+        workflow = yaml.safe_load(content)
+    except yaml.YAMLError:
+        return usages
+
+    if not workflow or "jobs" not in workflow:
+        return usages
+
+    for job_id, job_config in workflow.get("jobs", {}).items():
+        if not isinstance(job_config, dict):
+            continue
+
+        for step in job_config.get("steps", []):
+            if not isinstance(step, dict):
+                continue
+
+            run_content = step.get("run")
+            if not run_content:
+                continue
+
+            step_name = step.get("name", "<unnamed>")
+
+            # 提取 make targets
+            targets = extract_make_targets_from_run(str(run_content))
+            for target, _has_variable in targets:
+                usages.append(
+                    MakeTargetUsage(
+                        target=target,
+                        workflow_file=workflow_path.name,
+                        job_id=job_id,
+                        step_name=step_name,
+                        line_content=str(run_content)[:100],
+                    )
+                )
+
+    return usages
+
+
+# ============================================================================
 # Artifact Path Normalization
 # ============================================================================
 
@@ -547,6 +809,58 @@ def normalize_glob_pattern(pattern: str) -> str:
         'logs/[abc]*.log'
     """
     return normalize_artifact_path(pattern, allow_empty=False)
+
+
+# ============================================================================
+# Artifact Path Lookup Tokens
+# ============================================================================
+
+GLOB_TOKEN_PATTERN = re.compile(r"\*|\?|\[[^\]]*]")
+
+
+def _split_glob_fixed_fragments(pattern: str) -> list[str]:
+    """将 glob 模式拆分为固定片段列表"""
+    return [fragment for fragment in GLOB_TOKEN_PATTERN.split(pattern) if fragment]
+
+
+def artifact_path_lookup_tokens(path: str) -> list[tuple[str, ...]]:
+    """生成 artifact 路径在文档中的查找 token 组
+
+    返回值为 token 组列表。任一组满足"全部 token 出现"即视为匹配。
+
+    规则：
+    1. 统一使用 normalize_artifact_path() 进行标准化
+    2. 精确路径：仅返回 (normalized,)
+    3. 目录路径（以 / 结尾）：仅返回 (normalized,)
+    4. Glob 模式（含 * ? []）：
+       - 返回 (normalized,) 作为精确模式
+       - 若存在 >=2 个固定片段，追加 (fragment1, fragment2, ...) 作为占位符匹配
+         例如: "test-results-*.xml" -> ("test-results-", ".xml")
+    """
+    if not isinstance(path, str):
+        path = str(path)
+
+    try:
+        normalized = normalize_artifact_path(path, allow_empty=True)
+    except ArtifactPathError:
+        normalized = path.strip()
+
+    if not normalized:
+        return []
+
+    tokens: list[tuple[str, ...]] = []
+
+    is_glob = bool(GLOB_TOKEN_PATTERN.search(normalized))
+    if is_glob:
+        tokens.append((normalized,))
+        fragments = _split_glob_fixed_fragments(normalized)
+        if len(fragments) >= 2:
+            tokens.append(tuple(fragments))
+        return tokens
+
+    # 非 glob：精确路径或目录路径均使用标准化路径
+    tokens.append((normalized,))
+    return tokens
 
 
 # ============================================================================

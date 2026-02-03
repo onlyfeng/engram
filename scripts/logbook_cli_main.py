@@ -53,7 +53,7 @@ def scm_refresh_vfacts(
     """刷新 vfacts 视图"""
     import json
 
-    import scm_sync_runner
+    from engram.logbook import scm_sync_runner
 
     result = scm_sync_runner.refresh_vfacts(dry_run=dry_run, concurrently=concurrently)
     ok = result.get("refreshed", False) or dry_run

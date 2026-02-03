@@ -22,10 +22,10 @@ from typing import Any
 import pytest
 
 from scripts.ci.check_workflow_contract_internal_consistency import (
-    ERROR_TYPE_DUPLICATE_JOB_ID,
-    ERROR_TYPE_DUPLICATE_REQUIRED_JOB_ID,
-    ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH,
-    ERROR_TYPE_REQUIRED_JOB_NOT_IN_JOB_IDS,
+    CONTRACT_JOB_IDS_DUPLICATE,
+    CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH,
+    CONTRACT_REQUIRED_JOB_ID_DUPLICATE,
+    CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS,
     ConsistencyError,
     ConsistencyResult,
     WorkflowContractInternalConsistencyChecker,
@@ -115,7 +115,7 @@ class TestJobIdsNamesLengthConsistency:
 
         assert result.success is True
         length_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH
+            e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH
         ]
         assert len(length_errors) == 0
 
@@ -132,7 +132,7 @@ class TestJobIdsNamesLengthConsistency:
 
         assert result.success is False
         length_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH
+            e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH
         ]
         assert len(length_errors) == 1
         assert "3" in length_errors[0].message  # job_ids count
@@ -151,7 +151,7 @@ class TestJobIdsNamesLengthConsistency:
 
         assert result.success is False
         length_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH
+            e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH
         ]
         assert len(length_errors) == 1
 
@@ -168,7 +168,7 @@ class TestJobIdsNamesLengthConsistency:
 
         # 空数组长度相等，不会触发长度不匹配错误
         length_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH
+            e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH
         ]
         assert len(length_errors) == 0
 
@@ -192,7 +192,7 @@ class TestNoDuplicateJobIds:
         checker = WorkflowContractInternalConsistencyChecker(contract_path)
         result = checker.check()
 
-        duplicate_errors = [e for e in result.errors if e.error_type == ERROR_TYPE_DUPLICATE_JOB_ID]
+        duplicate_errors = [e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_DUPLICATE]
         assert len(duplicate_errors) == 0
 
     def test_duplicate_job_id_fails(self) -> None:
@@ -207,7 +207,7 @@ class TestNoDuplicateJobIds:
         result = checker.check()
 
         assert result.success is False
-        duplicate_errors = [e for e in result.errors if e.error_type == ERROR_TYPE_DUPLICATE_JOB_ID]
+        duplicate_errors = [e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_DUPLICATE]
         assert len(duplicate_errors) == 1
         assert duplicate_errors[0].key == "test"
 
@@ -223,7 +223,7 @@ class TestNoDuplicateJobIds:
         result = checker.check()
 
         assert result.success is False
-        duplicate_errors = [e for e in result.errors if e.error_type == ERROR_TYPE_DUPLICATE_JOB_ID]
+        duplicate_errors = [e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_DUPLICATE]
         assert len(duplicate_errors) == 2
         duplicate_keys = {e.key for e in duplicate_errors}
         assert "test" in duplicate_keys
@@ -254,7 +254,7 @@ class TestNoDuplicateRequiredJobIds:
         result = checker.check()
 
         duplicate_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_DUPLICATE_REQUIRED_JOB_ID
+            e for e in result.errors if e.error_type == CONTRACT_REQUIRED_JOB_ID_DUPLICATE
         ]
         assert len(duplicate_errors) == 0
 
@@ -275,7 +275,7 @@ class TestNoDuplicateRequiredJobIds:
 
         assert result.success is False
         duplicate_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_DUPLICATE_REQUIRED_JOB_ID
+            e for e in result.errors if e.error_type == CONTRACT_REQUIRED_JOB_ID_DUPLICATE
         ]
         assert len(duplicate_errors) == 1
         assert duplicate_errors[0].key == "test"
@@ -305,7 +305,7 @@ class TestRequiredJobsInJobIds:
         result = checker.check()
 
         not_in_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_REQUIRED_JOB_NOT_IN_JOB_IDS
+            e for e in result.errors if e.error_type == CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS
         ]
         assert len(not_in_errors) == 0
 
@@ -326,7 +326,7 @@ class TestRequiredJobsInJobIds:
 
         assert result.success is False
         not_in_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_REQUIRED_JOB_NOT_IN_JOB_IDS
+            e for e in result.errors if e.error_type == CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS
         ]
         assert len(not_in_errors) == 1
         assert not_in_errors[0].key == "build"
@@ -348,7 +348,7 @@ class TestRequiredJobsInJobIds:
 
         assert result.success is False
         not_in_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_REQUIRED_JOB_NOT_IN_JOB_IDS
+            e for e in result.errors if e.error_type == CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS
         ]
         assert len(not_in_errors) == 2
 
@@ -393,7 +393,7 @@ class TestMultipleWorkflows:
 
         # nightly 中的重复 job_id 应被检测到
         assert result.success is False
-        duplicate_errors = [e for e in result.errors if e.error_type == ERROR_TYPE_DUPLICATE_JOB_ID]
+        duplicate_errors = [e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_DUPLICATE]
         assert len(duplicate_errors) == 1
         assert duplicate_errors[0].workflow == "nightly"
 
@@ -429,7 +429,7 @@ class TestOutputFormatting:
             workflows_checked=["ci"],
             errors=[
                 ConsistencyError(
-                    error_type=ERROR_TYPE_DUPLICATE_JOB_ID,
+                    error_type=CONTRACT_JOB_IDS_DUPLICATE,
                     workflow="ci",
                     message="Duplicate job_id 'test'",
                     key="test",
@@ -543,7 +543,7 @@ class TestEdgeCases:
 
         # 应该报告长度不匹配（0 vs 1）
         length_errors = [
-            e for e in result.errors if e.error_type == ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH
+            e for e in result.errors if e.error_type == CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH
         ]
         assert len(length_errors) == 1
 

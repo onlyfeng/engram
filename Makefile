@@ -1,14 +1,14 @@
 # Engram Makefile - 快速部署与开发工具
 # 
 # 快速开始:
-#   make ci           - 运行所有 CI 检查（lint、typecheck、schema 等）
-#   make setup-db     - 一键初始化数据库
+#   make ci                 - 运行所有 CI 检查（lint、typecheck、schema 等）
+#   make setup-db           - 一键初始化数据库（自动识别/交互；本地推荐）
 #   make gateway      - 启动 Gateway 服务
 #   make help         - 查看所有命令
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified mcp-doctor bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-core setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -42,10 +42,164 @@ OPENMEMORY_SVC_PASSWORD ?=
 
 ## ==================== 快速部署 ====================
 
-setup-db: precheck db-create bootstrap-roles migrate-ddl apply-roles apply-openmemory-grants verify-permissions  ## 一键初始化数据库（创建库 + 角色 + DDL + 权限 + 验证）
+setup-db:  ## 一键初始化数据库（自动识别：有密码用现有/可重设；无密码则引导输入）
+	@set -e; \
+	# 非交互环境（CI / 脚本）：不尝试读取输入，直接按当前环境变量执行
+	if [ ! -t 0 ]; then \
+		$(MAKE) --no-print-directory setup-db-core; \
+		exit 0; \
+	fi; \
+	echo "========== 初始化数据库（setup-db） =========="; \
+	echo ""; \
+	PWD_COUNT=0; \
+	if [ -n "$$LOGBOOK_MIGRATOR_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ -n "$$LOGBOOK_SVC_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ -n "$$OPENMEMORY_MIGRATOR_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ -n "$$OPENMEMORY_SVC_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ "$$PWD_COUNT" = "0" ]; then \
+		echo "检测到未设置服务账号密码。"; \
+		echo ""; \
+		echo "请选择部署模式："; \
+		echo "  1) logbook-only   (不创建服务账号；使用 postgres 超级用户)"; \
+		echo "  2) unified-stack  (创建服务账号；需要输入 4 个密码)"; \
+		printf "输入 1 或 2 [1]: "; \
+		IFS= read -r MODE; MODE=$${MODE:-1}; \
+		if [ "$$MODE" = "1" ]; then \
+			echo ""; \
+			echo "[INFO] 使用 logbook-only（不设置密码）"; \
+			$(MAKE) --no-print-directory setup-db-core \
+				LOGBOOK_MIGRATOR_PASSWORD= \
+				LOGBOOK_SVC_PASSWORD= \
+				OPENMEMORY_MIGRATOR_PASSWORD= \
+				OPENMEMORY_SVC_PASSWORD=; \
+		elif [ "$$MODE" = "2" ]; then \
+			echo ""; \
+			echo "[INFO] 使用 unified-stack（密码输入不会回显）"; \
+			stty -echo 2>/dev/null || true; \
+			trap 'stty echo 2>/dev/null || true' EXIT; \
+			printf "LOGBOOK_MIGRATOR_PASSWORD: "; IFS= read -r LB_MIG; printf "\n"; \
+			printf "LOGBOOK_SVC_PASSWORD: "; IFS= read -r LB_SVC; printf "\n"; \
+			printf "OPENMEMORY_MIGRATOR_PASSWORD: "; IFS= read -r OM_MIG; printf "\n"; \
+			printf "OPENMEMORY_SVC_PASSWORD: "; IFS= read -r OM_SVC; printf "\n"; \
+			stty echo 2>/dev/null || true; \
+			trap - EXIT; \
+			if [ -z "$$LB_MIG" ] || [ -z "$$LB_SVC" ] || [ -z "$$OM_MIG" ] || [ -z "$$OM_SVC" ]; then \
+				echo "[ERROR] unified-stack 模式要求 4 个密码均非空"; \
+				exit 1; \
+			fi; \
+			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+				$(MAKE) --no-print-directory setup-db-core; \
+		else \
+			echo "[ERROR] 无效输入：$$MODE（请输入 1 或 2）"; \
+			exit 1; \
+		fi; \
+	elif [ "$$PWD_COUNT" = "4" ]; then \
+		echo "检测到已设置全部 4 个服务账号密码（unified-stack）。"; \
+		echo ""; \
+		echo "请选择："; \
+		echo "  1) 使用已有设置（推荐）"; \
+		echo "  2) 重新输入并覆盖 4 个密码"; \
+		echo "  3) 切换为 logbook-only（清空密码，使用 postgres 超级用户）"; \
+		printf "输入 1/2/3 [1]: "; \
+		IFS= read -r CHOICE; CHOICE=$${CHOICE:-1}; \
+		if [ "$$CHOICE" = "1" ]; then \
+			echo ""; \
+			echo "[INFO] 使用已有 unified-stack 密码设置"; \
+			$(MAKE) --no-print-directory setup-db-core; \
+		elif [ "$$CHOICE" = "2" ]; then \
+			echo ""; \
+			echo "[INFO] 重新输入 unified-stack 密码（不会回显）"; \
+			stty -echo 2>/dev/null || true; \
+			trap 'stty echo 2>/dev/null || true' EXIT; \
+			printf "LOGBOOK_MIGRATOR_PASSWORD: "; IFS= read -r LB_MIG; printf "\n"; \
+			printf "LOGBOOK_SVC_PASSWORD: "; IFS= read -r LB_SVC; printf "\n"; \
+			printf "OPENMEMORY_MIGRATOR_PASSWORD: "; IFS= read -r OM_MIG; printf "\n"; \
+			printf "OPENMEMORY_SVC_PASSWORD: "; IFS= read -r OM_SVC; printf "\n"; \
+			stty echo 2>/dev/null || true; \
+			trap - EXIT; \
+			if [ -z "$$LB_MIG" ] || [ -z "$$LB_SVC" ] || [ -z "$$OM_MIG" ] || [ -z "$$OM_SVC" ]; then \
+				echo "[ERROR] unified-stack 模式要求 4 个密码均非空"; \
+				exit 1; \
+			fi; \
+			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+				$(MAKE) --no-print-directory setup-db-core; \
+		elif [ "$$CHOICE" = "3" ]; then \
+			echo ""; \
+			echo "[INFO] 切换为 logbook-only（清空密码）"; \
+			$(MAKE) --no-print-directory setup-db-core \
+				LOGBOOK_MIGRATOR_PASSWORD= \
+				LOGBOOK_SVC_PASSWORD= \
+				OPENMEMORY_MIGRATOR_PASSWORD= \
+				OPENMEMORY_SVC_PASSWORD=; \
+		else \
+			echo "[ERROR] 无效输入：$$CHOICE（请输入 1/2/3）"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "检测到已设置 $$PWD_COUNT/4 个密码（不完整）。"; \
+		echo ""; \
+		echo "请选择："; \
+		echo "  1) 补全缺失的密码（保留已设置的）"; \
+		echo "  2) 重新输入并覆盖 4 个密码"; \
+		echo "  3) 切换为 logbook-only（清空密码）"; \
+		printf "输入 1/2/3 [1]: "; \
+		IFS= read -r CHOICE; CHOICE=$${CHOICE:-1}; \
+		if [ "$$CHOICE" = "1" ]; then \
+			echo ""; \
+			echo "[INFO] 补全缺失密码（不会回显）"; \
+			LB_MIG="$$LOGBOOK_MIGRATOR_PASSWORD"; \
+			LB_SVC="$$LOGBOOK_SVC_PASSWORD"; \
+			OM_MIG="$$OPENMEMORY_MIGRATOR_PASSWORD"; \
+			OM_SVC="$$OPENMEMORY_SVC_PASSWORD"; \
+			stty -echo 2>/dev/null || true; \
+			trap 'stty echo 2>/dev/null || true' EXIT; \
+			if [ -z "$$LB_MIG" ]; then printf "LOGBOOK_MIGRATOR_PASSWORD: "; IFS= read -r LB_MIG; printf "\n"; fi; \
+			if [ -z "$$LB_SVC" ]; then printf "LOGBOOK_SVC_PASSWORD: "; IFS= read -r LB_SVC; printf "\n"; fi; \
+			if [ -z "$$OM_MIG" ]; then printf "OPENMEMORY_MIGRATOR_PASSWORD: "; IFS= read -r OM_MIG; printf "\n"; fi; \
+			if [ -z "$$OM_SVC" ]; then printf "OPENMEMORY_SVC_PASSWORD: "; IFS= read -r OM_SVC; printf "\n"; fi; \
+			stty echo 2>/dev/null || true; \
+			trap - EXIT; \
+			if [ -z "$$LB_MIG" ] || [ -z "$$LB_SVC" ] || [ -z "$$OM_MIG" ] || [ -z "$$OM_SVC" ]; then \
+				echo "[ERROR] unified-stack 模式要求 4 个密码均非空"; \
+				exit 1; \
+			fi; \
+			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+				$(MAKE) --no-print-directory setup-db-core; \
+		elif [ "$$CHOICE" = "2" ]; then \
+			echo ""; \
+			echo "[INFO] 重新输入 unified-stack 密码（不会回显）"; \
+			stty -echo 2>/dev/null || true; \
+			trap 'stty echo 2>/dev/null || true' EXIT; \
+			printf "LOGBOOK_MIGRATOR_PASSWORD: "; IFS= read -r LB_MIG; printf "\n"; \
+			printf "LOGBOOK_SVC_PASSWORD: "; IFS= read -r LB_SVC; printf "\n"; \
+			printf "OPENMEMORY_MIGRATOR_PASSWORD: "; IFS= read -r OM_MIG; printf "\n"; \
+			printf "OPENMEMORY_SVC_PASSWORD: "; IFS= read -r OM_SVC; printf "\n"; \
+			stty echo 2>/dev/null || true; \
+			trap - EXIT; \
+			if [ -z "$$LB_MIG" ] || [ -z "$$LB_SVC" ] || [ -z "$$OM_MIG" ] || [ -z "$$OM_SVC" ]; then \
+				echo "[ERROR] unified-stack 模式要求 4 个密码均非空"; \
+				exit 1; \
+			fi; \
+			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+				$(MAKE) --no-print-directory setup-db-core; \
+		elif [ "$$CHOICE" = "3" ]; then \
+			echo ""; \
+			echo "[INFO] 切换为 logbook-only（清空密码）"; \
+			$(MAKE) --no-print-directory setup-db-core \
+				LOGBOOK_MIGRATOR_PASSWORD= \
+				LOGBOOK_SVC_PASSWORD= \
+				OPENMEMORY_MIGRATOR_PASSWORD= \
+				OPENMEMORY_SVC_PASSWORD=; \
+		else \
+			echo "[ERROR] 无效输入：$$CHOICE（请输入 1/2/3）"; \
+			exit 1; \
+		fi; \
+	fi
+
+setup-db-core: precheck db-create bootstrap-roles migrate-ddl apply-roles apply-openmemory-grants verify-permissions  # setup-db 核心步骤（内部目标）
 	@echo "========== 初始化完成 =========="
 	@echo ""
-	@if [ -z "$(LOGBOOK_SVC_PASSWORD)" ]; then \
+	@if [ -z "$$LOGBOOK_SVC_PASSWORD" ]; then \
 		echo "部署模式: logbook-only"; \
 		echo "下一步："; \
 		echo "  1. 设置环境变量："; \
@@ -76,10 +230,10 @@ setup-db-logbook-only: db-create migrate-ddl verify-permissions  ## 一键初始
 precheck:  ## 检查部署模式和环境变量
 	@echo "检查部署模式..."
 	@PWD_COUNT=0; \
-	if [ -n "$(LOGBOOK_MIGRATOR_PASSWORD)" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
-	if [ -n "$(LOGBOOK_SVC_PASSWORD)" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
-	if [ -n "$(OPENMEMORY_MIGRATOR_PASSWORD)" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
-	if [ -n "$(OPENMEMORY_SVC_PASSWORD)" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ -n "$$LOGBOOK_MIGRATOR_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ -n "$$LOGBOOK_SVC_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ -n "$$OPENMEMORY_MIGRATOR_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
+	if [ -n "$$OPENMEMORY_SVC_PASSWORD" ]; then PWD_COUNT=$$((PWD_COUNT+1)); fi; \
 	if [ "$$PWD_COUNT" = "0" ]; then \
 		echo "[INFO] 部署模式: logbook-only"; \
 		echo "       未设置任何服务账号密码，将跳过 login role 创建"; \
@@ -256,6 +410,31 @@ check-iteration-docs:  ## 检查迭代文档规范（.iteration/ 链接禁止 + 
 	$(PYTHON) -m scripts.ci.check_iteration_evidence_contract --verbose
 	@echo "迭代文档规范检查通过"
 
+check-iteration-fixtures-freshness:  ## 检查 iteration fixtures 是否为最新
+	@echo "检查 iteration fixtures 是否为最新..."
+	$(PYTHON) -m scripts.ci.check_iteration_fixtures_freshness --verbose
+	@echo "iteration fixtures 检查通过"
+
+check-min-gate-profiles-consistency:  ## 检查最小门禁 profile 与 Makefile 一致性
+	@echo "检查最小门禁 profile 与 Makefile 一致性..."
+	$(PYTHON) -m scripts.ci.check_min_gate_profiles_consistency --verbose
+	@echo "最小门禁 profile 一致性检查通过"
+
+check-iteration-gate-profiles-contract:  ## 检查迭代门禁 profile 合约
+	@echo "检查迭代门禁 profile 合约..."
+	$(PYTHON) -m scripts.ci.check_iteration_gate_profiles_contract --verbose
+	@echo "迭代门禁 profile 合约检查通过"
+
+check-iteration-toolchain-drift-map-contract:  ## 检查迭代 toolchain drift map 合约命令
+	@echo "检查迭代 toolchain drift map 合约命令..."
+	$(PYTHON) -m scripts.ci.check_iteration_toolchain_drift_map_contract --verbose
+	@echo "迭代 toolchain drift map 合约命令检查通过"
+
+check-iteration-docs-generated-blocks:  ## 检查迭代回归文档受控块一致性
+	@echo "检查迭代回归文档受控块..."
+	$(PYTHON) -m scripts.ci.check_iteration_regression_generated_blocks --verbose
+	@echo "迭代回归文档受控块检查通过"
+
 check-iteration-docs-headings:  ## 检查 regression 文件标准标题（阻断模式）
 	@echo "检查 regression 文件标准标题..."
 	$(PYTHON) -m scripts.ci.check_iteration_docs_placeholders --verbose
@@ -293,6 +472,11 @@ check-workflow-contract-docs-sync:  ## Workflow 合约与文档同步检查
 	@echo "检查 Workflow 合约与文档同步..."
 	$(PYTHON) -m scripts.ci.check_workflow_contract_docs_sync
 	@echo "Workflow 合约与文档同步检查通过"
+
+check-workflow-contract-error-types-docs-sync:  ## Workflow 合约 Error Types 文档同步检查
+	@echo "检查 Workflow 合约 Error Types 文档同步..."
+	$(PYTHON) -m scripts.ci.check_workflow_contract_error_types_docs_sync
+	@echo "Workflow 合约 Error Types 文档同步检查通过"
 
 check-workflow-contract-docs-sync-json:  ## Workflow 合约与文档同步检查（JSON 输出）
 	$(PYTHON) -m scripts.ci.check_workflow_contract_docs_sync --json
@@ -353,6 +537,12 @@ workflow-contract-drift-report-all:  ## Workflow 合约 drift 报告（JSON + Ma
 	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --markdown --output artifacts/workflow_contract_drift.md || true
 	@echo "Drift reports 已生成到 artifacts/ 目录"
 
+workflow-contract-suggest:  ## Workflow 合约更新建议（JSON + Markdown 输出到 artifacts/）
+	@mkdir -p artifacts
+	$(PYTHON) -m scripts.ci.suggest_workflow_contract_updates --json --output artifacts/workflow_contract_suggestions.json || true
+	$(PYTHON) -m scripts.ci.suggest_workflow_contract_updates --markdown --output artifacts/workflow_contract_suggestions.md || true
+	@echo "Suggestions 已生成到 artifacts/ 目录"
+
 render-workflow-contract-docs:  ## 渲染 Workflow 合约文档受控块（仅预览输出，不写入）
 	@echo "渲染 Workflow 合约文档受控块..."
 	$(PYTHON) -m scripts.ci.render_workflow_contract_docs --target all
@@ -385,6 +575,16 @@ check-no-root-wrappers:  ## 根目录 wrapper 禁止导入检查
 	$(PYTHON) -m scripts.ci.check_no_root_wrappers_allowlist --verbose
 	@echo "根目录 wrapper 导入检查通过"
 
+check-mcp-config-docs-sync:  ## MCP 配置文档与 SSOT 同步检查
+	@echo "检查 MCP 配置文档同步..."
+	$(PYTHON) -m scripts.ci.check_mcp_config_docs_sync --verbose
+	@echo "MCP 配置文档同步检查通过"
+
+update-mcp-config-docs:  ## 更新 MCP 配置文档受控块
+	@echo "更新 MCP 配置文档受控块..."
+	$(PYTHON) scripts/docs/render_mcp_config_snippet.py --write
+	@echo "MCP 配置文档受控块已更新"
+
 check-mcp-error-contract:  ## MCP JSON-RPC 错误码合约检查
 	@echo "检查 MCP JSON-RPC 错误码合约..."
 	$(PYTHON) -m scripts.ci.check_mcp_jsonrpc_error_contract --verbose
@@ -406,7 +606,22 @@ check-ci-test-isolation:  ## CI 测试隔离检查（禁止模块级 sys.path �
 check-ci-test-isolation-json:  ## CI 测试隔离检查（JSON 输出）
 	$(PYTHON) -m scripts.ci.check_ci_test_isolation --json
 
-ci: lint format-check typecheck-gate typecheck-strict-island mypy-metrics check-mypy-metrics-thresholds check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs validate-workflows-strict check-workflow-contract-docs-sync check-workflow-contract-version-policy check-workflow-contract-internal-consistency check-workflow-make-targets-consistency check-mcp-error-contract check-mcp-error-docs-sync check-ci-test-isolation  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
+workflow-contract-preflight:  ## Workflow 合约预检（串行执行合约相关门禁 + CI 脚本测试）
+	@echo "运行 Workflow 合约预检..."
+	@$(MAKE) validate-workflows-strict
+	@$(MAKE) check-workflow-contract-docs-sync
+	@$(MAKE) check-workflow-contract-error-types-docs-sync
+	@$(MAKE) check-workflow-contract-version-policy
+	@$(MAKE) check-workflow-contract-doc-anchors
+	@$(MAKE) check-workflow-contract-coupling-map-sync
+	@$(MAKE) check-workflow-contract-docs-generated
+	@$(MAKE) check-workflow-contract-internal-consistency
+	@$(MAKE) check-workflow-make-targets-consistency
+	@$(MAKE) check-ci-test-isolation
+	$(PYTEST) tests/ci/ -q
+	@echo "Workflow 合约预检通过"
+
+ci: lint format-check typecheck-gate typecheck-strict-island mypy-metrics check-mypy-metrics-thresholds check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-iteration-toolchain-drift-map-contract validate-workflows-strict check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-version-policy check-workflow-contract-internal-consistency check-workflow-make-targets-consistency check-mcp-error-contract check-mcp-error-docs-sync check-ci-test-isolation  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
 	@echo ""
 	@echo "=========================================="
 	@echo "[OK] 所有 CI 检查通过"
@@ -557,6 +772,10 @@ verify-unified:  ## 统一栈验证（健康检查 + DB 权限 + smoke 测试）
 	@echo "可选：设置 VERIFY_FULL=1 执行完整验证"
 	@echo "  VERIFY_FULL=1 make verify-unified"
 
+mcp-doctor:  ## MCP 诊断（health + CORS + tools/list）
+	@GATEWAY_URL=$(GATEWAY_URL) MCP_DOCTOR_TIMEOUT=$(VERIFY_TIMEOUT) \
+		$(PYTHON) scripts/ops/mcp_doctor.py
+
 bootstrap-roles: precheck  ## 初始化服务账号（支持 logbook-only 跳过或 unified-stack 创建）
 	@echo "初始化服务账号..."
 	$(PYTHON) scripts/db_bootstrap.py \
@@ -584,6 +803,14 @@ db-drop:  ## 删除数据库（危险操作）
 
 # 迭代编号（通过 N= 参数传入）
 N ?=
+
+# rerun advice 可选参数
+RANGE ?= origin/master...HEAD
+FORMAT ?= markdown
+
+# 最小回归可选参数
+TYPES ?= cycle
+DRY_RUN ?= 1
 
 iteration-init:  ## 初始化本地迭代草稿（用法: make iteration-init N=13 或 make iteration-init N=next）
 	@if [ -z "$(N)" ]; then \
@@ -634,6 +861,17 @@ iteration-snapshot:  ## 快照 SSOT 迭代到本地只读副本（用法: make i
 iteration-audit:  ## 生成迭代文档审计报告（输出到 .artifacts/iteration-audit/）
 	$(PYTHON) scripts/iteration/audit_iteration_docs.py --output-dir .artifacts/iteration-audit
 
+iteration-rerun-advice:  ## 生成最小重跑建议（RANGE=origin/master...HEAD FORMAT=markdown|json）
+	$(PYTHON) scripts/iteration/rerun_advice.py --git-range $(RANGE) --format $(FORMAT)
+
+iteration-cycle-advice:  ## 生成 iteration_cycle 建议（基于 git diff --name-only）
+	git diff --name-only $(RANGE) | $(PYTHON) scripts/iteration/iteration_cycle.py --stdin
+
+iteration-min-regression:  ## 运行最小迭代回归命令集（TYPES=cycle DRY_RUN=1）
+	@ARGS="$(TYPES)"; \
+	if [ "$(DRY_RUN)" = "1" ]; then ARGS="$$ARGS --dry-run"; fi; \
+	$(PYTHON) scripts/iteration/run_min_iteration_regression.py $$ARGS
+
 ## ==================== 服务 ====================
 
 gateway:  ## 启动 Gateway 服务（带热重载）
@@ -671,9 +909,8 @@ help:  ## 显示帮助信息
 	@echo "\033[1mEngram - AI 友好的事实账本与记忆管理模块\033[0m"
 	@echo ""
 	@echo "\033[1m快速开始:\033[0m"
-	@echo "  1. 设置密码环境变量（见下方）"
-	@echo "  2. make setup-db    # 一键初始化数据库"
-	@echo "  3. make gateway     # 启动服务"
+	@echo "  1. make setup-db     # 一键初始化数据库（自动识别/交互；推荐）"
+	@echo "  2. make gateway      # 启动服务"
 	@echo ""
 	@echo "\033[1m可用命令:\033[0m"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \

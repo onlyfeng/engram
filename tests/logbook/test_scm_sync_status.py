@@ -592,7 +592,7 @@ class TestOutputStructureSnapshot:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         result = get_sync_summary(db_conn)
 
@@ -666,7 +666,7 @@ class TestCircuitBreakerAndTokenBucketStatus:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         result = get_sync_summary(db_conn)
 
@@ -729,7 +729,7 @@ class TestCircuitBreakerAndTokenBucketStatus:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         result = get_sync_summary(db_conn)
 
@@ -798,7 +798,7 @@ class TestCircuitBreakerAndTokenBucketStatus:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         result = get_sync_summary(db_conn)
 
@@ -820,7 +820,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -849,7 +849,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -877,7 +877,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -910,7 +910,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -950,7 +950,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -975,7 +975,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1011,7 +1011,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1041,7 +1041,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1077,7 +1077,7 @@ class TestPrometheusOutputFormat:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1102,7 +1102,7 @@ class TestFixedSchemaSummary:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1152,7 +1152,7 @@ class TestFixedSchemaSummary:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1197,7 +1197,7 @@ class TestFixedSchemaSummary:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1248,7 +1248,7 @@ class TestFixedSchemaSummary:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1329,7 +1329,7 @@ class TestPausedReposAggregation:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1378,7 +1378,7 @@ class TestPausedReposAggregation:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1417,7 +1417,7 @@ class TestNoSensitiveInfoLeakage:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1467,7 +1467,7 @@ class TestNoSensitiveInfoLeakage:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1524,7 +1524,7 @@ class TestNoSensitiveInfoLeakage:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1570,7 +1570,7 @@ class TestNoSensitiveInfoLeakage:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1618,7 +1618,7 @@ class TestNoSensitiveInfoLeakage:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1657,7 +1657,7 @@ class TestPrometheusMetricLabelsStability:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1693,7 +1693,7 @@ class TestPrometheusMetricLabelsStability:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1729,7 +1729,7 @@ class TestPrometheusMetricLabelsStability:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1767,7 +1767,7 @@ class TestPrometheusMetricLabelsStability:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1821,7 +1821,7 @@ class TestPrometheusMetricLabelsStability:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1866,7 +1866,7 @@ class TestPrometheusMetricLabelsStability:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -1951,7 +1951,7 @@ class TestErrorBudgetRealAggregation:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -1992,7 +1992,7 @@ class TestErrorBudgetRealAggregation:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         # 不插入任何 sync_runs，直接获取 summary
         summary = get_sync_summary(db_conn)
@@ -2028,7 +2028,7 @@ class TestErrorBudgetRealAggregation:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import format_prometheus_metrics, get_sync_summary
+        from engram.logbook.scm_sync_status import format_prometheus_metrics, get_sync_summary
 
         summary = get_sync_summary(db_conn)
         prom_output = format_prometheus_metrics(summary)
@@ -2065,7 +2065,7 @@ class TestCircuitBreakerKeyConsistency:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2093,7 +2093,7 @@ class TestCircuitBreakerKeyConsistency:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2121,7 +2121,7 @@ class TestCircuitBreakerKeyConsistency:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2148,7 +2148,7 @@ class TestCircuitBreakerKeyConsistency:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2180,7 +2180,7 @@ class TestCircuitBreakerKeyConsistency:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2203,7 +2203,7 @@ class TestCircuitBreakerKeyConsistency:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2251,7 +2251,7 @@ class TestRateLimitBucketsPauseSemantics:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2285,7 +2285,7 @@ class TestRateLimitBucketsPauseSemantics:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2318,7 +2318,7 @@ class TestRateLimitBucketsPauseSemantics:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2353,7 +2353,7 @@ class TestRateLimitBucketsPauseSemantics:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 
@@ -2388,7 +2388,7 @@ class TestRateLimitBucketsPauseSemantics:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from scm_sync_status import get_sync_summary
+        from engram.logbook.scm_sync_status import get_sync_summary
 
         summary = get_sync_summary(db_conn)
 

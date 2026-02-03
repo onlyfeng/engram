@@ -24,7 +24,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from scripts.ci.workflow_contract_common import (
+    MakeTargetUsage,
+    extract_make_targets_from_workflow,
+)
 
 # ============================================================================
 # Error Types
@@ -50,17 +53,6 @@ class WarningTypes:
 # ============================================================================
 # Data Classes
 # ============================================================================
-
-
-@dataclass
-class MakeTargetUsage:
-    """记录 make target 使用位置"""
-
-    target: str
-    workflow_file: str
-    job_id: str
-    step_name: str
-    line_content: str
 
 
 @dataclass
@@ -144,176 +136,6 @@ def parse_makefile_targets(makefile_path: Path) -> set[str]:
             targets.add(target)
 
     return targets
-
-
-# ============================================================================
-# Workflow Parser
-# ============================================================================
-
-
-def extract_make_targets_from_run(run_content: str) -> list[tuple[str, bool]]:
-    """
-    从 run 命令内容中提取 make targets
-
-    处理场景：
-    - make target
-    - make target1 target2
-    - make -C dir target
-    - cmd1 && make target
-    - cmd1 ; make target
-    - make N=13 target
-    - $(MAKE) target
-    - 变量插值: make ${{ env.TARGET }} (标记为含变量)
-
-    Args:
-        run_content: run 步骤的内容
-
-    Returns:
-        (target, has_variable) 元组列表
-    """
-    targets: list[tuple[str, bool]] = []
-
-    # 拆分多行和多命令
-    # 处理 && 和 ; 分隔的命令
-    lines = run_content.replace("\\n", "\n").split("\n")
-
-    for line in lines:
-        # 进一步按 && 和 ; 拆分
-        commands = re.split(r"\s*(?:&&|;)\s*", line)
-
-        for cmd in commands:
-            cmd = cmd.strip()
-            if not cmd:
-                continue
-
-            # 检查是否是 make 命令
-            # 匹配: make, $(MAKE), ${MAKE}
-            make_match = re.match(r"^(?:make|\$\(MAKE\)|\$\{MAKE\})\s*(.*)$", cmd)
-            if not make_match:
-                continue
-
-            args = make_match.group(1)
-
-            # 移除行尾注释（在引号外的 # 开始的内容）
-            # 简单处理：找到第一个 # 并截断
-            comment_idx = args.find("#")
-            if comment_idx != -1:
-                args = args[:comment_idx].strip()
-
-            # 跳过空参数（整行都是注释）
-            if not args:
-                continue
-
-            # 检查是否包含变量插值
-            has_variable = bool(re.search(r"\$\{\{.*?\}\}|\$\(.*?\)|\$\{.*?\}|\$[A-Za-z_]", args))
-
-            # 解析 make 参数
-            # 移除常见选项和变量赋值
-            # -C dir, -f file, -j N, --directory=dir, VAR=value
-            tokens = args.split()
-            i = 0
-            while i < len(tokens):
-                token = tokens[i]
-
-                # 跳过选项
-                if token.startswith("-"):
-                    # -C, -f, -j 等需要参数的选项
-                    if token in ("-C", "-f", "-j", "--directory", "--file", "--jobs"):
-                        i += 2  # 跳过选项和参数
-                        continue
-                    elif token.startswith("-C") or token.startswith("-f") or token.startswith("-j"):
-                        # -Cdir, -ffile 等合并形式
-                        i += 1
-                        continue
-                    elif "=" in token:
-                        # --directory=dir
-                        i += 1
-                        continue
-                    else:
-                        # 其他选项如 -k, -n 等
-                        i += 1
-                        continue
-
-                # 跳过变量赋值 VAR=value
-                if "=" in token and not token.startswith("$"):
-                    i += 1
-                    continue
-
-                # 跳过变量插值
-                if token.startswith("$"):
-                    # 保守处理：标记为含变量，但不提取
-                    has_variable = True
-                    i += 1
-                    continue
-
-                # 跳过空白和引号内容
-                if not token or token.startswith('"') or token.startswith("'"):
-                    i += 1
-                    continue
-
-                # 这应该是一个 target
-                target = token
-                # 验证 target 格式（字母、数字、下划线、连字符）
-                if re.match(r"^[a-zA-Z_][a-zA-Z0-9_-]*$", target):
-                    targets.append((target, has_variable))
-
-                i += 1
-
-    return targets
-
-
-def extract_make_targets_from_workflow(workflow_path: Path) -> list[MakeTargetUsage]:
-    """
-    从 workflow 文件中提取所有 make target 使用
-
-    Args:
-        workflow_path: workflow 文件路径
-
-    Returns:
-        MakeTargetUsage 列表
-    """
-    usages: list[MakeTargetUsage] = []
-
-    if not workflow_path.exists():
-        return usages
-
-    content = workflow_path.read_text(encoding="utf-8")
-    try:
-        workflow = yaml.safe_load(content)
-    except yaml.YAMLError:
-        return usages
-
-    if not workflow or "jobs" not in workflow:
-        return usages
-
-    for job_id, job_config in workflow.get("jobs", {}).items():
-        if not isinstance(job_config, dict):
-            continue
-
-        for step in job_config.get("steps", []):
-            if not isinstance(step, dict):
-                continue
-
-            run_content = step.get("run")
-            if not run_content:
-                continue
-
-            step_name = step.get("name", "<unnamed>")
-
-            # 提取 make targets
-            targets = extract_make_targets_from_run(str(run_content))
-            for target, _has_variable in targets:
-                usages.append(
-                    MakeTargetUsage(
-                        target=target,
-                        workflow_file=workflow_path.name,
-                        job_id=job_id,
-                        step_name=step_name,
-                        line_content=str(run_content)[:100],
-                    )
-                )
-
-    return usages
 
 
 # ============================================================================

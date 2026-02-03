@@ -65,9 +65,9 @@ class ToolResultErrorCode:
     # -------------------------------------------------------------------------
 
     # 缺少必需参数（canonical）
-    MISSING_REQUIRED_PARAM = "MISSING_REQUIRED_PARAM"
+    MISSING_REQUIRED_PARAMETER = "MISSING_REQUIRED_PARAMETER"
     # 旧名 alias（保持向后兼容）
-    MISSING_REQUIRED_PARAMETER = MISSING_REQUIRED_PARAM
+    MISSING_REQUIRED_PARAM = MISSING_REQUIRED_PARAMETER
 
 
 __all__ = [

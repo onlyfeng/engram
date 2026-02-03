@@ -580,7 +580,11 @@ make lint && \\
         """测试 full profile 输出稳定性"""
         result = render_min_gate_block(13, "full")
         assert result == self.FULL_SNAPSHOT, (
-            f"full profile 输出与快照不一致\n实际输出:\n{result}\n期望输出:\n{self.FULL_SNAPSHOT}"
+            f"full profile 输出与快照不一致\n"
+            f"实际输出:\n{result}\n"
+            f"期望输出:\n{self.FULL_SNAPSHOT}\n"
+            "如需更新快照，请运行: "
+            "python scripts/iteration/update_render_min_gate_block_fixtures.py --iteration 13"
         )
 
     def test_regression_snapshot(self):
@@ -589,7 +593,9 @@ make lint && \\
         assert result == self.REGRESSION_SNAPSHOT, (
             f"regression profile 输出与快照不一致\n"
             f"实际输出:\n{result}\n"
-            f"期望输出:\n{self.REGRESSION_SNAPSHOT}"
+            f"期望输出:\n{self.REGRESSION_SNAPSHOT}\n"
+            "如需更新快照，请运行: "
+            "python scripts/iteration/update_render_min_gate_block_fixtures.py --iteration 13"
         )
 
     def test_docs_only_snapshot(self):
@@ -598,7 +604,9 @@ make lint && \\
         assert result == self.DOCS_ONLY_SNAPSHOT, (
             f"docs-only profile 输出与快照不一致\n"
             f"实际输出:\n{result}\n"
-            f"期望输出:\n{self.DOCS_ONLY_SNAPSHOT}"
+            f"期望输出:\n{self.DOCS_ONLY_SNAPSHOT}\n"
+            "如需更新快照，请运行: "
+            "python scripts/iteration/update_render_min_gate_block_fixtures.py --iteration 13"
         )
 
     def test_ci_only_snapshot(self):
@@ -607,7 +615,9 @@ make lint && \\
         assert result == self.CI_ONLY_SNAPSHOT, (
             f"ci-only profile 输出与快照不一致\n"
             f"实际输出:\n{result}\n"
-            f"期望输出:\n{self.CI_ONLY_SNAPSHOT}"
+            f"期望输出:\n{self.CI_ONLY_SNAPSHOT}\n"
+            "如需更新快照，请运行: "
+            "python scripts/iteration/update_render_min_gate_block_fixtures.py --iteration 13"
         )
 
     def test_sql_only_snapshot(self):
@@ -616,7 +626,9 @@ make lint && \\
         assert result == self.SQL_ONLY_SNAPSHOT, (
             f"sql-only profile 输出与快照不一致\n"
             f"实际输出:\n{result}\n"
-            f"期望输出:\n{self.SQL_ONLY_SNAPSHOT}"
+            f"期望输出:\n{self.SQL_ONLY_SNAPSHOT}\n"
+            "如需更新快照，请运行: "
+            "python scripts/iteration/update_render_min_gate_block_fixtures.py --iteration 13"
         )
 
     def test_gateway_only_snapshot(self):
@@ -625,7 +637,9 @@ make lint && \\
         assert result == self.GATEWAY_ONLY_SNAPSHOT, (
             f"gateway-only profile 输出与快照不一致\n"
             f"实际输出:\n{result}\n"
-            f"期望输出:\n{self.GATEWAY_ONLY_SNAPSHOT}"
+            f"期望输出:\n{self.GATEWAY_ONLY_SNAPSHOT}\n"
+            "如需更新快照，请运行: "
+            "python scripts/iteration/update_render_min_gate_block_fixtures.py --iteration 13"
         )
 
     def test_iteration_number_changes_output(self):

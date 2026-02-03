@@ -39,10 +39,13 @@ except ImportError:
     JsonSchemaValidationError = Exception  # type: ignore
 
 from scripts.ci.workflow_contract_common import (
+    MakeTargetUsage,
     build_workflows_view,
     discover_workflow_keys,
+    extract_make_targets_from_workflow,
     find_fuzzy_match,
     normalize_artifact_path,
+    parse_makefile_targets,
 )
 
 # ============================================================================
@@ -232,139 +235,17 @@ MAKE_TARGET_IGNORE_LIST = {
 }
 
 
-def parse_makefile_targets(makefile_path: Path) -> set[str]:
-    """
-    Parse a Makefile to extract all defined target names.
-
-    Handles:
-    - Regular targets: target: dependencies
-    - .PHONY declarations: .PHONY: target1 target2 ...
-    - Targets with pattern rules (%)
-    - Continuation lines (\\)
-
-    Args:
-        makefile_path: Path to the Makefile
-
-    Returns:
-        Set of target names defined in the Makefile
-    """
-    if not makefile_path.exists():
-        return set()
-
-    targets = set()
-
-    with open(makefile_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    # Handle line continuations first
-    content = re.sub(r"\\\n\s*", " ", content)
-
-    for line in content.split("\n"):
-        line = line.strip()
-
-        # Skip comments and empty lines
-        if not line or line.startswith("#"):
-            continue
-
-        # Match .PHONY declarations
-        # .PHONY: target1 target2 target3 ...
-        phony_match = re.match(r"^\.PHONY:\s*(.+)$", line)
-        if phony_match:
-            phony_targets = phony_match.group(1).split()
-            for t in phony_targets:
-                # Skip continuation marker
-                if t != "\\":
-                    targets.add(t)
-            continue
-
-        # Match regular target definitions
-        # target: [dependencies]
-        # target:: [dependencies]
-        target_match = re.match(r"^([a-zA-Z0-9_][a-zA-Z0-9_.-]*)::?\s*", line)
-        if target_match:
-            target_name = target_match.group(1)
-            # Skip internal targets (starting with _)
-            # But include them in the set for completeness
-            targets.add(target_name)
-
-    return targets
-
-
-def extract_workflow_make_calls(workflow_path: Path) -> list[dict[str, Any]]:
+def extract_workflow_make_calls(workflow_path: Path) -> list[MakeTargetUsage]:
     """
     Extract make target calls from a GitHub Actions workflow file.
-
-    Scans all `run:` commands for `make <target>` patterns.
 
     Args:
         workflow_path: Path to the workflow YAML file
 
     Returns:
-        List of dicts with keys:
-        - target: The make target name
-        - file: Source file path
-        - job: Job ID where the call is found
-        - step: Step name (if available)
-        - line_content: The line containing the make call
+        MakeTargetUsage 列表（target + workflow/job/step 上下文）
     """
-    if not workflow_path.exists():
-        return []
-
-    with open(workflow_path, "r", encoding="utf-8") as f:
-        try:
-            workflow = yaml.safe_load(f)
-        except yaml.YAMLError:
-            return []
-
-    if not workflow or "jobs" not in workflow:
-        return []
-
-    results = []
-
-    # Pattern to match make calls:
-    # - make target
-    # - make target1 target2
-    # - make -C dir target (will extract target)
-    # - Does NOT match make with variables like make $TARGET
-    make_pattern = re.compile(
-        r"\bmake\s+"
-        r"(?:-[a-zA-Z]\s+[^\s]+\s+)*"  # Optional flags like -C dir
-        r"([a-zA-Z][a-zA-Z0-9_-]*)"  # Target name (must start with letter)
-    )
-
-    for job_id, job_data in workflow.get("jobs", {}).items():
-        if not isinstance(job_data, dict):
-            continue
-
-        for step in job_data.get("steps", []):
-            if not isinstance(step, dict):
-                continue
-
-            run_content = step.get("run", "")
-            if not run_content:
-                continue
-
-            step_name = step.get("name", "")
-
-            # Find all make calls in the run content
-            for match in make_pattern.finditer(run_content):
-                target = match.group(1)
-
-                # Skip variable expansions
-                if "$" in target or target.startswith("$"):
-                    continue
-
-                results.append(
-                    {
-                        "target": target,
-                        "file": str(workflow_path),
-                        "job": job_id,
-                        "step": step_name,
-                        "line_content": match.group(0),
-                    }
-                )
-
-    return results
+    return extract_make_targets_from_workflow(workflow_path)
 
 
 # ============================================================================
@@ -1954,7 +1835,7 @@ class WorkflowContractValidator:
             make_calls = extract_workflow_make_calls(workflow_path)
 
             for call in make_calls:
-                target = call["target"]
+                target = call.target
 
                 # 跳过 ignore list 中的 targets
                 if target in ignore_list:
@@ -1965,18 +1846,18 @@ class WorkflowContractValidator:
                     self.result.errors.append(
                         ValidationError(
                             workflow=workflow_file,
-                            file=call["file"],
+                            file=call.workflow_file,
                             error_type="undeclared_make_target",
                             key=target,
                             message=(
                                 f"ERROR: make target '{target}' called in workflow but not declared "
                                 f"in workflow_contract.v1.json make.targets_required. "
-                                f"Job: {call['job']}, Step: {call['step'] or '(unnamed)'}. "
+                                f"Job: {call.job_id}, Step: {call.step_name or '(unnamed)'}. "
                                 f"Please add '{target}' to make.targets_required or add it to the ignore list."
                             ),
                             expected="Target in make.targets_required",
                             actual=target,
-                            location=f"jobs.{call['job']}.steps",
+                            location=f"jobs.{call.job_id}.steps",
                         )
                     )
                     self.result.success = False

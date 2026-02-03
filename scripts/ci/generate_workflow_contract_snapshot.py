@@ -15,6 +15,10 @@ Generate Workflow Contract Snapshot
     # 输出到文件
     python scripts/ci/generate_workflow_contract_snapshot.py --output snapshot.json
 
+    # 变更前后快照（推荐保存到 artifacts，便于 PR 评审）
+    python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_before.json
+    python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_after.json
+
     # 包含完整 step 内容（默认只提取 name）
     python scripts/ci/generate_workflow_contract_snapshot.py --include-step-details
 """
@@ -280,6 +284,10 @@ def main():
 
   # 输出到文件
   python scripts/ci/generate_workflow_contract_snapshot.py --output snapshot.json
+
+  # 变更前后快照（推荐保存到 artifacts）
+  python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_before.json
+  python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_after.json
 
   # 包含 step 详细信息
   python scripts/ci/generate_workflow_contract_snapshot.py --include-step-details

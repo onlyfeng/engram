@@ -51,6 +51,14 @@ DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
 DEFAULT_CONTRACT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
 DEFAULT_COUPLING_MAP_DOC_PATH = "docs/ci_nightly_workflow_refactor/coupling_map.md"
 
+# 受控块固定文案
+JOB_DESCRIPTION_FALLBACK_TEMPLATE = "{step_count} 个必需步骤"
+FROZEN_JOB_REASON_TEXT = "Required Check"
+FROZEN_STEP_REASON_TEXT = "核心步骤"
+MAKE_TARGET_REASON_TEXT = "CI 必需目标"
+LABEL_REASON_TEXT = "PR label"
+COUPLING_MAP_TARGET_REASON_TEXT = "CI/workflow 必需"
+
 # Marker 格式
 MARKER_BEGIN_FMT = "<!-- BEGIN:{block_name} -->"
 MARKER_END_FMT = "<!-- END:{block_name} -->"
@@ -96,6 +104,16 @@ COUPLING_MAP_BLOCK_NAMES = frozenset({
     CouplingMapBlockNames.NIGHTLY_JOBS_LIST,
     CouplingMapBlockNames.MAKE_TARGETS_LIST,
 })
+
+
+def get_contract_block_names() -> frozenset[str]:
+    """返回 contract.md 预期受控块集合"""
+    return CONTRACT_BLOCK_NAMES
+
+
+def get_coupling_map_block_names() -> frozenset[str]:
+    """返回 coupling_map.md 预期受控块集合"""
+    return COUPLING_MAP_BLOCK_NAMES
 
 
 # ============================================================================
@@ -151,6 +169,18 @@ class WorkflowContractDocsRenderer:
             return MARKER_BEGIN_FMT.format(block_name=block_name)
         return MARKER_END_FMT.format(block_name=block_name)
 
+    def _get_required_job_description(self, job: dict[str, Any]) -> str:
+        """获取 job 说明：优先使用 _comment，缺失时使用固定模板回退"""
+        desc = job.get("_comment", "")
+        if desc:
+            return desc
+
+        required_steps = job.get("required_steps", [])
+        if required_steps:
+            return JOB_DESCRIPTION_FALLBACK_TEMPLATE.format(step_count=len(required_steps))
+
+        return ""
+
     # ========================================================================
     # contract.md 块渲染方法
     # ========================================================================
@@ -167,13 +197,9 @@ class WorkflowContractDocsRenderer:
         job_descriptions: dict[str, str] = {}
         for job in required_jobs:
             job_id = job.get("id", "")
-            # 使用 job 的 _comment 或 required_steps 的第一条作为说明
-            desc = job.get("_comment", "")
-            if not desc and job.get("required_steps"):
-                # 简单描述：显示 steps 数量
-                step_count = len(job.get("required_steps", []))
-                desc = f"{step_count} 个必需步骤"
-            job_descriptions[job_id] = desc
+            if not job_id:
+                continue
+            job_descriptions[job_id] = self._get_required_job_description(job)
 
         lines: list[str] = []
         lines.append("| Job ID | Job Name | 说明 |")
@@ -203,11 +229,9 @@ class WorkflowContractDocsRenderer:
         job_descriptions: dict[str, str] = {}
         for job in required_jobs:
             job_id = job.get("id", "")
-            desc = job.get("_comment", "")
-            if not desc and job.get("required_steps"):
-                step_count = len(job.get("required_steps", []))
-                desc = f"{step_count} 个必需步骤"
-            job_descriptions[job_id] = desc
+            if not job_id:
+                continue
+            job_descriptions[job_id] = self._get_required_job_description(job)
 
         lines: list[str] = []
         lines.append("| Job ID | Job Name | 说明 |")
@@ -237,8 +261,7 @@ class WorkflowContractDocsRenderer:
 
         # 按字母序排序以保证渲染稳定性
         for job_name in sorted(allowlist):
-            # 原因可以从注释或固定描述获取
-            lines.append(f"| `{job_name}` | Required Check |")
+            lines.append(f"| `{job_name}` | {FROZEN_JOB_REASON_TEXT} |")
 
         return RenderedBlock(
             name=block_name,
@@ -259,7 +282,7 @@ class WorkflowContractDocsRenderer:
 
         # 按字母序排序以保证渲染稳定性
         for step_name in sorted(allowlist):
-            lines.append(f"| `{step_name}` | 核心步骤 |")
+            lines.append(f"| `{step_name}` | {FROZEN_STEP_REASON_TEXT} |")
 
         return RenderedBlock(
             name=block_name,
@@ -280,7 +303,7 @@ class WorkflowContractDocsRenderer:
 
         # 按字母序排序以保证渲染稳定性
         for target in sorted(targets_required):
-            lines.append(f"| `{target}` | CI 必需目标 |")
+            lines.append(f"| `{target}` | {MAKE_TARGET_REASON_TEXT} |")
 
         return RenderedBlock(
             name=block_name,
@@ -306,7 +329,7 @@ class WorkflowContractDocsRenderer:
 
         # 按 label 名称排序以保证渲染稳定性
         for label, workflow in sorted(all_labels, key=lambda x: x[0]):
-            lines.append(f"| `{label}` | {workflow} | PR label |")
+            lines.append(f"| `{label}` | {workflow} | {LABEL_REASON_TEXT} |")
 
         return RenderedBlock(
             name=block_name,
@@ -375,7 +398,7 @@ class WorkflowContractDocsRenderer:
 
         # 按字母序排序
         for target in sorted(targets_required):
-            lines.append(f"| `{target}` | CI/workflow 必需 |")
+            lines.append(f"| `{target}` | {COUPLING_MAP_TARGET_REASON_TEXT} |")
 
         return RenderedBlock(
             name=block_name,

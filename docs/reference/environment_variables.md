@@ -508,7 +508,7 @@ SCM 同步子系统提供以下 CLI 工具，核心实现位于 `src/engram/logb
 | **状态查看** | `engram-scm-status` | 查看同步健康状态与指标 |
 | **运行器** | `engram-scm run` | 手动执行增量/回填同步 |
 
-> **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已弃用，将在 v1.0 移除。请迁移至 `engram-scm-*` 命令。
+> **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已移除。请使用 `engram-scm-*` 命令。
 
 #### 调度器使用示例
 

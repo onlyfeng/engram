@@ -9,10 +9,10 @@ Workflow Contract 版本策略检查脚本
 
 关键文件规则（统一定义，详见 CRITICAL_*_RULES）：
 
-  [workflow_core] Phase 1 Workflow 文件：
+  [workflow_core] Workflow 文件（Phase 2 已纳入 release）：
     - .github/workflows/ci.yml
     - .github/workflows/nightly.yml
-    注：Phase 1 仅支持 ci/nightly，扩展时修改 CRITICAL_WORKFLOW_RULES。
+    - .github/workflows/release.yml
 
   [contract_definition] 合约定义文件：
     - scripts/ci/workflow_contract.v*.json
@@ -22,6 +22,7 @@ Workflow Contract 版本策略检查脚本
     - scripts/ci/validate_workflows.py
     - scripts/ci/workflow_contract.v*.schema.json
     - scripts/ci/check_workflow_contract_docs_sync.py
+    - scripts/ci/check_workflow_contract_error_types_docs_sync.py
     - scripts/ci/workflow_contract_drift_report.py
     - scripts/ci/generate_workflow_contract_snapshot.py
 
@@ -61,6 +62,11 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from scripts.ci.workflow_contract_common import (
+    compute_set_diff,
+    is_string_similar,
+    parse_makefile_targets_from_content,
+)
 # ============================================================================
 # Constants
 # ============================================================================
@@ -132,8 +138,8 @@ VERSION_POLICY_FILE_ERROR_TYPES = frozenset(
 #   - description: 规则描述（用于 trigger_reasons）
 #   - category: 分类（workflow_core | contract_definition | contract_docs | tooling）
 #
-# Phase 1 范围说明：
-#   当前仅覆盖 ci.yml 和 nightly.yml。release.yml 将在 Phase 2 引入。
+# Phase 2 范围说明：
+#   当前覆盖 ci.yml、nightly.yml 与 release.yml。
 #   可通过扩展 CRITICAL_WORKFLOW_RULES 支持更多 workflow 文件。
 #
 
@@ -151,36 +157,16 @@ class CriticalFileRule:
         return bool(re.match(self.pattern, file_path))
 
 
-# Phase 1 Workflow 核心文件规则
-# 注意：当前仅支持 ci/nightly，扩展时修改此列表的正则表达式
+# Workflow 核心文件规则
+# 注意：当前支持 ci/nightly/release，扩展时修改此列表的正则表达式
 #
 # ============================================================================
-# Phase 2 扩展点：纳入 release.yml
-# ============================================================================
-#
-# 当需要将 release.yml 纳入合约版本策略检查时，按以下步骤扩展：
-#
-# 1. 修改下方 pattern 正则表达式：
-#    - 当前: r"^\.github/workflows/(ci|nightly)\.yml$"
-#    - Phase 2: r"^\.github/workflows/(ci|nightly|release)\.yml$"
-#
-# 2. 更新 description 字段：
-#    - Phase 2: "Phase 2 workflow 文件（ci.yml/nightly.yml/release.yml）"
-#
-# 3. 同步更新其他脚本（参见 contract.md 2.4.3 节迁移 Checklist）：
-#    - check_workflow_contract_docs_sync.py: 扩展 WORKFLOW_DOC_ANCHORS
-#    - workflow_contract.v1.json: 添加 release 字段定义
-#    - contract.md: 更新 2.3 节为正式章节
-#
-# 4. 版本策略影响：
-#    - 扩展 workflow 范围属于 Minor (0.X.0) 变更
-#    - 需同步更新 workflow_contract.v1.json 的 version 字段
-#
+# Release workflow 已纳入合约版本策略检查（Phase 2）
 # ============================================================================
 CRITICAL_WORKFLOW_RULES: list[CriticalFileRule] = [
     CriticalFileRule(
-        pattern=r"^\.github/workflows/(ci|nightly)\.yml$",
-        description="Phase 1 workflow 文件（ci.yml/nightly.yml）",
+        pattern=r"^\.github/workflows/(ci|nightly|release)\.yml$",
+        description="Phase 2 workflow 文件（ci.yml/nightly.yml/release.yml）",
         category="workflow_core",
     ),
 ]
@@ -221,6 +207,11 @@ CRITICAL_TOOLING_RULES: list[CriticalFileRule] = [
         category="tooling",
     ),
     CriticalFileRule(
+        pattern=r"^scripts/ci/check_workflow_contract_error_types_docs_sync\.py$",
+        description="Error Types 文档同步校验脚本",
+        category="tooling",
+    ),
+    CriticalFileRule(
         pattern=r"^scripts/ci/workflow_contract_drift_report\.py$",
         description="漂移报告生成脚本",
         category="tooling",
@@ -246,8 +237,16 @@ MAKEFILE_CI_KEYWORDS = [
     "workflow-contract",
 ]
 
+# Makefile target rename detection threshold
+MAKEFILE_RENAME_SIMILARITY_THRESHOLD = 0.6
+
 # Makefile 规则描述（用于 trigger_reasons）
 MAKEFILE_RULE_DESCRIPTION = "Makefile CI/workflow 相关目标变更"
+
+# Makefile target 行匹配（用于结构化检测）
+MAKEFILE_TARGET_LINE_PATTERN = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_.%/-]*(?:\s+[A-Za-z0-9][A-Za-z0-9_.%/-]*)*)\s*:(?!\s*=)"
+)
 
 
 # ============================================================================
@@ -414,7 +413,7 @@ def get_old_file_content(file_path: str, base: str = "HEAD~1") -> str | None:
 # ============================================================================
 #
 # 按关键性分组，便于单独测试每个组的触发行为：
-#   - WORKFLOW_PATTERNS: Phase 1 workflow 文件，任何变更必须 bump
+#   - WORKFLOW_PATTERNS: workflow 文件，任何变更必须 bump
 #   - TOOLING_PATTERNS: 关键校验器脚本，变更影响合约执行逻辑
 #   - CONTRACT_PATTERNS: 合约定义文件（JSON 和文档）
 #   - NON_CRITICAL_DOC_PATTERNS: 非关键文档（不触发 bump）
@@ -424,11 +423,12 @@ def get_old_file_content(file_path: str, base: str = "HEAD~1") -> str | None:
 class RuleGroups:
     """规则分组常量定义（便于测试导入）"""
 
-    # Phase 1 workflow 文件（必须触发）
+    # workflow 文件（必须触发）
     WORKFLOW_FILES = frozenset(
         {
             ".github/workflows/ci.yml",
             ".github/workflows/nightly.yml",
+            ".github/workflows/release.yml",
         }
     )
 
@@ -437,6 +437,7 @@ class RuleGroups:
         {
             "scripts/ci/validate_workflows.py",
             "scripts/ci/check_workflow_contract_docs_sync.py",
+            "scripts/ci/check_workflow_contract_error_types_docs_sync.py",
             "scripts/ci/workflow_contract_drift_report.py",
             "scripts/ci/generate_workflow_contract_snapshot.py",
         }
@@ -497,6 +498,10 @@ class VersionPolicyCheckInput:
     new_contract_content: str  # 新版本 contract JSON 内容
     doc_content: str  # contract.md 文档内容
     makefile_diff: str | None = None  # Makefile diff 内容（可选）
+    makefile_old_content: str | None = None  # Makefile 旧内容（可选）
+    makefile_new_content: str | None = None  # Makefile 新内容（可选）
+    makefile_required_targets: list[str] | None = None  # 合约 targets_required（可选）
+    workflow_make_targets: list[str] | None = None  # workflow 中 make 调用（可选）
 
 
 @dataclass
@@ -528,8 +533,33 @@ def check_version_policy_pure(
     violations: list[VersionPolicyViolation] = []
 
     # 1. 过滤关键文件并获取触发原因
+    makefile_old_targets = None
+    makefile_new_targets = None
+    if input_data.makefile_new_content is not None:
+        makefile_new_targets = parse_makefile_targets_from_content(
+            input_data.makefile_new_content
+        )
+    if input_data.makefile_old_content is not None:
+        makefile_old_targets = parse_makefile_targets_from_content(
+            input_data.makefile_old_content
+        )
+    elif makefile_new_targets is not None:
+        makefile_old_targets = set()
+
+    makefile_required_targets = (
+        set(input_data.makefile_required_targets) if input_data.makefile_required_targets else None
+    )
+    workflow_make_targets = (
+        set(input_data.workflow_make_targets) if input_data.workflow_make_targets else None
+    )
+
     critical_files, trigger_reasons = filter_critical_files_with_reasons(
-        input_data.changed_files, input_data.makefile_diff
+        input_data.changed_files,
+        makefile_diff=input_data.makefile_diff,
+        makefile_old_targets=makefile_old_targets,
+        makefile_new_targets=makefile_new_targets,
+        makefile_required_targets=makefile_required_targets,
+        workflow_make_targets=workflow_make_targets,
     )
 
     # 如果没有关键文件变更，直接返回空结果
@@ -644,7 +674,7 @@ def check_version_policy_pure(
 
 
 def is_workflow_file(file_path: str) -> bool:
-    """检查文件是否为 Phase 1 workflow 文件
+    """检查文件是否为 workflow 文件
 
     Args:
         file_path: 文件路径
@@ -750,22 +780,204 @@ def is_makefile_ci_related_change(diff_content: str) -> bool:
     if not diff_content:
         return False
 
-    for keyword in MAKEFILE_CI_KEYWORDS:
-        if keyword in diff_content:
+    def is_changed_line(line: str) -> bool:
+        return line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+
+    def is_comment_or_echo(line: str) -> bool:
+        stripped = line.lstrip()
+        if not stripped:
+            return True
+        if stripped.startswith("#"):
+            return True
+        if stripped.startswith("@#"):
+            return True
+        if stripped.startswith("@echo") or stripped.startswith("echo "):
+            return True
+        return False
+
+    def extract_target_names(line: str) -> list[str]:
+        if not line:
+            return []
+        if line[0] in "+- ":
+            line = line[1:]
+        if not line or line[0].isspace():
+            return []
+        match = MAKEFILE_TARGET_LINE_PATTERN.match(line)
+        if not match:
+            return []
+        return [target for target in match.group(1).split() if target]
+
+    def is_ci_target(target: str) -> bool:
+        target_with_colon = f"{target}:"
+        return any(
+            keyword in target or keyword in target_with_colon for keyword in MAKEFILE_CI_KEYWORDS
+        )
+
+    saw_target_context = False
+    current_targets: list[str] = []
+
+    for raw_line in diff_content.splitlines():
+        if raw_line.startswith(("diff --git", "index ", "---", "+++")):
+            continue
+        if raw_line.startswith("@@"):
+            current_targets = []
+            continue
+
+        target_names = extract_target_names(raw_line)
+        if target_names:
+            saw_target_context = True
+            current_targets = target_names
+            if is_changed_line(raw_line) and any(is_ci_target(t) for t in target_names):
+                return True
+            continue
+
+        if is_changed_line(raw_line) and current_targets:
+            if any(is_ci_target(t) for t in current_targets):
+                return True
+
+    if saw_target_context:
+        return False
+
+    for raw_line in diff_content.splitlines():
+        if not is_changed_line(raw_line):
+            continue
+        content = raw_line[1:] if raw_line and raw_line[0] in "+-" else raw_line
+        if is_comment_or_echo(content):
+            continue
+        if any(keyword in content for keyword in MAKEFILE_CI_KEYWORDS):
             return True
 
     return False
 
 
+# ============================================================================
+# Makefile Target Change Detection
+# ============================================================================
+
+
+def _load_make_targets_required(contract_path: Path) -> set[str]:
+    """从合约文件加载 make.targets_required 集合"""
+    if not contract_path.exists():
+        return set()
+
+    try:
+        with open(contract_path, "r", encoding="utf-8") as file:
+            contract = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+    make_config = contract.get("make", {})
+    targets_required = make_config.get("targets_required", [])
+    return {target for target in targets_required if isinstance(target, str)}
+
+
+def _extract_ci_workflow_make_targets(project_root: Path) -> set[str]:
+    """从 CI workflow 中提取 make 调用目标集合"""
+    workflow_path = project_root / ".github" / "workflows" / "ci.yml"
+    if not workflow_path.exists():
+        return set()
+
+    try:
+        from scripts.ci.validate_workflows import extract_workflow_make_calls
+    except Exception:
+        return set()
+
+    try:
+        make_calls = extract_workflow_make_calls(workflow_path)
+    except Exception:
+        return set()
+
+    targets = {call.target for call in make_calls}
+    return {target for target in targets if target}
+
+
+def _detect_makefile_target_changes(
+    old_targets: set[str],
+    new_targets: set[str],
+) -> tuple[set[str], set[str], list[tuple[str, str]]]:
+    """检测 Makefile targets 的新增、删除、重命名变化"""
+    removed, added = compute_set_diff(old_targets, new_targets)
+    renamed: list[tuple[str, str]] = []
+
+    if removed and added:
+        remaining_added = set(added)
+        remaining_removed = set(removed)
+
+        for old_target in sorted(removed):
+            for new_target in sorted(remaining_added):
+                if is_string_similar(
+                    old_target, new_target, threshold=MAKEFILE_RENAME_SIMILARITY_THRESHOLD
+                ):
+                    renamed.append((old_target, new_target))
+                    remaining_added.remove(new_target)
+                    remaining_removed.remove(old_target)
+                    break
+
+        added = remaining_added
+        removed = remaining_removed
+
+    return added, removed, renamed
+
+
+def _format_makefile_target_reason(targets: set[str]) -> str:
+    """格式化 Makefile 触发原因说明"""
+    targets_list = ", ".join(sorted(targets))
+    return f"Makefile target changed: {targets_list}"
+
+
+def _evaluate_makefile_criticality(
+    makefile_diff: str | None,
+    old_targets: set[str] | None,
+    new_targets: set[str] | None,
+    required_targets: set[str] | None,
+    workflow_targets: set[str] | None,
+) -> tuple[bool, str | None]:
+    """评估 Makefile 变更是否触发版本策略检查"""
+    if new_targets is not None:
+        if old_targets is None:
+            old_targets = set()
+
+        added, removed, renamed = _detect_makefile_target_changes(old_targets, new_targets)
+        changed_targets = set(added) | set(removed)
+        for old_target, new_target in renamed:
+            changed_targets.add(old_target)
+            changed_targets.add(new_target)
+
+        if changed_targets:
+            relevant_targets = set()
+            if required_targets:
+                relevant_targets.update(required_targets)
+            if workflow_targets:
+                relevant_targets.update(workflow_targets)
+
+            matched_targets = changed_targets & relevant_targets
+            if matched_targets:
+                return True, _format_makefile_target_reason(matched_targets)
+
+    # Fallback: keyword-based detection
+    if makefile_diff and is_makefile_ci_related_change(makefile_diff):
+        return True, MAKEFILE_RULE_DESCRIPTION
+
+    return False, None
+
+
 def filter_critical_files_with_reasons(
     changed_files: list[str],
     makefile_diff: str | None = None,
+    makefile_old_targets: set[str] | None = None,
+    makefile_new_targets: set[str] | None = None,
+    makefile_required_targets: set[str] | None = None,
+    workflow_make_targets: set[str] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """过滤出关键文件列表并记录触发原因
 
     Args:
         changed_files: 所有变更文件列表
         makefile_diff: Makefile 的 diff 内容（可选）
+        makefile_old_targets: 旧 Makefile target 集合（可选）
+        makefile_new_targets: 新 Makefile target 集合（可选）
+        makefile_required_targets: 合约 targets_required 集合（可选）
+        workflow_make_targets: workflow 中 make 调用集合（可选）
 
     Returns:
         (关键文件列表, 触发原因字典)
@@ -776,9 +988,16 @@ def filter_critical_files_with_reasons(
     for file_path in changed_files:
         # Makefile 特殊处理：只有 CI 相关变更才算关键
         if file_path == "Makefile":
-            if makefile_diff and is_makefile_ci_related_change(makefile_diff):
+            is_critical, reason = _evaluate_makefile_criticality(
+                makefile_diff=makefile_diff,
+                old_targets=makefile_old_targets,
+                new_targets=makefile_new_targets,
+                required_targets=makefile_required_targets,
+                workflow_targets=workflow_make_targets,
+            )
+            if is_critical:
                 critical.append(file_path)
-                reasons[file_path] = MAKEFILE_RULE_DESCRIPTION
+                reasons[file_path] = reason or MAKEFILE_RULE_DESCRIPTION
             continue
 
         rule = get_matching_rule(file_path)
@@ -792,6 +1011,10 @@ def filter_critical_files_with_reasons(
 def filter_critical_files(
     changed_files: list[str],
     makefile_diff: str | None = None,
+    makefile_old_targets: set[str] | None = None,
+    makefile_new_targets: set[str] | None = None,
+    makefile_required_targets: set[str] | None = None,
+    workflow_make_targets: set[str] | None = None,
 ) -> list[str]:
     """过滤出关键文件列表（向后兼容）
 
@@ -802,7 +1025,14 @@ def filter_critical_files(
     Returns:
         关键文件列表
     """
-    critical, _ = filter_critical_files_with_reasons(changed_files, makefile_diff)
+    critical, _ = filter_critical_files_with_reasons(
+        changed_files,
+        makefile_diff=makefile_diff,
+        makefile_old_targets=makefile_old_targets,
+        makefile_new_targets=makefile_new_targets,
+        makefile_required_targets=makefile_required_targets,
+        workflow_make_targets=workflow_make_targets,
+    )
     return critical
 
 
@@ -1099,11 +1329,36 @@ class WorkflowContractVersionChecker:
 
         # 2. 过滤关键文件并获取触发原因
         makefile_diff = None
+        makefile_old_targets = None
+        makefile_new_targets = None
+        makefile_required_targets = None
+        workflow_make_targets = None
         if "Makefile" in changed_files:
             makefile_diff = get_file_diff_content("Makefile", base)
+            makefile_path = self.project_root / "Makefile"
+            if makefile_path.exists():
+                try:
+                    new_content = makefile_path.read_text(encoding="utf-8")
+                    makefile_new_targets = parse_makefile_targets_from_content(new_content)
+                except OSError:
+                    makefile_new_targets = None
+
+                old_content = get_old_file_content("Makefile", base)
+                if old_content is not None and makefile_new_targets is not None:
+                    makefile_old_targets = parse_makefile_targets_from_content(old_content)
+                elif makefile_new_targets is not None:
+                    makefile_old_targets = set()
+
+                makefile_required_targets = _load_make_targets_required(self.contract_path)
+                workflow_make_targets = _extract_ci_workflow_make_targets(self.project_root)
 
         critical_files, trigger_reasons = filter_critical_files_with_reasons(
-            changed_files, makefile_diff
+            changed_files,
+            makefile_diff=makefile_diff,
+            makefile_old_targets=makefile_old_targets,
+            makefile_new_targets=makefile_new_targets,
+            makefile_required_targets=makefile_required_targets,
+            workflow_make_targets=workflow_make_targets,
         )
         self.result.changed_critical_files = critical_files
         self.result.trigger_reasons = trigger_reasons
@@ -1290,9 +1545,10 @@ def main() -> int:
         epilog="""
 关键文件规则（按类别）：
 
-  [workflow_core] Phase 1 Workflow 文件（扩展时修改 CRITICAL_WORKFLOW_RULES）：
+  [workflow_core] Workflow 文件（扩展时修改 CRITICAL_WORKFLOW_RULES）：
     - .github/workflows/ci.yml
     - .github/workflows/nightly.yml
+    - .github/workflows/release.yml
 
   [contract_definition] 合约定义文件：
     - scripts/ci/workflow_contract.v*.json
@@ -1302,6 +1558,7 @@ def main() -> int:
     - scripts/ci/validate_workflows.py
     - scripts/ci/workflow_contract.v*.schema.json
     - scripts/ci/check_workflow_contract_docs_sync.py
+    - scripts/ci/check_workflow_contract_error_types_docs_sync.py
     - scripts/ci/workflow_contract_drift_report.py
     - scripts/ci/generate_workflow_contract_snapshot.py
 

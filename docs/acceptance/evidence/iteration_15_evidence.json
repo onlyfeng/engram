@@ -1,0 +1,42 @@
+{
+  "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
+  "iteration_number": 15,
+  "recorded_at": "2026-02-03T07:04:29Z",
+  "commit_sha": "1c9f7b47ebb9f3f7e675e215358b4b5d508f9854",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.13.2",
+    "arch": "x86_64"
+  },
+  "source": {
+    "source_path": "docs/acceptance/iteration_15_regression.md"
+  },
+  "commands": [
+    {
+      "name": "ci",
+      "command": "make ci",
+      "result": "PASS",
+      "summary": "passed",
+      "exit_code": 0
+    },
+    {
+      "name": "gateway_tests",
+      "command": "pytest tests/gateway/ -q",
+      "result": "PASS",
+      "summary": "1105 passed, 206 skipped",
+      "exit_code": 0
+    },
+    {
+      "name": "acceptance_tests",
+      "command": "pytest tests/acceptance/ -q",
+      "result": "PASS",
+      "summary": "132 passed, 48 skipped",
+      "exit_code": 0
+    }
+  ],
+  "overall_result": "PASS",
+  "sensitive_data_declaration": true,
+  "links": {
+    "regression_doc_url": "docs/acceptance/iteration_15_regression.md"
+  }
+}

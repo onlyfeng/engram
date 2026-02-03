@@ -42,10 +42,11 @@ from scripts.ci.render_workflow_contract_docs import (
     WorkflowContractDocsRenderer,
     extract_block_from_content,
     find_all_markers,
+    get_coupling_map_block_names,
 )
 from scripts.ci.workflow_contract_common import (
+    artifact_path_lookup_tokens,
     discover_workflow_keys,
-    normalize_artifact_path,
 )
 
 # ============================================================================
@@ -80,6 +81,7 @@ class CouplingMapSyncErrorTypes:
     BLOCK_MARKER_DUPLICATE = "block_marker_duplicate"
     BLOCK_MARKER_UNPAIRED = "block_marker_unpaired"
     BLOCK_CONTENT_MISMATCH = "block_content_mismatch"
+    UNKNOWN_BLOCK_MARKER = "unknown_block_marker"
 
 
 # 导出所有 error_type 的集合（用于测试覆盖检查）
@@ -95,6 +97,7 @@ COUPLING_MAP_SYNC_ERROR_TYPES = frozenset({
     CouplingMapSyncErrorTypes.BLOCK_MARKER_DUPLICATE,
     CouplingMapSyncErrorTypes.BLOCK_MARKER_UNPAIRED,
     CouplingMapSyncErrorTypes.BLOCK_CONTENT_MISMATCH,
+    CouplingMapSyncErrorTypes.UNKNOWN_BLOCK_MARKER,
 })
 
 
@@ -119,16 +122,6 @@ CRITICAL_MAKE_TARGETS = frozenset({
     "verify-unified",
     "verify-permissions",
 })
-
-# 需要忽略的 artifact 路径模式（通配符等）
-# 这些路径在 coupling_map 中可能以不同形式出现
-ARTIFACT_PATH_NORMALIZATIONS = {
-    "test-results-*.xml": "test-results-",
-    "acceptance-results-*.xml": "acceptance-results-",
-    "migration-output-*.log": "migration-output-",
-    "verify-output-*.log": "verify-output-",
-}
-
 
 # ============================================================================
 # Data Classes
@@ -254,31 +247,6 @@ class WorkflowContractCouplingMapSyncChecker:
         """检查值是否在 coupling_map 中可被找到"""
         return value in self.coupling_map_content
 
-    def normalize_artifact_path_for_lookup(self, path: str) -> str:
-        """标准化 artifact 路径用于 coupling_map 查找
-
-        首先应用通用的路径标准化规则，然后处理通配符模式以便在
-        coupling_map.md 中查找。
-
-        Args:
-            path: 原始 artifact 路径
-
-        Returns:
-            用于查找的标准化路径
-        """
-        # 1. 应用通用的路径标准化
-        try:
-            normalized = normalize_artifact_path(path, allow_empty=True)
-        except Exception:
-            normalized = path
-
-        # 2. 处理特殊通配符模式（用于 coupling_map 查找）
-        for pattern, replacement in ARTIFACT_PATH_NORMALIZATIONS.items():
-            if normalized == pattern or path == pattern:
-                return replacement
-
-        return normalized
-
     def check_job_ids(self) -> None:
         """校验所有 workflow 的 job_ids"""
         for workflow_key in self.workflow_keys:
@@ -317,9 +285,15 @@ class WorkflowContractCouplingMapSyncChecker:
 
             for path in required_paths:
                 self.result.checked_artifacts.append(path)
-                # 标准化路径用于匹配
-                normalized_path = self.normalize_artifact_path_for_lookup(path)
-                if not self.check_value_in_coupling_map(normalized_path):
+                lookup_groups = artifact_path_lookup_tokens(path)
+                if not lookup_groups:
+                    lookup_groups = [(path,)]
+
+                matched = any(
+                    all(token in self.coupling_map_content for token in group)
+                    for group in lookup_groups
+                )
+                if not matched:
                     self.result.add_error(
                         SyncError(
                             error_type=CouplingMapSyncErrorTypes.ARTIFACT_NOT_IN_COUPLING_MAP,
@@ -396,6 +370,7 @@ class WorkflowContractCouplingMapSyncChecker:
 
         # 只检查 coupling_map.md 相关的块
         rendered_blocks = renderer.render_coupling_map_blocks()
+        expected_block_names = get_coupling_map_block_names()
 
         # 检查 marker 完整性
         marker_map: dict[str, list[tuple[str, int]]] = {}  # block_name -> [(type, line)]
@@ -403,6 +378,21 @@ class WorkflowContractCouplingMapSyncChecker:
             if block_name not in marker_map:
                 marker_map[block_name] = []
             marker_map[block_name].append((marker_type, line_num))
+
+        unknown_blocks = sorted(set(marker_map.keys()) - set(expected_block_names))
+        for block_name in unknown_blocks:
+            self.result.add_error(
+                SyncError(
+                    error_type=CouplingMapSyncErrorTypes.UNKNOWN_BLOCK_MARKER,
+                    category="block",
+                    value=block_name,
+                    message=(
+                        f"Unknown block marker '{block_name}' found in document. "
+                        "Remove the markers or add renderer support in "
+                        "scripts/ci/render_workflow_contract_docs.py and update the expected block list."
+                    ),
+                )
+            )
 
         # 检查每个预期的块
         for block_name, rendered_block in rendered_blocks.items():

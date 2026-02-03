@@ -896,7 +896,7 @@ class TestReaperProcessFunctions:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -974,7 +974,7 @@ class TestReaperProcessFunctions:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1191,7 +1191,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1270,7 +1270,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1351,7 +1351,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1428,7 +1428,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1504,7 +1504,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1584,7 +1584,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1700,7 +1700,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -1781,7 +1781,7 @@ class TestLastErrorBasedProcessing:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2107,7 +2107,7 @@ class TestReaperProcessExpiredJobsExtreme:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2182,7 +2182,7 @@ class TestReaperProcessExpiredJobsExtreme:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2260,7 +2260,7 @@ class TestReaperProcessExpiredJobsExtreme:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2337,7 +2337,7 @@ class TestReaperProcessExpiredJobsExtreme:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2417,7 +2417,7 @@ class TestReaperProcessExpiredJobsExtreme:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2526,7 +2526,9 @@ class TestQueueReaperConsistency:
             DEFAULT_BACKOFF_BASE as errors_base,
         )
         from engram.logbook.scm_sync_queue import DEFAULT_BACKOFF_BASE as queue_base
-        from scm_sync_reaper import DEFAULT_BACKOFF_BASE as reaper_base
+        from engram.logbook.scm_sync_reaper_core import (
+            DEFAULT_RETRY_DELAY_SECONDS as reaper_base,
+        )
 
         # 都应该引用同一个常量
         assert queue_base == errors_base
@@ -2588,7 +2590,7 @@ class TestQueueReaperConsistency:
     def test_reaper_default_max_backoff_is_reasonable(self):
         """验证 reaper 默认最大退避时间合理"""
         from engram.logbook.scm_sync_errors import DEFAULT_MAX_BACKOFF
-        from scm_sync_reaper import DEFAULT_MAX_REAPER_BACKOFF_SECONDS
+        from engram.logbook.scm_sync_reaper_core import DEFAULT_MAX_REAPER_BACKOFF_SECONDS
 
         # reaper 的默认 max 应该合理（30 分钟）
         assert DEFAULT_MAX_REAPER_BACKOFF_SECONDS == 1800
@@ -2665,7 +2667,7 @@ class TestReaperIdempotency:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2767,7 +2769,7 @@ class TestReaperIdempotency:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_jobs
-            from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+            from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
             test_conn = get_conn(dsn)
             try:
@@ -2865,7 +2867,7 @@ class TestReaperIdempotency:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_running_runs
-            from scm_sync_reaper import process_expired_runs
+            from engram.logbook.scm_sync_reaper_core import process_expired_runs
 
             test_conn = get_conn(dsn)
             try:
@@ -2976,7 +2978,7 @@ class TestReaperIdempotency:
                 sys.path.insert(0, str(scripts_dir))
 
             from db import get_conn, list_expired_locks
-            from scm_sync_reaper import process_expired_locks
+            from engram.logbook.scm_sync_reaper_core import process_expired_locks
 
             test_conn = get_conn(dsn)
             try:
@@ -3044,7 +3046,7 @@ class TestReaperIdempotency:
             sys.path.insert(0, str(scripts_dir))
 
         from db import get_conn
-        from scm_sync_reaper import (
+        from engram.logbook.scm_sync_reaper_core import (
             JobRecoveryPolicy,
             process_expired_jobs,
             process_expired_locks,

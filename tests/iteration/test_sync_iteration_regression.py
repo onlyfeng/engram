@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 # 添加脚本目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
 
-import sync_iteration_regression as sync_module  # noqa: E402
-from sync_iteration_regression import (  # noqa: E402
+import generated_blocks as blocks  # noqa: E402
+from generated_blocks import (  # noqa: E402
     find_evidence_block,
     find_evidence_insert_position,
     find_min_gate_block,
@@ -30,6 +30,9 @@ from sync_iteration_regression import (  # noqa: E402
     generate_evidence_placeholder,
     generate_min_gate_block_with_markers,
     render_evidence_snippet,
+)
+from iteration_evidence_schema import CURRENT_SCHEMA_REF  # noqa: E402
+from sync_iteration_regression import (  # noqa: E402
     sync_evidence_block,
     sync_min_gate_block,
 )
@@ -39,6 +42,12 @@ from sync_iteration_regression import (  # noqa: E402
 
 if TYPE_CHECKING:
     from _pytest.monkeypatch import MonkeyPatch
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _normalize_snapshot(content: str) -> str:
+    return content.replace("\r\n", "\n").strip()
 
 
 # ============================================================================
@@ -251,6 +260,21 @@ class TestRenderEvidenceSnippet:
         result = render_evidence_snippet(evidence)
         assert "45.5s" in result
 
+    def test_renders_v2_snapshot(self):
+        """测试 v2 evidence snippet 快照"""
+        evidence_path = FIXTURES_DIR / "iteration_evidence_v2_minimal.json"
+        snapshot_path = FIXTURES_DIR / "evidence_snippet_v2_snapshot.md"
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+        result = render_evidence_snippet(evidence)
+        expected = snapshot_path.read_text(encoding="utf-8")
+
+        assert _normalize_snapshot(result) == _normalize_snapshot(expected), (
+            "evidence snippet 快照不一致。"
+            "如需更新快照，请运行: "
+            "python scripts/iteration/update_iteration_fixtures.py --evidence-snippet"
+        )
+
 
 class TestGenerateEvidenceBlock:
     """测试 evidence block 生成"""
@@ -441,10 +465,7 @@ class TestSyncEvidenceBlock:
             encoding="utf-8",
         )
 
-        # Mock EVIDENCE_DIR
-        import sync_iteration_regression
-
-        monkeypatch.setattr(sync_iteration_regression, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", evidence_dir)
 
         content = """# Header
 
@@ -463,10 +484,7 @@ Footer"""
 
     def test_inserts_placeholder_when_no_evidence(self, tmp_path: Path, monkeypatch: "MonkeyPatch"):
         """测试无证据文件时插入占位符"""
-        # Mock 空的 EVIDENCE_DIR
-        import sync_iteration_regression
-
-        monkeypatch.setattr(sync_iteration_regression, "EVIDENCE_DIR", tmp_path)
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", tmp_path)
 
         content = """# Title
 
@@ -479,6 +497,34 @@ Footer"""
         assert changed is True
         assert inserted is True
         assert "证据文件尚未生成" in updated
+
+    def test_invalid_json_placeholder_does_not_leak_sensitive(self, tmp_path: Path, monkeypatch):
+        """测试坏 JSON 含敏感串时占位符不泄露原文"""
+        evidence_dir = tmp_path / "evidence"
+        evidence_dir.mkdir()
+        evidence_file = evidence_dir / "iteration_99_evidence.json"
+        evidence_file.write_text(
+            '{"notes": "glpat-secret-123", '
+            '"dsn": "postgresql://user:pass@localhost/db", '
+            '"auth": "Bearer super-secret"',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", evidence_dir)
+
+        content = """# Title
+
+## 相关文档
+
+- Link
+"""
+        updated, changed, inserted = sync_evidence_block(content, 99)
+
+        assert changed is True
+        assert inserted is True
+        assert "glpat-" not in updated
+        assert "postgresql://" not in updated
+        assert "Bearer " not in updated
 
 
 # ============================================================================
@@ -535,8 +581,8 @@ class TestSyncIterationRegression:
         )
 
         # Mock 路径
-        monkeypatch.setattr(sync_module, "REGRESSION_DOCS_DIR", docs_dir)
-        monkeypatch.setattr(sync_module, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(blocks, "REGRESSION_DOCS_DIR", docs_dir)
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", evidence_dir)
 
         # 执行同步（预览模式）
         result = sync_func(99, "full", write=False)
@@ -548,6 +594,66 @@ class TestSyncIterationRegression:
         assert result.evidence_inserted is True
         assert "Iteration 99" in result.updated_content
         assert "abc1234" in result.updated_content
+
+    def test_sync_includes_v2_schema_line_and_markers(
+        self, tmp_path: Path, monkeypatch: "MonkeyPatch"
+    ):
+        """测试 evidence 受控块包含 v2 schema 行且 marker 完整。"""
+        docs_dir = tmp_path / "docs" / "acceptance"
+        docs_dir.mkdir(parents=True)
+        evidence_dir = docs_dir / "evidence"
+        evidence_dir.mkdir()
+
+        doc_content = """# Iteration 99 Regression
+
+## 执行信息
+
+| 项目 | 值 |
+|------|-----|
+| 日期 | 2026-02-02 |
+
+## 执行结果总览
+
+| 序号 | 测试 |
+"""
+        doc_path = docs_dir / "iteration_99_regression.md"
+        doc_path.write_text(doc_content, encoding="utf-8")
+
+        evidence_file = evidence_dir / "iteration_99_evidence.json"
+        evidence_file.write_text(
+            json.dumps(
+                {
+                    "$schema": CURRENT_SCHEMA_REF,
+                    "iteration_number": 99,
+                    "recorded_at": "2026-02-02T14:30:00Z",
+                    "commit_sha": "abc1234",
+                    "runner": {
+                        "os": "darwin-24.6.0",
+                        "python": "3.12.1",
+                        "arch": "arm64",
+                    },
+                    "source": {
+                        "source_path": "docs/acceptance/iteration_99_regression.md",
+                    },
+                    "overall_result": "PASS",
+                    "commands": [
+                        {"name": "ci", "command": "make ci", "result": "PASS"},
+                    ],
+                    "sensitive_data_declaration": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(blocks, "REGRESSION_DOCS_DIR", docs_dir)
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", evidence_dir)
+
+        result = sync_func(99, "full", write=False)
+
+        assert result.success is True
+        assert "<!-- BEGIN GENERATED: evidence_snippet -->" in result.updated_content
+        assert "<!-- END GENERATED: evidence_snippet -->" in result.updated_content
+        assert "| **Schema 版本** | `iteration_evidence_v2.schema.json` |" in result.updated_content
 
     def test_idempotent_sync(self, tmp_path: Path, monkeypatch: "MonkeyPatch"):
         """测试同步幂等性"""
@@ -571,8 +677,8 @@ class TestSyncIterationRegression:
         doc_path.write_text(doc_content, encoding="utf-8")
 
         # Mock 路径
-        monkeypatch.setattr(sync_module, "REGRESSION_DOCS_DIR", docs_dir)
-        monkeypatch.setattr(sync_module, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(blocks, "REGRESSION_DOCS_DIR", docs_dir)
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", evidence_dir)
 
         # 第一次同步
         result1 = sync_func(99, "full", write=True, sync_evidence=False)
@@ -608,8 +714,8 @@ Old content
         doc_path.write_text(doc_content, encoding="utf-8")
 
         # Mock 路径
-        monkeypatch.setattr(sync_module, "REGRESSION_DOCS_DIR", docs_dir)
-        monkeypatch.setattr(sync_module, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(blocks, "REGRESSION_DOCS_DIR", docs_dir)
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", evidence_dir)
 
         # 写入模式同步
         result = sync_func(99, "full", write=True, sync_evidence=False)
@@ -625,7 +731,7 @@ Old content
         """测试文档不存在时返回错误"""
         docs_dir = tmp_path / "docs" / "acceptance"
 
-        monkeypatch.setattr(sync_module, "REGRESSION_DOCS_DIR", docs_dir)
+        monkeypatch.setattr(blocks, "REGRESSION_DOCS_DIR", docs_dir)
 
         result = sync_func(99, "full")
 
@@ -715,8 +821,8 @@ old
         doc_path = docs_dir / "iteration_99_regression.md"
         doc_path.write_text(doc_content, encoding="utf-8")
 
-        monkeypatch.setattr(sync_module, "REGRESSION_DOCS_DIR", docs_dir)
-        monkeypatch.setattr(sync_module, "EVIDENCE_DIR", evidence_dir)
+        monkeypatch.setattr(blocks, "REGRESSION_DOCS_DIR", docs_dir)
+        monkeypatch.setattr(blocks, "EVIDENCE_DIR", evidence_dir)
 
         # 使用 regression profile 覆盖
         result = sync_func(99, "regression", write=False, sync_evidence=False)

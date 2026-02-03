@@ -28,6 +28,7 @@ from scripts.ci.check_workflow_contract_coupling_map_sync import (
 from scripts.ci.render_workflow_contract_docs import (
     WorkflowContractDocsRenderer,
 )
+from scripts.ci.workflow_contract_common import artifact_path_lookup_tokens
 
 # ============================================================================
 # Fixtures
@@ -274,14 +275,120 @@ class TestArtifactPathsCheck:
 
 | Artifact | Path |
 |----------|------|
-| test results | `test-results-{python-version}` |
+| test results | `test-results-{python-version}.xml` |
 """
         contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
 
         checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
         result = checker.check()
 
-        # 验证无 artifact 相关错误（因为标准化后的前缀匹配成功）
+        # 验证无 artifact 相关错误（固定片段匹配成功）
+        artifact_errors = [e for e in result.errors if e.category == "artifact"]
+        assert len(artifact_errors) == 0
+
+    def test_glob_path_requires_literal_when_no_fixed_fragments(self) -> None:
+        """glob 模式只有通配符时，应要求文档包含原始模式"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": [],
+                "job_names": [],
+                "artifact_archive": {
+                    "required_artifact_paths": [
+                        "**/*.json",
+                    ],
+                },
+            },
+        }
+        coupling_map = """
+# CI/Nightly Workflow 耦合映射
+
+## Artifacts
+
+| Artifact | Path |
+|----------|------|
+| report | `artifacts/report.json` |
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
+        artifact_errors = [
+            e
+            for e in result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.ARTIFACT_NOT_IN_COUPLING_MAP
+        ]
+        assert len(artifact_errors) == 1
+        assert artifact_errors[0].value == "**/*.json"
+
+    def test_directory_artifact_path_requires_trailing_slash(self) -> None:
+        """目录路径必须保留末尾斜杠"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": [],
+                "job_names": [],
+                "artifact_archive": {
+                    "required_artifact_paths": [
+                        ".artifacts/acceptance-runs/",
+                    ],
+                },
+            },
+        }
+        coupling_map = """
+# CI/Nightly Workflow 耦合映射
+
+## Artifacts
+
+| Artifact | Path |
+|----------|------|
+| acceptance runs | `.artifacts/acceptance-runs` |
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
+        artifact_errors = [
+            e
+            for e in result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.ARTIFACT_NOT_IN_COUPLING_MAP
+        ]
+        assert len(artifact_errors) == 1
+        assert artifact_errors[0].value == ".artifacts/acceptance-runs/"
+
+    def test_directory_artifact_path_with_trailing_slash_passes(self) -> None:
+        """目录路径包含末尾斜杠时应通过"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": [],
+                "job_names": [],
+                "artifact_archive": {
+                    "required_artifact_paths": [
+                        ".artifacts/acceptance-runs/",
+                    ],
+                },
+            },
+        }
+        coupling_map = """
+# CI/Nightly Workflow 耦合映射
+
+## Artifacts
+
+| Artifact | Path |
+|----------|------|
+| acceptance runs | `.artifacts/acceptance-runs/` |
+"""
+        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
         artifact_errors = [e for e in result.errors if e.category == "artifact"]
         assert len(artifact_errors) == 0
 
@@ -484,6 +591,7 @@ class TestErrorTypeConstants:
             "block_marker_duplicate",
             "block_marker_unpaired",
             "block_content_mismatch",
+            "unknown_block_marker",
         }
         assert COUPLING_MAP_SYNC_ERROR_TYPES == expected_types
 
@@ -502,42 +610,20 @@ class TestErrorTypeConstants:
 # ============================================================================
 
 
-class TestArtifactPathNormalization:
-    """测试 artifact 路径标准化"""
+class TestArtifactPathLookupTokens:
+    """测试 artifact 路径查找 token 规则"""
 
-    def test_normalize_artifact_path_for_lookup_basic(self) -> None:
-        """测试基本的路径标准化"""
-        contract = {
-            "version": "1.0.0",
-            "ci": {"file": ".github/workflows/ci.yml", "job_ids": [], "job_names": []},
-        }
-        coupling_map = "# Coupling Map"
-        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
+    def test_artifact_path_lookup_tokens_basic(self) -> None:
+        """测试基本路径的 token 生成"""
+        assert ("artifacts/",) in artifact_path_lookup_tokens("./artifacts/")
+        assert artifact_path_lookup_tokens("a\\b\\c") == [("a/b/c",)]
+        assert artifact_path_lookup_tokens("a//b//") == [("a/b/",)]
 
-        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
-
-        # 测试基本标准化
-        assert checker.normalize_artifact_path_for_lookup("./artifacts/") == "artifacts/"
-        assert checker.normalize_artifact_path_for_lookup("a\\b\\c") == "a/b/c"
-        assert checker.normalize_artifact_path_for_lookup("a//b//") == "a/b/"
-
-    def test_normalize_artifact_path_for_lookup_wildcard(self) -> None:
-        """测试通配符路径标准化"""
-        contract = {
-            "version": "1.0.0",
-            "ci": {"file": ".github/workflows/ci.yml", "job_ids": [], "job_names": []},
-        }
-        coupling_map = "# Coupling Map"
-        contract_path, coupling_map_path = create_temp_files(contract, coupling_map)
-
-        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
-
-        # 测试通配符路径（ARTIFACT_PATH_NORMALIZATIONS 中的模式）
-        assert checker.normalize_artifact_path_for_lookup("test-results-*.xml") == "test-results-"
-        assert (
-            checker.normalize_artifact_path_for_lookup("acceptance-results-*.xml")
-            == "acceptance-results-"
-        )
+    def test_artifact_path_lookup_tokens_glob(self) -> None:
+        """测试通配符路径的 token 生成"""
+        tokens = artifact_path_lookup_tokens("test-results-*.xml")
+        assert ("test-results-*.xml",) in tokens
+        assert ("test-results-", ".xml") in tokens
 
     def test_artifact_check_with_normalized_paths(self) -> None:
         """测试标准化路径在 artifact 检查中的使用"""
@@ -892,6 +978,72 @@ some content
         assert mismatch_errors[0].expected_block is not None
         assert "BEGIN:CI_JOBS_LIST" in mismatch_errors[0].expected_block
 
+    def test_unknown_block_marker_reports_error(self) -> None:
+        """当存在未知 marker 时，应报错并提示修复步骤"""
+        contract = {
+            "version": "1.0.0",
+            "ci": {
+                "file": ".github/workflows/ci.yml",
+                "job_ids": ["ci-job"],
+                "job_names": ["CI Job"],
+            },
+            "nightly": {
+                "file": ".github/workflows/nightly.yml",
+                "job_ids": ["nightly-job"],
+                "job_names": ["Nightly Job"],
+            },
+            "make": {"targets_required": ["ci"]},
+        }
+
+        temp_dir = Path(tempfile.mkdtemp())
+        contract_path = temp_dir / "contract.json"
+        with open(contract_path, "w", encoding="utf-8") as f:
+            json.dump(contract, f)
+
+        renderer = WorkflowContractDocsRenderer(contract_path)
+        renderer.load_contract()
+        blocks = renderer.render_coupling_map_blocks()
+
+        coupling_map = f"""# Coupling Map
+
+<!-- BEGIN:UNKNOWN_BLOCK -->
+unexpected content
+<!-- END:UNKNOWN_BLOCK -->
+
+## CI Jobs
+
+<!-- BEGIN:CI_JOBS_LIST -->
+{blocks["CI_JOBS_LIST"].content}
+<!-- END:CI_JOBS_LIST -->
+
+## Nightly Jobs
+
+<!-- BEGIN:NIGHTLY_JOBS_LIST -->
+{blocks["NIGHTLY_JOBS_LIST"].content}
+<!-- END:NIGHTLY_JOBS_LIST -->
+
+## Make Targets
+
+<!-- BEGIN:MAKE_TARGETS_LIST -->
+{blocks["MAKE_TARGETS_LIST"].content}
+<!-- END:MAKE_TARGETS_LIST -->
+"""
+        coupling_map_path = temp_dir / "coupling_map.md"
+        coupling_map_path.write_text(coupling_map, encoding="utf-8")
+
+        checker = WorkflowContractCouplingMapSyncChecker(contract_path, coupling_map_path)
+        result = checker.check()
+
+        unknown_errors = [
+            e
+            for e in result.errors
+            if e.error_type == CouplingMapSyncErrorTypes.UNKNOWN_BLOCK_MARKER
+        ]
+        assert len(unknown_errors) == 1
+        assert unknown_errors[0].value == "UNKNOWN_BLOCK"
+        assert "Remove the markers" in unknown_errors[0].message
+        assert "renderer support" in unknown_errors[0].message
+
 
 # ============================================================================
 # Test: 渲染稳定性（Coupling Map）
@@ -994,6 +1146,7 @@ class TestNewErrorTypesCompleteness:
         assert CouplingMapSyncErrorTypes.BLOCK_MARKER_DUPLICATE in COUPLING_MAP_SYNC_ERROR_TYPES
         assert CouplingMapSyncErrorTypes.BLOCK_MARKER_UNPAIRED in COUPLING_MAP_SYNC_ERROR_TYPES
         assert CouplingMapSyncErrorTypes.BLOCK_CONTENT_MISMATCH in COUPLING_MAP_SYNC_ERROR_TYPES
+        assert CouplingMapSyncErrorTypes.UNKNOWN_BLOCK_MARKER in COUPLING_MAP_SYNC_ERROR_TYPES
 
     def test_all_class_attrs_in_set(self) -> None:
         """CouplingMapSyncErrorTypes 类的所有属性应在集合中"""

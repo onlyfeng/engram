@@ -9,8 +9,8 @@ Workflow Contract Validator 单元测试
 4. Step name 变化 diff 提示
 5. 实际 workflow 文件校验（集成测试）
 
-Phase 1 说明：
-- 校验 ci.yml 和 nightly.yml，release.yml 暂不纳入
+Phase 2 说明：
+- 校验 ci.yml、nightly.yml 与 release.yml
 - Nightly 验证为结构契约校验（job/step/artifact 定义），不执行 docker compose
 - 合约定义参见 scripts/ci/workflow_contract.v1.json
 """

@@ -1,7 +1,7 @@
 # CLI 入口清单与调用规范
 
 > **状态**：当前  
-> **更新日期**：2026-02-01  
+> **更新日期**：2026-02-03  
 > **关联文档**：[iteration_2_plan.md](iteration_2_plan.md) (M1: 脚本入口收敛)
 
 ---
@@ -41,6 +41,7 @@
 | `engram-migrate` | `engram.logbook.cli.db_migrate:main` | 数据库迁移 | 核心 |
 | `engram-scm` | `engram.logbook.cli.scm:main` | SCM 操作入口 | scm |
 | `engram-gateway` | `engram.gateway.main:main` | Gateway 服务启动 | gateway |
+| `engram-iteration` | `engram.iteration.cli:main` | Iteration 工具入口（rerun-advice） | core |
 | `engram-scm-sync` | `engram.logbook.cli.scm_sync:main` | SCM Sync 统一入口 | scm |
 | `engram-scm-scheduler` | `engram.logbook.cli.scm_sync:scheduler_main` | 调度器快捷入口 | scm |
 | `engram-scm-worker` | `engram.logbook.cli.scm_sync:worker_main` | Worker 快捷入口 | scm |
@@ -66,13 +67,13 @@ v2.0 已移除根目录兼容入口，以下清单仅用于历史追溯：
 | `identity_sync.py` | 身份同步工具 | `engram-identity-sync` | 已移除（v2.0） |
 | `kv.py` | KV 存储工具 | `engram.logbook.kv` | 兼容保留 |
 | `scm_repo.py` | SCM 仓库工具 | `engram.logbook.scm_repo` | 兼容保留 |
-| `scm_sync_runner.py` | SCM Sync 运行器 | `engram-scm-runner` | 待移除 |
-| `scm_sync_status.py` | SCM Sync 状态 | `engram-scm-status` | 待移除 |
-| `scm_sync_reaper.py` | SCM Sync 清理器 | `engram-scm-reaper` | 待移除 |
-| `scm_sync_worker.py` | SCM Sync Worker | `engram-scm-worker` | 待移除 |
+| `scm_sync_runner.py` | SCM Sync 运行器 | `engram-scm-runner` | 已移除（v2.0） |
+| `scm_sync_status.py` | SCM Sync 状态 | `engram-scm-status` | 已移除（v2.0） |
+| `scm_sync_reaper.py` | SCM Sync 清理器 | `engram-scm-reaper` | 已移除（v2.0） |
+| `scm_sync_worker.py` | SCM Sync Worker | `engram-scm-worker` | 已移除（v2.0） |
 | `scm_sync_gitlab_commits.py` | GitLab Commits 同步 | `engram-scm-sync` | 已移除（v2.0） |
-| `scm_sync_gitlab_mrs.py` | GitLab MRs 同步 | `engram-scm-sync` | 待移除 |
-| `scm_sync_svn.py` | SVN 同步 | `engram-scm-sync` | 待移除 |
+| `scm_sync_gitlab_mrs.py` | GitLab MRs 同步 | `engram-scm-sync` | 已移除（v2.0） |
+| `scm_sync_svn.py` | SVN 同步 | `engram-scm-sync` | 已移除（v2.0） |
 
 ### 1.3 scripts/ 目录脚本
 
@@ -437,20 +438,13 @@ Runner 的 CLI 解析器统一在 `engram.logbook.scm_sync_runner` 模块中：
 |--------|----------|
 | `engram-scm-runner` | 调用 `runner_main()` -> 内部使用 `create_parser()` |
 | `engram-scm-sync runner` | 调用 `runner_main()` -> 内部使用 `create_parser()` |
-| `python scm_sync_runner.py` | 调用 `runner_main()` (兼容入口，输出 deprecation 警告) |
+| `python scm_sync_runner.py` | 已移除（v2.0），请使用 `engram-scm-runner` |
 | 直接调用 `parse_args()` | 测试和脚本可直接使用 |
 
-### 6.3 移除条件（scm_sync_runner.py 根目录脚本）
+### 6.3 状态（scm_sync_runner.py 根目录脚本）
 
-根目录的 `scm_sync_runner.py` 将在满足以下条件后移除：
-
-| # | 条件 | 状态 |
-|---|------|------|
-| 1 | `create_parser()` 和 `parse_args()` 导出稳定 | ✅ 完成 |
-| 2 | `runner_main()` 复用 `create_parser()` | ✅ 完成 |
-| 3 | 测试从 `engram.logbook.scm_sync_runner` 导入 | ✅ 完成 |
-| 4 | 至少一个完整版本周期 | 待满足 |
-| 5 | 所有 CI 流水线迁移到新入口 | 待满足 |
+根目录的 `scm_sync_runner.py` 已移除（v2.0），请使用 `engram-scm-runner` 或
+`engram-scm-sync runner`。
 
 ---
 
@@ -464,4 +458,4 @@ Runner 的 CLI 解析器统一在 `engram.logbook.scm_sync_runner` 模块中：
 
 ---
 
-更新时间：2026-01-31
+更新时间：2026-02-03

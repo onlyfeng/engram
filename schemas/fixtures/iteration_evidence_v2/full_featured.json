@@ -1,0 +1,72 @@
+{
+  "iteration_number": 15,
+  "recorded_at": "2026-02-03T03:10:00Z",
+  "commit_sha": "def4567abc8901234567890abcdef1234567890",
+  "runner": {
+    "os": "darwin-24.6.0",
+    "python": "3.12.1",
+    "arch": "arm64",
+    "runner_label": "local"
+  },
+  "source": {
+    "source_path": "docs/acceptance/iteration_15_regression.md",
+    "source_type": "manual",
+    "source_ref": "iteration-15"
+  },
+  "commands": [
+    {
+      "name": "ci",
+      "command": "make ci",
+      "result": "ERROR",
+      "summary": "timeout reached ([REDACTED])",
+      "duration_seconds": 1200.0,
+      "exit_code": 124,
+      "timed_out": true,
+      "timeout_seconds": 1200,
+      "stdout_excerpt": "[REDACTED]",
+      "stderr_excerpt": "[REDACTED]",
+      "tests": [
+        {
+          "name": "tests/iteration/test_update_iteration_fixtures.py::test_all_is_idempotent",
+          "result": "PASS",
+          "duration_seconds": 0.8
+        },
+        {
+          "name": "tests/iteration/test_sync_iteration_regression.py::TestRenderEvidenceSnippet::test_renders_v2_snapshot",
+          "result": "FAIL",
+          "summary": "[REDACTED]",
+          "duration_seconds": 0.5
+        }
+      ]
+    },
+    {
+      "name": "lint",
+      "command": "make lint",
+      "result": "PASS",
+      "summary": "ruff check passed",
+      "duration_seconds": 4.2,
+      "exit_code": 0,
+      "timed_out": false,
+      "timeout_seconds": 600,
+      "stdout_excerpt": "[REDACTED]"
+    }
+  ],
+  "links": {
+    "ci_run_url": "https://example.com/ci/123",
+    "regression_doc_url": "docs/acceptance/iteration_15_regression.md"
+  },
+  "notes": "stdout/stderr 已脱敏，[REDACTED]",
+  "overall_result": "FAIL",
+  "evidence_refs": [
+    "doc:docs/acceptance/iteration_15_regression.md",
+    "commit:def4567abc8901234567890abcdef1234567890"
+  ],
+  "redaction_applied": true,
+  "redaction_summary": "命令输出已脱敏",
+  "redaction_rules": [
+    "mask-secrets",
+    "truncate-long-lines"
+  ],
+  "redaction_notes": "原始输出已替换为 [REDACTED]。",
+  "sensitive_data_declaration": true
+}

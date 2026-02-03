@@ -3,7 +3,7 @@
 > 本文档固化 workflow 的关键标识符、环境变量、标签语义等，作为"禁止回归"的基准。
 > 任何修改需经过 review 并更新本文档。
 
-> **Phase 1 范围说明**: 当前合约版本（详见第 14 章版本控制表或 `workflow_contract.v1.json` 的 `version` 字段）仅覆盖 CI 和 Nightly workflow。Release workflow (`release.yml`) 将在 Phase 2 引入。
+> **范围说明**: 当前合约版本（详见第 14 章版本控制表或 `workflow_contract.v1.json` 的 `version` 字段）覆盖 CI、Nightly 与 Release workflow。
 
 ---
 
@@ -19,9 +19,11 @@
 | `scripts/ci/workflow_contract.v1.schema.json` | **Schema** | 定义 contract JSON 的字段约束和结构规范 |
 | `.github/workflows/ci.yml` | **实现（CI workflow）** | CI workflow 的实际定义 |
 | `.github/workflows/nightly.yml` | **实现（Nightly workflow）** | Nightly workflow 的实际定义 |
+| `.github/workflows/release.yml` | **实现（Release workflow）** | Release workflow 的实际定义 |
 | `Makefile` | **实现（构建目标）** | 定义 workflow 依赖的构建目标（`validate-workflows-strict` 等） |
 | `scripts/ci/validate_workflows.py` | **校验（合约校验器）** | 核心校验脚本，验证 workflow 与 contract 的一致性 |
 | `scripts/ci/check_workflow_contract_docs_sync.py` | **校验（文档同步）** | 校验 contract JSON 与 contract.md 的同步状态 |
+| `scripts/ci/check_workflow_contract_error_types_docs_sync.py` | **校验（Error Types 文档同步）** | 校验 Error Types 表格与代码常量同步 |
 | `scripts/ci/check_workflow_contract_version_policy.py` | **校验（版本策略）** | 检查关键文件变更时版本是否已更新 |
 | `scripts/ci/workflow_contract_drift_report.py` | **工具（漂移报告）** | 生成合约与 workflow 之间的差异报告 |
 | `scripts/ci/generate_workflow_contract_snapshot.py` | **工具（快照生成）** | 生成 workflow 结构快照，用于变更前后对比 |
@@ -33,7 +35,7 @@
 | 属性 | 值 |
 |------|-----|
 | **Make Target** | `make validate-workflows-strict`（CI 使用）/ `make validate-workflows`（本地） |
-| **直接调用** | `python scripts/ci/validate_workflows.py --strict` |
+| **JSON 报告** | `make -s validate-workflows-json > artifacts/workflow_contract_validation.json` |
 | **Exit Code** | `0` = 通过；`1` = 存在 ERROR（阻断 CI） |
 | **Artifact 路径** | `artifacts/workflow_contract_validation.json` |
 | **CI Artifact 名称** | `workflow-contract-validation` |
@@ -59,7 +61,7 @@
 | 属性 | 值 |
 |------|-----|
 | **Make Target** | `make check-workflow-contract-docs-sync` |
-| **直接调用** | `python scripts/ci/check_workflow_contract_docs_sync.py` |
+| **JSON 报告** | `make -s check-workflow-contract-docs-sync-json > artifacts/workflow_contract_docs_sync.json` |
 | **Exit Code** | `0` = 同步；`1` = 存在不同步项（阻断 CI） |
 | **Artifact 路径** | `artifacts/workflow_contract_docs_sync.json` |
 | **CI Artifact 名称** | `workflow-contract-docs-sync` |
@@ -74,7 +76,6 @@
 | 属性 | 值 |
 |------|-----|
 | **Make Target** | `make check-workflow-contract-version-policy` |
-| **直接调用** | `python scripts/ci/check_workflow_contract_version_policy.py --pr-mode` |
 | **Exit Code** | `0` = 通过；`1` = 版本未更新（阻断 CI） |
 | **Artifact 路径** | 无独立 artifact |
 
@@ -88,7 +89,8 @@
 | 属性 | 值 |
 |------|-----|
 | **Make Target** | `make workflow-contract-drift-report`（阻断）/ `make workflow-contract-drift-report-all`（非阻断） |
-| **直接调用** | `python scripts/ci/workflow_contract_drift_report.py --output <path>` |
+| **CI 报告（JSON）** | `make -s workflow-contract-drift-report-json` |
+| **CI 报告（Markdown）** | `make -s workflow-contract-drift-report-markdown > artifacts/workflow_contract_drift.md` |
 | **Exit Code** | `0` = 无漂移；`非0` = 检测到漂移（**CI 中使用 `\|\| true` 不阻断**） |
 | **Artifact 路径** | `artifacts/workflow_contract_drift.json`、`artifacts/workflow_contract_drift.md` |
 | **CI Artifact 名称** | `workflow-contract-drift` |
@@ -97,6 +99,18 @@
 - 检测 workflow 文件与合约定义之间的差异
 - 生成 JSON 和 Markdown 格式报告
 - **定位为参考性报告，CI 中默认不阻断**
+
+#### 0.2.5 check_workflow_contract_error_types_docs_sync.py（Error Types 文档同步）
+
+| 属性 | 值 |
+|------|-----|
+| **Make Target** | `make check-workflow-contract-error-types-docs-sync` |
+| **Exit Code** | `0` = 同步；`1` = 存在不同步项（阻断 CI）；`2` = 文档/代码加载失败 |
+| **Artifact 路径** | 无独立 artifact |
+
+**功能说明**：
+- 校验 contract.md 第 13 章 Error Types 表格与代码常量同步
+- 覆盖 validate_workflows/docs_sync/version_policy/drift_report 的类型集合
 
 ### 0.3 CI 阻断策略边界
 
@@ -109,11 +123,12 @@ CI workflow 的 `workflow-contract` job 包含以下检查步骤：
 | `Run CI script tests` | `pytest tests/ci/ -q` | **阻断** | 测试失败时阻断 |
 | `Validate workflow contract` | `make validate-workflows-strict` | **阻断** | ERROR 时阻断（frozen 改名、extra jobs 等） |
 | `Check workflow contract docs sync` | `make check-workflow-contract-docs-sync` | **阻断** | 文档不同步时阻断 |
+| `Check workflow contract error types docs sync` | `make check-workflow-contract-error-types-docs-sync` | **阻断** | Error Types 表格不同步时阻断 |
 | `Check workflow contract version policy` | `make check-workflow-contract-version-policy` | **阻断** | 版本未更新时阻断 |
-| `Generate validation report (JSON)` | `...validate_workflows.py --json > ... \|\| true` | **非阻断** | 报告生成失败不阻断 |
-| `Generate docs sync report (JSON)` | `...check_workflow_contract_docs_sync.py --json > ... \|\| true` | **非阻断** | 报告生成失败不阻断 |
-| `Generate drift report (JSON)` | `...workflow_contract_drift_report.py ... \|\| true` | **非阻断** | drift 报告为参考性，不阻断 |
-| `Generate drift report (Markdown)` | `...workflow_contract_drift_report.py --markdown ... \|\| true` | **非阻断** | drift 报告为参考性，不阻断 |
+| `Generate validation report (JSON)` | `make -s validate-workflows-json > artifacts/workflow_contract_validation.json \|\| true` | **非阻断** | 报告生成失败不阻断 |
+| `Generate docs sync report (JSON)` | `make -s check-workflow-contract-docs-sync-json > artifacts/workflow_contract_docs_sync.json \|\| true` | **非阻断** | 报告生成失败不阻断 |
+| `Generate drift report (JSON)` | `make -s workflow-contract-drift-report-json \|\| true` | **非阻断** | drift 报告为参考性，不阻断 |
+| `Generate drift report (Markdown)` | `make -s workflow-contract-drift-report-markdown > artifacts/workflow_contract_drift.md \|\| true` | **非阻断** | drift 报告为参考性，不阻断 |
 
 #### 0.3.2 阻断策略设计原则
 
@@ -121,6 +136,7 @@ CI workflow 的 `workflow-contract` job 包含以下检查步骤：
 |----------|----------|------|
 | **合约校验**（validate_workflows.py） | 阻断 | 确保 workflow 与合约一致，防止回归 |
 | **文档同步**（check_workflow_contract_docs_sync.py） | 阻断 | 确保文档作为"禁止回归"基准的有效性 |
+| **Error Types 文档同步**（check_workflow_contract_error_types_docs_sync.py） | 阻断 | 确保 Error Types 表格与代码常量一致 |
 | **版本策略**（check_workflow_contract_version_policy.py） | 阻断 | 确保版本变更可追溯 |
 | **报告生成**（`--json` 输出） | 非阻断 | 报告生成失败不应阻断主流程 |
 | **漂移报告**（workflow_contract_drift_report.py） | 非阻断 | 定位为参考性报告，帮助识别潜在问题 |
@@ -201,24 +217,31 @@ Drift Report 使用 `|| true` 的原因：
 | `notify-results` | Notify Results | Nightly 运行结果通知 |
 <!-- END:NIGHTLY_JOB_TABLE -->
 
-### 2.3 Release Workflow (`release.yml`) - Phase 2 预留
+### 2.3 Release Workflow (`release.yml`)
 
-> **注意**: Release workflow 将在 Phase 2 引入，当前合约版本不包含此部分。
+| Job ID | Job Name | 说明 |
+|--------|----------|------|
+| `build` | Build Release | 构建 wheel/sdist 并归档 release artifacts |
+| `publish` | Publish Release Artifacts | 下载产物并按输入开关发布 |
+| `notify` | Notify Release | 发布结果通知 |
 
-### 2.4 Phase 2 设计：Release Workflow 纳入合约
+Release workflow 通过 `workflow_dispatch` 触发，默认仅构建并归档产物。
+发布由输入 `publish` 控制，`release_tag` 作为可选标签参数。
 
-本节预定义 `release.yml` 纳入合约的设计方案，供 Phase 2 实施时参考。
+### 2.4 Release Workflow 合约细则
+
+本节说明 `release.yml` 的合约字段与冻结策略。
 
 #### 2.4.1 最小字段集合
 
-当 `release.yml` 纳入合约时，需在 `workflow_contract.v1.json` 中添加以下字段：
+Release workflow 的合约字段如下：
 
 ```json
 {
   "release": {
     "file": ".github/workflows/release.yml",
     "job_ids": ["build", "publish", "notify"],
-    "job_names": ["Build Release", "Publish to Registry", "Notify Release"],
+    "job_names": ["Build Release", "Publish Release Artifacts", "Notify Release"],
     "required_jobs": [
       {
         "id": "build",
@@ -226,11 +249,28 @@ Drift Report 使用 `|| true` 的原因：
         "required_steps": [
           "Checkout repository",
           "Set up Python",
+          "Install dependencies",
           "Build package",
           "Upload release artifacts"
         ]
+      },
+      {
+        "id": "publish",
+        "name": "Publish Release Artifacts",
+        "required_steps": [
+          "Download release artifacts",
+          "Publish release artifacts"
+        ]
+      },
+      {
+        "id": "notify",
+        "name": "Notify Release",
+        "required_steps": [
+          "Notify release status"
+        ]
       }
     ],
+    "required_env_vars": [],
     "artifact_archive": {
       "required_artifact_paths": [
         "dist/*.whl",
@@ -252,83 +292,36 @@ Drift Report 使用 `|| true` 的原因：
 | `file` | ✅ | Workflow 文件路径，必须为 `.github/workflows/release.yml` |
 | `job_ids` | ✅ | Release workflow 的所有 job ID 列表 |
 | `job_names` | ✅ | 与 `job_ids` 位置对应的 job name 列表 |
-| `required_jobs` | ⚠️ | 至少定义核心 job（如 build）的 required_steps |
-| `artifact_archive` | ⚠️ | Release 产物路径（如 wheel/sdist） |
+| `required_jobs` | ⚠️ | 记录 release 核心 job 的 required_steps |
+| `required_env_vars` | ⚠️ | Release workflow 环境变量（当前为空，使用 workflow_dispatch inputs） |
+| `artifact_archive` | ⚠️ | Release 产物路径（wheel/sdist） |
 | `labels` | ❌ | 可选，release 专用 PR labels |
 
 #### 2.4.2 Frozen 冻结范围策略
 
-**策略选项：**
+Release workflow 采用**最小冻结策略**：
 
-| 选项 | 优点 | 缺点 | 推荐场景 |
-|------|------|------|----------|
-| **A：复用现有 allowlist** | 统一管理、避免重复 | 冻结列表可能过长 | Release jobs/steps 与 CI 高度共用 |
-| **B：新增 release 专用 allowlist** | 隔离管理、灵活控制 | 维护两套列表 | Release 有独立的冻结需求 |
-| **C：混合策略（推荐）** | 平衡灵活性与一致性 | 需明确边界 | 共用基础步骤，独立 release 专用步骤 |
+- **复用冻结步骤**：`Checkout repository`、`Set up Python`、`Install dependencies`
+- **release 专用步骤不冻结**：`Build package`、`Upload release artifacts`、`Publish release artifacts`、`Notify release status`
+- **release job name 不冻结**：仅保留 CI/Nightly 的 Required Checks 在 `frozen_job_names.allowlist`
 
-**推荐策略 C 实现方式：**
-
-1. **共用基础步骤**：`Checkout repository`、`Set up Python` 等基础步骤复用 `frozen_step_text.allowlist`
-2. **Release 专用步骤**：如 `Build package`、`Publish to Registry` 等添加到同一 `frozen_step_text.allowlist`，并在注释中标注 `[release]`
-3. **Job Names**：Release 的核心 job names 添加到 `frozen_job_names.allowlist`，标注 `[release]`
-
-**合约配置示例（策略 C）：**
-
-```json
-{
-  "frozen_step_text": {
-    "_comment": "Phase 2: [release] 标注表示 release workflow 专用",
-    "allowlist": [
-      "Checkout repository",
-      "Set up Python",
-      "Install dependencies",
-      "Build package",
-      "Upload release artifacts",
-      "Publish to Registry"
-    ]
-  },
-  "frozen_job_names": {
-    "_comment": "Phase 2: [release] 标注表示 release workflow 专用",
-    "allowlist": [
-      "Test (Python ${{ matrix.python-version }})",
-      "Lint",
-      "Workflow Contract Validation",
-      "Unified Stack Full Verification",
-      "Build Release",
-      "Publish to Registry"
-    ]
-  }
-}
-```
+该策略避免 release 小步调整触发冻结变更，同时保持基础步骤稳定。
 
 #### 2.4.3 Version Policy 扩展
 
-当纳入 `release.yml` 时，需扩展 `CRITICAL_WORKFLOW_RULES` 以触发版本策略检查。
+Release workflow 已纳入版本策略检查，当前配置为：
 
-**扩展步骤：**
+```python
+CRITICAL_WORKFLOW_RULES = [
+    CriticalFileRule(
+        pattern=r"^\.github/workflows/(ci|nightly|release)\.yml$",
+        description="Phase 2 workflow 文件（ci.yml/nightly.yml/release.yml）",
+        category="workflow_core",
+    ),
+]
+```
 
-1. **修改 `check_workflow_contract_version_policy.py`**：
-   ```python
-   # 在 CRITICAL_WORKFLOW_RULES 中扩展正则
-   # 当前: r"^\.github/workflows/(ci|nightly)\.yml$"
-   # Phase 2: r"^\.github/workflows/(ci|nightly|release)\.yml$"
-   ```
-
-2. **修改 `WORKFLOW_DOC_ANCHORS`**（在 `check_workflow_contract_docs_sync.py`）：
-   ```python
-   WORKFLOW_DOC_ANCHORS = {
-       "ci": [...],
-       "nightly": [...],
-       "release": ["### 2.3 Release Workflow", "Release Workflow (`release.yml`)"],
-   }
-   ```
-
-3. **更新 `contract.md` 文档**：
-   - 将 "2.3 Release Workflow - Phase 2 预留" 改为正式章节
-   - 添加 Release workflow 的 Job ID / Job Name 对照表
-   - 更新第 14 章版本控制表
-
-**迁移 Checklist：**
+**落地 Checklist（已完成）：**
 
 | 步骤 | 文件 | 操作 |
 |------|------|------|
@@ -517,9 +510,14 @@ env:
   SKIP_DEGRADATION_TEST: "0"     # 显式设置为 0（执行降级测试）
 ```
 
-### 4.3 Release Gate - Phase 2 预留
+### 4.3 Release Gate
 
-> **注意**: Release Gate 环境变量将在 Phase 2 Release workflow 引入时定义。
+Release workflow 当前不要求额外的环境变量，使用 `workflow_dispatch` 输入控制发布行为：
+
+| 输入 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `publish` | `boolean` | `false` | 是否执行发布步骤 |
+| `release_tag` | `string` | `""` | 可选的发布标签 |
 
 ### 4.4 Acceptance 目标环境变量绑定
 
@@ -658,7 +656,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 | 步骤类型 | 示例 | 原因 |
 |----------|------|------|
 | **基础设置步骤** | `Checkout repository`, `Set up Python`, `Install dependencies` | 所有 job 的前置依赖 |
-| **合约自身校验步骤** | `Validate workflow contract`, `Check workflow contract docs sync` | 确保合约一致性门禁生效 |
+| **合约自身校验步骤** | `Validate workflow contract`, `Check workflow contract docs sync`, `Check workflow contract error types docs sync` | 确保合约一致性门禁生效 |
 | **CI 脚本测试步骤** | `Run CI script tests` | 确保 CI 脚本本身的正确性 |
 | **核心验证/测试步骤** | `Run unit and integration tests`, `Run acceptance tests` | 主要质量门禁 |
 | **Artifact 上传步骤** | `Upload test results`, `Upload validation report` | 确保 CI 产物可追溯 |
@@ -859,12 +857,14 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 | `check-gateway-import-surface` | CI 必需目标 |
 | `check-gateway-public-api-surface` | CI 必需目标 |
 | `check-iteration-docs` | CI 必需目标 |
+| `check-iteration-fixtures-freshness` | CI 必需目标 |
 | `check-logbook-consistency` | CI 必需目标 |
 | `check-migration-sanity` | CI 必需目标 |
 | `check-schemas` | CI 必需目标 |
 | `check-scm-sync-consistency` | CI 必需目标 |
 | `check-workflow-contract-doc-anchors` | CI 必需目标 |
 | `check-workflow-contract-docs-sync` | CI 必需目标 |
+| `check-workflow-contract-error-types-docs-sync` | CI 必需目标 |
 | `check-workflow-contract-internal-consistency` | CI 必需目标 |
 | `check-workflow-contract-version-policy` | CI 必需目标 |
 | `check-workflow-make-targets-consistency` | CI 必需目标 |
@@ -894,9 +894,10 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 | `apply-roles` | 应用 Logbook 角色和权限 |
 | `apply-openmemory-grants` | 应用 OpenMemory 权限 |
 
-### 7.3 Release 相关 Make Targets - Phase 2 预留
+### 7.3 Release 相关 Make Targets
 
-> **注意**: Release 专用 Make targets 将在 Phase 2 Release workflow 引入时定义。
+Release workflow 当前不依赖 Makefile 目标（直接执行 `python -m build`），
+因此未纳入 `make.targets_required`。
 
 ---
 
@@ -1054,7 +1055,7 @@ CI 产物按重要性分为三级：
 |------|-----------------|------|
 | **CI Workflow** | 14 | 标准保留期，满足日常调试和回溯需求 |
 | **Nightly Workflow** | 14 | 与 CI 一致 |
-| **发布分支** | 30-90 | 可通过 workflow 条件增加（Phase 2 预留） |
+| **Release Workflow** | 14 | 与 CI/Nightly 一致，必要时按发布策略调整 |
 
 **稳定性约束：**
 - `retention-days` 不应随意减少（可能影响正在排查的问题）
@@ -1144,6 +1145,20 @@ pytest tests/ci/test_validate_workflows_artifacts.py -v
 | Glob 模式（目录前缀） | `artifacts/*.json` | `artifacts/report.json` | ✅ 匹配 |
 | 大小写不同 | `TEST.xml` | `test.xml` | ❌ 不匹配（区分大小写） |
 
+#### 8.9.5 coupling_map.md 记录规则（artifact 路径）
+
+为确保 `check_workflow_contract_coupling_map_sync.py` 可以稳定匹配，`coupling_map.md` 中的产物路径按以下规则记录：
+
+| 类型 | 记录规则 | 示例 |
+|------|----------|------|
+| **精确路径** | 记录规范化后的完整路径（去掉 `./`，统一 `/`，去重复 `/`） | `artifacts/workflow_contract_validation.json` |
+| **目录路径**（以 `/` 结尾） | 保留尾随 `/`，校验器按尾随 `/` 精确匹配 | `.artifacts/acceptance-runs/` |
+| **Glob 模式**（含 `* ? []`） | 推荐直接记录原始 glob；若使用占位符，需保留 glob 的固定片段（前缀/后缀） | `test-results-*.xml` 或 `test-results-{python-version}.xml` |
+
+**说明**：
+- **目录路径**：尾随 `/` 是语义的一部分（目录匹配），不可省略。
+- **占位符 glob**：必须保留 glob 的固定片段（如 `test-results-` 与 `.xml`），校验器按固定片段组合匹配。
+
 ### 8.10 Drift Report 漂移报告合约
 
 #### 8.10.1 概述
@@ -1156,7 +1171,7 @@ Drift Report 用于检测 workflow 文件（`.github/workflows/*.yml`）与合�
 |------|----------|-------------|----------|
 | **本地开发** | 手动执行 | `make workflow-contract-drift-report` | 脚本失败时阻断（返回非零退出码） |
 | **本地批量** | 手动执行 | `make workflow-contract-drift-report-all` | 不阻断（使用 `|| true`） |
-| **PR/CI** | workflow-contract job | 直接调用脚本 + `|| true` | 默认不阻断 |
+| **PR/CI** | workflow-contract job | `make -s workflow-contract-drift-report-json` / `make -s workflow-contract-drift-report-markdown > artifacts/workflow_contract_drift.md` + `|| true` | 默认不阻断 |
 | **夜间** | N/A | N/A | 不执行 drift report |
 
 #### 8.10.3 输出位置
@@ -1464,6 +1479,7 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
 | `scripts/ci/validate_workflows.py` | 合约校验器核心脚本 | 校验逻辑变更需版本更新 |
 | `scripts/ci/workflow_contract.v1.schema.json` | 合约 JSON Schema | 字段约束变更需版本更新 |
 | `scripts/ci/check_workflow_contract_docs_sync.py` | 文档同步校验脚本 | 同步规则变更需版本更新 |
+| `scripts/ci/check_workflow_contract_error_types_docs_sync.py` | Error Types 文档同步校验脚本 | 表格同步规则变更需版本更新 |
 | `scripts/ci/workflow_contract_drift_report.py` | 漂移报告生成脚本 | 报告格式变更需版本更新 |
 | `scripts/ci/generate_workflow_contract_snapshot.py` | 快照生成脚本 | 快照格式变更需版本更新 |
 
@@ -1620,7 +1636,7 @@ make validate-workflows-strict
 ```json
 {
   "trigger_reasons": {
-    ".github/workflows/ci.yml": "Phase 1 workflow 文件（ci.yml/nightly.yml）",
+    ".github/workflows/ci.yml": "Phase 2 workflow 文件（ci.yml/nightly.yml/release.yml）",
     "scripts/ci/validate_workflows.py": "合约校验器核心脚本",
     "Makefile": "Makefile CI/workflow 相关目标变更"
   }
@@ -1631,12 +1647,12 @@ make validate-workflows-strict
 
 | 类别 | 描述 | 示例文件 |
 |------|------|----------|
-| `workflow_core` | Phase 1 workflow 文件 | `ci.yml`, `nightly.yml` |
+| `workflow_core` | Phase 2 workflow 文件 | `ci.yml`, `nightly.yml`, `release.yml` |
 | `contract_definition` | 合约定义和文档 | `workflow_contract.v1.json`, `contract.md` |
 | `tooling` | 工具脚本（影响合约执行） | `validate_workflows.py`, `*.schema.json` |
 | `special` | 特殊规则（如 Makefile CI 相关） | `Makefile`（仅 CI 相关变更） |
 
-> **注意**：Phase 1 仅覆盖 `ci.yml` 和 `nightly.yml`。扩展支持其他 workflow 文件时，需修改 `check_workflow_contract_version_policy.py` 中的 `CRITICAL_WORKFLOW_RULES`。
+> **注意**：当前覆盖 `ci.yml`、`nightly.yml` 与 `release.yml`。如需扩展更多 workflow 文件，修改 `check_workflow_contract_version_policy.py` 中的 `CRITICAL_WORKFLOW_RULES`。
 
 ---
 
@@ -1658,11 +1674,14 @@ make validate-workflows-strict
 | `ci.job_names` | `workflow_contract.v1.json` | CI workflow 的 Job Name 列表 | `validate_workflows.py` |
 | `nightly.job_ids` | `workflow_contract.v1.json` | Nightly workflow 的 Job ID 列表 | `validate_workflows.py` |
 | `nightly.job_names` | `workflow_contract.v1.json` | Nightly workflow 的 Job Name 列表 | `validate_workflows.py` |
+| `release.job_ids` | `workflow_contract.v1.json` | Release workflow 的 Job ID 列表 | `validate_workflows.py` |
+| `release.job_names` | `workflow_contract.v1.json` | Release workflow 的 Job Name 列表 | `validate_workflows.py` |
 | `*.required_jobs[].required_steps` | `workflow_contract.v1.json` | 每个 Job 的必需 Step 列表 | `validate_workflows.py` |
 | `frozen_job_names.allowlist` | `workflow_contract.v1.json` | 禁止改名的 Job Name 冻结列表 | `validate_workflows.py` |
 | `frozen_step_text.allowlist` | `workflow_contract.v1.json` | 禁止改名的 Step Name 冻结列表 | `validate_workflows.py` |
 | `ci.artifact_archive` | `workflow_contract.v1.json` | CI workflow 必需上传的 Artifact 路径和步骤 | `validate_workflows.py` |
 | `nightly.artifact_archive` | `workflow_contract.v1.json` | Nightly workflow 的 Artifact 配置 | `validate_workflows.py` |
+| `release.artifact_archive` | `workflow_contract.v1.json` | Release workflow 的 Artifact 配置 | `validate_workflows.py` |
 | `make.targets_required` | `workflow_contract.v1.json` | workflow 依赖的 Makefile 目标列表 | `validate_workflows.py` |
 | `ci.labels` | `workflow_contract.v1.json` | 支持的 PR Label 列表 | `validate_workflows.py` |
 | `step_name_aliases` | `workflow_contract.v1.json` | Step 名称别名映射（canonical → aliases） | `validate_workflows.py` |
@@ -1716,6 +1735,7 @@ make validate-workflows-strict
 | `scripts/ci/gh_pr_labels_to_outputs.py` | **实现（Labels 解析）** | PR Labels 解析脚本，`LABEL_*` 常量必须与 `ci.labels` 同步 |
 | `scripts/ci/validate_workflows.py` | **校验（合约校验器）** | 自动校验 workflow 与 contract 的一致性；变更触发版本更新检查 |
 | `scripts/ci/check_workflow_contract_docs_sync.py` | **校验（文档同步校验器）** | 校验 contract JSON 与 contract.md 的同步状态；变更触发版本更新检查 |
+| `scripts/ci/check_workflow_contract_error_types_docs_sync.py` | **校验（Error Types 文档同步）** | 校验第 13 章 Error Types 表格与代码常量同步；变更触发版本更新检查 |
 | `scripts/ci/workflow_contract.v1.schema.json` | **Schema（合约结构定义）** | 定义 contract JSON 的字段约束；变更触发版本更新检查 |
 | `scripts/ci/workflow_contract_drift_report.py` | **工具（漂移报告）** | 生成合约漂移报告；变更触发版本更新检查 |
 | `scripts/ci/generate_workflow_contract_snapshot.py` | **工具（快照生成）** | 生成合约快照；变更触发版本更新检查 |
@@ -1814,6 +1834,7 @@ make validate-workflows-strict        # 会自动校验 labels 一致性
 - scripts/ci/validate_workflows.py           # 合约校验器核心脚本
 - scripts/ci/workflow_contract.v1.schema.json # 合约 JSON Schema
 - scripts/ci/check_workflow_contract_docs_sync.py # 文档同步校验脚本
+- scripts/ci/check_workflow_contract_error_types_docs_sync.py # Error Types 文档同步校验脚本
 - scripts/ci/workflow_contract_drift_report.py    # 漂移报告生成脚本
 - scripts/ci/generate_workflow_contract_snapshot.py # 快照生成脚本
 
@@ -2008,6 +2029,11 @@ make check-workflow-contract-version-policy   # 版本策略检查
 | `label_not_in_doc` | Label 在文档中未找到 | content |
 | `version_not_in_doc` | 版本号在文档中未找到 | content |
 | `make_target_not_in_doc` | Make Target 在文档中未找到 | content |
+| `block_marker_missing` | 受控块 markers 缺失 | block |
+| `block_marker_duplicate` | 受控块 markers 重复 | block |
+| `block_marker_unpaired` | 受控块 markers 不成对 | block |
+| `unknown_block_marker` | 文档中出现未知的受控块 marker | block |
+| `block_content_mismatch` | 受控块内容与渲染结果不一致 | block |
 
 ### 13.3 check_workflow_contract_version_policy.py 错误类型
 
@@ -2115,6 +2141,9 @@ class ErrorTypes:
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.25.0 | 2026-02-03 | Phase 2: add release workflow |
+| v2.24.0 | 2026-02-03 | 新增 Error Types 文档同步门禁：新增 check_workflow_contract_error_types_docs_sync.py 并接入 CI/Makefile；补全第 13 章表格 |
+| v2.23.0 | 2026-02-03 | 新增 iteration fixtures freshness 检查：CI/Makefile 接入并扩展 iteration-tools-test 步骤 |
 | v2.22.1 | 2026-02-02 | docs: enable controlled blocks for contract.md/coupling_map.md |
 | v2.22.0 | 2026-02-02 | 新增 ci-test-isolation job 到 CI workflow 合约：CI 测试隔离检查；新增 make.targets_required: 'check-ci-test-isolation' |
 | v2.21.0 | 2026-02-02 | 新增 workflow make targets 一致性检查：workflow-contract job required_steps 添加 'Check workflow make targets consistency'；make.targets_required 添加 'check-workflow-make-targets-consistency' |

@@ -17,6 +17,7 @@ import pytest
 # 确保能够导入 engram_logbook 模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from engram.common.redaction import redact_sensitive_data, redact_sensitive_text
 from engram.logbook.scm_auth import redact, redact_dict, redact_headers
 
 
@@ -216,6 +217,24 @@ class TestRedactHeaders:
         result = redact_headers(headers)
         assert result["Cookie"] == "[REDACTED]"
 
+    def test_redact_headers_x_gitlab_token(self):
+        """测试 X-GitLab-Token header 脱敏"""
+        headers = {
+            "X-GitLab-Token": "glpat-secret123",
+            "Accept": "application/json",
+        }
+        result = redact_headers(headers)
+        assert result["X-GitLab-Token"] == "[REDACTED]"
+        assert result["Accept"] == "application/json"
+
+    def test_redact_headers_set_cookie(self):
+        """测试 Set-Cookie header 脱敏"""
+        headers = {
+            "Set-Cookie": "session=abc123; token=xyz789",
+        }
+        result = redact_headers(headers)
+        assert result["Set-Cookie"] == "[REDACTED]"
+
     def test_redact_headers_case_insensitive(self):
         """测试 header 名称大小写不敏感"""
         headers = {
@@ -235,6 +254,39 @@ class TestRedactHeaders:
         """测试 None 返回空字典"""
         result = redact_headers(None)
         assert result == {}
+
+
+class TestCommonRedaction:
+    """测试通用脱敏工具"""
+
+    def test_redact_sensitive_text(self):
+        """验证通用文本脱敏覆盖常见 token"""
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret"
+        result = redact_sensitive_text(text)
+        assert "eyJhbGciOiJIUzI1NiJ9.secret" not in result
+        assert "[REDACTED]" in result or "[GITLAB_TOKEN]" in result
+
+    def test_redact_sensitive_data_nested(self):
+        """验证通用结构化脱敏"""
+        data = {
+            "token": "glpat-abc123def456ghi789jkl",
+            "nested": {
+                "Authorization": "Bearer top.secret.token",
+                "safe": "ok",
+            },
+            "items": [
+                "token=plain-token",
+                {"password": "secret123"},
+            ],
+        }
+
+        result = redact_sensitive_data(data)
+
+        assert result["token"] == "[REDACTED]"
+        assert result["nested"]["Authorization"] == "[REDACTED]"
+        assert result["nested"]["safe"] == "ok"
+        assert "plain-token" not in str(result["items"])
+        assert result["items"][1]["password"] == "[REDACTED]"
 
 
 class TestRedactInExceptionMessage:

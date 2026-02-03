@@ -113,8 +113,8 @@ def new_request_correlation_id(existing: Optional[str] = None) -> str:
         # 独立使用（不在中间件上下文中）
         correlation_id = new_request_correlation_id()
     """
-    # 从 correlation_id 模块导入（单一来源原则）
-    from .correlation_id import generate_correlation_id, normalize_correlation_id
+    # 从 mcp_rpc 重新导出（保持单一来源且便于测试 patch）
+    from .mcp_rpc import generate_correlation_id, normalize_correlation_id
 
     if existing:
         # 归一化：如果 existing 合规则直接返回，否则生成新的

@@ -3627,32 +3627,33 @@ class TestScmSyncStackIntegration:
 
         验证：
         1. 命令能够正常执行
-        2. 输出包含关键字段（scanned_repos, candidates_found）
+        2. 输出包含关键字段（repos_scanned, candidates_selected）
         3. 输出不包含敏感信息
         """
 
-        import scm_sync_scheduler as scheduler
+        import json
 
-        # 创建调度器实例
-        sched = scheduler.SyncScheduler()
+        from engram.logbook.scm_sync_scheduler_core import run_scheduler_tick
 
-        # 执行扫描
-        result = sched.scan_and_enqueue()
+        conn = migrated_database["conn"]
+
+        # 执行调度扫描（dry_run 避免修改队列）
+        result = run_scheduler_tick(conn, dry_run=True)
 
         # 验证结果对象存在关键字段
-        assert hasattr(result, "scanned_repos"), "结果应包含 scanned_repos 字段"
-        assert hasattr(result, "candidates_found"), "结果应包含 candidates_found 字段"
+        assert hasattr(result, "repos_scanned"), "结果应包含 repos_scanned 字段"
+        assert hasattr(result, "candidates_selected"), "结果应包含 candidates_selected 字段"
         assert hasattr(result, "jobs_enqueued"), "结果应包含 jobs_enqueued 字段"
         assert hasattr(result, "jobs_skipped"), "结果应包含 jobs_skipped 字段"
-        assert hasattr(result, "scan_duration_seconds"), "结果应包含 scan_duration_seconds 字段"
+        assert hasattr(result, "scheduled_at"), "结果应包含 scheduled_at 字段"
 
         # 验证数值合理
-        assert result.scanned_repos >= 0, "scanned_repos 应 >= 0"
-        assert result.candidates_found >= 0, "candidates_found 应 >= 0"
-        assert result.scan_duration_seconds >= 0, "scan_duration_seconds 应 >= 0"
+        assert result.repos_scanned >= 0, "repos_scanned 应 >= 0"
+        assert result.candidates_selected >= 0, "candidates_selected 应 >= 0"
+        assert result.jobs_enqueued >= 0, "jobs_enqueued 应 >= 0"
 
         # 检查 JSON 输出不包含敏感信息
-        json_output = result.to_json()
+        json_output = json.dumps(result.to_dict(), ensure_ascii=False, default=str)
         sensitive_found = self._check_no_sensitive_info(json_output, "scheduler scan output")
         assert not sensitive_found, f"Scheduler 输出包含敏感信息: {sensitive_found}"
 
@@ -3673,7 +3674,7 @@ class TestScmSyncStackIntegration:
         注意：由于测试环境可能没有 GitLab 连接，worker 可能会失败，
         但这是预期行为，我们只验证流程不崩溃。
         """
-        import scm_sync_worker as worker
+        from engram.logbook import scm_sync_worker_core as worker
 
         # 生成测试 worker ID
         worker_id = f"test-worker-{secrets.token_hex(4)}"
@@ -3682,10 +3683,11 @@ class TestScmSyncStackIntegration:
         # 注意：这可能返回 False（无任务）或 True（处理了任务但可能失败）
         # 两种情况都是预期行为
         try:
-            result = worker.run_once(
+            result = worker.process_one_job(
                 worker_id=worker_id,
                 job_types=["gitlab_commits"],  # 只处理我们创建的测试任务类型
-                enable_circuit_breaker=False,  # 测试中禁用熔断
+                conn=migrated_database["conn"],
+                circuit_breaker=None,  # 测试中禁用熔断
             )
 
             # 结果应该是布尔值
@@ -3714,7 +3716,7 @@ class TestScmSyncStackIntegration:
         """
         from io import StringIO
 
-        import scm_sync_reaper as reaper
+        from engram.logbook import scm_db
 
         # 捕获 stdout（reaper 使用 print 输出 JSON 日志）
         old_stdout = sys.stdout
@@ -3723,21 +3725,17 @@ class TestScmSyncStackIntegration:
 
         try:
             # 获取数据库连接
-            conn = reaper.get_connection()
+            conn = migrated_database["conn"]
 
-            try:
-                # 扫描过期任务
-                jobs = reaper.scan_expired_jobs(conn, grace_seconds=60, limit=100)
-                runs = reaper.scan_expired_runs(conn, max_duration_seconds=1800, limit=100)
-                locks = reaper.scan_expired_locks(conn, grace_seconds=0, limit=100)
+            # 扫描过期任务
+            jobs = scm_db.list_expired_running_jobs(conn, grace_seconds=60, limit=100)
+            runs = scm_db.list_expired_running_runs(conn, max_duration_seconds=1800, limit=100)
+            locks = scm_db.list_expired_locks(conn, grace_seconds=0, limit=100)
 
-                # 验证返回类型
-                assert isinstance(jobs, list), "scan_expired_jobs 应返回列表"
-                assert isinstance(runs, list), "scan_expired_runs 应返回列表"
-                assert isinstance(locks, list), "scan_expired_locks 应返回列表"
-
-            finally:
-                conn.close()
+            # 验证返回类型
+            assert isinstance(jobs, list), "list_expired_running_jobs 应返回列表"
+            assert isinstance(runs, list), "list_expired_running_runs 应返回列表"
+            assert isinstance(locks, list), "list_expired_locks 应返回列表"
 
         finally:
             sys.stdout = old_stdout
@@ -3771,7 +3769,7 @@ class TestScmSyncStackIntegration:
         - scm_window_failed_rate
         - scm_window_rate_limit_rate
         """
-        import scm_sync_status as status
+        from engram.logbook import scm_sync_status as status
 
         # 获取数据库连接
         conn = status.get_connection()
@@ -3849,9 +3847,8 @@ class TestScmSyncStackIntegration:
 
         这是一个端到端的验证流程。
         """
-        import db as scm_db
-        import scm_sync_reaper as reaper
-        import scm_sync_status as status
+        from engram.logbook import scm_db
+        from engram.logbook import scm_sync_status as status
 
         conn = migrated_database["conn"]
 
@@ -3885,20 +3882,11 @@ class TestScmSyncStackIntegration:
             status_conn.close()
 
         # 4. reaper scan 应该不会标记我们的新任务为过期
-        reaper_conn = reaper.get_connection()
-        try:
-            expired_jobs = reaper.scan_expired_jobs(
-                reaper_conn,
-                grace_seconds=60,
-                limit=100,
-            )
+        expired_jobs = scm_db.list_expired_running_jobs(conn, grace_seconds=60, limit=100)
 
-            # 我们刚创建的任务不应该在过期列表中
-            expired_job_ids = [str(j.get("job_id", "")) for j in expired_jobs]
-            assert job_id not in expired_job_ids, "新创建的任务不应被标记为过期"
-
-        finally:
-            reaper_conn.close()
+        # 我们刚创建的任务不应该在过期列表中
+        expired_job_ids = [str(j.get("job_id", "")) for j in expired_jobs]
+        assert job_id not in expired_job_ids, "新创建的任务不应被标记为过期"
 
         # 5. 清理测试任务
         with conn.cursor() as cur:
@@ -3920,7 +3908,7 @@ class TestScmSyncStackIntegration:
         """
         import json
 
-        import scm_sync_status as status
+        from engram.logbook import scm_sync_status as status
 
         conn = status.get_connection()
 

@@ -50,11 +50,11 @@ from scripts.ci.workflow_contract_common import (
 # 默认合约文件路径
 DEFAULT_CONTRACT_PATH = Path(__file__).parent / "workflow_contract.v1.json"
 
-# Error types
-ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH = "job_ids_names_length_mismatch"
-ERROR_TYPE_DUPLICATE_JOB_ID = "duplicate_job_id"
-ERROR_TYPE_DUPLICATE_REQUIRED_JOB_ID = "duplicate_required_job_id"
-ERROR_TYPE_REQUIRED_JOB_NOT_IN_JOB_IDS = "required_job_not_in_job_ids"
+# Error types (align with validate_workflows.py / contract.md)
+CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH = "contract_job_ids_names_length_mismatch"
+CONTRACT_JOB_IDS_DUPLICATE = "contract_job_ids_duplicate"
+CONTRACT_REQUIRED_JOB_ID_DUPLICATE = "contract_required_job_id_duplicate"
+CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS = "contract_required_job_not_in_job_ids"
 
 
 # ============================================================================
@@ -183,10 +183,14 @@ class WorkflowContractInternalConsistencyChecker:
         if len(job_ids) != len(job_names):
             self.result.add_error(
                 ConsistencyError(
-                    error_type=ERROR_TYPE_JOB_IDS_NAMES_LENGTH_MISMATCH,
+                    error_type=CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH,
                     workflow=workflow,
-                    message=f"job_ids ({len(job_ids)}) and job_names ({len(job_names)}) "
-                    f"must have the same length for position matching",
+                    message=(
+                        f"Contract error: {workflow}.job_ids ({len(job_ids)}) and "
+                        f"{workflow}.job_names ({len(job_names)}) must have the same length "
+                        f"for position matching. Fix scripts/ci/workflow_contract.v1.json "
+                        f"fields: {workflow}.job_ids / {workflow}.job_names."
+                    ),
                     key=f"job_ids={len(job_ids)}, job_names={len(job_names)}",
                 )
             )
@@ -198,9 +202,12 @@ class WorkflowContractInternalConsistencyChecker:
             if job_id in seen:
                 self.result.add_error(
                     ConsistencyError(
-                        error_type=ERROR_TYPE_DUPLICATE_JOB_ID,
+                        error_type=CONTRACT_JOB_IDS_DUPLICATE,
                         workflow=workflow,
-                        message=f"Duplicate job_id '{job_id}' in job_ids array",
+                        message=(
+                            f"Contract error: Duplicate job_id '{job_id}' in {workflow}.job_ids. "
+                            f"Fix scripts/ci/workflow_contract.v1.json field: {workflow}.job_ids."
+                        ),
                         key=job_id,
                     )
                 )
@@ -218,9 +225,13 @@ class WorkflowContractInternalConsistencyChecker:
             if job_id in seen:
                 self.result.add_error(
                     ConsistencyError(
-                        error_type=ERROR_TYPE_DUPLICATE_REQUIRED_JOB_ID,
+                        error_type=CONTRACT_REQUIRED_JOB_ID_DUPLICATE,
                         workflow=workflow,
-                        message=f"Duplicate required_job id '{job_id}' in required_jobs array",
+                        message=(
+                            f"Contract error: Duplicate required_job id '{job_id}' in "
+                            f"{workflow}.required_jobs. Fix scripts/ci/workflow_contract.v1.json "
+                            f"field: {workflow}.required_jobs[*].id."
+                        ),
                         key=job_id,
                     )
                 )
@@ -238,9 +249,14 @@ class WorkflowContractInternalConsistencyChecker:
             if job_id not in job_ids_set:
                 self.result.add_error(
                     ConsistencyError(
-                        error_type=ERROR_TYPE_REQUIRED_JOB_NOT_IN_JOB_IDS,
+                        error_type=CONTRACT_REQUIRED_JOB_NOT_IN_JOB_IDS,
                         workflow=workflow,
-                        message=f"required_job id '{job_id}' is not defined in job_ids array",
+                        message=(
+                            f"Contract error: required_job id '{job_id}' is not defined in "
+                            f"{workflow}.job_ids. Fix scripts/ci/workflow_contract.v1.json: "
+                            f"add '{job_id}' to {workflow}.job_ids or remove it from "
+                            f"{workflow}.required_jobs."
+                        ),
                         key=job_id,
                     )
                 )

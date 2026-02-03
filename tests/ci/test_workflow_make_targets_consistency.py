@@ -17,14 +17,16 @@ import pytest
 from scripts.ci.check_workflow_make_targets_consistency import (
     CheckResult,
     ErrorTypes,
-    MakeTargetUsage,
     WorkflowMakeTargetsChecker,
-    extract_make_targets_from_run,
-    extract_make_targets_from_workflow,
     format_result_json,
     format_result_text,
     load_contract_make_targets,
     parse_makefile_targets,
+)
+from scripts.ci.workflow_contract_common import (
+    MakeTargetUsage,
+    extract_make_targets_from_run,
+    extract_make_targets_from_workflow,
 )
 
 # ============================================================================
@@ -349,6 +351,53 @@ class TestExtractMakeTargetsFromWorkflow:
         assert install_usage.workflow_file == "ci.yml"
         assert install_usage.job_id == "test"
         assert install_usage.step_name == "Install"
+
+    def test_extract_ci_nightly_make_patterns(self, temp_workspace):
+        """覆盖 ci/nightly 典型 make 调用形式"""
+        workflow_content = """name: CI
+on: [push]
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Contract checks
+        run: |
+          echo "start"
+          make check-iteration-fixtures-freshness
+          make validate-workflows-strict
+          make check-workflow-contract-docs-sync
+      - name: Multi targets
+        run: make lint format test
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run make verify-unified (full mode)
+        run: |
+          make verify-unified
+          make iteration-audit
+      - name: Mixed forms
+        run: |
+          make -C scripts ci
+          make VAR=1 lint
+          make ${{ env.TARGET }}
+          echo "done" && $(MAKE) test; make format
+"""
+        workflow_file = temp_workspace / ".github" / "workflows" / "ci.yml"
+        workflow_file.write_text(workflow_content)
+
+        usages = extract_make_targets_from_workflow(workflow_file)
+
+        target_names = {u.target for u in usages}
+        assert "check-iteration-fixtures-freshness" in target_names
+        assert "validate-workflows-strict" in target_names
+        assert "check-workflow-contract-docs-sync" in target_names
+        assert "verify-unified" in target_names
+        assert "iteration-audit" in target_names
+        assert "ci" in target_names
+        assert "lint" in target_names
+        assert "format" in target_names
+        assert "test" in target_names
+        assert "TARGET" not in target_names
 
     def test_nonexistent_workflow(self, temp_workspace):
         """测试不存在的 workflow"""

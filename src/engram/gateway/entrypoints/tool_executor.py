@@ -39,6 +39,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
+from ..result_error_codes import ToolResultErrorCode
+
 if TYPE_CHECKING:
     from ..di import GatewayDepsProtocol
     from ..services.ports import ToolCallContext, ToolCallResult
@@ -233,7 +235,7 @@ class DefaultToolExecutor:
 
     错误码映射：
     - UNKNOWN_TOOL: 工具名不在可用列表中
-    - MISSING_REQUIRED_PARAM: 缺少必需参数
+    - MISSING_REQUIRED_PARAMETER: 缺少必需参数
     - INVALID_PARAM_TYPE: 参数类型错误
     - INTERNAL_ERROR: 未预期的内部错误
     """
@@ -277,7 +279,7 @@ class DefaultToolExecutor:
 
         错误处理：
         - 未知工具 → UNKNOWN_TOOL
-        - 缺少参数 → MISSING_REQUIRED_PARAM
+        - 缺少参数 → MISSING_REQUIRED_PARAMETER
         - 内部异常 → INTERNAL_ERROR
         """
         # 延迟导入，避免循环依赖
@@ -338,7 +340,7 @@ class DefaultToolExecutor:
             if "未知工具" in error_msg or "unknown tool" in error_msg.lower():
                 error_code = "UNKNOWN_TOOL"
             elif "缺少" in error_msg or "missing" in error_msg.lower():
-                error_code = "MISSING_REQUIRED_PARAM"
+                error_code = ToolResultErrorCode.MISSING_REQUIRED_PARAMETER
 
             logger.warning(f"工具执行参数错误: {e}, tool={name}, correlation_id={correlation_id}")
             return ToolCallResult(
@@ -389,7 +391,7 @@ class DefaultToolExecutor:
             if param not in arguments or arguments[param] is None:
                 return ToolCallResult(
                     ok=False,
-                    error_code="MISSING_REQUIRED_PARAM",
+                    error_code=ToolResultErrorCode.MISSING_REQUIRED_PARAMETER,
                     error_message=f"缺少必需参数: {param}",
                     retryable=False,
                 )

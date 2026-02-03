@@ -382,7 +382,12 @@ $ make ci
 - 历史快照：[iteration_13_20260201_103000.json](evidence/iteration_13_20260201_103000.json)（首次验收）
 ```
 
-**格式 SSOT**：[schemas/iteration_evidence_v1.schema.json](../../schemas/iteration_evidence_v1.schema.json)
+**格式 SSOT**：[schemas/iteration_evidence_v2.schema.json](../../schemas/iteration_evidence_v2.schema.json)（v1 作为 legacy 兼容；当前默认版本由 `scripts/iteration/iteration_evidence_schema.py` 统一管理）
+
+**演进策略（Evidence v2 → v3）**：
+- **non-breaking**：新增可选字段或校验细化 → 更新 v2 schema + 模板 + fixtures。
+- **breaking**：结构/字段变更 → 新增 `iteration_evidence_v3.schema.json`，更新 `iteration_evidence_schema.py` 默认指向 v3，保留 v2；禁止覆盖旧版本。
+- 历史证据升级以脚本重生为主（`record_iteration_evidence.py`），避免手工编辑 JSON。
 
 **Schema 约束摘要**：
 
@@ -403,7 +408,7 @@ $ make ci
 
 ```json
 {
-  "$schema": "./iteration_evidence_v1.schema.json",
+  "$schema": "./iteration_evidence_v2.schema.json",
   "iteration_number": 13,
   "recorded_at": "2026-02-02T14:30:22Z",
   "commit_sha": "abc1234def5678901234567890abcdef12345678",

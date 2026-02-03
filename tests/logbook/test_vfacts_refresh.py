@@ -25,7 +25,7 @@ class TestRefreshVfactsFunction:
 
     def test_refresh_dry_run(self):
         """测试 dry-run 模式"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         result = refresh_vfacts(dry_run=True)
 
@@ -35,7 +35,7 @@ class TestRefreshVfactsFunction:
 
     def test_refresh_dry_run_concurrently(self):
         """测试 dry-run + concurrently 模式"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         result = refresh_vfacts(dry_run=True, concurrently=True)
 
@@ -43,10 +43,10 @@ class TestRefreshVfactsFunction:
         assert result["refreshed"] is False
         assert result["concurrently"] is True
 
-    @patch("scm_sync_runner.get_connection")
+    @patch("engram.logbook.scm_sync_runner.get_connection")
     def test_refresh_success(self, mock_get_connection):
         """测试正常刷新成功"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         # 模拟数据库连接和游标
         mock_conn = MagicMock()
@@ -72,10 +72,10 @@ class TestRefreshVfactsFunction:
         assert any("REFRESH MATERIALIZED VIEW scm.v_facts" in str(call) for call in calls)
         mock_conn.commit.assert_called_once()
 
-    @patch("scm_sync_runner.get_connection")
+    @patch("engram.logbook.scm_sync_runner.get_connection")
     def test_refresh_concurrently(self, mock_get_connection):
         """测试 CONCURRENTLY 模式刷新"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         # 模拟数据库连接和游标
         mock_conn = MagicMock()
@@ -98,10 +98,10 @@ class TestRefreshVfactsFunction:
             "REFRESH MATERIALIZED VIEW CONCURRENTLY scm.v_facts" in str(call) for call in calls
         )
 
-    @patch("scm_sync_runner.get_connection")
+    @patch("engram.logbook.scm_sync_runner.get_connection")
     def test_refresh_error_handling(self, mock_get_connection):
         """测试刷新失败时的错误处理"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         # 模拟连接失败
         mock_get_connection.side_effect = Exception("Connection failed")
@@ -116,10 +116,10 @@ class TestRefreshVfactsFunction:
 class TestRefreshVfactsResultFields:
     """测试刷新结果字段"""
 
-    @patch("scm_sync_runner.get_connection")
+    @patch("engram.logbook.scm_sync_runner.get_connection")
     def test_result_has_all_fields(self, mock_get_connection):
         """测试结果包含所有必要字段"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         # 模拟数据库连接和游标
         mock_conn = MagicMock()
@@ -151,7 +151,7 @@ class TestSyncResultVfactsFields:
 
     def test_sync_result_has_vfacts_fields(self):
         """测试 SyncResult 包含 vfacts 刷新字段"""
-        from scm_sync_runner import SyncResult
+        from engram.logbook.scm_sync_runner import SyncResult
 
         result = SyncResult(
             phase="incremental",
@@ -165,7 +165,7 @@ class TestSyncResultVfactsFields:
 
     def test_sync_result_to_dict_includes_vfacts(self):
         """测试 to_dict 包含 vfacts 字段"""
-        from scm_sync_runner import SyncResult
+        from engram.logbook.scm_sync_runner import SyncResult
 
         result = SyncResult(
             phase="backfill",
@@ -186,7 +186,7 @@ class TestSyncResultVfactsFields:
 
     def test_sync_result_to_json_includes_vfacts(self):
         """测试 to_json 包含 vfacts 字段"""
-        from scm_sync_runner import SyncResult
+        from engram.logbook.scm_sync_runner import SyncResult
 
         result = SyncResult(
             phase="incremental",
@@ -210,7 +210,7 @@ class TestRunnerContextVfactsConfig:
         # 通过查看 dataclass 字段定义
         from dataclasses import fields
 
-        from scm_sync_runner import RunnerContext
+        from engram.logbook.scm_sync_runner import RunnerContext
 
         ctx_fields = {
             f.name: f.default for f in fields(RunnerContext) if f.default is not type(f.default)
@@ -220,10 +220,10 @@ class TestRunnerContextVfactsConfig:
         assert ctx_fields.get("auto_refresh_vfacts", True) is True
         assert ctx_fields.get("refresh_concurrently", False) is False
 
-    @patch("scm_sync_runner.get_config")
+    @patch("engram.logbook.scm_sync_runner.get_config")
     def test_runner_context_vfacts_defaults(self, mock_get_config):
         """测试 RunnerContext 默认 vfacts 配置"""
-        from scm_sync_runner import RepoSpec, RunnerContext
+        from engram.logbook.scm_sync_runner import RepoSpec, RunnerContext
 
         mock_config = MagicMock()
         mock_get_config.return_value = mock_config
@@ -237,10 +237,10 @@ class TestRunnerContextVfactsConfig:
         assert ctx.auto_refresh_vfacts is True
         assert ctx.refresh_concurrently is False
 
-    @patch("scm_sync_runner.get_config")
+    @patch("engram.logbook.scm_sync_runner.get_config")
     def test_runner_context_disable_refresh(self, mock_get_config):
         """测试禁用自动刷新"""
-        from scm_sync_runner import RepoSpec, RunnerContext
+        from engram.logbook.scm_sync_runner import RepoSpec, RunnerContext
 
         mock_config = MagicMock()
         mock_get_config.return_value = mock_config
@@ -305,7 +305,7 @@ class TestVfactsRefreshIntegration:
     )
     def test_refresh_updates_row_count(self):
         """测试刷新后行数更新符合预期"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         result = refresh_vfacts()
 
@@ -321,7 +321,7 @@ class TestVfactsRefreshIntegration:
     )
     def test_refresh_timestamp_updated(self):
         """测试刷新后时间戳更新"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         before_time = datetime.now(timezone.utc)
 
@@ -341,7 +341,7 @@ class TestVfactsRefreshIntegration:
     )
     def test_refresh_concurrently_with_unique_index(self):
         """测试 CONCURRENTLY 模式（需要唯一索引）"""
-        from scm_sync_runner import refresh_vfacts
+        from engram.logbook.scm_sync_runner import refresh_vfacts
 
         # v_facts 上已有唯一索引 idx_v_facts_source_id
         result = refresh_vfacts(concurrently=True)
@@ -353,9 +353,9 @@ class TestVfactsRefreshIntegration:
 class TestRunnerSyncTriggersRefresh:
     """测试同步成功后触发刷新"""
 
-    @patch("scm_sync_runner.refresh_vfacts")
-    @patch("scm_sync_runner.SyncRunner._run_sync_once")
-    @patch("scm_sync_runner.get_config")
+    @patch("engram.logbook.scm_sync_runner.refresh_vfacts")
+    @patch("engram.logbook.scm_sync_runner.SyncRunner._run_sync_once")
+    @patch("engram.logbook.scm_sync_runner.get_config")
     def test_incremental_success_triggers_refresh(
         self,
         mock_get_config,
@@ -363,7 +363,7 @@ class TestRunnerSyncTriggersRefresh:
         mock_refresh_vfacts,
     ):
         """测试增量同步成功后触发刷新"""
-        from scm_sync_runner import RepoSpec, RunnerContext, SyncRunner
+        from engram.logbook.scm_sync_runner import RepoSpec, RunnerContext, SyncRunner
 
         mock_config = MagicMock()
         mock_config.get.return_value = 60
@@ -398,9 +398,9 @@ class TestRunnerSyncTriggersRefresh:
         assert result.vfacts_refreshed is True
         assert result.vfacts_refresh_info is not None
 
-    @patch("scm_sync_runner.refresh_vfacts")
-    @patch("scm_sync_runner.SyncRunner._run_sync_once")
-    @patch("scm_sync_runner.get_config")
+    @patch("engram.logbook.scm_sync_runner.refresh_vfacts")
+    @patch("engram.logbook.scm_sync_runner.SyncRunner._run_sync_once")
+    @patch("engram.logbook.scm_sync_runner.get_config")
     def test_incremental_no_items_synced_skips_refresh(
         self,
         mock_get_config,
@@ -408,7 +408,7 @@ class TestRunnerSyncTriggersRefresh:
         mock_refresh_vfacts,
     ):
         """测试增量同步无新数据时跳过刷新"""
-        from scm_sync_runner import RepoSpec, RunnerContext, SyncRunner
+        from engram.logbook.scm_sync_runner import RepoSpec, RunnerContext, SyncRunner
 
         mock_config = MagicMock()
         mock_config.get.return_value = 60
@@ -435,9 +435,9 @@ class TestRunnerSyncTriggersRefresh:
         mock_refresh_vfacts.assert_not_called()
         assert result.vfacts_refreshed is False
 
-    @patch("scm_sync_runner.refresh_vfacts")
-    @patch("scm_sync_runner.SyncRunner._run_sync_once")
-    @patch("scm_sync_runner.get_config")
+    @patch("engram.logbook.scm_sync_runner.refresh_vfacts")
+    @patch("engram.logbook.scm_sync_runner.SyncRunner._run_sync_once")
+    @patch("engram.logbook.scm_sync_runner.get_config")
     def test_disable_auto_refresh_skips_refresh(
         self,
         mock_get_config,
@@ -445,7 +445,7 @@ class TestRunnerSyncTriggersRefresh:
         mock_refresh_vfacts,
     ):
         """测试禁用自动刷新时跳过刷新"""
-        from scm_sync_runner import RepoSpec, RunnerContext, SyncRunner
+        from engram.logbook.scm_sync_runner import RepoSpec, RunnerContext, SyncRunner
 
         mock_config = MagicMock()
         mock_config.get.return_value = 60

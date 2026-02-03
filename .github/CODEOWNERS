@@ -47,6 +47,8 @@
 # CI/Workflow 合约: Workflow 配置、验证脚本、合约文档
 # 修改这些文件需要 Infra 和 Architecture 两个团队同时 Review
 # ============================================================================
+/scripts/ci/**                                                          @engram/infra-owners @engram/architecture-owners
+/Makefile                                                               @engram/infra-owners @engram/architecture-owners
 /.github/workflows/**                                                      @engram/infra-owners @engram/architecture-owners
 /scripts/ci/workflow_contract*.json                                        @engram/infra-owners @engram/architecture-owners
 /scripts/ci/validate_workflows.py                                          @engram/infra-owners @engram/architecture-owners

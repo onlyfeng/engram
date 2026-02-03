@@ -1,0 +1,363 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/iteration_evidence_v2.schema.json",
+  "title": "Iteration Evidence V2 Schema",
+  "description": "迭代验收证据 Schema (V2)。用于记录迭代回归验证的结构化证据，作为版本化证据文件的格式 SSOT。注意：此 schema 明确禁止包含敏感信息（如密码、DSN 原文、API 密钥等）。",
+  "type": "object",
+  "required": ["iteration_number", "recorded_at", "commit_sha", "runner", "commands"],
+  "additionalProperties": false,
+  "definitions": {
+    "command_result": {
+      "type": "string",
+      "description": "命令执行结果状态",
+      "enum": ["PASS", "FAIL", "SKIP", "ERROR"]
+    },
+    "test_result": {
+      "type": "string",
+      "description": "单测或子步骤执行结果状态",
+      "enum": ["PASS", "FAIL", "SKIP", "ERROR"]
+    },
+    "test_entry": {
+      "type": "object",
+      "description": "命令内测试条目",
+      "required": ["name", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "测试名或用例标识",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "result": {
+          "$ref": "#/definitions/test_result"
+        },
+        "summary": {
+          "type": "string",
+          "description": "测试结果摘要（禁止包含敏感信息；禁止模板占位符如 {N}/{PLACEHOLDER}/TBD）",
+          "maxLength": 512
+        },
+        "duration_seconds": {
+          "type": "number",
+          "description": "测试耗时（秒）",
+          "minimum": 0
+        }
+      }
+    },
+    "command_entry": {
+      "type": "object",
+      "description": "单个门禁命令的执行记录",
+      "required": ["name", "command", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "门禁命令的人类可读名称（如 'lint', 'typecheck', 'test'）",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "command": {
+          "type": "string",
+          "description": "实际执行的命令（如 'make ci'）。禁止包含密码、API 密钥、DSN 等敏感信息；禁止模板占位符如 {N}/{PLACEHOLDER}/TBD。",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "result": {
+          "$ref": "#/definitions/command_result"
+        },
+        "summary": {
+          "type": "string",
+          "description": "执行结果摘要（如 '142 passed, 0 failed'）。禁止包含敏感信息；禁止模板占位符如 {N}/{PLACEHOLDER}/TBD。",
+          "maxLength": 512
+        },
+        "duration_seconds": {
+          "type": "number",
+          "description": "命令执行耗时（秒）",
+          "minimum": 0
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "命令退出码",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "timed_out": {
+          "type": "boolean",
+          "description": "命令是否超时"
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "description": "超时阈值（秒）",
+          "minimum": 0
+        },
+        "stdout_excerpt": {
+          "type": "string",
+          "description": "标准输出摘录（必须脱敏）",
+          "maxLength": 4096
+        },
+        "stderr_excerpt": {
+          "type": "string",
+          "description": "标准错误摘录（必须脱敏）",
+          "maxLength": 4096
+        },
+        "tests": {
+          "type": "array",
+          "description": "命令内细分测试结果",
+          "items": {
+            "$ref": "#/definitions/test_entry"
+          }
+        }
+      }
+    },
+    "runner_info": {
+      "type": "object",
+      "description": "执行环境信息",
+      "required": ["os", "python", "arch"],
+      "additionalProperties": false,
+      "properties": {
+        "os": {
+          "type": "string",
+          "description": "操作系统及版本（如 'ubuntu-22.04', 'darwin-24.6.0'）",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "python": {
+          "type": "string",
+          "description": "Python 版本（如 '3.11.9', '3.12.0'）",
+          "pattern": "^\\d+\\.\\d+(\\.\\d+)?$"
+        },
+        "arch": {
+          "type": "string",
+          "description": "CPU 架构（如 'x86_64', 'arm64'）",
+          "enum": ["x86_64", "arm64", "aarch64", "i686", "i386"]
+        },
+        "hostname": {
+          "type": "string",
+          "description": "主机名（可选，禁止包含敏感域名或内部 IP）",
+          "maxLength": 64
+        },
+        "runner_label": {
+          "type": "string",
+          "description": "CI runner 标签（如 'ubuntu-latest', 'self-hosted'）",
+          "maxLength": 64
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "description": "相关链接集合",
+      "additionalProperties": false,
+      "properties": {
+        "ci_run_url": {
+          "type": "string",
+          "description": "CI 运行页面 URL（如 GitHub Actions run URL）",
+          "format": "uri",
+          "maxLength": 512
+        },
+        "pr_url": {
+          "type": "string",
+          "description": "关联的 Pull Request URL",
+          "format": "uri",
+          "maxLength": 512
+        },
+        "artifact_url": {
+          "type": "string",
+          "description": "CI Artifacts 下载 URL（注意：有时效性，通常 90 天）",
+          "format": "uri",
+          "maxLength": 512
+        },
+        "regression_doc_url": {
+          "type": "string",
+          "description": "关联的回归文档 URL 或相对路径",
+          "maxLength": 512
+        }
+      }
+    },
+    "source_info": {
+      "type": "object",
+      "description": "证据来源信息（默认指向迭代回归文档路径）",
+      "required": ["source_path"],
+      "additionalProperties": false,
+      "properties": {
+        "source_path": {
+          "type": "string",
+          "description": "来源路径（如 docs/acceptance/iteration_15_regression.md；默认 docs/acceptance/iteration_<N>_regression.md）",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "source_type": {
+          "type": "string",
+          "description": "来源类型（如 manual/ci/automation）",
+          "maxLength": 32
+        },
+        "source_ref": {
+          "type": "string",
+          "description": "来源引用标识（可选）",
+          "maxLength": 128
+        }
+      }
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema 引用（可选）",
+      "format": "uri-reference"
+    },
+    "iteration_number": {
+      "type": "integer",
+      "description": "迭代编号（正整数）",
+      "minimum": 1
+    },
+    "recorded_at": {
+      "type": "string",
+      "description": "证据记录时间（ISO 8601 格式，UTC 时区）",
+      "format": "date-time"
+    },
+    "commit_sha": {
+      "type": "string",
+      "description": "验证时的 Git commit SHA（完整 40 字符或短 SHA）",
+      "pattern": "^[a-f0-9]{7,40}$"
+    },
+    "runner": {
+      "$ref": "#/definitions/runner_info"
+    },
+    "source": {
+      "$ref": "#/definitions/source_info"
+    },
+    "commands": {
+      "type": "array",
+      "description": "执行的门禁命令列表",
+      "items": {
+        "$ref": "#/definitions/command_entry"
+      },
+      "minItems": 1
+    },
+    "links": {
+      "$ref": "#/definitions/links"
+    },
+    "notes": {
+      "type": "string",
+      "description": "补充说明（可选）。禁止包含敏感信息；禁止模板占位符如 {N}/{PLACEHOLDER}/TBD。",
+      "maxLength": 4096
+    },
+    "overall_result": {
+      "type": "string",
+      "description": "整体验收结果",
+      "enum": ["PASS", "PARTIAL", "FAIL"]
+    },
+    "evidence_refs": {
+      "type": "array",
+      "description": "证据链引用列表（需脱敏）",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      }
+    },
+    "redaction_applied": {
+      "type": "boolean",
+      "description": "是否执行过脱敏处理"
+    },
+    "redaction_summary": {
+      "type": "string",
+      "description": "脱敏摘要（禁止包含敏感信息）",
+      "maxLength": 512
+    },
+    "redaction_rules": {
+      "type": "array",
+      "description": "脱敏规则列表",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "maxItems": 50
+    },
+    "redaction_notes": {
+      "type": "string",
+      "description": "脱敏补充说明（可选）",
+      "maxLength": 1024
+    },
+    "sensitive_data_declaration": {
+      "type": "boolean",
+      "description": "声明此文件不包含敏感信息。记录者应确保所有字段值均不包含密码、API 密钥、数据库连接字符串、内部 IP 地址等敏感信息。",
+      "const": true
+    }
+  },
+  "examples": [
+    {
+      "$schema": "./iteration_evidence_v2.schema.json",
+      "iteration_number": 15,
+      "recorded_at": "2026-02-03T02:15:30Z",
+      "commit_sha": "abc1234def5678901234567890abcdef12345678",
+      "runner": {
+        "os": "darwin-24.6.0",
+        "python": "3.12.1",
+        "arch": "arm64",
+        "runner_label": "local"
+      },
+      "source": {
+        "source_path": "docs/acceptance/iteration_15_regression.md",
+        "source_type": "manual",
+        "source_ref": "iteration-15"
+      },
+      "commands": [
+        {
+          "name": "ci",
+          "command": "make ci",
+          "result": "FAIL",
+          "summary": "tests failed ([REDACTED])",
+          "duration_seconds": 412.5,
+          "exit_code": 1,
+          "timed_out": false,
+          "timeout_seconds": 1200,
+          "stdout_excerpt": "[REDACTED]",
+          "stderr_excerpt": "[REDACTED]",
+          "tests": [
+            {
+              "name": "tests/iteration/test_update_iteration_fixtures.py::test_all_is_idempotent",
+              "result": "PASS",
+              "duration_seconds": 0.8
+            },
+            {
+              "name": "tests/iteration/test_sync_iteration_regression.py::TestRenderEvidenceSnippet::test_renders_v2_snapshot",
+              "result": "FAIL",
+              "summary": "[REDACTED]"
+            }
+          ]
+        },
+        {
+          "name": "lint",
+          "command": "make lint",
+          "result": "PASS",
+          "summary": "ruff check passed",
+          "duration_seconds": 4.2,
+          "exit_code": 0,
+          "timed_out": false,
+          "timeout_seconds": 600,
+          "stdout_excerpt": "[REDACTED]"
+        }
+      ],
+      "links": {
+        "ci_run_url": "https://example.com/ci/123",
+        "regression_doc_url": "docs/acceptance/iteration_15_regression.md"
+      },
+      "notes": "stdout/stderr 已脱敏，[REDACTED]",
+      "overall_result": "PARTIAL",
+      "evidence_refs": [
+        "doc:docs/acceptance/iteration_15_regression.md",
+        "commit:abc1234def5678901234567890abcdef12345678"
+      ],
+      "redaction_applied": true,
+      "redaction_summary": "命令输出已脱敏",
+      "redaction_rules": [
+        "mask-secrets",
+        "truncate-long-lines"
+      ],
+      "redaction_notes": "原始输出已替换为 [REDACTED]。",
+      "sensitive_data_declaration": true
+    }
+  ]
+}

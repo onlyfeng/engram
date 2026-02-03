@@ -501,7 +501,7 @@ class TestWorkerExecution:
         self, db_conn, test_repo, worker_id, stub_sync_registry, monkeypatch
     ):
         """测试成功执行任务"""
-        import scm_sync_worker
+        from engram.logbook import scm_sync_worker_core as scm_sync_worker
         from engram.logbook.scm_sync_queue import STATUS_COMPLETED
 
         # Monkeypatch 同步函数注册表
@@ -534,7 +534,7 @@ class TestWorkerExecution:
 
     def test_process_job_transient_failure(self, db_conn, test_repo, worker_id, monkeypatch):
         """测试临时性失败自动重试"""
-        import scm_sync_worker
+        from engram.logbook import scm_sync_worker_core as scm_sync_worker
         from engram.logbook.scm_sync_queue import STATUS_FAILED
 
         # 创建失败的同步函数
@@ -571,7 +571,7 @@ class TestWorkerExecution:
 
     def test_process_job_permanent_failure(self, db_conn, test_repo, worker_id, monkeypatch):
         """测试永久性失败直接标记为 dead"""
-        import scm_sync_worker
+        from engram.logbook import scm_sync_worker_core as scm_sync_worker
         from engram.logbook.scm_sync_queue import STATUS_DEAD
 
         # 创建永久失败的同步函数
@@ -616,7 +616,7 @@ class TestReaperCleanup:
 
     def test_reaper_scans_expired_jobs(self, db_conn, test_repo, worker_id):
         """测试 Reaper 扫描过期的 running 任务"""
-        from scm_sync_reaper import scan_expired_jobs
+        from engram.logbook.scm_db import list_expired_running_jobs
 
         # 创建一个过期的 running 任务
         job_id = str(uuid.uuid4())
@@ -635,7 +635,7 @@ class TestReaperCleanup:
             db_conn.commit()
 
         # 扫描过期任务
-        expired_jobs = scan_expired_jobs(db_conn, grace_seconds=60, limit=10)
+        expired_jobs = list_expired_running_jobs(db_conn, grace_seconds=60, limit=10)
 
         assert len(expired_jobs) >= 1
         expired_job_ids = [str(j["job_id"]) for j in expired_jobs]
@@ -643,8 +643,9 @@ class TestReaperCleanup:
 
     def test_reaper_processes_expired_jobs_to_failed(self, db_conn, test_repo, worker_id):
         """测试 Reaper 将过期任务转为 failed"""
+        from engram.logbook.scm_db import list_expired_running_jobs
         from engram.logbook.scm_sync_queue import STATUS_FAILED
-        from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs, scan_expired_jobs
+        from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
         # 创建过期任务
         job_id = str(uuid.uuid4())
@@ -663,7 +664,7 @@ class TestReaperCleanup:
             db_conn.commit()
 
         # 扫描并处理
-        expired_jobs = scan_expired_jobs(db_conn, grace_seconds=60, limit=10)
+        expired_jobs = list_expired_running_jobs(db_conn, grace_seconds=60, limit=10)
         stats = process_expired_jobs(
             db_conn,
             expired_jobs,
@@ -678,8 +679,9 @@ class TestReaperCleanup:
 
     def test_reaper_marks_max_attempts_as_dead(self, db_conn, test_repo, worker_id):
         """测试 Reaper 将达到最大重试次数的任务标记为 dead"""
+        from engram.logbook.scm_db import list_expired_running_jobs
         from engram.logbook.scm_sync_queue import STATUS_DEAD
-        from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs, scan_expired_jobs
+        from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
         # 创建过期任务，已达到最大重试次数
         job_id = str(uuid.uuid4())
@@ -698,7 +700,7 @@ class TestReaperCleanup:
             db_conn.commit()
 
         # 扫描并处理
-        expired_jobs = scan_expired_jobs(db_conn, grace_seconds=60, limit=10)
+        expired_jobs = list_expired_running_jobs(db_conn, grace_seconds=60, limit=10)
         stats = process_expired_jobs(
             db_conn,
             expired_jobs,
@@ -1044,7 +1046,7 @@ class TestSchedulerWorkerReaperIntegration:
         2. Worker claim 并执行
         3. 验证 sync_jobs 和 sync_runs 状态
         """
-        import scm_sync_worker
+        from engram.logbook import scm_sync_worker_core as scm_sync_worker
         from engram.logbook.scm_sync_queue import (
             STATUS_COMPLETED,
             STATUS_RUNNING,
@@ -1100,7 +1102,7 @@ class TestSchedulerWorkerReaperIntegration:
         """
         测试 Worker 成功执行后写入 sync_run 记录
         """
-        import scm_sync_worker
+        from engram.logbook import scm_sync_worker_core as scm_sync_worker
         from engram.logbook.scm_sync_queue import enqueue
 
         # 清理
@@ -1126,9 +1128,12 @@ class TestSchedulerWorkerReaperIntegration:
             # 使用 process_one_job 完整流程
             # Mock 必要的依赖
             with (
-                patch("scm_sync_worker.scm_sync_lock.claim", return_value=True),
-                patch("scm_sync_worker.scm_sync_lock.release", return_value=True),
-                patch("scm_sync_worker.renew_lease", return_value=True),
+                patch("engram.logbook.scm_sync_worker_core.scm_sync_lock.claim", return_value=True),
+                patch(
+                    "engram.logbook.scm_sync_worker_core.scm_sync_lock.release",
+                    return_value=True,
+                ),
+                patch("engram.logbook.scm_sync_worker_core.renew_lease", return_value=True),
             ):
                 processed = scm_sync_worker.process_one_job(
                     worker_id=worker_id,
@@ -1171,7 +1176,7 @@ class TestSchedulerWorkerReaperIntegration:
         """
         from db import list_expired_running_jobs
         from engram.logbook.scm_sync_queue import STATUS_FAILED, STATUS_RUNNING
-        from scm_sync_reaper import (
+        from engram.logbook.scm_sync_reaper_core import (
             JobRecoveryPolicy,
             process_expired_jobs,
         )
@@ -1233,7 +1238,7 @@ class TestSchedulerWorkerReaperIntegration:
         测试 Reaper 将达到最大重试次数的过期任务标记为 dead
         """
         from db import list_expired_running_jobs
-        from scm_sync_reaper import (
+        from engram.logbook.scm_sync_reaper_core import (
             JobRecoveryPolicy,
             process_expired_jobs,
         )
@@ -1287,8 +1292,8 @@ class TestSchedulerWorkerReaperIntegration:
         4. Reaper 回收超时任务
         5. 验证所有状态
         """
-        import scm_sync_worker
         from db import list_expired_running_jobs
+        from engram.logbook import scm_sync_worker_core as scm_sync_worker
         from engram.logbook.scm_sync_queue import (
             STATUS_COMPLETED,
             STATUS_FAILED,
@@ -1296,7 +1301,7 @@ class TestSchedulerWorkerReaperIntegration:
             claim,
             enqueue,
         )
-        from scm_sync_reaper import JobRecoveryPolicy, process_expired_jobs
+        from engram.logbook.scm_sync_reaper_core import JobRecoveryPolicy, process_expired_jobs
 
         # 清理所有测试仓库的任务
         for repo in multiple_test_repos:
@@ -1385,7 +1390,7 @@ class TestSchedulerWorkerReaperIntegration:
         测试成功同步后 kv 表中的 cursor 被更新
         """
         import db as scm_db
-        import scm_sync_worker
+        from engram.logbook import scm_sync_worker_core as scm_sync_worker
         from engram.logbook.scm_sync_queue import ack, claim, enqueue
         from kv import kv_set_json
 
@@ -1594,7 +1599,7 @@ class TestSyncRunLifecycle:
     def test_reaper_marks_expired_run_as_failed(self, db_conn, test_repo):
         """测试 Reaper 将过期的 running sync_run 标记为 failed"""
         from db import list_expired_running_runs
-        from scm_sync_reaper import process_expired_runs
+        from engram.logbook.scm_sync_reaper_core import process_expired_runs
 
         run_id = str(uuid.uuid4())
 
@@ -1700,7 +1705,7 @@ class TestLockExpiration:
     def test_expired_lock_released_by_reaper(self, db_conn, test_repo, worker_id):
         """测试 Reaper 释放过期的锁"""
         from db import list_expired_locks
-        from scm_sync_reaper import process_expired_locks
+        from engram.logbook.scm_sync_reaper_core import process_expired_locks
 
         # 清理
         with db_conn.cursor() as cur:

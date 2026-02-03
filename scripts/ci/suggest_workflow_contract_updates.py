@@ -14,6 +14,7 @@ Suggest Workflow Contract Updates
 输出格式:
 - JSON（机器可读）: --json 或 --output xxx.json
 - Markdown（人类可读）: --markdown 或 --output xxx.md
+  - 输出包含 summary counts，便于粘贴到 PR 描述
 
 用法:
     # 输出 JSON 到 stdout
@@ -25,6 +26,10 @@ Suggest Workflow Contract Updates
     # 输出到文件（根据扩展名自动选择格式）
     python scripts/ci/suggest_workflow_contract_updates.py --output suggestions.json
     python scripts/ci/suggest_workflow_contract_updates.py --output suggestions.md
+
+    # 输出到 artifacts（便于 PR 评审/上传）
+    python scripts/ci/suggest_workflow_contract_updates.py --json --output artifacts/workflow_contract_suggestions.json
+    python scripts/ci/suggest_workflow_contract_updates.py --markdown --output artifacts/workflow_contract_suggestions.md
 
     # 只分析特定 workflow
     python scripts/ci/suggest_workflow_contract_updates.py --workflow ci --json
@@ -1053,6 +1058,10 @@ def main() -> int:
   # 输出到文件
   python scripts/ci/suggest_workflow_contract_updates.py --output suggestions.json
   python scripts/ci/suggest_workflow_contract_updates.py --output suggestions.md
+
+  # 输出到 artifacts
+  python scripts/ci/suggest_workflow_contract_updates.py --json --output artifacts/workflow_contract_suggestions.json
+  python scripts/ci/suggest_workflow_contract_updates.py --markdown --output artifacts/workflow_contract_suggestions.md
 
   # 只分析 ci workflow
   python scripts/ci/suggest_workflow_contract_updates.py --workflow ci --json

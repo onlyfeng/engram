@@ -639,19 +639,19 @@ class MockHelpers:
                 mocks["claim"].return_value = MockHelpers.make_claim_result()
                 mocks["execute"].return_value = MockHelpers.make_success_result()
 
-                from scm_sync_worker import process_one_job
+                from engram.logbook.scm_sync_worker_core import process_one_job
                 result = process_one_job(worker_id="test")
 
                 mocks["ack"].assert_called_once()
         """
         with (
-            patch("scm_sync_worker.claim") as mock_claim,
-            patch("scm_sync_worker.ack") as mock_ack,
-            patch("scm_sync_worker.fail_retry") as mock_fail_retry,
-            patch("scm_sync_worker.mark_dead") as mock_mark_dead,
-            patch("scm_sync_worker.requeue_without_penalty") as mock_requeue,
-            patch("scm_sync_worker.renew_lease") as mock_renew,
-            patch("scm_sync_worker.execute_sync_job") as mock_execute,
+            patch("engram.logbook.scm_sync_worker_core.claim") as mock_claim,
+            patch("engram.logbook.scm_sync_worker_core.ack") as mock_ack,
+            patch("engram.logbook.scm_sync_worker_core.fail_retry") as mock_fail_retry,
+            patch("engram.logbook.scm_sync_worker_core.mark_dead") as mock_mark_dead,
+            patch("engram.logbook.scm_sync_worker_core.requeue_without_penalty") as mock_requeue,
+            patch("engram.logbook.scm_sync_worker_core.renew_lease") as mock_renew,
+            patch("engram.logbook.scm_sync_worker_core.execute_sync_job") as mock_execute,
         ):
             # 设置默认返回值
             mock_renew.return_value = True

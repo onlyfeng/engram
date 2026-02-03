@@ -451,3 +451,31 @@ MCP_CORS_HEADERS = {
     "Access-Control-Expose-Headers": "Mcp-Session-Id, X-Correlation-ID",
     "Access-Control-Max-Age": "86400",
 }
+
+
+def build_mcp_allow_headers(requested_headers: Optional[str]) -> str:
+    """
+    构建 MCP 端点的 Access-Control-Allow-Headers 值。
+
+    如果请求包含 Access-Control-Request-Headers，则在默认允许列表基础上补全，
+    并进行大小写不敏感去重，确保 MCP 规范必需头仍然被允许。
+    """
+
+    def _split_headers(raw_headers: Optional[str]) -> List[str]:
+        if not raw_headers:
+            return []
+        return [item.strip() for item in raw_headers.split(",") if item.strip()]
+
+    default_headers = _split_headers(MCP_CORS_HEADERS.get("Access-Control-Allow-Headers"))
+    requested = _split_headers(requested_headers)
+
+    merged: List[str] = []
+    seen = set()
+    for header in [*default_headers, *requested]:
+        normalized = header.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(header)
+
+    return ", ".join(merged) if merged else ""

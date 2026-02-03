@@ -13,6 +13,7 @@ MCP JSON-RPC 2.0 协议契约测试
 """
 
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -143,7 +144,7 @@ def mock_dependencies():
     依赖注入策略（v2 架构）:
     ===========================
     1. 使用 GatewayContainer.create_for_testing() 设置全局容器
-    2. app.py 中 deps = container.deps，所有 handler 通过 deps 参数获取依赖
+    2. routes.py 中通过 get_deps_for_request 获取 container.deps
     3. 无需 patch handler 模块级的 get_config/get_client（已统一通过 deps 注入）
 
     对于 handler 单元测试，应优先使用 GatewayDeps.for_testing() 进行依赖注入。
@@ -223,6 +224,23 @@ def client(mock_dependencies):
     # container 已由 mock_dependencies 通过 set_container() 设置
     test_app = create_app()
 
+    return TestClient(test_app)
+
+
+@pytest.fixture(scope="function")
+def auth_client(mock_dependencies, monkeypatch):
+    """
+    启用 Gateway Auth token 配置的 TestClient
+
+    - GATEWAY_AUTH_TOKEN: 单 token 配置
+    - GATEWAY_AUTH_TOKENS_JSON: 多 token 列表配置
+    """
+    monkeypatch.setenv("GATEWAY_AUTH_TOKEN", "primary-token")
+    monkeypatch.setenv("GATEWAY_AUTH_TOKENS_JSON", json.dumps(["secondary-token"]))
+
+    from engram.gateway.app import create_app
+
+    test_app = create_app()
     return TestClient(test_app)
 
 
@@ -320,6 +338,56 @@ class TestJsonRpcMethodNotFound:
         assert response.status_code == 200
         result = response.json()
         assert result["error"]["code"] == -32601
+
+
+class TestJsonRpcLifecycle:
+    """测试 MCP initialize/ping 生命周期契约"""
+
+    def test_initialize_allows_missing_params(self, client):
+        """initialize 允许缺省 params"""
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "initialize", "id": 1},
+        )
+        assert response.status_code == 200
+        result = response.json()
+
+        assert result.get("error") is None
+        assert result.get("result") is not None
+        init_result = result["result"]
+        assert "protocolVersion" in init_result
+        assert "capabilities" in init_result
+        assert "serverInfo" in init_result
+        assert isinstance(init_result["protocolVersion"], str)
+        assert isinstance(init_result["capabilities"], dict)
+        assert isinstance(init_result["serverInfo"], dict)
+        assert "tools" in init_result["capabilities"]
+        assert isinstance(init_result["capabilities"]["tools"], dict)
+        assert "name" in init_result["serverInfo"]
+        assert "version" in init_result["serverInfo"]
+
+    def test_initialize_allows_empty_params(self, client):
+        """initialize 允许空 params"""
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "initialize", "params": {}, "id": 2},
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None
+        assert result.get("result") is not None
+        assert "protocolVersion" in result["result"]
+
+    def test_ping_returns_empty_result(self, client):
+        """ping 返回空结果对象"""
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "ping", "id": 3},
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None
+        assert result.get("result") == {}
 
 
 class TestToolsList:
@@ -439,6 +507,37 @@ class TestToolsList:
         # 验证 content 和 content_type 的类型定义
         assert properties["content"]["type"] == "string"
         assert properties["content_type"]["type"] == "string"
+
+
+class TestGatewayAuthTokens:
+    """测试 Gateway Auth token 鉴权契约"""
+
+    def test_tools_list_without_token_rejected(self, auth_client):
+        response = auth_client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+        )
+
+        assert response.status_code in (401, 403)
+        body = response.json()
+        assert isinstance(body, dict)
+        assert "detail" in body
+        assert isinstance(body["detail"], str)
+
+    @pytest.mark.parametrize("token", ["primary-token", "secondary-token"])
+    def test_tools_list_with_valid_token_returns_tools(self, auth_client, token):
+        response = auth_client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert "result" in result
+        tools = result["result"].get("tools")
+        assert isinstance(tools, list)
+        assert len(tools) > 0
 
 
 class TestToolsCall:
@@ -980,6 +1079,52 @@ class TestInternalError:
         assert content["ok"] is False
         assert "内部错误" in content["message"]
 
+    def test_unhandled_exception_before_dispatch_returns_jsonrpc_error(self, client):
+        """分发前异常应返回 JSON-RPC internal error 且包含 CORS headers"""
+        requested_headers = "X-Request-Id, X-Correlation-ID"
+        sensitive_token = "glpat-abc123def456ghi789jkl"
+        auth_value = "Authorization: Bearer secret-token-123"
+        with patch(
+            "engram.gateway.routes._make_cors_headers_with_correlation_id",
+            side_effect=RuntimeError(f"boom {auth_value} {sensitive_token}"),
+        ):
+            response = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+                headers={"Access-Control-Request-Headers": requested_headers},
+            )
+
+        assert response.status_code == 500
+        result = response.json()
+        assert result.get("jsonrpc") == "2.0"
+
+        assert_jsonrpc_error_response(
+            result,
+            expected_code=-32603,
+            expected_category="internal",
+            expected_reason="UNHANDLED_EXCEPTION",
+        )
+        error_data = result["error"]["data"]
+        correlation_id = error_data["correlation_id"]
+        assert response.headers.get("X-Correlation-ID") == correlation_id
+
+        assert response.headers.get("Access-Control-Allow-Origin") == "*"
+        expose_headers = response.headers.get("Access-Control-Expose-Headers", "")
+        assert "X-Correlation-ID" in expose_headers
+        allow_headers = response.headers.get("Access-Control-Allow-Headers", "")
+        allow_header_set = {
+            item.strip().lower() for item in allow_headers.split(",") if item.strip()
+        }
+        assert "x-request-id" in allow_header_set
+        assert "x-correlation-id" in allow_header_set
+        assert result["error"]["message"] == "内部错误"
+        payload = json.dumps(result, ensure_ascii=False)
+        assert sensitive_token not in payload
+        assert "secret-token-123" not in payload
+        details_payload = json.dumps(result["error"]["data"].get("details", {}), ensure_ascii=False)
+        assert sensitive_token not in details_payload
+        assert "secret-token-123" not in details_payload
+
 
 class TestCorrelationIdTracking:
     """测试 correlation_id 追踪"""
@@ -1011,6 +1156,69 @@ class TestCorrelationIdTracking:
         if "error" in result and "data" in result["error"]:
             data = result["error"]["data"]
             assert "correlation_id" in data
+
+
+class TestErrorRedaction:
+    """测试错误响应脱敏"""
+
+    def test_error_message_redacts_sensitive_tool_name(self, client):
+        """错误消息与 details 不应泄露敏感 token"""
+        sensitive_tool_name = "glpat-abc123def456ghi789jkl"
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": sensitive_tool_name, "arguments": {}},
+                "id": 1,
+            },
+        )
+        result = response.json()
+
+        assert "error" in result
+        error = result["error"]
+        assert sensitive_tool_name not in error["message"]
+        assert "[GITLAB_TOKEN]" in error["message"] or "[REDACTED]" in error["message"]
+
+        details = error["data"].get("details", {})
+        assert sensitive_tool_name not in json.dumps(details)
+
+    def test_unhandled_exception_hides_sensitive_values(self, client):
+        """UNHANDLED_EXCEPTION 不应回显 token/Authorization 值"""
+        sensitive_token = "glpat-abc123def456ghi789jkl"
+        auth_value = "Authorization: Bearer secret-token-123"
+
+        async def mock_executor(tool_name, tool_args, correlation_id):
+            raise KeyError(f"{auth_value} {sensitive_token}")
+
+        with patch(
+            "engram.gateway.mcp_rpc.get_tool_executor",
+            return_value=mock_executor,
+        ):
+            response = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"name": "memory_query", "arguments": {"query": "test"}},
+                    "id": 1,
+                },
+            )
+
+        result = response.json()
+        assert_jsonrpc_error_response(
+            result,
+            expected_code=-32603,
+            expected_category="internal",
+            expected_reason="UNHANDLED_EXCEPTION",
+        )
+        assert result["error"]["message"] == "内部错误"
+        payload = json.dumps(result, ensure_ascii=False)
+        assert sensitive_token not in payload
+        assert "secret-token-123" not in payload
+        details_payload = json.dumps(result["error"]["data"].get("details", {}), ensure_ascii=False)
+        assert sensitive_token not in details_payload
+        assert "secret-token-123" not in details_payload
 
 
 class TestErrorDataFields:
@@ -3072,7 +3280,7 @@ class TestCorrelationIdConsistencyAllErrorPaths:
 
     契约要求（钉死规则）：
     ================================================================================
-    1. 真实 dispatch 链路中，correlation_id 由 HTTP 入口层（app.py mcp_endpoint）生成
+    1. 真实 dispatch 链路中，correlation_id 由 HTTP 入口层（routes.py mcp_endpoint）生成
     2. 所有错误响应的 X-Correlation-ID header 与 error.data.correlation_id 必须一致
     3. ErrorData.to_dict() 在真实链路中不应触发重新生成（因为 correlation_id 已传入）
     ================================================================================
@@ -3543,6 +3751,66 @@ class TestErrorCodeBoundaryMisuse:
                 f"边界违规: VALID_ERROR_REASONS 不应包含 ToolResultErrorCode.{code}。"
                 f"请确保测试文件中的 VALID_ERROR_REASONS 与 PUBLIC_MCP_ERROR_REASONS 一致。"
             )
+
+
+class TestMcpRequestLogging:
+    def test_mcp_options_logs_headers_without_secrets(self, client, caplog):
+        caplog.set_level(logging.INFO, logger="gateway")
+
+        headers = {
+            "Origin": "https://example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": (
+                "Authorization: Bearer top-secret, X-Engram-Auth: engram-secret, X-Extra"
+            ),
+        }
+        response = client.options("/mcp", headers=headers)
+        assert response.status_code == 204
+
+        record = next(
+            (item for item in caplog.records if item.getMessage() == "MCP CORS preflight"),
+            None,
+        )
+        assert record is not None, "应记录 MCP CORS preflight 日志"
+
+        requested_headers = getattr(record, "requested_headers", "")
+        allow_headers = getattr(record, "allow_headers", "")
+        assert "Authorization" in requested_headers
+        assert "X-Engram-Auth" in requested_headers
+        assert "top-secret" not in requested_headers
+        assert "engram-secret" not in requested_headers
+        assert "Bearer" not in requested_headers
+        assert "Authorization" in allow_headers
+
+    def test_mcp_endpoint_logs_request_metadata_without_token_leak(self, client, caplog):
+        caplog.set_level(logging.INFO, logger="gateway")
+
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+            headers={
+                "Authorization": "Bearer top-secret",
+                "X-Engram-Auth": "engram-secret",
+                "Mcp-Session-Id": "session-123",
+            },
+        )
+        assert response.status_code == 200
+
+        record = next(
+            (item for item in caplog.records if item.getMessage() == "MCP request"),
+            None,
+        )
+        assert record is not None, "应记录 MCP request 日志"
+
+        assert getattr(record, "is_jsonrpc", None) is True
+        assert getattr(record, "method", None) == "tools/list"
+        assert getattr(record, "mcp_session_id_present", None) is True
+        assert getattr(record, "correlation_id", None) == response.headers.get("X-Correlation-ID")
+
+        record_payload = json.dumps(record.__dict__, default=str)
+        assert "top-secret" not in record_payload
+        assert "engram-secret" not in record_payload
+        assert "session-123" not in record_payload
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@
     3. 支持从 JSON 文件或参数读取命令执行结果
     4. 内置敏感信息脱敏（PASSWORD/DSN/TOKEN 等）
     5. 输出到 docs/acceptance/evidence/iteration_<N>_evidence.json（固定文件名策略）
-    6. 输出格式符合 iteration_evidence_v1.schema.json
+    6. 输出格式符合 iteration_evidence_v2.schema.json
 
 安全特性:
     - 检测并拒绝写入常见敏感键（PASSWORD/DSN/TOKEN/SECRET/KEY/CREDENTIAL）
@@ -54,6 +54,7 @@ from scripts.iteration.iteration_evidence_naming import (
     EVIDENCE_DIR,
     canonical_evidence_path,
 )
+from scripts.iteration.iteration_evidence_schema import CURRENT_SCHEMA_REF
 
 # 项目根目录
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -151,7 +152,7 @@ class SensitiveKeyWarning:
 
 @dataclass
 class CommandEntry:
-    """单个门禁命令的执行记录（符合 iteration_evidence_v1.schema.json）。"""
+    """单个门禁命令的执行记录（符合 iteration_evidence_v2.schema.json）。"""
 
     name: str
     command: str
@@ -163,7 +164,7 @@ class CommandEntry:
 
 @dataclass
 class RunnerInfo:
-    """执行环境信息（符合 iteration_evidence_v1.schema.json）。"""
+    """执行环境信息（符合 iteration_evidence_v2.schema.json）。"""
 
     os: str
     python: str
@@ -174,7 +175,7 @@ class RunnerInfo:
 
 @dataclass
 class Links:
-    """相关链接集合（符合 iteration_evidence_v1.schema.json）。"""
+    """相关链接集合（符合 iteration_evidence_v2.schema.json）。"""
 
     ci_run_url: Optional[str] = None
     pr_url: Optional[str] = None
@@ -184,7 +185,7 @@ class Links:
 
 @dataclass
 class EvidenceRecord:
-    """迭代验收证据记录（符合 iteration_evidence_v1.schema.json）。"""
+    """迭代验收证据记录（符合 iteration_evidence_v2.schema.json）。"""
 
     iteration_number: int
     recorded_at: str
@@ -322,7 +323,7 @@ def compute_overall_result(commands: List[CommandEntry]) -> OverallResultType:
 def derive_command_name(command: str) -> str:
     """从命令字符串推导命令名称。
 
-    生成的名称符合 iteration_evidence_v1.schema.json 的 pattern: ^[a-z][a-z0-9_-]*$
+    生成的名称符合 iteration_evidence_v2.schema.json 的 pattern: ^[a-z][a-z0-9_-]*$
 
     Args:
         command: 完整命令字符串
@@ -584,6 +585,18 @@ def redact_sensitive_data(
     return data, warnings, redacted_count
 
 
+def derive_redaction_rules(warnings: List[SensitiveKeyWarning]) -> List[str]:
+    """根据脱敏警告推导规则标识。"""
+    rules: List[str] = []
+    if any("敏感键名匹配" in warning.reason for warning in warnings):
+        rules.append("sensitive-key")
+    if any("值匹配敏感信息模式" in warning.reason for warning in warnings):
+        rules.append("sensitive-value")
+    if not rules and warnings:
+        rules.append("sensitive-data")
+    return rules
+
+
 # ============================================================================
 # 命令结果解析
 # ============================================================================
@@ -737,6 +750,8 @@ def record_evidence(
     regression_doc_url: Optional[str] = None,
     pr_url: Optional[str] = None,
     artifact_url: Optional[str] = None,
+    source_type: Optional[str] = None,
+    source_ref: Optional[str] = None,
     include_regression_doc_url: bool = True,
     *,
     dry_run: bool = False,
@@ -753,6 +768,8 @@ def record_evidence(
         regression_doc_url: 回归文档 URL（可选，默认自动生成）
         pr_url: Pull Request URL（可选）
         artifact_url: CI Artifacts 下载 URL（可选）
+        source_type: 证据来源类型（可选）
+        source_ref: 证据来源引用标识（可选）
         include_regression_doc_url: 是否包含 regression_doc_url（默认 True）
         dry_run: 是否为预览模式
 
@@ -775,14 +792,14 @@ def record_evidence(
     # 获取 runner 信息
     runner = get_runner_info(runner_label)
 
+    default_regression_doc_path = f"docs/acceptance/iteration_{iteration_number}_regression.md"
+    source_path = regression_doc_url or default_regression_doc_path
+
     # 构建 links 对象
     # 默认总是写入 regression_doc_url，除非 include_regression_doc_url=False
     actual_regression_doc_url: Optional[str] = None
     if include_regression_doc_url:
-        actual_regression_doc_url = (
-            regression_doc_url
-            or f"docs/acceptance/iteration_{iteration_number}_regression.md"
-        )
+        actual_regression_doc_url = regression_doc_url or default_regression_doc_path
     else:
         # 如果用户关闭自动生成但仍显式传入，则使用传入值
         actual_regression_doc_url = regression_doc_url
@@ -812,9 +829,9 @@ def record_evidence(
         sensitive_data_declaration=True,
     )
 
-    # 转换为字典（符合 iteration_evidence_v1.schema.json）
+    # 转换为字典（符合 iteration_evidence_v2.schema.json）
     record_dict: Dict[str, Any] = {
-        "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+        "$schema": CURRENT_SCHEMA_REF,
         "iteration_number": record.iteration_number,
         "recorded_at": record.recorded_at,
         "commit_sha": record.commit_sha,
@@ -822,6 +839,9 @@ def record_evidence(
             "os": record.runner.os,
             "python": record.runner.python,
             "arch": record.runner.arch,
+        },
+        "source": {
+            "source_path": source_path,
         },
         "commands": [],
         "overall_result": record.overall_result,
@@ -833,6 +853,11 @@ def record_evidence(
         record_dict["runner"]["runner_label"] = record.runner.runner_label
     if record.runner.hostname:
         record_dict["runner"]["hostname"] = record.runner.hostname
+
+    if source_type:
+        record_dict["source"]["source_type"] = source_type
+    if source_ref:
+        record_dict["source"]["source_ref"] = source_ref
 
     # 添加 commands
     for cmd in record.commands:
@@ -869,6 +894,11 @@ def record_evidence(
 
     # 脱敏处理
     redacted_dict, warnings, redacted_count = redact_sensitive_data(record_dict)
+
+    if redacted_count > 0:
+        redacted_dict["redaction_applied"] = True
+        redacted_dict["redaction_summary"] = f"检测并脱敏 {redacted_count} 处敏感信息"
+        redacted_dict["redaction_rules"] = derive_redaction_rules(warnings)
 
     # 生成输出文件名（使用 iteration_evidence_naming helper）
     output_path = canonical_evidence_path(iteration_number)
@@ -930,7 +960,7 @@ def main() -> int:
 
 输出格式:
     输出文件为 docs/acceptance/evidence/iteration_<N>_evidence.json（固定文件名策略）
-    格式符合 iteration_evidence_v1.schema.json
+    格式符合 iteration_evidence_v2.schema.json
 
 安全说明:
     脚本会自动检测并脱敏常见敏感信息（PASSWORD/DSN/TOKEN 等）。
@@ -1002,6 +1032,18 @@ def main() -> int:
         type=str,
         default=None,
         help="CI Artifacts 下载 URL（注意：有时效性，通常 90 天）",
+    )
+    parser.add_argument(
+        "--source-type",
+        type=str,
+        default=None,
+        help="证据来源类型（如 manual/ci/automation）",
+    )
+    parser.add_argument(
+        "--source-ref",
+        type=str,
+        default=None,
+        help="证据来源引用标识（可选）",
     )
     parser.add_argument(
         "--dry-run",
@@ -1135,6 +1177,8 @@ def main() -> int:
             regression_doc_url=args.regression_doc_url,
             pr_url=args.pr_url,
             artifact_url=args.artifact_url,
+            source_type=args.source_type,
+            source_ref=args.source_ref,
             include_regression_doc_url=not args.no_regression_doc_url,
             dry_run=args.dry_run,
         )

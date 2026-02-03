@@ -29,7 +29,7 @@ import logging
 from typing import Any, Dict
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 # 从 api_models 导入所有 API 模型和常量
 from .api_models import (
@@ -41,6 +41,13 @@ from .api_models import (
     MemoryStoreRequest,
     ReliabilityReportErrorCode,
     ReliabilityReportResponse,
+    build_mcp_allow_headers,
+)
+from .error_redaction import (
+    DEFAULT_PUBLIC_ERROR_MESSAGE,
+    sanitize_error_details,
+    sanitize_error_message,
+    sanitize_header_list,
 )
 
 # 向后兼容导出：确保从 routes 导入模型的代码继续工作
@@ -115,6 +122,8 @@ def register_routes(app: FastAPI) -> None:
         JsonRpcErrorCode,
         dispatch_jsonrpc_request,
         handle_tools_call_with_executor,
+        is_jsonrpc_request,
+        is_valid_correlation_id,
         make_jsonrpc_error,
         mcp_router,
         register_tool_executor,
@@ -192,7 +201,7 @@ def register_routes(app: FastAPI) -> None:
 
         这确保 reset 后无需额外注册 tool_executor 也能正常工作。
         """
-        from .mcp_rpc import get_current_correlation_id
+        from .mcp_rpc import get_current_correlation_id, get_tool_executor
 
         correlation_id = get_current_correlation_id()
         if correlation_id is None:
@@ -200,7 +209,8 @@ def register_routes(app: FastAPI) -> None:
                 "correlation_id 未设置：_handle_tools_call_injected 必须在 dispatch 上下文中调用"
             )
 
-        return await handle_tools_call_with_executor(params, _execute_tool, correlation_id)
+        executor = get_tool_executor() or _execute_tool
+        return await handle_tools_call_with_executor(params, executor, correlation_id)
 
     # 注册到 mcp_router，覆盖默认的 handle_tools_call
     mcp_router.register("tools/call", _handle_tools_call_injected)
@@ -230,12 +240,24 @@ def register_routes(app: FastAPI) -> None:
         }
 
     @app.options("/mcp")
-    async def mcp_options():
+    async def mcp_options(request: Request):
         """MCP 端点的 CORS 预检请求处理"""
-        return JSONResponse(
-            content={"ok": True},
-            headers=MCP_CORS_HEADERS,
+        is_preflight = bool(request.headers.get("Access-Control-Request-Method"))
+        requested_headers = request.headers.get("Access-Control-Request-Headers")
+        response_headers = dict(MCP_CORS_HEADERS)
+        allow_headers = MCP_CORS_HEADERS.get("Access-Control-Allow-Headers", "")
+        if requested_headers:
+            allow_headers = build_mcp_allow_headers(requested_headers)
+            response_headers["Access-Control-Allow-Headers"] = allow_headers
+
+        logger.info(
+            "MCP CORS preflight",
+            extra={
+                "requested_headers": sanitize_header_list(requested_headers),
+                "allow_headers": sanitize_header_list(allow_headers),
+            },
         )
+        return Response(status_code=204 if is_preflight else 200, headers=response_headers)
 
     @app.post("/mcp")
     async def mcp_endpoint(request: Request):
@@ -247,8 +269,8 @@ def register_routes(app: FastAPI) -> None:
         - 旧格式 (MCPToolCall): {"tool": "...", "arguments": {...}}
 
         设计原则：
-        - 使用 dispatch_jsonrpc_request 统一入口函数处理编解码
-        - 该入口函数是唯一的 JSON-RPC 处理点，方便测试时 patch
+        - JSON-RPC 请求使用 dispatch_jsonrpc_request 统一处理
+        - Legacy 请求保持 MCPResponse 结构，兼容旧客户端
         """
         # 通过 dependencies 模块获取 correlation_id（保持单一来源）
         # 优先使用中间件上下文，若不在上下文中则生成新的
@@ -256,18 +278,59 @@ def register_routes(app: FastAPI) -> None:
         mcp_session_id = request.headers.get("Mcp-Session-Id") or request.headers.get(
             "mcp-session-id"
         )
-        if mcp_session_id:
-            logger.info(
-                f"MCP 请求: Mcp-Session-Id={mcp_session_id}, correlation_id={correlation_id}"
-            )
 
         # 创建带 correlation_id 的响应 headers（契约：单次生成语义）
-        response_headers = _make_cors_headers_with_correlation_id(correlation_id)
+        try:
+            response_headers = _make_cors_headers_with_correlation_id(correlation_id)
+        except Exception as exc:
+            logger.error(
+                "MCP 响应头构建失败: correlation_id=%s, error=%s",
+                correlation_id,
+                sanitize_error_message(str(exc)),
+            )
+            response_headers = dict(MCP_CORS_HEADERS)
+            requested_headers = request.headers.get("Access-Control-Request-Headers")
+            if requested_headers:
+                response_headers["Access-Control-Allow-Headers"] = build_mcp_allow_headers(
+                    requested_headers
+                )
+            response_headers["X-Correlation-ID"] = correlation_id
+            error_data = ErrorData(
+                category=ErrorCategory.INTERNAL,
+                reason=ErrorReason.UNHANDLED_EXCEPTION,
+                retryable=False,
+                correlation_id=correlation_id,
+                details=sanitize_error_details(
+                    {
+                        "exception_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                ),
+            )
+            return JSONResponse(
+                content=make_jsonrpc_error(
+                    None,
+                    JsonRpcErrorCode.INTERNAL_ERROR,
+                    DEFAULT_PUBLIC_ERROR_MESSAGE,
+                    data=error_data.to_dict(strict=True),
+                ).model_dump(exclude_none=True),
+                status_code=500,
+                headers=response_headers,
+            )
 
         # 解析原始请求 JSON
         try:
             body = await request.json()
         except Exception as e:
+            logger.info(
+                "MCP request",
+                extra={
+                    "is_jsonrpc": None,
+                    "method": None,
+                    "correlation_id": correlation_id,
+                    "mcp_session_id_present": bool(mcp_session_id),
+                },
+            )
             error_data = ErrorData(
                 category=ErrorCategory.PROTOCOL,
                 reason=ErrorReason.PARSE_ERROR,
@@ -280,20 +343,121 @@ def register_routes(app: FastAPI) -> None:
                     None,
                     JsonRpcErrorCode.PARSE_ERROR,
                     f"JSON 解析失败: {str(e)}",
-                    data=error_data.to_dict(),
+                    data=error_data.to_dict(strict=True),
                 ).model_dump(exclude_none=True),
                 status_code=400,
                 headers=response_headers,
             )
 
-        # 使用统一入口函数处理 JSON-RPC 请求（方便 patch 测试）
-        result = await dispatch_jsonrpc_request(body, correlation_id)
+        is_jsonrpc = isinstance(body, dict) and is_jsonrpc_request(body)
+        method: str | None = body.get("method") if is_jsonrpc else None
 
-        return JSONResponse(
-            content=result.to_dict(),
-            status_code=result.http_status,
-            headers=response_headers,
+        logger.info(
+            "MCP request",
+            extra={
+                "is_jsonrpc": is_jsonrpc,
+                "method": method,
+                "correlation_id": correlation_id,
+                "mcp_session_id_present": bool(mcp_session_id),
+            },
         )
+
+        if is_jsonrpc:
+            # 使用统一入口函数处理 JSON-RPC 请求（方便 patch 测试）
+            result = await dispatch_jsonrpc_request(
+                body,
+                correlation_id,
+                strict_correlation_id=True,
+            )
+            response_headers = _make_cors_headers_with_correlation_id(result.correlation_id)
+
+            if result.response.error:
+                if result.response.error.data is None:
+                    error_data = ErrorData(
+                        category=ErrorCategory.PROTOCOL,
+                        reason=ErrorReason.INVALID_REQUEST,
+                        retryable=False,
+                        correlation_id=result.correlation_id,
+                        details=None,
+                    )
+                    result.response.error.data = error_data.to_dict(strict=True)
+                elif isinstance(result.response.error.data, dict):
+                    assert "correlation_id" in result.response.error.data, (
+                        "契约违反: error.data 缺少 correlation_id。"
+                        "JSON-RPC 入口链路必须由入口层生成并透传 correlation_id。"
+                    )
+                    assert is_valid_correlation_id(result.response.error.data["correlation_id"]), (
+                        "契约违反: error.data.correlation_id 格式不合规。"
+                    )
+                    assert result.response.error.data["correlation_id"] == result.correlation_id, (
+                        "契约违反: error.data.correlation_id 与入口 correlation_id 不一致。"
+                    )
+
+            return JSONResponse(
+                content=result.to_dict(),
+                status_code=result.http_status,
+                headers=response_headers,
+            )
+
+        # 旧协议分支
+        try:
+            mcp_request = MCPToolCall(**body)
+        except Exception as e:
+            logger.warning(f"旧协议请求格式无效: correlation_id={correlation_id}, error={e}")
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "error": f"无效的请求格式: {str(e)}",
+                    "correlation_id": correlation_id,
+                },
+                status_code=400,
+                headers=response_headers,
+            )
+
+        tool = mcp_request.tool
+        args = mcp_request.arguments
+
+        logger.info(f"旧协议请求: tool={tool}, correlation_id={correlation_id}")
+
+        try:
+            tool_result = await _execute_tool(tool, args, correlation_id)
+            tool_result["correlation_id"] = correlation_id
+            if tool_result.get("ok", True):
+                return JSONResponse(
+                    content=MCPResponse(ok=True, result=tool_result).model_dump(),
+                    headers=response_headers,
+                )
+            error_message = (
+                tool_result.get("message")
+                or tool_result.get("error")
+                or tool_result.get("suggestion")
+                or "工具执行失败"
+            )
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "error": error_message,
+                    "result": tool_result,
+                    "correlation_id": correlation_id,
+                },
+                headers=response_headers,
+            )
+        except ValueError as e:
+            logger.warning(
+                f"旧协议工具调用参数错误: tool={tool}, correlation_id={correlation_id}, error={e}"
+            )
+            return JSONResponse(
+                content={"ok": False, "error": str(e), "correlation_id": correlation_id},
+                headers=response_headers,
+            )
+        except Exception as e:
+            logger.exception(
+                f"旧协议工具调用失败: tool={tool}, correlation_id={correlation_id}, error={e}"
+            )
+            return JSONResponse(
+                content={"ok": False, "error": str(e), "correlation_id": correlation_id},
+                headers=response_headers,
+            )
 
     @app.post("/memory/store", response_model=MemoryStoreResponse)
     async def memory_store_endpoint(request: MemoryStoreRequest):

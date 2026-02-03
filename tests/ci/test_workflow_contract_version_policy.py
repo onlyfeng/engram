@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,7 @@ from scripts.ci.check_workflow_contract_version_policy import (
     get_matching_rule,
     is_critical_tooling_script,
     is_non_critical_doc,
+    is_string_similar,
     is_workflow_file,
 )
 
@@ -645,7 +647,7 @@ class TestTriggerReasons:
 
         # 验证 trigger_reasons 包含 ci.yml 的原因
         assert ".github/workflows/ci.yml" in result.trigger_reasons
-        assert "Phase 1" in result.trigger_reasons[".github/workflows/ci.yml"]
+        assert "Phase 2" in result.trigger_reasons[".github/workflows/ci.yml"]
         assert "workflow" in result.trigger_reasons[".github/workflows/ci.yml"].lower()
 
     def test_trigger_reasons_populated_for_tooling_files(
@@ -746,20 +748,19 @@ class TestTriggerReasons:
 class TestCriticalFileRules:
     """测试关键文件规则定义"""
 
-    def test_critical_workflow_rules_cover_phase1_files(self) -> None:
-        """CRITICAL_WORKFLOW_RULES 应覆盖 Phase 1 的 ci/nightly 文件"""
+    def test_critical_workflow_rules_cover_phase2_files(self) -> None:
+        """CRITICAL_WORKFLOW_RULES 应覆盖 ci/nightly/release 文件"""
         assert any(rule.matches(".github/workflows/ci.yml") for rule in CRITICAL_WORKFLOW_RULES)
         assert any(
             rule.matches(".github/workflows/nightly.yml") for rule in CRITICAL_WORKFLOW_RULES
         )
-
-    def test_critical_workflow_rules_exclude_non_phase1_files(self) -> None:
-        """CRITICAL_WORKFLOW_RULES 不应匹配非 Phase 1 的 workflow 文件"""
-        # release.yml 是 Phase 2 的，当前不应匹配
-        assert not any(
+        assert any(
             rule.matches(".github/workflows/release.yml") for rule in CRITICAL_WORKFLOW_RULES
         )
-        # 其他 workflow 文件也不应匹配
+
+    def test_critical_workflow_rules_exclude_non_contract_files(self) -> None:
+        """CRITICAL_WORKFLOW_RULES 不应匹配未纳入合约的 workflow 文件"""
+        # 其他 workflow 文件不应匹配
         assert not any(
             rule.matches(".github/workflows/deploy.yml") for rule in CRITICAL_WORKFLOW_RULES
         )
@@ -836,6 +837,95 @@ class TestFilterCriticalFilesWithReasons:
 
         assert "Makefile" not in files
         assert "Makefile" not in reasons
+
+    def test_makefile_gateway_echo_change_does_not_trigger(self) -> None:
+        """非 CI target 的 echo 文案变更不应触发"""
+        diff = textwrap.dedent(
+            """\
+            @@
+             gateway:
+            -\t@echo "gateway: running"
+            +\t@echo "gateway: check-workflow-contract-docs-sync"
+            """
+        )
+
+        files, reasons = filter_critical_files_with_reasons(["Makefile"], diff)
+
+        assert "Makefile" not in files
+        assert "Makefile" not in reasons
+
+    def test_makefile_comment_keyword_does_not_trigger(self) -> None:
+        """注释中包含 CI 关键字不应触发"""
+        diff = textwrap.dedent(
+            """\
+            @@
+            +# validate-workflows should remain optional
+            +# ci: lint typecheck
+            """
+        )
+
+        files, reasons = filter_critical_files_with_reasons(["Makefile"], diff)
+
+        assert "Makefile" not in files
+        assert "Makefile" not in reasons
+
+    def test_makefile_echo_keyword_without_target_context_does_not_trigger(self) -> None:
+        """仅 echo 文案包含关键字且无 target 上下文时不应触发"""
+        diff = textwrap.dedent(
+            """\
+            @@
+            +\t@echo "run validate-workflows locally"
+            +\t@echo "workflow-contract checks"
+            """
+        )
+
+        files, reasons = filter_critical_files_with_reasons(["Makefile"], diff)
+
+        assert "Makefile" not in files
+        assert "Makefile" not in reasons
+
+    @pytest.mark.parametrize(
+        ("target_name", "command"),
+        [
+            ("validate-workflows-strict", "$(PYTHON) -m scripts.ci.validate_workflows --strict"),
+            (
+                "check-workflow-contract-docs-sync",
+                "python scripts/ci/check_workflow_contract_docs_sync.py",
+            ),
+        ],
+    )
+    def test_makefile_ci_target_body_change_triggers(self, target_name: str, command: str) -> None:
+        """CI 相关目标内容变更应触发"""
+        diff = textwrap.dedent(
+            f"""\
+            @@
+             {target_name}:
+            -\t{command}
+            +\t{command} --verbose
+            """
+        )
+
+        files, reasons = filter_critical_files_with_reasons(["Makefile"], diff)
+
+        assert "Makefile" in files
+        assert reasons["Makefile"] == MAKEFILE_RULE_DESCRIPTION
+
+    def test_ci_yml_change_triggers_filter(self) -> None:
+        """ci.yml 变更应触发 filter_critical_files_with_reasons"""
+        files, reasons = filter_critical_files_with_reasons([".github/workflows/ci.yml"])
+
+        assert ".github/workflows/ci.yml" in files
+        assert ".github/workflows/ci.yml" in reasons
+        assert "workflow" in reasons[".github/workflows/ci.yml"].lower()
+
+    def test_contract_doc_change_triggers_filter(self) -> None:
+        """contract.md 变更应触发 filter_critical_files_with_reasons"""
+        files, reasons = filter_critical_files_with_reasons(
+            ["docs/ci_nightly_workflow_refactor/contract.md"]
+        )
+
+        assert "docs/ci_nightly_workflow_refactor/contract.md" in files
+        assert "docs/ci_nightly_workflow_refactor/contract.md" in reasons
 
 
 # ============================================================================
@@ -917,6 +1007,127 @@ class TestCheckVersionPolicyPure:
         assert result.version_in_doc is True
         assert result.violations == []
 
+    def test_invalid_contract_json_returns_parse_error(self) -> None:
+        """新 contract JSON 解析失败应返回 parse_error"""
+        input_data = VersionPolicyCheckInput(
+            changed_files=[".github/workflows/ci.yml"],
+            old_contract_content=json.dumps({"version": "2.5.0", "last_updated": "2026-02-01"}),
+            new_contract_content="{invalid json",
+            doc_content="| v2.5.0 | 2026-02-01 | test |",
+        )
+
+        result = check_version_policy_pure(input_data)
+
+        assert len(result.violations) == 1
+        assert result.violations[0].error_type == VersionPolicyErrorTypes.CONTRACT_PARSE_ERROR
+        assert result.version_updated is False
+        assert result.last_updated_updated is False
+        assert result.version_in_doc is False
+
+    def test_makefile_target_change_triggers_without_keywords(self) -> None:
+        """结构化 Makefile target 变更应触发检查"""
+        input_data = VersionPolicyCheckInput(
+            changed_files=["Makefile"],
+            old_contract_content=None,
+            new_contract_content=json.dumps({"version": "2.6.0", "last_updated": "2026-02-02"}),
+            doc_content="| v2.6.0 | 2026-02-02 | new |",
+            makefile_old_content="ci:\n\t@echo old\n",
+            makefile_new_content="validate-workflows:\n\t@echo run\nci:\n\t@echo old\n",
+            makefile_required_targets=["validate-workflows"],
+        )
+
+        result = check_version_policy_pure(input_data)
+
+        assert "Makefile" in result.critical_files
+        assert "validate-workflows" in result.trigger_reasons["Makefile"]
+        assert result.violations == []
+
+    def test_makefile_target_addition_triggers_with_required_targets(self) -> None:
+        """新增 required target 应触发检查"""
+        input_data = VersionPolicyCheckInput(
+            changed_files=["Makefile"],
+            old_contract_content=None,
+            new_contract_content=json.dumps({"version": "2.6.0", "last_updated": "2026-02-02"}),
+            doc_content="| v2.6.0 | 2026-02-02 | new |",
+            makefile_new_content="validate-workflows:\n\t@echo run\n",
+            makefile_required_targets=["validate-workflows"],
+        )
+
+        result = check_version_policy_pure(input_data)
+
+        assert "Makefile" in result.critical_files
+        assert result.trigger_reasons["Makefile"] == "Makefile target changed: validate-workflows"
+        assert result.violations == []
+
+    def test_makefile_target_removal_triggers_with_workflow_targets(self) -> None:
+        """删除 workflow 使用的 target 应触发检查"""
+        input_data = VersionPolicyCheckInput(
+            changed_files=["Makefile"],
+            old_contract_content=None,
+            new_contract_content=json.dumps({"version": "2.6.0", "last_updated": "2026-02-02"}),
+            doc_content="| v2.6.0 | 2026-02-02 | new |",
+            makefile_old_content="ci:\n\t@echo run\nlint:\n\t@echo lint\n",
+            makefile_new_content="lint:\n\t@echo lint\n",
+            workflow_make_targets=["ci"],
+        )
+
+        result = check_version_policy_pure(input_data)
+
+        assert "Makefile" in result.critical_files
+        assert result.trigger_reasons["Makefile"] == "Makefile target changed: ci"
+        assert result.violations == []
+
+    def test_makefile_target_change_with_required_and_workflow_union(self) -> None:
+        """required_targets 与 workflow_make_targets 取并集"""
+        input_data = VersionPolicyCheckInput(
+            changed_files=["Makefile"],
+            old_contract_content=None,
+            new_contract_content=json.dumps({"version": "2.6.0", "last_updated": "2026-02-02"}),
+            doc_content="| v2.6.0 | 2026-02-02 | new |",
+            makefile_old_content="ci:\n\t@echo run\n",
+            makefile_new_content="lint:\n\t@echo lint\n",
+            makefile_required_targets=["validate-workflows"],
+            workflow_make_targets=["ci"],
+        )
+
+        result = check_version_policy_pure(input_data)
+
+        assert "Makefile" in result.critical_files
+        assert result.trigger_reasons["Makefile"] == "Makefile target changed: ci"
+        assert result.violations == []
+
+    def test_makefile_target_change_without_relevant_targets_skips(self) -> None:
+        """无 required/workflow targets 时结构化变更不触发"""
+        input_data = VersionPolicyCheckInput(
+            changed_files=["Makefile"],
+            old_contract_content=None,
+            new_contract_content=json.dumps({"version": "2.6.0", "last_updated": "2026-02-02"}),
+            doc_content="| v2.6.0 | 2026-02-02 | new |",
+            makefile_old_content="lint:\n\t@echo lint\n",
+            makefile_new_content="lint:\n\t@echo lint\nformat:\n\t@echo format\n",
+        )
+
+        result = check_version_policy_pure(input_data)
+
+        assert result.critical_files == []
+        assert result.violations == []
+
+    def test_makefile_diff_only_triggers_keyword_detection(self) -> None:
+        """仅提供 diff 时应走关键字检测"""
+        input_data = VersionPolicyCheckInput(
+            changed_files=["Makefile"],
+            old_contract_content=None,
+            new_contract_content=json.dumps({"version": "2.6.0", "last_updated": "2026-02-02"}),
+            doc_content="| v2.6.0 | 2026-02-02 | new |",
+            makefile_diff="+validate-workflows:\n+\t$(PYTHON) -m scripts.ci.validate_workflows",
+        )
+
+        result = check_version_policy_pure(input_data)
+
+        assert "Makefile" in result.critical_files
+        assert result.trigger_reasons["Makefile"] == MAKEFILE_RULE_DESCRIPTION
+        assert result.violations == []
+
 
 # ============================================================================
 # Test: ci.yml 变更必须 bump
@@ -924,7 +1135,7 @@ class TestCheckVersionPolicyPure:
 
 
 class TestCiYmlChangesMustBump:
-    """测试 .github/workflows/ci.yml 变更必须触发 bump"""
+    """测试 workflow 变更必须触发 bump"""
 
     def test_ci_yml_is_workflow_file(self) -> None:
         """ci.yml 应被识别为 workflow 文件"""
@@ -961,6 +1172,14 @@ class TestCiYmlChangesMustBump:
 
         files, reasons = filter_critical_files_with_reasons([".github/workflows/nightly.yml"])
         assert ".github/workflows/nightly.yml" in files
+
+    def test_release_yml_also_requires_bump(self) -> None:
+        """release.yml 变更也必须 bump"""
+        assert is_workflow_file(".github/workflows/release.yml") is True
+
+        files, reasons = filter_critical_files_with_reasons([".github/workflows/release.yml"])
+        assert ".github/workflows/release.yml" in files
+        assert "workflow" in reasons[".github/workflows/release.yml"].lower()
 
 
 # ============================================================================
@@ -1169,6 +1388,77 @@ class TestMakefileCITargetRecognitionAccuracy:
         assert "Makefile" in files
 
 
+class TestMakefileTargetStructuralDetection:
+    """测试基于 target 结构化变更的识别"""
+
+    def test_makefile_target_addition_triggers_with_reason(self) -> None:
+        """新增 CI 相关 target 应触发并给出准确原因"""
+        files, reasons = filter_critical_files_with_reasons(
+            ["Makefile"],
+            makefile_old_targets={"lint"},
+            makefile_new_targets={"lint", "validate-workflows"},
+            makefile_required_targets={"validate-workflows"},
+        )
+
+        assert "Makefile" in files
+        assert reasons["Makefile"] == "Makefile target changed: validate-workflows"
+
+    def test_makefile_target_removal_triggers_with_reason(self) -> None:
+        """删除 CI 相关 target 应触发并给出准确原因"""
+        files, reasons = filter_critical_files_with_reasons(
+            ["Makefile"],
+            makefile_old_targets={"validate-workflows", "lint"},
+            makefile_new_targets={"lint"},
+            makefile_required_targets={"validate-workflows"},
+        )
+
+        assert "Makefile" in files
+        assert reasons["Makefile"] == "Makefile target changed: validate-workflows"
+
+    def test_makefile_target_rename_triggers_when_required(self) -> None:
+        """当 required target 被重命名时应触发"""
+        files, reasons = filter_critical_files_with_reasons(
+            ["Makefile"],
+            makefile_old_targets={"validate-workflows"},
+            makefile_new_targets={"validate-workflows-strict"},
+            makefile_required_targets={"validate-workflows"},
+        )
+
+        assert "Makefile" in files
+        assert reasons["Makefile"] == "Makefile target changed: validate-workflows"
+
+    def test_makefile_target_change_unrelated_does_not_trigger(self) -> None:
+        """无关 target 结构化变更不应触发"""
+        files, reasons = filter_critical_files_with_reasons(
+            ["Makefile"],
+            makefile_old_targets={"lint"},
+            makefile_new_targets={"lint", "format"},
+            makefile_required_targets={"ci"},
+            workflow_make_targets={"ci"},
+        )
+
+        assert "Makefile" not in files
+        assert reasons == {}
+
+
+# ============================================================================
+# Test: Makefile rename similarity threshold boundaries
+# ============================================================================
+
+
+class TestMakefileRenameSimilarityThreshold:
+    """测试重命名相似度阈值边界行为稳定"""
+
+    def test_similarity_threshold_boundaries(self) -> None:
+        """0.59/0.60/0.61 阈值边界应稳定"""
+        base_name = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
+        candidate = "alpha beta gamma delta epsilon zeta lambda mu nu xi"
+
+        assert is_string_similar(base_name, candidate, threshold=0.59) is True
+        assert is_string_similar(base_name, candidate, threshold=0.60) is True
+        assert is_string_similar(base_name, candidate, threshold=0.61) is False
+
+
 # ============================================================================
 # Test: bump 但未更新 contract.md 版本表的报错信息稳定
 # ============================================================================
@@ -1293,11 +1583,10 @@ class TestRuleGroupsConstants:
     """测试 RuleGroups 常量定义"""
 
     def test_workflow_files_defined(self) -> None:
-        """WORKFLOW_FILES 应定义 Phase 1 workflow 文件"""
+        """WORKFLOW_FILES 应定义 workflow 文件"""
         assert ".github/workflows/ci.yml" in RuleGroups.WORKFLOW_FILES
         assert ".github/workflows/nightly.yml" in RuleGroups.WORKFLOW_FILES
-        # Phase 2 的 release.yml 当前不在列表中
-        assert ".github/workflows/release.yml" not in RuleGroups.WORKFLOW_FILES
+        assert ".github/workflows/release.yml" in RuleGroups.WORKFLOW_FILES
 
     def test_critical_tooling_scripts_defined(self) -> None:
         """CRITICAL_TOOLING_SCRIPTS 应定义关键工具脚本"""

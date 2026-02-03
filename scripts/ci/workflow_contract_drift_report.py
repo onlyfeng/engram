@@ -20,6 +20,13 @@ Workflow Contract Drift Report Generator
     # 输出到文件
     python scripts/ci/workflow_contract_drift_report.py --output drift_report.json
 
+    # 输出到 artifacts（便于 PR 评审/上传）
+    python scripts/ci/workflow_contract_drift_report.py --output artifacts/workflow_contract_drift.json
+    python scripts/ci/workflow_contract_drift_report.py --markdown --output artifacts/workflow_contract_drift.md
+
+    # 或使用 Make target（同时生成 JSON + Markdown）
+    make workflow-contract-drift-report-all
+
     # 只检查 ci workflow
     python scripts/ci/workflow_contract_drift_report.py --workflow ci
 
@@ -622,7 +629,7 @@ class WorkflowContractDriftAnalyzer:
         # 收集实际调用的 targets
         actual_targets: set[str] = set()
         for call in make_calls:
-            actual_targets.add(call["target"])
+            actual_targets.add(call.target)
 
         # 检查 contract 中要求但 workflow 未调用的 targets (removed)
         for target in targets_required - actual_targets:
@@ -871,7 +878,7 @@ class WorkflowContractDriftAnalyzer:
             workflow_path = self.workspace_root / workflow_file
             make_calls = extract_workflow_make_calls(workflow_path)
             for call in make_calls:
-                all_workflow_targets.add(call["target"])
+                all_workflow_targets.add(call.target)
 
         # 检查 workflow 中调用但 contract 未要求的 targets (added)
         for target in all_workflow_targets - targets_required:

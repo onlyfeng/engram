@@ -1,4 +1,4 @@
-# CI/Nightly Workflow 耦合映射
+# CI/Nightly/Release Workflow 耦合映射
 
 > 本文档记录 workflow 与 Makefile targets、环境变量、产物路径的耦合关系。
 
@@ -60,12 +60,14 @@
 | `check-gateway-import-surface` | CI/workflow 必需 |
 | `check-gateway-public-api-surface` | CI/workflow 必需 |
 | `check-iteration-docs` | CI/workflow 必需 |
+| `check-iteration-fixtures-freshness` | CI/workflow 必需 |
 | `check-logbook-consistency` | CI/workflow 必需 |
 | `check-migration-sanity` | CI/workflow 必需 |
 | `check-schemas` | CI/workflow 必需 |
 | `check-scm-sync-consistency` | CI/workflow 必需 |
 | `check-workflow-contract-doc-anchors` | CI/workflow 必需 |
 | `check-workflow-contract-docs-sync` | CI/workflow 必需 |
+| `check-workflow-contract-error-types-docs-sync` | CI/workflow 必需 |
 | `check-workflow-contract-internal-consistency` | CI/workflow 必需 |
 | `check-workflow-contract-version-policy` | CI/workflow 必需 |
 | `check-workflow-make-targets-consistency` | CI/workflow 必需 |
@@ -240,9 +242,60 @@
 
 ---
 
-## 3. Makefile Targets 清单
+## 3. Release Workflow Jobs 与产物映射
 
-### 3.1 CI 使用的核心目标
+### 3.1 build job
+
+| 属性 | 值 |
+|------|-----|
+| Job ID | `build` |
+| Job Name | `Build Release` |
+
+**产物上传**：
+
+| Artifact 名称 | 文件路径 | 保留天数 |
+|--------------|----------|----------|
+| `release-artifacts` | `dist/*.whl`, `dist/*.tar.gz` | 14 |
+
+**执行步骤**：
+- `Checkout repository`
+- `Set up Python`
+- `Install dependencies`
+- `Build package`
+- `Upload release artifacts`
+
+### 3.2 publish job
+
+| 属性 | 值 |
+|------|-----|
+| Job ID | `publish` |
+| Job Name | `Publish Release Artifacts` |
+| 依赖 | `build` |
+
+**产物下载**：`release-artifacts` → `dist/`
+
+**workflow_dispatch 输入**：
+
+| 输入 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `publish` | boolean | false | 是否执行发布步骤 |
+| `release_tag` | string | "" | 可选的发布标签 |
+
+### 3.3 notify job
+
+| 属性 | 值 |
+|------|-----|
+| Job ID | `notify` |
+| Job Name | `Notify Release` |
+| 依赖 | `build`, `publish` |
+
+**说明**：当前仅输出结果信息，不依赖 Makefile 目标。
+
+---
+
+## 4. Makefile Targets 清单
+
+### 4.1 CI 使用的核心目标
 
 | Target | 说明 | 使用场景 |
 |--------|------|----------|
@@ -262,7 +315,7 @@
 | `check-gateway-correlation-id-single-source` | Gateway `correlation_id` 单一来源检查 | gateway-correlation-id-single-source job |
 | `check-mcp-error-contract` | MCP JSON-RPC 错误码合约检查 | mcp-error-contract job |
 
-### 3.2 Nightly 使用的核心目标
+### 4.2 Nightly 使用的核心目标
 
 | Target | 说明 | 使用场景 |
 |--------|------|----------|
@@ -273,7 +326,7 @@
 | `apply-openmemory-grants` | 应用 OpenMemory 权限 | 数据库初始化 |
 | `iteration-audit` | 迭代文档审计 | iteration-audit job |
 
-### 3.3 测试相关目标
+### 4.3 测试相关目标
 
 | Target | 说明 |
 |--------|------|
@@ -283,7 +336,7 @@
 | `test-gateway-integration` | Gateway 集成测试 |
 | `test-gateway-integration-full` | Gateway 完整集成测试 |
 
-### 3.4 验证相关目标
+### 4.4 验证相关目标
 
 | Target | 说明 |
 |--------|------|
@@ -295,7 +348,7 @@
 
 ---
 
-## 4. 合约文件引用
+## 5. 合约文件引用
 
 | 文件 | 用途 |
 |------|------|
@@ -305,10 +358,11 @@
 
 ---
 
-## 5. 版本控制
+## 6. 版本控制
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.2 | 2026-02-03 | 新增 release workflow 耦合映射（build/publish/notify） |
 | v2.1 | 2026-02-02 | 补全缺失的 CI jobs（gateway-import-surface, gateway-public-api-surface, gateway-correlation-id-single-source, mcp-error-contract, iteration-tools-test）；新增 nightly iteration-audit job；补全相关 make targets |
 | v2.0 | 2026-02-02 | 重写为 Phase 1 重构后的新 workflow 结构；移除旧的 detect-changes 耦合映射；更新产物路径和环境变量 |
 | v1.1 | 2026-01-30 | 新增 Acceptance 产物归档路径章节 |

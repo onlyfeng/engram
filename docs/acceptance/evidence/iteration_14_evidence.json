@@ -1,32 +1,20 @@
 {
-  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
   "iteration_number": 14,
-  "recorded_at": "2026-02-02T01:15:50Z",
-  "commit_sha": "2633ebb8528406f5d3602675b2e438a9c7505b91",
+  "recorded_at": "2026-02-03T03:19:19Z",
+  "commit_sha": "abc1234567890",
   "runner": {
     "os": "darwin-24.6.0",
     "python": "3.13.2",
     "arch": "x86_64"
   },
+  "source": {
+    "source_path": "docs/acceptance/iteration_14_regression.md"
+  },
   "commands": [
     {
       "name": "ci",
       "command": "make ci",
-      "result": "PASS"
-    },
-    {
-      "name": "doc_check",
-      "command": "make check-iteration-docs",
-      "result": "PASS"
-    },
-    {
-      "name": "ci_tests",
-      "command": "pytest tests/ci/ -q",
-      "result": "PASS"
-    },
-    {
-      "name": "iteration_tests",
-      "command": "pytest tests/iteration/ -q",
       "result": "PASS"
     }
   ],

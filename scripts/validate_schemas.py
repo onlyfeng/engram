@@ -56,6 +56,7 @@ DEFAULT_FIXTURES_DIR = "fixtures"  # 相对于 schemas/ 目录
 # 例: scm_sync_job_payload_v1.schema.json -> fixtures/scm_sync_job_payload_v1/
 SCHEMA_FIXTURE_MAPPING = {
     "audit_event_v1.schema.json": "audit_event_v1",
+    "iteration_evidence_v2.schema.json": "iteration_evidence_v2",
     "object_store_audit_event_v1.schema.json": "object_store_audit_event_v1",
     "scm_sync_job_payload_v1.schema.json": "scm_sync_job_payload_v1",
     "scm_sync_run_v1.schema.json": "scm_sync_run_v1",
@@ -64,8 +65,12 @@ SCHEMA_FIXTURE_MAPPING = {
 # 需要校验的 schema 文件列表（相对于 schemas/ 目录）
 SCHEMA_FILES = [
     "audit_event_v1.schema.json",
+    "iteration_evidence_v2.schema.json",
+    "iteration_gate_profiles_v1.schema.json",
+    "iteration_toolchain_drift_map_v1.schema.json",
     "object_store_audit_event_v1.schema.json",
     "reliability_report_v1.schema.json",
+    "workflow_contract_drift_report_v1.schema.json",
     "scm_sync_job_payload_v1.schema.json",
     "scm_sync_result_v1.schema.json",
     "scm_sync_run_v1.schema.json",
