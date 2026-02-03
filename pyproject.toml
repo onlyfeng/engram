@@ -61,6 +61,8 @@ dev = [
     "types-PyYAML>=6.0.0",
     "boto3-stubs[s3]>=1.28.0",
     "types-psycopg2>=2.9.0",
+    # tomli 无条件安装用于 mypy 检查（运行时 Python 3.11+ 使用 tomllib）
+    "tomli>=2.0",
 ]
 
 [project.scripts]
