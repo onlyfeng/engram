@@ -155,7 +155,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[full,dev]"
 
       - name: Run ruff check (lint)
         run: ruff check src/ tests/
@@ -465,7 +465,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[full,dev]"
 
       - name: Check SCM Sync consistency
         run: |
