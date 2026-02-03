@@ -482,7 +482,7 @@ class TestTwoPhaseAuditIntendedAction:
 
     覆盖场景：
     1. deferred 路径时 evidence_refs_json 包含 intended_action
-    2. intended_action 反映原策略决策
+    2. intended_action 记录为 deferred
     """
 
     @pytest.mark.asyncio
@@ -532,9 +532,9 @@ class TestTwoPhaseAuditIntendedAction:
         assert "intended_action" in evidence, (
             f"evidence_refs_json 应包含 intended_action，实际: {evidence.keys()}"
         )
-        # intended_action 应为 allow 或 redirect（取决于策略决策）
-        assert evidence["intended_action"] in ("allow", "redirect"), (
-            f"intended_action 应为 allow 或 redirect，实际: {evidence['intended_action']}"
+        # intended_action 应为 deferred
+        assert evidence["intended_action"] == "deferred", (
+            f"intended_action 应为 deferred，实际: {evidence['intended_action']}"
         )
 
 
@@ -810,8 +810,8 @@ class TestEvidenceRefsJsonCrossStageQuery:
 
             assert row is not None, "应能查询到审计记录"
             intended_action = row[0]
-            assert intended_action in ("allow", "redirect"), (
-                f"intended_action 应为 allow 或 redirect，实际: {intended_action}"
+            assert intended_action == "deferred", (
+                f"intended_action 应为 deferred，实际: {intended_action}"
             )
 
 

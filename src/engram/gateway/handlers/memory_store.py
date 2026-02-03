@@ -774,6 +774,7 @@ def _handle_openmemory_failure(
         error_code = "unknown"
 
     # 构建失败审计
+    reason_with_outbox = f"{error_reason}:outbox:{outbox_id}"
     failure_gateway_event = build_gateway_audit_event(
         operation="memory_store",
         correlation_id=correlation_id,
@@ -781,7 +782,7 @@ def _handle_openmemory_failure(
         requested_space=target_space,
         final_space=final_space,
         action="redirect",
-        reason=error_reason,
+        reason=reason_with_outbox,
         payload_sha=payload_sha,
         payload_len=len(payload_md),
         evidence=normalized_evidence,
@@ -801,7 +802,7 @@ def _handle_openmemory_failure(
         validate_refs_effective=validate_refs_effective,
         validate_refs_reason=validate_refs_reason,
         evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
-        intended_action=decision.action.value,
+        intended_action="deferred",
     )
     failure_evidence_refs_json = build_evidence_refs_json(
         evidence=normalized_evidence, gateway_event=failure_gateway_event
@@ -812,7 +813,7 @@ def _handle_openmemory_failure(
             actor_user_id=actor_user_id,
             target_space=final_space,
             action="redirect",
-            reason=error_reason,
+            reason=reason_with_outbox,
             payload_sha=payload_sha,
             evidence_refs_json=failure_evidence_refs_json,
             validate_refs=validate_refs_effective,

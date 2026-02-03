@@ -441,6 +441,8 @@ class FakeLogbookDatabase:
         payload_sha: Optional[str] = None,
         evidence_refs_json: Optional[Dict] = None,
         validate_refs: bool = False,
+        correlation_id: Optional[str] = None,
+        status: str = "success",
     ) -> int:
         """写入审计日志"""
         call_record = {
@@ -451,6 +453,8 @@ class FakeLogbookDatabase:
             "payload_sha": payload_sha,
             "evidence_refs_json": evidence_refs_json,
             "validate_refs": validate_refs,
+            "correlation_id": correlation_id,
+            "status": status,
         }
         self.audit_calls.append(call_record)
 
