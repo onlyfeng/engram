@@ -305,6 +305,99 @@ def migrated_db(test_db_info: dict) -> Generator[dict, None, None]:
     }
 
 
+# ---------- schema_prefix / prefixed fixtures ----------
+
+
+@pytest.fixture(scope="module")
+def schema_prefix() -> str:
+    """生成 module 级 schema_prefix（用于两阶段审计隔离）"""
+    short_id = uuid.uuid4().hex[:8]
+    return f"tp_{short_id}"
+
+
+@pytest.fixture(scope="module")
+def prefixed_schema_context(schema_prefix: str):
+    """
+    设置带前缀的 SchemaContext（module scope）
+
+    - 设置 ENGRAM_TESTING=1
+    - 注册全局 SchemaContext
+    - teardown 时强制清理
+    """
+    from engram.logbook.schema_context import (
+        SchemaContext,
+        reset_schema_context,
+        set_schema_context,
+    )
+
+    old_engram_testing = os.environ.get("ENGRAM_TESTING")
+    os.environ["ENGRAM_TESTING"] = "1"
+
+    ctx = SchemaContext(schema_prefix=schema_prefix)
+    set_schema_context(ctx)
+
+    yield ctx
+
+    # 强 teardown
+    reset_schema_context()
+    try:
+        from engram.gateway import logbook_adapter
+
+        logbook_adapter.reset_adapter()
+    except ImportError:
+        pass
+
+    if old_engram_testing is None:
+        os.environ.pop("ENGRAM_TESTING", None)
+    else:
+        os.environ["ENGRAM_TESTING"] = old_engram_testing
+
+
+@pytest.fixture(scope="module")
+def migrated_db_prefixed(
+    test_db_info: dict,
+    prefixed_schema_context,
+) -> Generator[dict, None, None]:
+    """
+    在测试数据库中执行迁移，使用带前缀的 schema（module scope）
+    """
+    from engram.logbook.migrate import run_migrate
+    from engram.logbook.schema_context import SCHEMA_SUFFIXES
+
+    dsn = test_db_info["dsn"]
+    schema_prefix = prefixed_schema_context.schema_prefix
+
+    result = run_migrate(dsn=dsn, schema_prefix=schema_prefix, quiet=True)
+
+    if not result.get("ok"):
+        pytest.fail(
+            f"带前缀的数据库迁移失败: {result.get('message', 'unknown error')}\n"
+            f"Detail: {result.get('detail')}"
+        )
+
+    yield {
+        "dsn": dsn,
+        "db_name": test_db_info["db_name"],
+        "worker_id": test_db_info["worker_id"],
+        "schema_prefix": schema_prefix,
+        "schema_context": prefixed_schema_context,
+        "schemas": prefixed_schema_context.all_schemas,
+    }
+
+    # teardown: DROP SCHEMA
+    try:
+        conn = psycopg.connect(dsn, autocommit=True)
+        with conn.cursor() as cur:
+            for suffix in SCHEMA_SUFFIXES:
+                schema_name = f"{schema_prefix}_{suffix}"
+                cur.execute(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
+        conn.close()
+    except Exception as e:
+        import warnings
+
+        warnings.warn(f"清理带前缀的 schema 失败: {e}")
+
+
 # ---------- search_path 辅助函数 ----------
 
 
@@ -401,6 +494,40 @@ def db_conn_committed(migrated_db: dict) -> Generator[psycopg.Connection, None, 
         search_path = build_search_path(schemas)
         with conn.cursor() as cur:
             cur.execute(f"SET search_path TO {search_path}")
+
+        yield conn
+    finally:
+        conn.close()
+
+
+@pytest.fixture(scope="function")
+def db_conn_prefixed_committed(
+    migrated_db_prefixed: dict,
+) -> Generator[psycopg.Connection, None, None]:
+    """
+    提供一个使用带前缀 schema 的可提交数据库连接
+    """
+    dsn = migrated_db_prefixed["dsn"]
+    schema_context = migrated_db_prefixed["schema_context"]
+
+    try:
+        conn = psycopg.connect(dsn, autocommit=False)
+    except psycopg.OperationalError as e:
+        error_msg = str(e).lower()
+        if "connection refused" in error_msg:
+            pytest.skip(
+                f"数据库连接被拒绝\n测试数据库可能已被删除或 PostgreSQL 服务已停止。\n详细错误: {e}"
+            )
+        else:
+            pytest.skip(f"无法连接测试数据库\nDSN: {dsn.split('@')[0]}@...\n详细错误: {e}")
+        return
+    except Exception as e:
+        pytest.skip(f"无法连接测试数据库\n错误类型: {type(e).__name__}\n详细错误: {e}")
+        return
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET search_path TO {schema_context.search_path_sql}")
 
         yield conn
     finally:

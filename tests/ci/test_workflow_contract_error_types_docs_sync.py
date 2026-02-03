@@ -70,6 +70,13 @@ def _build_doc(
     ):
         if key in omit_sections:
             continue
+        if key == "drift_types":
+            parts.extend(
+                [
+                    "### 13.4 workflow_contract_drift_report.py 漂移类型",
+                    "",
+                ]
+            )
         heading = SECTION_HEADINGS[key]
         parts.extend([heading, _make_table(values_for(key), TABLE_HEADERS[key]), ""])
 

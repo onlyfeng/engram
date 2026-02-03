@@ -820,7 +820,9 @@ GLOB_TOKEN_PATTERN = re.compile(r"\*|\?|\[[^\]]*]")
 
 def _split_glob_fixed_fragments(pattern: str) -> list[str]:
     """将 glob 模式拆分为固定片段列表"""
-    return [fragment for fragment in GLOB_TOKEN_PATTERN.split(pattern) if fragment]
+    fragments = [fragment for fragment in GLOB_TOKEN_PATTERN.split(pattern) if fragment]
+    # 仅保留包含字母或数字的片段（过滤纯分隔符）
+    return [fragment for fragment in fragments if any(ch.isalnum() for ch in fragment)]
 
 
 def artifact_path_lookup_tokens(path: str) -> list[tuple[str, ...]]:
