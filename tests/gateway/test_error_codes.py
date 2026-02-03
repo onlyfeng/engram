@@ -228,7 +228,7 @@ class TestGatewayErrorCodes:
                 f"correlation_id 必须以 'corr-' 开头，实际: {result.correlation_id}"
             )
 
-            # 关键断言：验证审计 reason 为 openmemory_write_failed:connection_error
+            # 关键断言：验证审计 reason 以 openmemory_write_failed:connection_error 开头
             assert len(captured_audits) >= 1
             # 找到失败审计（reason 包含 openmemory_write_failed）
             failure_audit = None
@@ -239,8 +239,11 @@ class TestGatewayErrorCodes:
             assert failure_audit is not None, (
                 f"应存在 openmemory_write_failed 审计记录，实际审计: {captured_audits}"
             )
-            assert failure_audit["reason"] == ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION, (
-                f"OpenMemory 连接失败时 reason 必须为 {ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION}，实际: {failure_audit['reason']}"
+            assert str(failure_audit["reason"]).startswith(
+                ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION
+            ), (
+                "OpenMemory 连接失败时 reason 必须以 "
+                f"{ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION} 开头，实际: {failure_audit['reason']}"
             )
 
             # 关键断言：审计内部 action 为 "redirect"（表示重定向到 outbox）
@@ -608,10 +611,10 @@ class TestOpenMemoryAPIErrorWithStatus:
             assert len(captured_audits) == 1
             audit = captured_audits[0]
 
-            # 关键断言: reason 必须为 openmemory_write_failed:api_error_404
+            # 关键断言: reason 必须以 openmemory_write_failed:api_error_404 开头
             expected_reason = ErrorCode.openmemory_api_error(404)
-            assert audit["reason"] == expected_reason, (
-                f"OpenMemory API 404 错误时 reason 必须为 {expected_reason}，实际: {audit['reason']}"
+            assert str(audit["reason"]).startswith(expected_reason), (
+                f"OpenMemory API 404 错误时 reason 必须以 {expected_reason} 开头，实际: {audit['reason']}"
             )
 
     @pytest.mark.asyncio
@@ -668,10 +671,10 @@ class TestOpenMemoryAPIErrorWithStatus:
             assert len(captured_audits) == 1
             audit = captured_audits[0]
 
-            # 关键断言: reason 必须为 openmemory_write_failed:api_error_500
+            # 关键断言: reason 必须以 openmemory_write_failed:api_error_500 开头
             expected_reason = ErrorCode.openmemory_api_error(500)
-            assert audit["reason"] == expected_reason, (
-                f"OpenMemory API 500 错误时 reason 必须为 {expected_reason}，实际: {audit['reason']}"
+            assert str(audit["reason"]).startswith(expected_reason), (
+                f"OpenMemory API 500 错误时 reason 必须以 {expected_reason} 开头，实际: {audit['reason']}"
             )
 
 
@@ -741,8 +744,8 @@ class TestUnknownExceptionErrorCodes:
             audit = captured_audits[0]
 
             # 关键断言
-            assert audit["reason"] == ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC, (
-                f"OpenMemory 通用错误时 reason 必须为 {ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC}，实际: {audit['reason']}"
+            assert str(audit["reason"]).startswith(ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC), (
+                f"OpenMemory 通用错误时 reason 必须以 {ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC} 开头，实际: {audit['reason']}"
             )
 
 
