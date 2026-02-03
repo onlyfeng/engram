@@ -102,8 +102,36 @@ class WriteAuditRow(TypedDict, total=False):
     reason: Optional[str]
     payload_sha: Optional[str]
     evidence_refs_json: EvidenceRefsJson
+    correlation_id: Optional[str]
+    status: str
     created_at: datetime
+    updated_at: Optional[datetime]
 
+
+VALID_WRITE_AUDIT_STATUSES = {"pending", "success", "failed", "redirected"}
+
+
+def _validate_write_audit_status(status: Optional[str]) -> str:
+    """
+    校验 write_audit.status 的取值
+
+    Args:
+        status: 待校验状态
+
+    Returns:
+        合法状态（默认 success）
+
+    Raises:
+        ValidationError: 当 status 不合法时
+    """
+    if not status:
+        return "success"
+    if status not in VALID_WRITE_AUDIT_STATUSES:
+        raise ValidationError(
+            "status 取值非法",
+            {"status": status, "allowed": sorted(VALID_WRITE_AUDIT_STATUSES)},
+        )
+    return status
 
 def _validate_policy_json(policy_json: Any) -> Dict:
     """
@@ -356,6 +384,8 @@ def query_write_audit(
     action: Optional[str] = None,
     target_space: Optional[str] = None,
     reason_prefix: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+    status: Optional[str] = None,
     config: Optional[Config] = None,
 ) -> List[WriteAuditRow]:
     """
@@ -368,6 +398,8 @@ def query_write_audit(
         action: 按 action 筛选 (allow/redirect/reject)
         target_space: 按 target_space 筛选
         reason_prefix: 按 reason 前缀筛选（例如 "policy:" 或 "outbox_flush_"）
+        correlation_id: 按 correlation_id 筛选
+        status: 按 status 筛选 (pending/success/failed/redirected)
         config: 配置实例
 
     Returns:
@@ -403,13 +435,23 @@ def query_write_audit(
                 conditions.append("reason LIKE %s")
                 params.append(f"{reason_prefix}%")
 
+            if correlation_id:
+                conditions.append("correlation_id = %s")
+                params.append(correlation_id)
+
+            if status:
+                status = _validate_write_audit_status(status)
+                conditions.append("status = %s")
+                params.append(status)
+
             where_clause = ""
             if conditions:
                 where_clause = "WHERE " + " AND ".join(conditions)
 
             query = f"""
                 SELECT audit_id, actor_user_id, target_space, action, reason,
-                       payload_sha, evidence_refs_json, created_at
+                       payload_sha, evidence_refs_json, correlation_id, status,
+                       created_at, updated_at
                 FROM write_audit
                 {where_clause}
                 ORDER BY created_at DESC
@@ -430,7 +472,10 @@ def query_write_audit(
                     "reason": str(row[4]) if row[4] else None,
                     "payload_sha": str(row[5]) if row[5] else None,
                     "evidence_refs_json": cast(EvidenceRefsJson, row[6]) if row[6] else {},
-                    "created_at": row[7],
+                    "correlation_id": str(row[7]) if row[7] else None,
+                    "status": str(row[8]) if row[8] else "success",
+                    "created_at": row[9],
+                    "updated_at": row[10],
                 }
                 results.append(audit_row)
             return results
@@ -438,6 +483,143 @@ def query_write_audit(
         raise DatabaseError(
             f"查询 write_audit 失败: {e}",
             {"error": str(e)},
+        )
+    finally:
+        conn.close()
+
+
+def get_write_audit_by_correlation_id(
+    correlation_id: str,
+    config: Optional[Config] = None,
+) -> List[WriteAuditRow]:
+    """
+    根据 correlation_id 查询 write_audit 记录
+
+    Args:
+        correlation_id: 关联追踪 ID
+        config: 配置实例
+
+    Returns:
+        审计记录列表（List[WriteAuditRow]）
+    """
+    if not correlation_id:
+        raise ValidationError(
+            "correlation_id 不能为空",
+            {"correlation_id": correlation_id},
+        )
+
+    conn = get_connection(config=config)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT audit_id, actor_user_id, target_space, action, reason,
+                       payload_sha, evidence_refs_json, correlation_id, status,
+                       created_at, updated_at
+                FROM write_audit
+                WHERE correlation_id = %s
+                ORDER BY created_at DESC
+                """,
+                (correlation_id,),
+            )
+            rows = cur.fetchall()
+            results: List[WriteAuditRow] = []
+            for row in rows:
+                audit_row: WriteAuditRow = {
+                    "audit_id": int(row[0]),
+                    "actor_user_id": str(row[1]) if row[1] else None,
+                    "target_space": str(row[2]),
+                    "action": str(row[3]),
+                    "reason": str(row[4]) if row[4] else None,
+                    "payload_sha": str(row[5]) if row[5] else None,
+                    "evidence_refs_json": cast(EvidenceRefsJson, row[6]) if row[6] else {},
+                    "correlation_id": str(row[7]) if row[7] else None,
+                    "status": str(row[8]) if row[8] else "success",
+                    "created_at": row[9],
+                    "updated_at": row[10],
+                }
+                results.append(audit_row)
+            return results
+    except psycopg.Error as e:
+        raise DatabaseError(
+            f"按 correlation_id 查询 write_audit 失败: {e}",
+            {"correlation_id": correlation_id, "error": str(e)},
+        )
+    finally:
+        conn.close()
+
+
+def update_write_audit(
+    correlation_id: str,
+    status: str,
+    reason_suffix: Optional[str] = None,
+    evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+    config: Optional[Config] = None,
+) -> int:
+    """
+    更新 write_audit 记录的最终状态（仅更新 pending 记录）
+
+    Args:
+        correlation_id: 关联追踪 ID
+        status: 最终状态（success/failed/redirected）
+        reason_suffix: 追加到原 reason 的后缀
+        evidence_refs_json_patch: 合并到 evidence_refs_json 顶层的字段
+        config: 配置实例
+
+    Returns:
+        更新的记录数
+    """
+    if not correlation_id:
+        raise ValidationError(
+            "correlation_id 不能为空",
+            {"correlation_id": correlation_id},
+        )
+
+    status = _validate_write_audit_status(status)
+
+    if evidence_refs_json_patch is not None and not isinstance(evidence_refs_json_patch, dict):
+        raise ValidationError(
+            "evidence_refs_json_patch 必须是 dict 类型",
+            {"actual_type": type(evidence_refs_json_patch).__name__},
+        )
+
+    set_parts: List[str] = ["status = %s", "updated_at = now()"]
+    params: List[Any] = [status]
+
+    if reason_suffix is not None:
+        set_parts.append(
+            "reason = CASE WHEN reason IS NULL OR reason = '' "
+            "THEN %s ELSE reason || ' ' || %s END"
+        )
+        params.extend([reason_suffix, reason_suffix])
+
+    if evidence_refs_json_patch is not None:
+        set_parts.append(
+            "evidence_refs_json = COALESCE(evidence_refs_json, '{}'::jsonb) || %s::jsonb"
+        )
+        params.append(json.dumps(evidence_refs_json_patch))
+
+    set_clause = ", ".join(set_parts)
+
+    conn = get_connection(config=config)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE write_audit
+                SET {set_clause}
+                WHERE correlation_id = %s AND status = 'pending'
+                """,
+                (*params, correlation_id),
+            )
+            updated = cur.rowcount
+            conn.commit()
+            return int(updated)
+    except psycopg.Error as e:
+        conn.rollback()
+        raise DatabaseError(
+            f"更新 write_audit 失败: {e}",
+            {"correlation_id": correlation_id, "error": str(e)},
         )
     finally:
         conn.close()
@@ -548,6 +730,8 @@ def insert_write_audit(
     reason: Optional[str] = None,
     payload_sha: Optional[str] = None,
     evidence_refs_json: Optional[Union[EvidenceRefsJson, Dict[str, Any]]] = None,
+    correlation_id: Optional[str] = None,
+    status: str = "success",
     config: Optional[Config] = None,
     validate_refs: bool = False,
 ) -> int:
@@ -561,6 +745,8 @@ def insert_write_audit(
         reason: 操作原因
         payload_sha: 负载 SHA256 哈希
         evidence_refs_json: 证据引用 JSON（推荐使用 build_evidence_refs_json 构建）
+        correlation_id: 关联追踪 ID（可选）
+        status: 审计状态（success/failed/redirected/pending）
         config: 配置实例
         validate_refs: 是否验证 evidence_refs_json 结构（默认 False）
 
@@ -592,6 +778,8 @@ def insert_write_audit(
         insert_write_audit(actor, space, "allow", evidence_refs_json=evidence)
     """
     evidence_refs = evidence_refs_json or {}
+    status = _validate_write_audit_status(status)
+    correlation_id = correlation_id or None
 
     # 可选验证
     if validate_refs and evidence_refs:
@@ -612,8 +800,9 @@ def insert_write_audit(
             cur.execute(
                 """
                 INSERT INTO write_audit
-                    (actor_user_id, target_space, action, reason, payload_sha, evidence_refs_json)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (actor_user_id, target_space, action, reason, payload_sha, evidence_refs_json,
+                     correlation_id, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING audit_id
                 """,
                 (
@@ -623,6 +812,8 @@ def insert_write_audit(
                     reason,
                     payload_sha,
                     json.dumps(evidence_refs),
+                    correlation_id,
+                    status or "success",
                 ),
             )
             result = cur.fetchone()

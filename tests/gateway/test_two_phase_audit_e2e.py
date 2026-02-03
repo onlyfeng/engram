@@ -817,10 +817,10 @@ class TestEvidenceRefsJsonCrossStageQuery:
 
 class TestTwoPhaseAuditRejectPath:
     """
-    测试两阶段审计的 REJECT 路径
+    测试两阶段审计的 REJECT/REDIRECT 路径
 
     覆盖场景：
-    1. 策略拒绝（team_write_enabled=False）
+    1. 策略重定向（team_write_enabled=False）
     2. Strict 模式 evidence 校验失败（缺少 sha256）
     3. correlation_id 一致性追踪
     4. 验证顶层 evidence_refs_json 字段满足查询契约
@@ -831,16 +831,16 @@ class TestTwoPhaseAuditRejectPath:
     """
 
     @pytest.mark.asyncio
-    async def test_policy_reject_single_audit_record(
+    async def test_policy_redirect_single_audit_record(
         self, two_phase_env, db_conn_prefixed_committed, test_correlation_id
     ):
         """
-        测试策略拒绝场景：只产生一条 reject 审计记录
+        测试策略重定向场景：只产生一条 redirect 审计记录
 
-        场景：team_write_enabled=False，策略判定为 REJECT
+        场景：team_write_enabled=False，策略判定为 REDIRECT
         验证：
         1. 用 SQL 统计该 correlation_id 的 write_audit 行数应为 1
-        2. 断言 status != 'pending' 且 action='reject'
+        2. 断言 status != 'pending' 且 action='redirect'
         3. 验证顶层 evidence_refs_json 包含 source/correlation_id/payload_sha
         """
         from engram.gateway.di import GatewayDeps
@@ -856,7 +856,7 @@ class TestTwoPhaseAuditRejectPath:
         # 创建真实 LogbookAdapter 依赖
         real_adapter = LogbookAdapter(dsn=dsn)
 
-        # 创建 Fake OpenMemory Client（不会被调用，因为策略拒绝）
+        # 创建 Fake OpenMemory Client（redirect 路径仍会调用）
         fake_client = FakeOpenMemoryClient()
         fake_client.configure_store_success(memory_id="should_not_be_called")
 
@@ -864,7 +864,7 @@ class TestTwoPhaseAuditRejectPath:
         fake_config = FakeGatewayConfig()
         fake_config.postgres_dsn = dsn
 
-        # 配置 settings：禁用团队写入以触发策略拒绝
+        # 配置 settings：禁用团队写入以触发策略重定向
         # 注意：使用 real_adapter，需要通过数据库配置 settings
         # 先更新治理设置
         real_adapter.update_governance_settings(
@@ -881,19 +881,20 @@ class TestTwoPhaseAuditRejectPath:
 
         # 调用 memory_store_impl
         result = await memory_store_impl(
-            payload_md="测试内容 - 策略拒绝路径",
+            payload_md="测试内容 - 策略重定向路径",
             target_space="team:restricted_project",  # 使用 team: 前缀触发 team_write 检查
             correlation_id=test_correlation_id,
             deps=deps,
         )
 
-        # 验证响应：策略拒绝
-        assert result.ok is False, f"策略拒绝时 ok 应为 False，实际: {result.ok}"
-        assert result.action == "reject", f"action 应为 reject，实际: {result.action}"
+        # 验证响应：策略重定向
+        assert result.ok is True, f"策略重定向时 ok 应为 True，实际: {result.ok}"
+        assert result.action == "redirect", f"action 应为 redirect，实际: {result.action}"
         assert result.correlation_id == test_correlation_id, "correlation_id 应一致"
 
-        # 使用辅助断言验证单阶段 reject（无 pending 状态）
-        audit = assert_single_stage_reject_no_pending(conn, test_correlation_id, governance_schema)
+        # 使用辅助断言验证审计记录（无 pending 状态）
+        audit = assert_two_phase_finalized(conn, test_correlation_id, "success", governance_schema)
+        assert audit["action"] == "redirect", f"action 应为 redirect，实际: {audit['action']}"
 
         # 使用辅助断言验证 evidence_refs_json 顶层契约
         evidence = audit["evidence_refs_json"]
@@ -1007,13 +1008,13 @@ class TestTwoPhaseAuditRejectPath:
         )
 
     @pytest.mark.asyncio
-    async def test_reject_path_evidence_refs_json_queryable(
+    async def test_redirect_path_evidence_refs_json_queryable(
         self, two_phase_env, db_conn_prefixed_committed, test_correlation_id
     ):
         """
-        测试 reject 路径的 evidence_refs_json 可通过 jsonb 操作符查询
+        测试 redirect 路径的 evidence_refs_json 可通过 jsonb 操作符查询
 
-        契约：reject 审计的 evidence_refs_json 顶层 gateway_event 必须包含
+        契约：redirect 审计的 evidence_refs_json 顶层 gateway_event 必须包含
         correlation_id/payload_sha，且可通过 jsonb 操作符查询。
         """
         from engram.gateway.di import GatewayDeps
@@ -1031,7 +1032,7 @@ class TestTwoPhaseAuditRejectPath:
         fake_config = FakeGatewayConfig()
         fake_config.postgres_dsn = dsn
 
-        # 配置 settings：禁用团队写入以触发策略拒绝
+        # 配置 settings：禁用团队写入以触发策略重定向
         real_adapter.update_governance_settings(
             project_key=fake_config.project_key,
             team_write_enabled=False,
@@ -1045,8 +1046,8 @@ class TestTwoPhaseAuditRejectPath:
         )
 
         await memory_store_impl(
-            payload_md="测试内容 - reject 路径 jsonb 查询",
-            target_space="team:reject_query_test",
+            payload_md="测试内容 - redirect 路径 jsonb 查询",
+            target_space="team:redirect_query_test",
             correlation_id=test_correlation_id,
             deps=deps,
         )
@@ -1070,7 +1071,7 @@ class TestTwoPhaseAuditRejectPath:
                 f"应能通过 evidence_refs_json->>'correlation_id' 查询到审计记录，"
                 f"correlation_id={test_correlation_id}"
             )
-            assert row[1] == "reject", f"查询到的 action 应为 reject，实际: {row[1]}"
+            assert row[1] == "redirect", f"查询到的 action 应为 redirect，实际: {row[1]}"
             assert row[2] != "pending", f"查询到的 status 不应为 pending，实际: {row[2]}"
 
             evidence_refs = row[3]
@@ -1108,14 +1109,14 @@ class TestTwoPhaseAuditRejectPath:
             )
 
     @pytest.mark.asyncio
-    async def test_reject_path_full_profile_verification(
+    async def test_redirect_path_full_profile_verification(
         self, two_phase_env, db_conn_prefixed_committed, test_correlation_id
     ):
         """
-        FULL profile 验收测试：完整验证 reject 路径的审计契约
+        FULL profile 验收测试：完整验证 redirect 路径的审计契约
 
         验证：
-        1. 策略拒绝只产生一条审计记录
+        1. 策略重定向只产生一条审计记录
         2. status 为最终状态（非 pending）
         3. evidence_refs_json 包含完整的 gateway_event 结构
         4. 所有必需字段存在且格式正确
@@ -1139,7 +1140,7 @@ class TestTwoPhaseAuditRejectPath:
         fake_config = FakeGatewayConfig()
         fake_config.postgres_dsn = dsn
 
-        # 配置 settings：禁用团队写入
+        # 配置 settings：禁用团队写入（触发重定向）
         real_adapter.update_governance_settings(
             project_key=fake_config.project_key,
             team_write_enabled=False,
@@ -1153,19 +1154,19 @@ class TestTwoPhaseAuditRejectPath:
         )
 
         result = await memory_store_impl(
-            payload_md="FULL profile 验收测试 - reject 路径",
-            target_space="team:full_profile_reject_test",
+            payload_md="FULL profile 验收测试 - redirect 路径",
+            target_space="team:full_profile_redirect_test",
             correlation_id=test_correlation_id,
             deps=deps,
         )
 
         # 验证响应
-        assert result.ok is False, "验收测试 reject 路径应返回 ok=False"
-        assert result.action == "reject"
+        assert result.ok is True, "验收测试 redirect 路径应返回 ok=True"
+        assert result.action == "redirect"
         assert result.correlation_id == test_correlation_id
 
-        # 使用辅助断言验证单阶段 reject
-        audit = assert_single_stage_reject_no_pending(conn, test_correlation_id, governance_schema)
+        # 使用辅助断言验证审计记录
+        audit = assert_two_phase_finalized(conn, test_correlation_id, "success", governance_schema)
         assert audit["correlation_id"] == test_correlation_id
         assert audit["payload_sha"] is not None, "payload_sha 不应为空"
         assert audit["created_at"] is not None, "created_at 不应为空"
@@ -1196,7 +1197,7 @@ class TestTwoPhaseAuditRejectPath:
 
         # 验证 decision 子结构
         decision = gateway_event["decision"]
-        assert decision["action"] == "reject"
+        assert decision["action"] == "redirect"
         assert decision["reason"] is not None
 
 

@@ -524,6 +524,8 @@ class LogbookAdapter:
         payload_sha: Optional[str] = None,
         evidence_refs_json: Optional[Dict] = None,
         validate_refs: bool = False,
+        correlation_id: Optional[str] = None,
+        status: str = "success",
     ) -> int:
         """
         写入审计日志
@@ -536,6 +538,8 @@ class LogbookAdapter:
             payload_sha: 记忆内容的 SHA256 哈希
             evidence_refs_json: 证据链引用
             validate_refs: 是否校验 evidence_refs 结构（默认 False，向后兼容）
+            correlation_id: 关联追踪 ID（可选）
+            status: 审计状态（success/failed/redirected/pending）
 
         Returns:
             创建的 audit_id
@@ -548,6 +552,8 @@ class LogbookAdapter:
             payload_sha=payload_sha,
             evidence_refs_json=evidence_refs_json,
             validate_refs=validate_refs,
+            correlation_id=correlation_id,
+            status=status,
             config=self._config,
         )
 
@@ -584,6 +590,33 @@ class LogbookAdapter:
             config=self._config,
         )
         return [dict(r) for r in results]
+
+    def update_write_audit(
+        self,
+        correlation_id: str,
+        status: str,
+        reason_suffix: Optional[str] = None,
+        evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """
+        更新审计记录的最终状态
+
+        Args:
+            correlation_id: 关联追踪 ID
+            status: 最终状态（success/failed/redirected）
+            reason_suffix: 追加到原 reason 的后缀
+            evidence_refs_json_patch: 需要合并到 evidence_refs_json 的字段
+
+        Returns:
+            更新的记录数
+        """
+        return governance.update_write_audit(
+            correlation_id=correlation_id,
+            status=status,
+            reason_suffix=reason_suffix,
+            evidence_refs_json_patch=evidence_refs_json_patch,
+            config=self._config,
+        )
 
     # ======================== logbook.items ========================
 
@@ -1610,6 +1643,8 @@ def insert_write_audit(
     payload_sha: Optional[str] = None,
     evidence_refs_json: Optional[Dict] = None,
     validate_refs: bool = False,
+    correlation_id: Optional[str] = None,
+    status: str = "success",
 ) -> int:
     """写入审计日志"""
     return get_adapter().insert_audit(
@@ -1620,6 +1655,23 @@ def insert_write_audit(
         payload_sha=payload_sha,
         evidence_refs_json=evidence_refs_json,
         validate_refs=validate_refs,
+        correlation_id=correlation_id,
+        status=status,
+    )
+
+
+def update_write_audit(
+    correlation_id: str,
+    status: str,
+    reason_suffix: Optional[str] = None,
+    evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+) -> int:
+    """更新审计记录的最终状态"""
+    return get_adapter().update_write_audit(
+        correlation_id=correlation_id,
+        status=status,
+        reason_suffix=reason_suffix,
+        evidence_refs_json_patch=evidence_refs_json_patch,
     )
 
 

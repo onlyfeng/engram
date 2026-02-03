@@ -232,6 +232,8 @@ class LogbookDatabase:
         payload_sha: Optional[str] = None,
         evidence_refs_json: Optional[Dict] = None,
         validate_refs: bool = False,
+        correlation_id: Optional[str] = None,
+        status: str = "success",
     ) -> int:
         """
         写入审计日志
@@ -244,6 +246,8 @@ class LogbookDatabase:
             payload_sha: 记忆内容的 SHA256 哈希
             evidence_refs_json: 证据链引用
             validate_refs: 是否校验 evidence_refs 结构（默认 False，向后兼容）
+            correlation_id: 关联追踪 ID（可选）
+            status: 审计状态（success/failed/redirected/pending）
 
         Returns:
             创建的 audit_id
@@ -257,6 +261,8 @@ class LogbookDatabase:
                 payload_sha=payload_sha,
                 evidence_refs_json=evidence_refs_json,
                 validate_refs=validate_refs,
+                correlation_id=correlation_id,
+                status=status,
             )
 
         # 回退实现（不支持 validate_refs，仅用于向后兼容）
@@ -268,8 +274,9 @@ class LogbookDatabase:
                 cur.execute(
                     """
                     INSERT INTO governance.write_audit
-                        (actor_user_id, target_space, action, reason, payload_sha, evidence_refs_json)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (actor_user_id, target_space, action, reason, payload_sha, evidence_refs_json,
+                         correlation_id, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING audit_id
                     """,
                     (
@@ -279,6 +286,8 @@ class LogbookDatabase:
                         reason,
                         payload_sha,
                         self._json.dumps(evidence_refs),
+                        correlation_id,
+                        status or "success",
                     ),
                 )
                 result = cur.fetchone()

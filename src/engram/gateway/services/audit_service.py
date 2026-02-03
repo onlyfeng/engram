@@ -22,6 +22,7 @@ def write_audit_or_raise(
     evidence_refs_json: Dict[str, Any],
     validate_refs: bool = False,
     correlation_id: str = "",
+    status: str = "success",
 ) -> int:
     """
     写入审计记录，失败时抛出 AuditWriteError
@@ -38,6 +39,7 @@ def write_audit_or_raise(
         evidence_refs_json: 证据引用 JSON
         validate_refs: 是否验证 evidence_refs_json 结构
         correlation_id: 关联 ID（用于日志）
+        status: 审计状态
 
     Returns:
         audit_id: 创建的审计记录 ID
@@ -54,6 +56,8 @@ def write_audit_or_raise(
             payload_sha=payload_sha,
             evidence_refs_json=evidence_refs_json,
             validate_refs=validate_refs,
+            correlation_id=correlation_id or None,
+            status=status,
         )
         logger.debug(f"审计记录写入成功: audit_id={audit_id}, correlation_id={correlation_id}")
         return int(audit_id)

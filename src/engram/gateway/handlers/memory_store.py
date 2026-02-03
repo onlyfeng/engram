@@ -476,6 +476,8 @@ def _handle_dedup_hit(
         reason=ErrorCode.DEDUP_HIT,
         payload_sha=payload_sha,
         evidence_refs_json=evidence_refs_json,
+        correlation_id=correlation_id,
+        status="success",
     )
 
     return MemoryStoreResponse(
@@ -561,6 +563,7 @@ def _handle_evidence_validation_failure(
         evidence_refs_json=evidence_refs_json,
         validate_refs=validate_refs_effective,
         correlation_id=correlation_id,
+        status="failed",
     )
 
     return MemoryStoreResponse(
@@ -571,7 +574,10 @@ def _handle_evidence_validation_failure(
         outbox_id=None,
         correlation_id=correlation_id,
         evidence_refs=evidence_refs,
-        message=f"strict 模式 evidence 校验失败: {', '.join(error_codes)}",
+        message=(
+            "strict 模式 evidence 校验失败: "
+            f"{reason} ({', '.join(error_codes) if error_codes else 'unknown'})"
+        ),
     )
 
 
@@ -632,6 +638,7 @@ def _handle_policy_reject(
         evidence_refs_json=evidence_refs_json,
         validate_refs=validate_refs_effective,
         correlation_id=correlation_id,
+        status="failed",
     )
 
     return MemoryStoreResponse(
@@ -704,6 +711,7 @@ def _handle_success(
         evidence_refs_json=post_audit_evidence_refs_json,
         validate_refs=validate_refs_effective,
         correlation_id=correlation_id,
+        status="success",
     )
 
     return MemoryStoreResponse(
@@ -793,7 +801,7 @@ def _handle_openmemory_failure(
         validate_refs_effective=validate_refs_effective,
         validate_refs_reason=validate_refs_reason,
         evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
-        intended_action="deferred",
+        intended_action=decision.action.value,
     )
     failure_evidence_refs_json = build_evidence_refs_json(
         evidence=normalized_evidence, gateway_event=failure_gateway_event
@@ -808,6 +816,8 @@ def _handle_openmemory_failure(
             payload_sha=payload_sha,
             evidence_refs_json=failure_evidence_refs_json,
             validate_refs=validate_refs_effective,
+            correlation_id=correlation_id,
+            status="redirected",
         )
     except Exception as failure_audit_err:
         logger.error(

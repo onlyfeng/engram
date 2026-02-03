@@ -179,6 +179,8 @@ def _handle_reject_policy(
         reason=ErrorCode.ACTOR_UNKNOWN_REJECT,
         payload_sha=payload_sha,
         evidence_refs_json=evidence_refs_json,
+        correlation_id=correlation_id,
+        status="failed",
     )
 
     return ActorValidationResult(
@@ -247,6 +249,8 @@ def _handle_degrade_policy(
         reason=ErrorCode.ACTOR_UNKNOWN_DEGRADE,
         payload_sha=payload_sha,
         evidence_refs_json=evidence_refs_json,
+        correlation_id=correlation_id,
+        status="success",
     )
 
     # 返回降级结果
@@ -315,6 +319,8 @@ def _handle_auto_create_policy(
             reason=ErrorCode.ACTOR_AUTOCREATED,
             payload_sha=payload_sha,
             evidence_refs_json=evidence_refs_json,
+            correlation_id=correlation_id,
+            status="success",
         )
 
         # 返回 None 表示继续正常流程
@@ -360,6 +366,8 @@ def _handle_auto_create_policy(
             reason=ErrorCode.ACTOR_AUTOCREATE_FAILED,
             payload_sha=payload_sha,
             evidence_refs_json=evidence_refs_json,
+            correlation_id=correlation_id,
+            status="failed",
         )
 
         return ActorValidationResult(
