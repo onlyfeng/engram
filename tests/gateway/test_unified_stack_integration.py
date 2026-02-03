@@ -4386,10 +4386,10 @@ class TestCorrelationIdRestEndpointContract:
         call_count = 0
         generated_ids = []
 
-        # 获取原始函数
-        import engram.gateway.mcp_rpc as mcp_rpc_module
+        # 获取原始函数 - correlation_id 是单一来源
+        import engram.gateway.correlation_id as correlation_id_module
 
-        original_generate = mcp_rpc_module.generate_correlation_id
+        original_generate = correlation_id_module.generate_correlation_id
 
         def spy_generate_correlation_id():
             nonlocal call_count
@@ -4398,8 +4398,10 @@ class TestCorrelationIdRestEndpointContract:
             generated_ids.append(result)
             return result
 
-        # 在创建应用前 patch（确保 from .mcp_rpc import 获取到 patched 版本）
-        monkeypatch.setattr(mcp_rpc_module, "generate_correlation_id", spy_generate_correlation_id)
+        # 在创建应用前 patch（确保从 correlation_id 模块导入的地方获取到 patched 版本）
+        monkeypatch.setattr(
+            correlation_id_module, "generate_correlation_id", spy_generate_correlation_id
+        )
 
         # 现在创建应用（此时 import 会获取到 patched 的函数）
         from engram.gateway.app import create_app
@@ -4488,10 +4490,10 @@ class TestCorrelationIdRestEndpointContract:
         call_count = 0
         generated_ids = []
 
-        # 获取原始函数
-        import engram.gateway.mcp_rpc as mcp_rpc_module
+        # 获取原始函数 - correlation_id 是单一来源
+        import engram.gateway.correlation_id as correlation_id_module
 
-        original_generate = mcp_rpc_module.generate_correlation_id
+        original_generate = correlation_id_module.generate_correlation_id
 
         def spy_generate_correlation_id():
             nonlocal call_count
@@ -4500,8 +4502,10 @@ class TestCorrelationIdRestEndpointContract:
             generated_ids.append(result)
             return result
 
-        # 在创建应用前 patch（确保 from .mcp_rpc import 获取到 patched 版本）
-        monkeypatch.setattr(mcp_rpc_module, "generate_correlation_id", spy_generate_correlation_id)
+        # 在创建应用前 patch（确保从 correlation_id 模块导入的地方获取到 patched 版本）
+        monkeypatch.setattr(
+            correlation_id_module, "generate_correlation_id", spy_generate_correlation_id
+        )
 
         # 现在创建应用（此时 import 会获取到 patched 的函数）
         from engram.gateway.app import create_app
