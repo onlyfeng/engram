@@ -236,9 +236,12 @@ class TestRecordEvidence:
         with tempfile.TemporaryDirectory() as tmpdir:
             # 临时修改输出目录
             import record_iteration_evidence
+            import iteration_evidence_naming as evidence_naming
 
             original_dir = record_iteration_evidence.EVIDENCE_DIR
+            original_naming_dir = evidence_naming.EVIDENCE_DIR
             record_iteration_evidence.EVIDENCE_DIR = Path(tmpdir)
+            evidence_naming.EVIDENCE_DIR = Path(tmpdir)
 
             try:
                 commands = [
@@ -284,6 +287,7 @@ class TestRecordEvidence:
 
             finally:
                 record_iteration_evidence.EVIDENCE_DIR = original_dir
+                evidence_naming.EVIDENCE_DIR = original_naming_dir
 
     def test_record_evidence_outputs_v2_schema_and_required_fields(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

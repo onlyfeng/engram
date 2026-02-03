@@ -562,6 +562,12 @@ class TestNewFileScenario:
 
         # 旧文件不存在，返回 None
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: None)
+        # 固定 base 存在，避免浅克隆环境影响新文件场景
+        monkeypatch.setattr(
+            module.WorkflowContractVersionChecker,
+            "_base_ref_exists",
+            lambda *args, **kwargs: True,
+        )
 
         # 动态获取类以确保使用被 mock 后的模块
         checker = module.WorkflowContractVersionChecker(project_root)
