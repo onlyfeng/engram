@@ -52,7 +52,7 @@ from typing import Any, Dict, List, Literal, Optional, cast
 
 from scripts.iteration.iteration_evidence_naming import (
     EVIDENCE_DIR,
-    canonical_evidence_path,
+    canonical_evidence_filename,
 )
 from scripts.iteration.iteration_evidence_schema import CURRENT_SCHEMA_REF
 
@@ -901,7 +901,7 @@ def record_evidence(
         redacted_dict["redaction_rules"] = derive_redaction_rules(warnings)
 
     # 生成输出文件名（使用 iteration_evidence_naming helper）
-    output_path = canonical_evidence_path(iteration_number)
+    output_path = EVIDENCE_DIR / canonical_evidence_filename(iteration_number)
 
     if dry_run:
         return RecordResult(

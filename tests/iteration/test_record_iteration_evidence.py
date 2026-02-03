@@ -72,9 +72,12 @@ def _isolate_evidence_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
     import iteration_evidence_naming as evidence_naming
     import record_iteration_evidence
 
+    import scripts.iteration.iteration_evidence_naming as evidence_naming_module
+
     evidence_dir = tmp_path / "evidence"
     monkeypatch.setattr(record_iteration_evidence, "EVIDENCE_DIR", evidence_dir)
     monkeypatch.setattr(evidence_naming, "EVIDENCE_DIR", evidence_dir)
+    monkeypatch.setattr(evidence_naming_module, "EVIDENCE_DIR", evidence_dir)
     return evidence_dir
 
 
