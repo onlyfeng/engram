@@ -133,6 +133,7 @@ def _validate_write_audit_status(status: Optional[str]) -> str:
         )
     return status
 
+
 def _validate_policy_json(policy_json: Any) -> Dict:
     """
     校验 policy_json 必须是 object（dict）
@@ -588,8 +589,7 @@ def update_write_audit(
 
     if reason_suffix is not None:
         set_parts.append(
-            "reason = CASE WHEN reason IS NULL OR reason = '' "
-            "THEN %s ELSE reason || ' ' || %s END"
+            "reason = CASE WHEN reason IS NULL OR reason = '' THEN %s ELSE reason || ' ' || %s END"
         )
         params.extend([reason_suffix, reason_suffix])
 
