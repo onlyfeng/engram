@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified mcp-doctor bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-core setup-db-logbook-only precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified mcp-doctor stack-doctor bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-core setup-db-logbook-only reset-native openmemory-fix-vector-dim openmemory-grant-svc-full env-write-local env-shell precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -18,6 +18,8 @@ PYTHON := python3
 PIP := pip
 PYTEST := pytest
 UVICORN := uvicorn
+UNAME_S := $(shell uname -s)
+PYTHON_BIN := $(shell $(PYTHON) -c 'import sys; print(sys.executable)')
 
 # PostgreSQL 配置（可通过环境变量覆盖）
 POSTGRES_DSN ?= postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)
@@ -27,12 +29,23 @@ POSTGRES_USER ?= postgres
 POSTGRES_PASSWORD ?= postgres
 POSTGRES_DB ?= engram
 
+# 管理员操作前缀（Linux/WSL2 默认使用 sudo -u postgres，可覆盖）
+# 说明：不要先用 `?=` 赋空值，否则后续 `?=` 不会生效（空值也会被视为“已定义”）。
+DB_ADMIN_PREFIX ?= $(if $(filter Linux,$(UNAME_S)),sudo -u postgres,)
+
+# 管理员 DSN（可覆盖；默认优先走本机 unix socket，避免 macOS 下不存在 postgres 角色的问题）
+# - 推荐显式设置 ENGRAM_PG_ADMIN_DSN（远程 DB / 非默认用户场景）
+# - 本机默认: postgresql:///...（使用当前 OS 用户；Linux/WSL2 下配合 DB_ADMIN_PREFIX=sudo -u postgres）
+ADMIN_DSN ?= $(if $(strip $(ENGRAM_PG_ADMIN_DSN)),$(ENGRAM_PG_ADMIN_DSN),postgresql:///$(POSTGRES_DB))
+ADMIN_BOOTSTRAP_DSN ?= postgresql:///postgres
+
 # 项目配置
 PROJECT_KEY ?= default
 
 # Gateway 配置
 GATEWAY_PORT ?= 8787
 OPENMEMORY_BASE_URL ?= http://localhost:8080
+ENV_LOCAL_FILE ?= .env.local
 
 # 服务账号密码（unified-stack 模式必须设置，logbook-only 模式可不设置）
 LOGBOOK_MIGRATOR_PASSWORD ?=
@@ -89,6 +102,14 @@ setup-db:  ## 一键初始化数据库（自动识别：有密码用现有/可�
 			fi; \
 			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
 				$(MAKE) --no-print-directory setup-db-core; \
+			echo ""; \
+			printf "是否将本次密码写入 $(ENV_LOCAL_FILE)（已在 .gitignore）以便后续启动？输入 y 确认 [N]: "; \
+			IFS= read -r SAVE_ENV; SAVE_ENV=$${SAVE_ENV:-N}; \
+			if [ "$$SAVE_ENV" = "y" ] || [ "$$SAVE_ENV" = "Y" ]; then \
+				LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+					$(MAKE) --no-print-directory env-write-local; \
+				echo "[OK] 已写入 $(ENV_LOCAL_FILE)。当前终端加载：set -a; source $(ENV_LOCAL_FILE); set +a"; \
+			fi; \
 		else \
 			echo "[ERROR] 无效输入：$$MODE（请输入 1 或 2）"; \
 			exit 1; \
@@ -123,6 +144,14 @@ setup-db:  ## 一键初始化数据库（自动识别：有密码用现有/可�
 			fi; \
 			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
 				$(MAKE) --no-print-directory setup-db-core; \
+			echo ""; \
+			printf "是否将本次密码写入 $(ENV_LOCAL_FILE)（已在 .gitignore）以便后续启动？输入 y 确认 [N]: "; \
+			IFS= read -r SAVE_ENV; SAVE_ENV=$${SAVE_ENV:-N}; \
+			if [ "$$SAVE_ENV" = "y" ] || [ "$$SAVE_ENV" = "Y" ]; then \
+				LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+					$(MAKE) --no-print-directory env-write-local; \
+				echo "[OK] 已写入 $(ENV_LOCAL_FILE)。当前终端加载：set -a; source $(ENV_LOCAL_FILE); set +a"; \
+			fi; \
 		elif [ "$$CHOICE" = "3" ]; then \
 			echo ""; \
 			echo "[INFO] 切换为 logbook-only（清空密码）"; \
@@ -165,6 +194,14 @@ setup-db:  ## 一键初始化数据库（自动识别：有密码用现有/可�
 			fi; \
 			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
 				$(MAKE) --no-print-directory setup-db-core; \
+			echo ""; \
+			printf "是否将本次密码写入 $(ENV_LOCAL_FILE)（已在 .gitignore）以便后续启动？输入 y 确认 [N]: "; \
+			IFS= read -r SAVE_ENV; SAVE_ENV=$${SAVE_ENV:-N}; \
+			if [ "$$SAVE_ENV" = "y" ] || [ "$$SAVE_ENV" = "Y" ]; then \
+				LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+					$(MAKE) --no-print-directory env-write-local; \
+				echo "[OK] 已写入 $(ENV_LOCAL_FILE)。当前终端加载：set -a; source $(ENV_LOCAL_FILE); set +a"; \
+			fi; \
 		elif [ "$$CHOICE" = "2" ]; then \
 			echo ""; \
 			echo "[INFO] 重新输入 unified-stack 密码（不会回显）"; \
@@ -182,6 +219,14 @@ setup-db:  ## 一键初始化数据库（自动识别：有密码用现有/可�
 			fi; \
 			LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
 				$(MAKE) --no-print-directory setup-db-core; \
+			echo ""; \
+			printf "是否将本次密码写入 $(ENV_LOCAL_FILE)（已在 .gitignore）以便后续启动？输入 y 确认 [N]: "; \
+			IFS= read -r SAVE_ENV; SAVE_ENV=$${SAVE_ENV:-N}; \
+			if [ "$$SAVE_ENV" = "y" ] || [ "$$SAVE_ENV" = "Y" ]; then \
+				LOGBOOK_MIGRATOR_PASSWORD="$$LB_MIG" LOGBOOK_SVC_PASSWORD="$$LB_SVC" OPENMEMORY_MIGRATOR_PASSWORD="$$OM_MIG" OPENMEMORY_SVC_PASSWORD="$$OM_SVC" \
+					$(MAKE) --no-print-directory env-write-local; \
+				echo "[OK] 已写入 $(ENV_LOCAL_FILE)。当前终端加载：set -a; source $(ENV_LOCAL_FILE); set +a"; \
+			fi; \
 		elif [ "$$CHOICE" = "3" ]; then \
 			echo ""; \
 			echo "[INFO] 切换为 logbook-only（清空密码）"; \
@@ -203,7 +248,7 @@ setup-db-core: precheck db-create bootstrap-roles migrate-ddl apply-roles apply-
 		echo "部署模式: logbook-only"; \
 		echo "下一步："; \
 		echo "  1. 设置环境变量："; \
-		echo "     export POSTGRES_DSN=\"postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)\""; \
+		echo "     export POSTGRES_DSN=\"$(ADMIN_DSN)\""; \
 		echo "     export OPENMEMORY_BASE_URL=\"http://localhost:8080\""; \
 		echo "  2. 启动 Gateway："; \
 		echo "     make gateway"; \
@@ -211,7 +256,12 @@ setup-db-core: precheck db-create bootstrap-roles migrate-ddl apply-roles apply-
 		echo "部署模式: unified-stack"; \
 		echo "下一步："; \
 		echo "  1. 设置环境变量："; \
-		echo "     export POSTGRES_DSN=\"postgresql://logbook_svc:\$$LOGBOOK_SVC_PASSWORD@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)\""; \
+		echo "     # 注意：make 无法把你刚输入的密码写回当前 shell"; \
+		echo "     #       建议在 setup-db 结束时选择写入 $(ENV_LOCAL_FILE)（已在 .gitignore）"; \
+		echo "     # 方式 A（推荐）：如果你已写入 $(ENV_LOCAL_FILE)"; \
+		echo "     set -a; source $(ENV_LOCAL_FILE); set +a"; \
+		echo "     # 方式 B：手动设置（把 <LOGBOOK_SVC_PASSWORD> 换成你的密码）"; \
+		echo "     export POSTGRES_DSN=\"postgresql://logbook_svc:<LOGBOOK_SVC_PASSWORD>@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)\""; \
 		echo "     export OPENMEMORY_BASE_URL=\"http://localhost:8080\""; \
 		echo "  2. 启动 Gateway："; \
 		echo "     make gateway"; \
@@ -254,6 +304,24 @@ precheck:  ## 检查部署模式和环境变量
 		echo "    export OPENMEMORY_SVC_PASSWORD=<密码>"; \
 		exit 1; \
 	fi
+
+env-write-local:  ## 写入本地环境变量文件（默认 .env.local，已在 .gitignore；可用 ENV_LOCAL_FILE=... 覆盖）
+	@ENV_LOCAL_FILE="$(ENV_LOCAL_FILE)" \
+	PROJECT_KEY="$(PROJECT_KEY)" \
+	OPENMEMORY_BASE_URL="$(OPENMEMORY_BASE_URL)" \
+	GATEWAY_PORT="$(GATEWAY_PORT)" \
+	POSTGRES_HOST="$(POSTGRES_HOST)" \
+	POSTGRES_PORT="$(POSTGRES_PORT)" \
+	POSTGRES_DB="$(POSTGRES_DB)" \
+	ADMIN_DSN="$(ADMIN_DSN)" \
+	$(PYTHON_BIN) scripts/ops/write_env_local.py
+
+env-shell:  ## 输出加载 .env/.env.local 的 shell 片段（用法：eval "$$(make --no-print-directory env-shell)"）
+	@printf '%s\n' \
+		'set -a' \
+		'[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"' \
+		'[ -f "$(CURDIR)/$(ENV_LOCAL_FILE)" ] && . "$(CURDIR)/$(ENV_LOCAL_FILE)"' \
+		'set +a'
 
 ## ==================== 安装 ====================
 
@@ -654,42 +722,42 @@ migrate-plan-full:  ## 查看完整迁移计划（DDL + 权限 + 验证）
 
 migrate-precheck:  ## 仅执行预检（验证配置和数据库连接，不执行迁移）
 	@echo "执行预检..."
-	$(PYTHON) -m engram.logbook.cli.db_migrate \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)" \
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_migrate \
+		--dsn "$(ADMIN_DSN)" \
 		--precheck-only
 	@echo "预检完成"
 
 migrate-ddl:  ## 仅执行 DDL 迁移（Schema/表/索引）
 	@echo "执行 DDL 迁移..."
-	$(PYTHON) -m engram.logbook.cli.db_migrate \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)"
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_migrate \
+		--dsn "$(ADMIN_DSN)"
 	@echo "DDL 迁移完成"
 
 apply-roles:  ## 应用 Logbook 角色和权限（04_roles_and_grants.sql）
 	@echo "应用 Logbook 角色和权限..."
-	$(PYTHON) -m engram.logbook.cli.db_migrate \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)" \
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_migrate \
+		--dsn "$(ADMIN_DSN)" \
 		--apply-roles
 	@echo "Logbook 角色已应用"
 
 apply-openmemory-grants:  ## 应用 OpenMemory 权限（05_openmemory_roles_and_grants.sql）
 	@echo "应用 OpenMemory 权限..."
-	$(PYTHON) -m engram.logbook.cli.db_migrate \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)" \
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_migrate \
+		--dsn "$(ADMIN_DSN)" \
 		--apply-openmemory-grants
 	@echo "OpenMemory 权限已应用"
 
 verify-permissions:  ## 验证数据库权限配置（99_verify_permissions.sql）
 	@echo "验证数据库权限..."
-	$(PYTHON) -m engram.logbook.cli.db_migrate \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)" \
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_migrate \
+		--dsn "$(ADMIN_DSN)" \
 		--verify
 	@echo "权限验证完成"
 
 verify-permissions-strict:  ## 验证数据库权限配置（严格模式，失败时报错退出）
 	@echo "验证数据库权限（严格模式）..."
-	$(PYTHON) -m engram.logbook.cli.db_migrate \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)" \
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_migrate \
+		--dsn "$(ADMIN_DSN)" \
 		--verify --verify-strict
 	@echo "权限验证完成（严格模式）"
 
@@ -740,8 +808,8 @@ verify-unified:  ## 统一栈验证（健康检查 + DB 权限 + smoke 测试）
 		echo "  ✓ Logbook schema 可访问" || \
 		echo "  ✗ Logbook schema 不可访问（可能尚未迁移）"; \
 	else \
-		$(PYTHON) -m engram.logbook.cli.db_migrate \
-			--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)" \
+		$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_migrate \
+			--dsn "$(ADMIN_DSN)" \
 			--verify && echo "  ✓ 权限验证通过" || echo "  ✗ 权限验证失败"; \
 	fi
 	@echo ""
@@ -776,28 +844,83 @@ mcp-doctor:  ## MCP 诊断（health + CORS + tools/list）
 	@GATEWAY_URL=$(GATEWAY_URL) MCP_DOCTOR_TIMEOUT=$(VERIFY_TIMEOUT) \
 		$(PYTHON) scripts/ops/mcp_doctor.py
 
+stack-doctor:  ## 全栈诊断（OpenMemory health + MCP tools/call 写入）
+	@echo "========== 全栈诊断（stack-doctor） =========="
+	@echo ""
+	@echo "[1/2] Gateway MCP 端点诊断（不依赖 OpenMemory）..."
+	@$(MAKE) --no-print-directory mcp-doctor
+	@echo ""
+	@echo "[2/2] OpenMemory + memory_store 写入验证..."
+	@GATEWAY_URL=$(GATEWAY_URL) OPENMEMORY_BASE_URL=$(OPENMEMORY_BASE_URL) STACK_DOCTOR_TIMEOUT=$(VERIFY_TIMEOUT) \
+		$(PYTHON) scripts/ops/stack_doctor.py
+
 bootstrap-roles: precheck  ## 初始化服务账号（支持 logbook-only 跳过或 unified-stack 创建）
 	@echo "初始化服务账号..."
-	$(PYTHON) scripts/db_bootstrap.py \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/postgres"
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_bootstrap \
+		--dsn "$(ADMIN_BOOTSTRAP_DSN)"
 
 bootstrap-roles-required:  ## 强制创建服务账号（unified-stack 模式，密码必须设置）
 	@echo "初始化服务账号（强制模式）..."
-	$(PYTHON) scripts/db_bootstrap.py \
-		--dsn "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/postgres" \
+	$(DB_ADMIN_PREFIX) $(PYTHON_BIN) -m engram.logbook.cli.db_bootstrap \
+		--dsn "$(ADMIN_BOOTSTRAP_DSN)" \
 		--require-roles
 	@echo "服务账号已就绪"
 
 db-create:  ## 创建数据库并启用 pgvector 扩展
 	@echo "创建数据库 $(POSTGRES_DB)..."
-	@createdb -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) $(POSTGRES_DB) 2>/dev/null || echo "数据库已存在，跳过创建"
+	@$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$(POSTGRES_DB)\";" 2>/dev/null || echo "数据库已存在，跳过创建"
 	@echo "启用 pgvector 扩展..."
-	@psql -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || echo "pgvector 已启用"
+	@$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || echo "pgvector 已启用"
 
 db-drop:  ## 删除数据库（危险操作）
 	@echo "警告：即将删除数据库 $(POSTGRES_DB)"
 	@read -p "确认删除？(y/N) " confirm && [ "$$confirm" = "y" ] && \
-		dropdb -h $(POSTGRES_HOST) -p $(POSTGRES_PORT) -U $(POSTGRES_USER) $(POSTGRES_DB) || echo "已取消"
+		$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "DROP DATABASE \"$(POSTGRES_DB)\";" || echo "已取消"
+
+reset-native:  ## 重置数据库与服务账号（危险操作：DROP/CREATE + 删除 4 个 LOGIN 账号）
+	@set -e; \
+	if [ -z "$$FORCE" ]; then \
+		if [ -t 0 ]; then \
+			echo "[WARN] 将删除数据库 $(POSTGRES_DB) 以及 4 个 LOGIN 账号（logbook_migrator/logbook_svc/openmemory_migrator_login/openmemory_svc）"; \
+			printf "输入 RESET 确认: "; \
+			IFS= read -r CONFIRM; \
+			if [ "$$CONFIRM" != "RESET" ]; then \
+				echo "已取消"; \
+				exit 1; \
+			fi; \
+		else \
+			echo "[ERROR] 非交互环境请设置 FORCE=1"; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "[INFO] 终止 $(POSTGRES_DB) 连接..."; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$(POSTGRES_DB)' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true; \
+	echo "[INFO] 删除数据库 $(POSTGRES_DB)..."; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$(POSTGRES_DB)\";"; \
+	echo "[INFO] 删除服务账号..."; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS logbook_migrator, logbook_svc, openmemory_migrator_login, openmemory_svc;"; \
+	$(MAKE) --no-print-directory setup-db
+
+openmemory-fix-vector-dim:  ## 修复 openmemory_vectors 向量维度（需 OM_VEC_DIM）
+	@set -e; \
+	if [ -z "$$OM_VEC_DIM" ]; then \
+		echo "[ERROR] 缺少 OM_VEC_DIM（示例：OM_VEC_DIM=1536）"; \
+		exit 1; \
+	fi; \
+	SCHEMA=$${OM_PG_SCHEMA:-openmemory}; \
+	echo "[INFO] 修复向量维度：schema=$$SCHEMA, dim=$$OM_VEC_DIM"; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "DROP INDEX IF EXISTS $$SCHEMA.openmemory_vectors_v_idx;"; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "ALTER TABLE $$SCHEMA.openmemory_vectors ALTER COLUMN v TYPE vector($$OM_VEC_DIM);"
+
+openmemory-grant-svc-full:  ## 兜底授权 openmemory_svc（仅当遇到权限问题时使用）
+	@set -e; \
+	SCHEMA=$${OM_PG_SCHEMA:-openmemory}; \
+	echo "[INFO] 授权 openmemory_svc：schema=$$SCHEMA"; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON SCHEMA $$SCHEMA TO openmemory_svc;"; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA $$SCHEMA TO openmemory_svc;"; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA $$SCHEMA TO openmemory_svc;"; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA $$SCHEMA GRANT ALL ON TABLES TO openmemory_svc;"; \
+	$(DB_ADMIN_PREFIX) psql "$(ADMIN_DSN)" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA $$SCHEMA GRANT ALL ON SEQUENCES TO openmemory_svc;"
 
 ## ==================== 迭代文档工作流 ====================
 
