@@ -425,6 +425,68 @@ npm run dev
 curl http://localhost:8080/health
 ```
 
+> 说明：OpenMemory HTTP Server 默认提供的是 **API/MCP/指标端点**，不一定提供 HTML 首页。  
+> 因此浏览器直接访问 `http://localhost:8080/` 返回 `404: Not Found` 也是正常的；请以 `/health` 与下述端点为准。
+
+#### 健康检查（HTTP）
+
+```bash
+# 不需要鉴权（public endpoint）
+curl -sf http://localhost:8080/health
+curl -sf http://localhost:8080/dashboard/health
+```
+
+#### Dashboard 指标（JSON）
+
+这些端点用于“浏览器/脚本快速查看指标”，返回 JSON（不是网页 UI）。
+
+> 若你未配置 `OM_API_KEY`（或将其置空以禁用鉴权），下面的 `-H "Authorization: ..."` 可以省略。
+
+```bash
+# 需要鉴权时：两种 Header 任选其一即可（建议用 Authorization）
+curl -sf http://localhost:8080/dashboard/stats -H "Authorization: Bearer $OM_API_KEY"
+curl -sf http://localhost:8080/dashboard/activity?limit=50 -H "Authorization: Bearer $OM_API_KEY"
+
+# 可选：Top/Timeline/Maintenance
+curl -sf http://localhost:8080/dashboard/top-memories?limit=20 -H "Authorization: Bearer $OM_API_KEY"
+curl -sf "http://localhost:8080/dashboard/sectors/timeline?hours=24" -H "Authorization: Bearer $OM_API_KEY"
+curl -sf "http://localhost:8080/dashboard/maintenance?hours=24" -H "Authorization: Bearer $OM_API_KEY"
+```
+
+> 兼容说明：OpenMemory 也支持 `x-api-key: <OM_API_KEY>`（值为纯 key，**不要**带 `Bearer ` 前缀）。
+
+#### 直接查看记忆（列表 / 详情）
+
+```bash
+# 1) 写入一条测试记忆（返回 JSON，重点字段是顶层 id）
+curl -sf -X POST http://localhost:8080/memory/add \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OM_API_KEY" \
+  -d '{"content":"ping","tags":[],"metadata":{"space":"private:test"}}'
+
+# 2) 列表：l=limit, u=offset，可选 user_id / sector
+curl -sf "http://localhost:8080/memory/all?l=20&u=0" -H "Authorization: Bearer $OM_API_KEY"
+
+# 3) 详情：把 <id> 换成上一步返回的 id
+curl -sf "http://localhost:8080/memory/<id>" -H "Authorization: Bearer $OM_API_KEY"
+```
+
+#### 浏览器里查看（需要鉴权时）：ModHeader 配置
+
+当你想“直接用浏览器打开上述 JSON 端点”而不想每次手写 `curl -H ...` 时，可以用 ModHeader 注入 Header。
+
+- **Header 规则**（建议都配上，兼容不同客户端）：
+  - `Authorization`: `Bearer <OM_API_KEY>`
+  - `x-api-key`: `<OM_API_KEY>`（注意：不要带 `Bearer `）
+- **URL Filter / Apply to URLs**（强烈建议只作用于本地，避免泄露）：
+  - `http://localhost:8080/*`
+  - `http://127.0.0.1:8080/*`
+- **快速自检**：
+  - 访问 `/health` 仍为 200（无需 Key）
+  - 访问 `/memory/all?l=5`：
+    - 仍是 401 → Header 未生效或 Key 不一致
+    - 变成 404 → 说明鉴权已通过，但你打开的路径不存在（请用本文列出的端点）
+
 ## 6. 配置
 
 ### 环境变量配置

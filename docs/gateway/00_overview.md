@@ -66,6 +66,16 @@
 | `POST` | `/memory/add` | 添加记忆 |
 | `POST` | `/memory/search` | 搜索记忆 |
 | `GET` | `/health` | 健康检查 |
+| `GET` | `/dashboard/health` | Dashboard 健康检查（public endpoint） |
+| `GET` | `/dashboard/stats` | Dashboard 指标（JSON） |
+| `GET` | `/dashboard/activity` | 最近活动（JSON） |
+| `GET` | `/memory/all` | 记忆列表（JSON） |
+| `GET` | `/memory/:id` | 记忆详情（JSON） |
+
+> 说明：
+> - `/dashboard/*` 为指标 JSON 端点（非 HTML UI），浏览器可直接打开查看 JSON。
+> - 当设置了 `OM_API_KEY`（或 `OPENMEMORY_API_KEY`）时，除 public endpoint 外都需要携带 `Authorization: Bearer <key>` 或 `x-api-key: <key>`。
+> - 浏览器注入 Header（ModHeader）与端点自检清单，参见 [安装指南](../installation.md) 的「验证 OpenMemory 连接」小节。
 
 **字段映射规范**
 
