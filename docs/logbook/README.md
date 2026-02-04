@@ -16,6 +16,7 @@
 | 6 | [05_definition_of_done.md](05_definition_of_done.md) | **DoD**：变更类型与必须同步更新的文件、破坏性变更要求 |
 | 7 | [06_scm_sync_subsystem.md](06_scm_sync_subsystem.md) | SCM Sync 子系统：状态机、数据流、配置开关 |
 | 8 | [07_scm_sync_ops_guide.md](07_scm_sync_ops_guide.md) | **SCM Sync 运维指南**：部署拓扑、参数推荐、故障处理 |
+| 9 | [08_identity_config.md](08_identity_config.md) | 身份配置：`.agentx/users/*.yaml` 字段说明与同步方式 |
 
 ---
 

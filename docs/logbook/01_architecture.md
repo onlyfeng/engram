@@ -25,7 +25,7 @@
 ## 身份与配置来源（双轨但有权威）
 - Git（仓库内）：/.agentx/users/<user_id>.yaml、/.agentx/roles/<user_id>/*
 - DB（权威映射与镜像）：identity.users / identity.accounts / identity.role_profiles
-- 本地覆盖（可选）：~/.agentx/user.config.yaml（仅用于个人临时覆盖，不作为权威）
+- 本地覆盖（可选）：~/.agentx/user.yaml（仅用于个人临时覆盖，不作为权威）
 
 ## SCM 同步映射与证据规范
 
