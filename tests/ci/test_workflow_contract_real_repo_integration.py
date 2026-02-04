@@ -10,8 +10,8 @@ tests/ci/test_workflow_contract_real_repo_integration.py
 3. check_workflow_contract_version_policy.py - WorkflowContractVersionChecker.check()
 
 涉及文件：
-- scripts/ci/workflow_contract.v1.json
-- scripts/ci/workflow_contract.v1.schema.json
+- scripts/ci/workflow_contract.v2.json
+- scripts/ci/workflow_contract.v2.schema.json
 - docs/ci_nightly_workflow_refactor/contract.md
 - .github/workflows/ci.yml
 - .github/workflows/nightly.yml
@@ -38,8 +38,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # 合约文件路径
-CONTRACT_PATH = PROJECT_ROOT / "scripts" / "ci" / "workflow_contract.v1.json"
-SCHEMA_PATH = PROJECT_ROOT / "scripts" / "ci" / "workflow_contract.v1.schema.json"
+CONTRACT_PATH = PROJECT_ROOT / "scripts" / "ci" / "workflow_contract.v2.json"
+SCHEMA_PATH = PROJECT_ROOT / "scripts" / "ci" / "workflow_contract.v2.schema.json"
 DOC_PATH = PROJECT_ROOT / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
 
 # Workflow 文件路径
@@ -488,7 +488,7 @@ class TestJsonSchemaValidation:
     ) -> None:
         """测试合约文件符合 JSON Schema
 
-        此测试验证 workflow_contract.v1.json 符合 workflow_contract.v1.schema.json
+        此测试验证 workflow_contract.v2.json 符合 workflow_contract.v2.schema.json
         定义的结构。
         """
         import json

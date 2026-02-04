@@ -111,7 +111,7 @@ sql/
 | **服务账号策略** | 角色定义、权限分配、账号创建逻辑 | 安全配置、权限验证 |
 | **验收命令链** | Makefile targets、验收脚本入口点 | CI 流程、验收产物 |
 | **verify-permissions 门禁** | 权限验证脚本、seek.enabled 控制 | 部署验证、CI 门禁 |
-| **最小复制清单** | logbook_only_import_v1.json 文件列表 | 集成指南、复制工具 |
+| **最小复制清单** | logbook_only_import_v2.json 文件列表 | 集成指南、复制工具 |
 
 ### 边界变更 → 必须更新的文件映射
 
@@ -121,7 +121,7 @@ sql/
 | **服务账号策略** | `logbook_postgres/scripts/db_bootstrap.py`<br>`sql/04_roles_and_grants.sql`<br>`sql/verify/99_verify_permissions.sql`<br>`docs/logbook/04_acceptance_criteria.md` |
 | **验收命令链** | `Makefile`<br>`logbook_postgres/scripts/logbook_cli.py`<br>`docs/logbook/04_acceptance_criteria.md`<br>`.github/workflows/ci.yml` |
 | **verify-permissions 门禁** | `sql/verify/99_verify_permissions.sql`<br>`Makefile` (`verify-permissions` target)<br>`docs/logbook/04_acceptance_criteria.md` |
-| **最小复制清单** | `docs/guides/manifests/logbook_only_import_v1.json`<br>`docs/guides/integrate_existing_project.md`<br>`docs/logbook/04_acceptance_criteria.md` |
+| **最小复制清单** | `docs/guides/manifests/logbook_only_import_v2.json`<br>`docs/guides/integrate_existing_project.md`<br>`docs/logbook/04_acceptance_criteria.md` |
 
 ### 文件路径详细清单
 
@@ -136,7 +136,7 @@ sql/
 | **文档** | `docs/logbook/03_deploy_verify_troubleshoot.md` | 部署验证与排错 |
 | **文档** | `docs/logbook/04_acceptance_criteria.md` | 验收标准与矩阵 |
 | **集成指南** | `docs/guides/integrate_existing_project.md` | 项目集成指南 |
-| **Manifest** | `docs/guides/manifests/logbook_only_import_v1.json` | 最小复制清单定义 |
+| **Manifest** | `docs/guides/manifests/logbook_only_import_v2.json` | 最小复制清单定义 |
 | **CI 脚本** | `.github/workflows/ci.yml` | CI 检查流程 |
 | **CI 脚本** | `Makefile` | 测试运行入口 |
 
@@ -176,7 +176,7 @@ make logbook-smoke
 psql -d $POSTGRES_DB -c "SET seek.enabled = 'false';" -f sql/verify/99_verify_permissions.sql
 
 # 最小复制清单变更 - 验证 manifest 完整性
-python -c "import json; m = json.load(open('docs/guides/manifests/logbook_only_import_v1.json')); print('OK:', len(m['files']['required']), 'required,', len(m['files']['optional']), 'optional')"
+python -c "import json; m = json.load(open('docs/guides/manifests/logbook_only_import_v2.json')); print('OK:', len(m['files']['required']), 'required,', len(m['files']['optional']), 'optional')"
 ```
 
 #### 完整自检脚本
@@ -207,7 +207,7 @@ python scripts/check_no_legacy_stage_aliases.py --fail
 
 # 步骤 5: 验证 manifest JSON 格式
 echo "[5/5] Validating manifest JSON..."
-python -c "import json; json.load(open('docs/guides/manifests/logbook_only_import_v1.json'))"
+python -c "import json; json.load(open('docs/guides/manifests/logbook_only_import_v2.json'))"
 
 echo "=== All checks passed ==="
 ```
@@ -218,7 +218,7 @@ echo "=== All checks passed ==="
 - [ ] SQL 文件编号顺序正确（00-99）
 - [ ] `99_verify_permissions.sql` 支持 `seek.enabled='false'` 跳过
 - [ ] Makefile 中 `acceptance-logbook-only` target 正常工作
-- [ ] `logbook_only_import_v1.json` 文件列表完整且路径正确
+- [ ] `logbook_only_import_v2.json` 文件列表完整且路径正确
 - [ ] `docs/logbook/04_acceptance_criteria.md` 验收矩阵已更新
 - [ ] `docs/guides/integrate_existing_project.md` 集成说明已同步
 - [ ] CI 脚本支持 Logbook-only 模式（无 Gateway/OpenMemory 依赖）

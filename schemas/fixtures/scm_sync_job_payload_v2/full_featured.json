@@ -1,0 +1,19 @@
+{
+  "$comment": "完整功能 payload - 包含所有常用字段",
+  "version": "v2",
+  "gitlab_instance": "gitlab.example.com",
+  "tenant_id": "tenant-acme",
+  "project_key": "mygroup/myproject",
+  "window_type": "time",
+  "since": "2024-01-01T00:00:00Z",
+  "until": "2024-01-02T00:00:00Z",
+  "mode": "incremental",
+  "diff_mode": "best_effort",
+  "strict": false,
+  "update_watermark": true,
+  "batch_size": 100,
+  "total_chunks": 1,
+  "current_chunk": 0,
+  "verbose": false,
+  "dry_run": false
+}

@@ -2,7 +2,7 @@
 """
 Workflow Contract Drift Report Generator
 
-读取 workflow 快照与 workflow_contract.v1.json，比较差异，
+读取 workflow 快照与 workflow_contract.v2.json，比较差异，
 输出 drift 的 JSON 报告（可选渲染 Markdown）。
 
 功能:
@@ -71,7 +71,7 @@ import yaml
 #   - 外部监控/分析工具
 #
 
-DRIFT_REPORT_SCHEMA_VERSION = "1.0.0"
+DRIFT_REPORT_SCHEMA_VERSION = "2.0.0"
 """
 Drift Report 输出 schema 版本号
 
@@ -1082,8 +1082,8 @@ def main() -> int:
     parser.add_argument(
         "--contract",
         type=str,
-        default="scripts/ci/workflow_contract.v1.json",
-        help="Contract JSON 文件路径 (default: scripts/ci/workflow_contract.v1.json)",
+        default="scripts/ci/workflow_contract.v2.json",
+        help="Contract JSON 文件路径 (default: scripts/ci/workflow_contract.v2.json)",
     )
     parser.add_argument(
         "--workspace",

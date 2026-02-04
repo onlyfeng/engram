@@ -31,7 +31,7 @@ Gateway 工具执行结果错误码定义
 
 边界检查由 CI 门禁强制执行：
 - 测试: tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorCodeBoundaryMisuse
-- 文档: docs/contracts/mcp_jsonrpc_error_v1.md §3.0
+- 文档: docs/contracts/mcp_jsonrpc_error_v2.md §3.0
 
 参见: error_codes.py 的对应边界声明
 ================================================================================

@@ -121,7 +121,7 @@
 | [iteration_12_regression.md](iteration_12_regression.md) | 上一迭代回归记录（基准） |
 | [00_acceptance_matrix.md](00_acceptance_matrix.md) | 验收测试矩阵总览 |
 | [gateway_public_api_surface.md](../architecture/gateway_public_api_surface.md) | Gateway 公开 API 契约 |
-| [workflow_contract.v1.json](../../scripts/ci/workflow_contract.v1.json) | CI Workflow 合约定义 |
+| [workflow_contract.v2.json](../../scripts/ci/workflow_contract.v2.json) | CI Workflow 合约定义 |
 
 ---
 

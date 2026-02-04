@@ -236,7 +236,7 @@ INLINE_MARKER_PATTERN = re.compile(
 DEFAULT_ALLOWLIST_FILE = "scripts/ci/no_root_wrappers_allowlist.json"
 
 # Schema 文件路径（相对于项目根）
-ALLOWLIST_SCHEMA_FILE = "schemas/no_root_wrappers_allowlist_v1.schema.json"
+ALLOWLIST_SCHEMA_FILE = "schemas/no_root_wrappers_allowlist_v2.schema.json"
 
 
 # ============================================================================
@@ -448,9 +448,9 @@ def load_allowlist(
         return entries
 
     # 校验 version
-    if data.get("version") != "1":
+    if data.get("version") not in ("2", "2.0"):
         print(
-            f"[WARN] Allowlist version 不匹配，期望 '1'，实际 '{data.get('version')}'",
+            f"[WARN] Allowlist version 不匹配，期望 '2' 或 '2.0'，实际 '{data.get('version')}'",
             file=sys.stderr,
         )
 

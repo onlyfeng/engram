@@ -46,7 +46,7 @@ class PolicyEngine:
     """策略引擎"""
 
     # 默认策略配置
-    # 完整 Schema 参见: docs/contracts/gateway_policy_v1.md
+    # 完整 Schema 参见: docs/contracts/gateway_policy_v2.md
     DEFAULT_POLICY = {
         "allowlist_users": [],  # 允许直接写 team 的用户列表（空=不限制）
         "allowed_kinds": ["PROCEDURE", "REVIEW_GUIDE", "PITFALL", "DECISION"],  # 允许的知识类型

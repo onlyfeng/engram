@@ -14,7 +14,7 @@ on:
         required: false
         default: ""
 
-# Naming policy: job/step names align with workflow_contract.v1.json.
+# Naming policy: job/step names align with workflow_contract.v2.json.
 # Frozen steps reused: Checkout repository, Set up Python, Install dependencies.
 
 jobs:

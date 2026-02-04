@@ -1,0 +1,9 @@
+{
+  "$comment": "时间窗口 backfill payload - 用于 CI schema 校验",
+  "version": "v2",
+  "window_type": "time",
+  "since": "2024-01-01T00:00:00Z",
+  "until": "2024-01-02T00:00:00Z",
+  "mode": "backfill",
+  "update_watermark": true
+}

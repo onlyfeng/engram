@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CI Test Isolation Allowlist v2",
+  "description": "CI 测试隔离检查豁免列表。每个条目必须包含豁免原因和到期策略。",
+  "type": "object",
+  "required": ["version", "entries"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": ["2"],
+      "description": "Schema 版本"
+    },
+    "description": {
+      "type": "string",
+      "description": "Allowlist 描述"
+    },
+    "entries": {
+      "type": "array",
+      "description": "豁免条目列表",
+      "items": {
+        "$ref": "#/definitions/allowlist_entry"
+      }
+    }
+  },
+  "definitions": {
+    "allowlist_entry": {
+      "type": "object",
+      "required": ["id", "file_glob", "violation_type", "reason", "owner", "expires_on"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+$",
+          "description": "唯一标识符（小写字母、数字、下划线、连字符）"
+        },
+        "file_glob": {
+          "type": "string",
+          "description": "文件匹配模式（glob pattern）"
+        },
+        "violation_type": {
+          "type": "string",
+          "enum": ["sys_path_insert", "sys_path_append", "toplevel_import", "dual_mode_import", "any"],
+          "description": "违规类型（any 表示匹配所有类型）"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 10,
+          "description": "豁免原因（至少 10 字符）"
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^@?[a-zA-Z0-9_-]+(-[a-zA-Z0-9_-]+)*$",
+          "description": "负责人（GitHub 用户名或团队）"
+        },
+        "expires_on": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "到期日期（YYYY-MM-DD 格式）"
+        },
+        "jira_ticket": {
+          "type": "string",
+          "description": "相关 Jira ticket（可选）"
+        },
+        "notes": {
+          "type": "string",
+          "description": "附加说明（可选）"
+        },
+        "created_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "创建日期（YYYY-MM-DD 格式，可选）"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

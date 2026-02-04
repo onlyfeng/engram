@@ -2,7 +2,7 @@
 """
 Import Manifest Consistency Test
 
-Validates that the unified_stack_import_v1.json manifest correctly describes
+Validates that the unified_stack_import_v2.json manifest correctly describes
 all file dependencies required by:
 1. docker-compose.unified.yml (volume mounts, build contexts)
 2. apps/openmemory_gateway/gateway/Dockerfile (COPY instructions)
@@ -38,7 +38,7 @@ def find_project_root() -> Path:
 PROJECT_ROOT = find_project_root()
 
 # Files to check
-MANIFEST_PATH = PROJECT_ROOT / "docs/guides/manifests/unified_stack_import_v1.json"
+MANIFEST_PATH = PROJECT_ROOT / "docs/guides/manifests/unified_stack_import_v2.json"
 COMPOSE_PATH = PROJECT_ROOT / "docker-compose.unified.yml"
 GATEWAY_DOCKERFILE_PATH = PROJECT_ROOT / "docker/engram.Dockerfile"
 

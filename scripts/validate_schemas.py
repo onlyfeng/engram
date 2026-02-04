@@ -53,29 +53,29 @@ DEFAULT_SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
 DEFAULT_FIXTURES_DIR = "fixtures"  # 相对于 schemas/ 目录
 
 # Schema 文件名与 fixtures 目录名的映射（去掉 .schema.json 后缀）
-# 例: scm_sync_job_payload_v1.schema.json -> fixtures/scm_sync_job_payload_v1/
+# 例: scm_sync_job_payload_v2.schema.json -> fixtures/scm_sync_job_payload_v2/
 SCHEMA_FIXTURE_MAPPING = {
-    "audit_event_v1.schema.json": "audit_event_v1",
+    "audit_event_v2.schema.json": "audit_event_v2",
     "iteration_evidence_v2.schema.json": "iteration_evidence_v2",
-    "object_store_audit_event_v1.schema.json": "object_store_audit_event_v1",
-    "scm_sync_job_payload_v1.schema.json": "scm_sync_job_payload_v1",
-    "scm_sync_run_v1.schema.json": "scm_sync_run_v1",
+    "object_store_audit_event_v2.schema.json": "object_store_audit_event_v2",
+    "scm_sync_job_payload_v2.schema.json": "scm_sync_job_payload_v2",
+    "scm_sync_run_v2.schema.json": "scm_sync_run_v2",
 }
 
 # 需要校验的 schema 文件列表（相对于 schemas/ 目录）
 SCHEMA_FILES = [
-    "audit_event_v1.schema.json",
+    "audit_event_v2.schema.json",
+    "import_migration_map_v2.schema.json",
     "iteration_evidence_v2.schema.json",
-    "iteration_gate_profiles_v1.schema.json",
-    "iteration_toolchain_drift_map_v1.schema.json",
-    "object_store_audit_event_v1.schema.json",
-    "reliability_report_v1.schema.json",
-    "workflow_contract_drift_report_v1.schema.json",
-    "scm_sync_job_payload_v1.schema.json",
-    "scm_sync_result_v1.schema.json",
-    "scm_sync_run_v1.schema.json",
-    "seek_query_packet_v1.schema.json",
-    "unified_stack_verify_results_v1.schema.json",
+    "iteration_gate_profiles_v2.schema.json",
+    "iteration_toolchain_drift_map_v2.schema.json",
+    "object_store_audit_event_v2.schema.json",
+    "reliability_report_v2.schema.json",
+    "workflow_contract_drift_report_v2.schema.json",
+    "scm_sync_job_payload_v2.schema.json",
+    "scm_sync_result_v2.schema.json",
+    "scm_sync_run_v2.schema.json",
+    "unified_stack_verify_results_v2.schema.json",
     "openmemory_conflict.schema.json",
     "openmemory_patches.schema.json",
     "openmemory_upstream_lock.schema.json",

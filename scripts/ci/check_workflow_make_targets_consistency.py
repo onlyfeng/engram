@@ -3,11 +3,11 @@
 Workflow Make Targets 一致性检查
 
 解析 .github/workflows/*.yml 中的 `run: make ...` 命令，提取 make targets，
-然后与 Makefile 的 .PHONY/定义目标和 workflow_contract.v1.json 的 make.targets_required 比对。
+然后与 Makefile 的 .PHONY/定义目标和 workflow_contract.v2.json 的 make.targets_required 比对。
 
 检查项：
 1. workflow 中使用的 make target 必须在 Makefile 中定义
-2. workflow_contract.v1.json 的 make.targets_required 必须在 Makefile 中定义
+2. workflow_contract.v2.json 的 make.targets_required 必须在 Makefile 中定义
 3. 报告 workflow 中使用但未在 contract 中声明的 targets（警告）
 
 用法:
@@ -181,7 +181,7 @@ class WorkflowMakeTargetsChecker:
     ):
         self.workspace = workspace
         self.makefile_path = makefile_path or workspace / "Makefile"
-        self.contract_path = contract_path or workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        self.contract_path = contract_path or workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         self.workflow_dir = workflow_dir or workspace / ".github" / "workflows"
 
     def check(self) -> CheckResult:

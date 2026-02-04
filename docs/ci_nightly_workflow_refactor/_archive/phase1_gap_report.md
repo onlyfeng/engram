@@ -18,7 +18,7 @@
 ---
 
 > **生成日期**: 2026-02-02（更新）
-> **审计范围**: `.github/workflows/ci.yml`、`.github/workflows/nightly.yml`、`scripts/ci/workflow_contract.v1.json`
+> **审计范围**: `.github/workflows/ci.yml`、`.github/workflows/nightly.yml`、`scripts/ci/workflow_contract.v2.json`
 > **快照来源**: `artifacts/workflow_snapshot.after.json`（由 `generate_workflow_contract_snapshot.py --include-step-details` 生成）
 > **文档目的**: 记录当前 CI/Nightly workflow 与合约定义之间的**结构性差距**，为后续决策提供基准
 > **文档状态**: **已归档** - 差距已在 v2.0.0+ 合约版本中解决
@@ -46,7 +46,7 @@
 
 ### 1.1 CI Workflow Job IDs
 
-| 合约期望 (`workflow_contract.v1.json`) | 实际存在 (`ci.yml`) | 状态 |
+| 合约期望 (`workflow_contract.v2.json`) | 实际存在 (`ci.yml`) | 状态 |
 |----------------------------------------|---------------------|------|
 | `detect-changes` | ❌ 不存在 | 🔴 GAP |
 | `precheck-static` | ❌ 不存在 | 🔴 GAP |
@@ -73,7 +73,7 @@
 
 ### 1.2 Nightly Workflow Job IDs
 
-| 合约期望 (`workflow_contract.v1.json`) | 实际存在 (`nightly.yml`) | 状态 |
+| 合约期望 (`workflow_contract.v2.json`) | 实际存在 (`nightly.yml`) | 状态 |
 |----------------------------------------|--------------------------|------|
 | `nightly-full` | ❌ 不存在 | 🔴 GAP |
 | — | `unified-stack-full` | 🟡 合约未定义 |
@@ -295,7 +295,7 @@
 3. 合约更新成本较低，不影响 CI 流程
 
 **操作步骤**:
-1. 根据快照更新 `workflow_contract.v1.json` 的 `ci.job_ids`、`ci.job_names`、`ci.required_jobs`
+1. 根据快照更新 `workflow_contract.v2.json` 的 `ci.job_ids`、`ci.job_names`、`ci.required_jobs`
 2. 根据快照更新 `nightly.job_ids`、`nightly.job_names`、`nightly.required_jobs`
 3. 移除或标记 `release` 定义为 "planned"
 4. 更新 `frozen_job_names.allowlist` 和 `frozen_step_text.allowlist`

@@ -60,7 +60,7 @@ def create_project_structure(
     """创建临时项目结构，包含 contract JSON 和 doc Markdown 文件
 
     Args:
-        contract_data: workflow_contract.v1.json 的内容
+        contract_data: workflow_contract.v2.json 的内容
         doc_content: contract.md 的内容
 
     Returns:
@@ -72,7 +72,7 @@ def create_project_structure(
     # 创建 scripts/ci 目录并写入 contract JSON
     contract_dir = temp_dir / "scripts" / "ci"
     contract_dir.mkdir(parents=True, exist_ok=True)
-    contract_path = contract_dir / "workflow_contract.v1.json"
+    contract_path = contract_dir / "workflow_contract.v2.json"
     with open(contract_path, "w", encoding="utf-8") as f:
         json.dump(contract_data, f, indent=2)
 
@@ -191,7 +191,7 @@ class TestVersionNotUpdated:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         assert result.success is False
@@ -213,7 +213,7 @@ class TestVersionNotUpdated:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/nightly.yml"])
 
         assert result.success is False
@@ -234,7 +234,7 @@ class TestVersionNotUpdated:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=["docs/ci_nightly_workflow_refactor/contract.md"])
 
         assert result.success is False
@@ -300,7 +300,7 @@ class TestVersionNotInDoc:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         assert result.success is False
@@ -397,7 +397,7 @@ class TestMakefileCIRelatedChange:
 
         monkeypatch.setattr(module, "get_file_diff_content", lambda *args: non_ci_diff)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=["Makefile"])
 
         # 不应触发版本检查
@@ -459,7 +459,7 @@ class TestToolingScriptChanges:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=["scripts/ci/validate_workflows.py"])
 
         assert "scripts/ci/validate_workflows.py" in result.changed_critical_files
@@ -477,10 +477,10 @@ class TestToolingScriptChanges:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
-        result = checker.check(changed_files=["scripts/ci/workflow_contract.v1.schema.json"])
+        checker = module.WorkflowContractVersionChecker(project_root)
+        result = checker.check(changed_files=["scripts/ci/workflow_contract.v2.schema.json"])
 
-        assert "scripts/ci/workflow_contract.v1.schema.json" in result.changed_critical_files
+        assert "scripts/ci/workflow_contract.v2.schema.json" in result.changed_critical_files
 
 
 # ============================================================================
@@ -512,7 +512,7 @@ class TestVersionTableParsing:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         assert result.version_in_doc is True
@@ -538,7 +538,7 @@ class TestVersionTableParsing:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         assert result.version_in_doc is True
@@ -598,7 +598,7 @@ class TestErrorMessageClarity:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         version_errors = [e for e in result.errors if e.error_type == "version_not_updated"]
@@ -617,7 +617,7 @@ class TestErrorMessageClarity:
 
         monkeypatch.setattr(module, "get_old_file_content", lambda *args: old_contract)
 
-        checker = WorkflowContractVersionChecker(project_root)
+        checker = module.WorkflowContractVersionChecker(project_root)
         result = checker.check(changed_files=[".github/workflows/ci.yml"])
 
         doc_errors = [e for e in result.errors if e.error_type == "version_not_in_doc"]
@@ -1209,8 +1209,7 @@ class TestCriticalToolingScriptsTrigger:
         assert is_critical_tooling_script("scripts/ci/workflow_contract_drift_report.py") is True
 
     def test_schema_file_is_critical(self) -> None:
-        """workflow_contract.v1.schema.json 应被识别为关键工具脚本"""
-        assert is_critical_tooling_script("scripts/ci/workflow_contract.v1.schema.json") is True
+        """workflow_contract.v2.schema.json 应被识别为关键工具脚本"""
         assert is_critical_tooling_script("scripts/ci/workflow_contract.v2.schema.json") is True
 
     def test_non_critical_script_not_flagged(self) -> None:

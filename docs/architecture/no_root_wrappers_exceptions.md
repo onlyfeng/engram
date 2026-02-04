@@ -10,7 +10,7 @@
 
 | 资源 | 权威来源 | 说明 |
 |------|----------|------|
-| **Allowlist 数据模型** | `schemas/no_root_wrappers_allowlist_v1.schema.json` | JSON Schema 定义，字段约束与格式验证 |
+| **Allowlist 数据模型** | `schemas/no_root_wrappers_allowlist_v2.schema.json` | JSON Schema 定义，字段约束与格式验证 |
 | **Allowlist 数据文件** | `scripts/ci/no_root_wrappers_allowlist.json` | CI 门禁检查的例外允许列表 |
 | **检查脚本** | `scripts/ci/check_no_root_wrappers_usage.py` | 执行例外检查的 CI 脚本 |
 | **规范文档** | 本文档 | 语义定义、变更流程、治理策略 |
@@ -114,17 +114,17 @@ import db_migrate  # ROOT-WRAPPER-ALLOW: 迁移测试; expires=2026-06-30; owner
 
 ### 2.1 Schema 版本
 
-当前版本：**1.0**
+当前版本：**2.0**
 
-Schema 定义文件：`schemas/no_root_wrappers_allowlist_v1.schema.json`
+Schema 定义文件：`schemas/no_root_wrappers_allowlist_v2.schema.json`
 
-> **版本兼容性**：检查脚本同时接受 `version: "1"` 和 `version: "1.0"`，两者语义等价。新文件推荐使用 `"1.0"`。
+> **版本兼容性**：检查脚本同时接受 `version: "2"` 和 `version: "2.0"`，两者语义等价。新文件推荐使用 `"2.0"`。
 
 ### 2.2 顶层结构
 
 ```json
 {
-  "version": "1.0",
+  "version": "2.0",
   "generated_at": "2026-02-01T12:00:00Z",
   "description": "根目录 wrapper 导入例外允许列表",
   "entries": []
@@ -133,7 +133,7 @@ Schema 定义文件：`schemas/no_root_wrappers_allowlist_v1.schema.json`
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `version` | string | 是 | Schema 版本，当前固定为 `"1.0"` |
+| `version` | string | 是 | Schema 版本，当前固定为 `"2.0"` |
 | `generated_at` | ISO8601 datetime | 否 | 文件生成/更新时间戳 |
 | `description` | string | 否 | 文件用途说明 |
 | `entries` | array | 是 | 例外条目列表 |
@@ -177,7 +177,7 @@ ID 格式建议：`<scope>-<module>-<描述>`
 
 ```json
 {
-  "version": "1.0",
+  "version": "2.0",
   "generated_at": "2026-02-01T12:00:00Z",
   "description": "根目录 wrapper 导入例外允许列表",
   "entries": [
@@ -553,7 +553,7 @@ import artifact_cli  # ALLOW-ROOT-WRAPPER: 测试需要
 
 ### 9.1 Schema 定义参考
 
-完整 Schema 定义见：`schemas/no_root_wrappers_allowlist_v1.schema.json`
+完整 Schema 定义见：`schemas/no_root_wrappers_allowlist_v2.schema.json`
 
 ### 9.2 检查脚本参考
 

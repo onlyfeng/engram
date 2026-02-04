@@ -24,7 +24,7 @@ def _find_schema_path() -> Path:
     """Find schema file path across execution contexts."""
     current = Path(__file__).resolve().parent
     for _ in range(10):
-        candidate = current / "schemas" / "workflow_contract_drift_report_v1.schema.json"
+        candidate = current / "schemas" / "workflow_contract_drift_report_v2.schema.json"
         if candidate.exists():
             return candidate
         current = current.parent
@@ -35,7 +35,7 @@ SCHEMA_PATH = _find_schema_path()
 
 
 def load_schema() -> Dict[str, Any]:
-    """Load workflow_contract_drift_report_v1 schema."""
+    """Load workflow_contract_drift_report_v2 schema."""
     if not SCHEMA_PATH.exists():
         pytest.skip(f"Schema file not found: {SCHEMA_PATH}")
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -45,7 +45,7 @@ def write_contract(workspace: Path, contract: dict[str, Any]) -> Path:
     """Write contract JSON file."""
     scripts_ci = workspace / "scripts" / "ci"
     scripts_ci.mkdir(parents=True, exist_ok=True)
-    contract_path = scripts_ci / "workflow_contract.v1.json"
+    contract_path = scripts_ci / "workflow_contract.v2.json"
     contract_path.write_text(json.dumps(contract, indent=2), encoding="utf-8")
     return contract_path
 
@@ -93,7 +93,7 @@ class TestWorkflowContractDriftReportSchema:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()

@@ -69,7 +69,7 @@ def temp_workspace(tmp_path: Path) -> Path:
 
 def write_contract(workspace: Path, contract: dict[str, Any]) -> Path:
     """写入 contract JSON 文件"""
-    contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+    contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
     with open(contract_path, "w", encoding="utf-8") as f:
         json.dump(contract, f, indent=2)
     return contract_path
@@ -231,7 +231,7 @@ class TestMissingJobId:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -273,7 +273,7 @@ class TestExtraJob:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -312,7 +312,7 @@ class TestJobNameMismatch:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -365,7 +365,7 @@ class TestMissingStep:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -411,7 +411,7 @@ class TestMissingStep:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -463,7 +463,7 @@ class TestNewStepInWorkflow:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -507,7 +507,7 @@ class TestFrozenAllowlistUpdate:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -555,7 +555,7 @@ class TestFrozenAllowlistUpdate:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -601,7 +601,7 @@ class TestWorkflowFilter:
 
         # 只分析 ci
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
             workflow_filter="ci",
         )
@@ -628,7 +628,7 @@ class TestDynamicWorkflowDiscovery:
             "version": "1.0.0",
             "last_updated": "2026-02-02",
             # 元数据字段（应被忽略）
-            "$schema": "workflow_contract.v1.schema.json",
+            "$schema": "workflow_contract.v2.schema.json",
             "make": {"targets": ["ci"]},
             "frozen_job_names": {"allowlist": []},
             "_changelog_v1.0.0": "initial version",
@@ -666,7 +666,7 @@ class TestDynamicWorkflowDiscovery:
         )
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -690,7 +690,7 @@ class TestDynamicWorkflowDiscovery:
             "version": "1.0.0",
             "last_updated": "2026-02-02",
             # 这些 metadata 字段不应被当作 workflow 处理
-            "$schema": "workflow_contract.v1.schema.json",
+            "$schema": "workflow_contract.v2.schema.json",
             "description": "Test contract",
             "make": {"file": ".github/workflows/make.yml"},  # 有 file 字段但是 metadata
             "frozen_step_text": {"file": "should-not-match", "allowlist": []},
@@ -713,7 +713,7 @@ class TestDynamicWorkflowDiscovery:
         )
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -762,7 +762,7 @@ class TestDynamicWorkflowDiscovery:
 
         # 只分析 staging（动态发现的 key）
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
             workflow_filter="staging",
         )
@@ -798,7 +798,7 @@ class TestDynamicWorkflowDiscovery:
 
         # 过滤一个不存在的 workflow key
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
             workflow_filter="nonexistent",
         )
@@ -844,7 +844,7 @@ class TestNoSuggestions:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1074,7 +1074,7 @@ class TestIntegration:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1115,7 +1115,7 @@ class TestIntegration:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractSuggestionAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1839,7 +1839,7 @@ class TestApplyWithFixtures:
     def test_apply_preserves_metadata(self, temp_workspace: Path) -> None:
         """验证 apply 保持 metadata 字段（如 _changelog）不变"""
         contract = {
-            "$schema": "workflow_contract.v1.schema.json",
+            "$schema": "workflow_contract.v2.schema.json",
             "version": "1.0.0",
             "description": "Test contract",
             "last_updated": "2026-02-02",
@@ -1878,7 +1878,7 @@ class TestApplyWithFixtures:
 
         # 验证 metadata 保持不变
         updated_contract = json.loads(result.contract_after)
-        assert updated_contract["$schema"] == "workflow_contract.v1.schema.json"
+        assert updated_contract["$schema"] == "workflow_contract.v2.schema.json"
         assert updated_contract["version"] == "1.0.0"
         assert updated_contract["description"] == "Test contract"
         assert updated_contract["_changelog_v1.0.0"] == "Initial version"

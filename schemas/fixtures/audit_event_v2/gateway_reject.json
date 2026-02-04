@@ -1,0 +1,37 @@
+{
+  "schema_version": "2.0",
+  "source": "gateway",
+  "operation": "memory_store",
+  "correlation_id": "corr-fedcba0987654321",
+  "actor_user_id": "user3",
+  "requested_space": "team:restricted",
+  "final_space": null,
+  "decision": {
+    "action": "reject",
+    "reason": "user_not_in_allowlist"
+  },
+  "payload_sha": "xyz789abc123xyz789abc123xyz789abc123xyz789abc123xyz789abc123xyz7",
+  "payload_len": 256,
+  "evidence_summary": {
+    "count": 1,
+    "has_strong": false,
+    "uris": ["https://jira.example.com/ISSUE-123"]
+  },
+  "trim": {
+    "was_trimmed": false,
+    "why": null,
+    "original_len": null
+  },
+  "refs": ["https://jira.example.com/ISSUE-123"],
+  "event_ts": "2024-01-15T12:00:00.000000+00:00",
+  "policy_mode": "strict",
+  "validation": {
+    "validate_refs_effective": true,
+    "validate_refs_reason": "strict_mode",
+    "evidence_validation": {
+      "is_valid": false,
+      "mode": "strict",
+      "error_code": "EVIDENCE_MISSING_SHA256"
+    }
+  }
+}

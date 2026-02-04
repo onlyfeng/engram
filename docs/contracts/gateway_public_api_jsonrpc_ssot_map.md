@@ -135,7 +135,7 @@
 ```
            ┌─────────────────────────────────────────┐
            │        JSON Schema (最高权威)            │
-           │ schemas/mcp_jsonrpc_error_v1.schema.json │
+           │ schemas/mcp_jsonrpc_error_v2.schema.json │
            └────────────────┬────────────────────────┘
                             │ 校验
            ┌────────────────▼────────────────────────┐
@@ -155,7 +155,7 @@
                             │ 描述
            ┌────────────────▼────────────────────────┐
            │          文档 (最终派生)                  │
-           │  docs/contracts/mcp_jsonrpc_error_v1.md │
+           │  docs/contracts/mcp_jsonrpc_error_v2.md │
            └─────────────────────────────────────────┘
 ```
 
@@ -165,7 +165,7 @@
 
 | 权威来源 | 路径 | 作用 |
 |----------|------|------|
-| **JSON Schema** | `schemas/mcp_jsonrpc_error_v1.schema.json` 的 `definitions.error_reason.enum` | 结构验证的最高权威 |
+| **JSON Schema** | `schemas/mcp_jsonrpc_error_v2.schema.json` 的 `definitions.error_reason.enum` | 结构验证的最高权威 |
 | **代码实现** | `src/engram/gateway/error_codes.py:McpErrorReason` | 运行时常量定义 |
 | **门禁脚本** | `scripts/ci/check_mcp_jsonrpc_error_contract.py` | 双向验证一致性 |
 
@@ -179,11 +179,11 @@ make check-mcp-error-contract
 
 | 契约元素 | 权威文件 | 说明 |
 |----------|----------|------|
-| ErrorData 结构 | `schemas/mcp_jsonrpc_error_v1.schema.json` | JSON-RPC error.data 结构定义 |
+| ErrorData 结构 | `schemas/mcp_jsonrpc_error_v2.schema.json` | JSON-RPC error.data 结构定义 |
 | ErrorCode 枚举 | `src/engram/gateway/error_codes.py:McpErrorCode` | -32xxx 错误码常量 |
 | ErrorCategory 枚举 | `src/engram/gateway/error_codes.py:McpErrorCategory` | 错误分类常量 |
 | ErrorReason 枚举 | `src/engram/gateway/error_codes.py:McpErrorReason` | 错误原因码常量 |
-| 审计事件结构 | `schemas/audit_event_v1.schema.json` | AuditEvent 结构定义 |
+| 审计事件结构 | `schemas/audit_event_v2.schema.json` | AuditEvent 结构定义 |
 | Outbox reason 码 | `src/engram/logbook/errors.py:ErrorCode` | Outbox 审计 reason 定义 |
 
 ---
@@ -214,7 +214,7 @@ make check-mcp-error-contract
 |------|------|
 | **统一来源** | 所有 correlation_id 的生成、校验、归一化都应通过 `correlation_id.py` |
 | **禁止硬编码** | 禁止在其他模块中直接使用 `f"corr-{uuid.uuid4().hex[:16]}"` |
-| **格式对齐** | 必须与 `schemas/audit_event_v1.schema.json` 中的格式定义一致 |
+| **格式对齐** | 必须与 `schemas/audit_event_v2.schema.json` 中的格式定义一致 |
 
 ### 3.4 门禁与测试锚点
 
@@ -256,9 +256,9 @@ make check-mcp-error-contract
 
 | 步骤 | 文件 | 说明 | 对应 make gate |
 |------|------|------|----------------|
-| 1 | `schemas/mcp_jsonrpc_error_v1.schema.json` | 更新 `error_reason.enum` | `make check-schemas` |
+| 1 | `schemas/mcp_jsonrpc_error_v2.schema.json` | 更新 `error_reason.enum` | `make check-schemas` |
 | 2 | `src/engram/gateway/error_codes.py` | 更新 `McpErrorReason` | `make check-mcp-error-contract` |
-| 3 | `docs/contracts/mcp_jsonrpc_error_v1.md` | 更新错误码文档 | - |
+| 3 | `docs/contracts/mcp_jsonrpc_error_v2.md` | 更新错误码文档 | - |
 | 4 | `tests/gateway/test_mcp_jsonrpc_contract.py` | 更新契约测试 | `make test` |
 
 #### 4.1.4 修改 correlation_id 相关逻辑
@@ -266,7 +266,7 @@ make check-mcp-error-contract
 | 步骤 | 文件 | 说明 | 对应 make gate |
 |------|------|------|----------------|
 | 1 | `src/engram/gateway/correlation_id.py` | SSOT 实现模块 | `make check-gateway-correlation-id-single-source` |
-| 2 | `schemas/audit_event_v1.schema.json` | 格式定义（如需） | `make check-schemas` |
+| 2 | `schemas/audit_event_v2.schema.json` | 格式定义（如需） | `make check-schemas` |
 | 3 | `tests/gateway/test_mcp_jsonrpc_contract.py` | 更新契约测试 | `make test` |
 | 4 | 本文档 (§3) | 更新规则说明 | - |
 
@@ -322,7 +322,7 @@ pytest tests/gateway/test_public_api_import_contract.py tests/gateway/test_mcp_j
 |------|------|------|
 | Gateway Public API Surface | [gateway_public_api_surface.md](../architecture/gateway_public_api_surface.md) | 导出项详细分析 |
 | Gateway 契约收敛文档 | [gateway_contract_convergence.md](./gateway_contract_convergence.md) | 五域契约汇总 |
-| MCP JSON-RPC 错误模型契约 | [mcp_jsonrpc_error_v1.md](./mcp_jsonrpc_error_v1.md) | 错误模型详细规范 |
+| MCP JSON-RPC 错误模型契约 | [mcp_jsonrpc_error_v2.md](./mcp_jsonrpc_error_v2.md) | 错误模型详细规范 |
 | Gateway Public API JSON-RPC Surface ADR | [adr_gateway_public_api_jsonrpc_surface.md](../architecture/adr_gateway_public_api_jsonrpc_surface.md) | 架构决策记录 |
 | Gateway ImportError 规范 | [gateway_importerror_and_optional_deps.md](../architecture/gateway_importerror_and_optional_deps.md) | 可选依赖错误处理 |
 

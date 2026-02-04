@@ -12,8 +12,8 @@
 
 | Manifest 文件 | 适用模式 | 版本 |
 |--------------|----------|------|
-| [`logbook_only_import_v1.json`](./manifests/logbook_only_import_v1.json) | Logbook-only | 1.0 |
-| [`unified_stack_import_v1.json`](./manifests/unified_stack_import_v1.json) | Unified stack | 1.0 |
+| [`logbook_only_import_v2.json`](./manifests/logbook_only_import_v2.json) | Logbook-only | 2.0 |
+| [`unified_stack_import_v2.json`](./manifests/unified_stack_import_v2.json) | Unified stack | 2.0 |
 
 **版本策略**（遵循 [`docs/contracts/versioning.md`](../contracts/versioning.md)）：
 
@@ -408,8 +408,8 @@ python "$ENGRAM_SRC/scripts/import_copy.py" \
 
 **脚本功能**：
 - 支持 `--mode logbook-only|unified` 选择部署模式
-  - `logbook-only`: 加载 `logbook_only_import_v1.json`
-  - `unified`: 加载 `unified_stack_import_v1.json`（默认）
+  - `logbook-only`: 加载 `logbook_only_import_v2.json`
+  - `unified`: 加载 `unified_stack_import_v2.json`（默认）
 - 使用 `--manifest` 可覆盖 `--mode` 的默认选择
 - 按 manifest 定义复制必需文件
 - 使用 `--include-optional` 包含可选文件
@@ -1016,7 +1016,7 @@ cp "$ENGRAM_SRC/configs/mcp/.mcp.json.example" configs/mcp/
 | 文档 | 说明 |
 |------|------|
 | [导入路径约束参考](./import_path_constraints.md) | 路径约束、失败症状与修复方式 |
-| [`unified_stack_import_v1.json`](./manifests/unified_stack_import_v1.json) | Unified Stack 机器可读 Manifest |
+| [`unified_stack_import_v2.json`](./manifests/unified_stack_import_v2.json) | Unified Stack 机器可读 Manifest |
 | [`scripts/import_copy.py`](../../scripts/import_copy.py) | 自动化导入复制工具 |
 | [`scripts/import_preflight.py`](../../scripts/import_preflight.py) | 导入预检验证工具 |
 | [版本控制契约](../contracts/versioning.md) | Schema 与 Manifest 版本策略 |

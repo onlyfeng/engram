@@ -122,7 +122,7 @@ Gateway deps.db Allowlist 校验
 
 项目根目录: /Users/a4399/Documents/ai/onlyfeng/engram
 Allowlist 文件: scripts/ci/gateway_deps_db_allowlist.json
-Schema 文件: schemas/gateway_deps_db_allowlist_v1.schema.json
+Schema 文件: schemas/gateway_deps_db_allowlist_v2.schema.json
 条目数: 0
 
 ----------------------------------------------------------------------

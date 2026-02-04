@@ -68,7 +68,7 @@ def minimal_evidence_data() -> dict:
 def full_evidence_data() -> dict:
     """完整字段的证据数据。"""
     return {
-        "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+        "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
         "iteration_number": 13,
         "recorded_at": "2026-02-01T22:50:45Z",
         "commit_sha": "f442a3eb08a3ec2879109923d216d2b19bfd8f32",

@@ -37,7 +37,7 @@ from scripts.ci._date_utils import utc_today
 
 # 默认文件路径（相对于项目根）
 DEFAULT_ALLOWLIST_FILE = "scripts/ci/gateway_deps_db_allowlist.json"
-DEFAULT_SCHEMA_FILE = "schemas/gateway_deps_db_allowlist_v1.schema.json"
+DEFAULT_SCHEMA_FILE = "schemas/gateway_deps_db_allowlist_v2.schema.json"
 
 # Owner 格式规范（GitHub 用户名或团队，必须以 @ 开头）
 OWNER_PATTERN = re.compile(r"^@[a-zA-Z0-9_-]+(-[a-zA-Z0-9_-]+)*$")
@@ -213,10 +213,10 @@ def validate_against_schema(
         result.schema_errors.append("entries 必须是数组")
         valid = False
 
-    # 校验 version 值（支持 "1" 或 "1.0"）
+    # 校验 version 值（支持 "2" 或 "2.0"）
     version = data.get("version")
-    if version not in ("1", "1.0"):
-        result.schema_errors.append(f"version 值无效，期望 '1' 或 '1.0'，实际 '{version}'")
+    if version not in ("2", "2.0"):
+        result.schema_errors.append(f"version 值无效，期望 '2' 或 '2.0'，实际 '{version}'")
         valid = False
 
     return valid

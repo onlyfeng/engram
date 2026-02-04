@@ -48,7 +48,6 @@ from generated_blocks import (  # noqa: E402
 )
 from iteration_evidence_schema import (
     CURRENT_SCHEMA_FILENAME,
-    LEGACY_SCHEMA_FILENAME,
     resolve_schema_name,
 )
 # 默认路径配置
@@ -149,7 +148,7 @@ def parse_evidence_data(data: dict[str, Any]) -> EvidenceData:
                 f"证据文件缺少必要字段: {field}\n"
                 f"必要字段: {', '.join(required_fields)}\n"
                 f"请检查证据文件格式是否符合 schemas/{schema_name}"
-                f"（默认: {CURRENT_SCHEMA_FILENAME}，兼容: {LEGACY_SCHEMA_FILENAME}）"
+                f"（当前: {CURRENT_SCHEMA_FILENAME}）"
             )
 
     commands_data = data["commands"]

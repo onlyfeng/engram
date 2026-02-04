@@ -92,7 +92,7 @@
 | 产物 | 路径 | 说明 |
 |------|------|------|
 | **回归记录** | `docs/acceptance/iteration_{N}_regression.md` | 版本化的回归记录 |
-| **验收证据** | `docs/acceptance/evidence/iteration_{N}_evidence.json` | 结构化验收证据（符合 `iteration_evidence_v1.schema.json`） |
+| **验收证据** | `docs/acceptance/evidence/iteration_{N}_evidence.json` | 结构化验收证据（符合 `iteration_evidence_v2.schema.json`） |
 | **本地迭代笔记** | `.iteration/` | 本地化，不纳入版本控制 |
 
 ---

@@ -15,7 +15,7 @@
 
 相关文档：
 - [Gateway 审计/证据/关联性端到端契约](./gateway_audit_evidence_correlation_contract.md)
-- [Outbox Lease 契约](./outbox_lease_v1.md)
+- [Outbox Lease 契约](./outbox_lease_v2.md)
 
 ---
 

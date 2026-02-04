@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/import_migration_map_v2.schema.json",
+  "title": "Import Migration Map V2 Schema",
+  "description": "Import migration map schema (v2).",
+  "type": "object",
+  "required": ["version", "description", "updated_at", "modules"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Schema reference for import migration map"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Schema version number (string)"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable description"
+    },
+    "updated_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Last update date in YYYY-MM-DD format"
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/module_entry"
+      }
+    }
+  },
+  "definitions": {
+    "nullable_string": {
+      "type": ["string", "null"]
+    },
+    "module_entry": {
+      "type": "object",
+      "required": [
+        "old_module",
+        "import_target",
+        "cli_target",
+        "notes",
+        "deprecated",
+        "status",
+        "owner",
+        "target_version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "old_module": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Deprecated module name at repo root"
+        },
+        "import_target": {
+          "$ref": "#/definitions/nullable_string",
+          "description": "New import path or null if removed"
+        },
+        "cli_target": {
+          "$ref": "#/definitions/nullable_string",
+          "description": "New CLI entrypoint or null if removed"
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Migration notes"
+        },
+        "deprecated": {
+          "type": "boolean",
+          "description": "Whether the module is deprecated"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["migrated", "removed"],
+          "description": "Migration status"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Owning team or contact"
+        },
+        "target_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Target migration version (e.g., v2.0)"
+        }
+      }
+    }
+  }
+}

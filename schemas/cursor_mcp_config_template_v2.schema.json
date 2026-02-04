@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/cursor_mcp_config_template_v2.schema.json",
+  "title": "Cursor MCP Config Template V2",
+  "description": "Cursor MCP 配置模板（V2），用于约束 mcpServers 结构与字段",
+  "type": "object",
+  "required": ["mcpServers"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "可选的 Schema 引用"
+    },
+    "_comment": {
+      "type": "array",
+      "description": "注释信息（仅用于示例说明）",
+      "items": { "type": "string" }
+    },
+    "mcpServers": {
+      "$ref": "#/definitions/mcp_servers"
+    }
+  },
+  "definitions": {
+    "mcp_servers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/definitions/mcp_server"
+      }
+    },
+    "mcp_server": {
+      "type": "object",
+      "required": ["type", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["http"],
+          "description": "传输类型，Gateway 仅支持 http"
+        },
+        "url": {
+          "type": "string",
+          "description": "MCP 端点 URL（必须以 /mcp 结尾）"
+        },
+        "headers": {
+          "type": "object",
+          "description": "可选请求头",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    }
+  }
+}

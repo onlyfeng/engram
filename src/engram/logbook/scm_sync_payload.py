@@ -8,17 +8,16 @@ engram_logbook.scm_sync_payload - SCM 同步任务 Payload 契约定义
 - MIN_REQUIRED_FIELDS: 每种 PhysicalJobType 的最小必需字段集合
 - UNKNOWN_FIELD_PASSTHROUGH_RULES: 未知字段透传规则
 - JobPayloadVersion: payload 版本枚举
-- SyncJobPayloadV1: V1 版本的 payload 数据类
-- parse_payload: 解析 payload 字典，兼容旧字段
+- SyncJobPayloadV2: V2 版本的 payload 数据类
+- parse_payload: 解析 payload 字典
 - validate_payload: 验证 payload 合法性
 
 设计原则:
 1. 版本化设计，支持平滑升级
-2. 向后兼容：新版本能解析旧格式的 payload
-3. 字段名使用 snake_case
-4. 所有字段都有合理的默认值
-5. 关键字段做类型与范围校验
-6. 未知字段透传保留，便于向前兼容
+2. 字段名使用 snake_case
+3. 所有字段都有合理的默认值
+4. 关键字段做类型与范围校验
+5. 未知字段透传保留，便于向前兼容
 
 使用示例:
     # 解析 payload
@@ -53,7 +52,7 @@ __all__ = [
     "PhysicalJobType",
     # 枚举与数据类
     "JobPayloadVersion",
-    "SyncJobPayloadV1",
+    "SyncJobPayloadV2",
     "DiffMode",
     "SyncMode",
     "WindowType",
@@ -72,12 +71,12 @@ __all__ = [
 # Payload 契约规范版本
 # =============================================================================
 
-PAYLOAD_SPEC_VERSION = "v1.0.0"
+PAYLOAD_SPEC_VERSION = "v2.0.0"
 """
 Payload 契约规范版本号
 
 版本历史:
-- v1.0.0 (2024-01): 初始版本，定义基础字段集合
+- v2.0.0 (2026-02): 命名升级为 v2，保持字段集合不变
 """
 
 
@@ -527,9 +526,7 @@ class JobPayloadVersion(str, Enum):
     用于标识 payload 的版本，支持平滑升级。
     """
 
-    V1 = "v1"
-    # 未来版本预留
-    # V2 = "v2"
+    V2 = "v2"
 
 
 class DiffMode(str, Enum):
@@ -772,9 +769,9 @@ def _validate_int_range(
 
 
 @dataclass
-class SyncJobPayloadV1:
+class SyncJobPayloadV2:
     """
-    V1 版本的同步任务 Payload
+    V2 版本的同步任务 Payload
 
     包含任务执行所需的所有参数。
 
@@ -788,7 +785,7 @@ class SyncJobPayloadV1:
     """
 
     # === 版本标识 ===
-    version: str = JobPayloadVersion.V1.value
+    version: str = JobPayloadVersion.V2.value
 
     # === Repo 定位信息 ===
     # GitLab 实例标识（规范化后的 host，如 gitlab.example.com）
@@ -1019,21 +1016,16 @@ class SyncJobPayloadV1:
 def parse_payload(
     data: Optional[Dict[str, Any]],
     strict: bool = False,
-) -> SyncJobPayloadV1:
+) -> SyncJobPayloadV2:
     """
-    解析 payload 字典为 SyncJobPayloadV1 对象
-
-    支持兼容旧字段名：
-    - "since" -> since_ts
-    - "until" -> until_ts
-    - "gitlab_host" -> gitlab_instance（旧字段名）
+    解析 payload 字典为 SyncJobPayloadV2 对象
 
     Args:
         data: payload 字典（可以为 None 或空）
         strict: 是否在验证失败时抛出异常
 
     Returns:
-        SyncJobPayloadV1 对象
+        SyncJobPayloadV2 对象
 
     Raises:
         PayloadValidationError: strict=True 且验证失败时
@@ -1044,19 +1036,18 @@ def parse_payload(
     if not isinstance(data, dict):
         if strict:
             raise PayloadValidationError(f"payload 必须是 dict 类型，实际 {type(data).__name__}")
-        return SyncJobPayloadV1()
+        return SyncJobPayloadV2()
 
     # 收集已知字段
     known_fields = set()
 
     # === 版本 ===
-    version = data.get("version", JobPayloadVersion.V1.value)
+    version = data.get("version", JobPayloadVersion.V2.value)
     known_fields.add("version")
 
     # === Repo 定位信息 ===
-    # 兼容旧字段名 gitlab_host -> gitlab_instance
-    gitlab_instance = data.get("gitlab_instance") or data.get("gitlab_host")
-    known_fields.update(["gitlab_instance", "gitlab_host"])
+    gitlab_instance = data.get("gitlab_instance")
+    known_fields.add("gitlab_instance")
 
     tenant_id = data.get("tenant_id")
     known_fields.add("tenant_id")
@@ -1176,7 +1167,7 @@ def parse_payload(
     extra = {k: v for k, v in data.items() if k not in known_fields}
 
     # 构建 payload 对象
-    payload = SyncJobPayloadV1(
+    payload = SyncJobPayloadV2(
         version=version,
         gitlab_instance=gitlab_instance,
         tenant_id=tenant_id,
@@ -1208,20 +1199,20 @@ def parse_payload(
 
 
 def validate_payload(
-    data: Union[Dict[str, Any], SyncJobPayloadV1],
+    data: Union[Dict[str, Any], SyncJobPayloadV2],
 ) -> tuple:
     """
     验证 payload 是否符合契约
 
     Args:
-        data: payload 字典或 SyncJobPayloadV1 对象
+        data: payload 字典或 SyncJobPayloadV2 对象
 
     Returns:
         (is_valid, errors) 元组
         - is_valid: bool, 是否有效
         - errors: List[str], 错误列表
     """
-    if isinstance(data, SyncJobPayloadV1):
+    if isinstance(data, SyncJobPayloadV2):
         errors = data.validate()
     else:
         try:
@@ -1607,7 +1598,7 @@ def build_time_window_payload(
     diff_mode: str = DiffMode.BEST_EFFORT.value,
     strict: bool = False,
     **extra: Any,
-) -> SyncJobPayloadV1:
+) -> SyncJobPayloadV2:
     """
     构建时间窗口 payload（用于 Git/MR/Review）
 
@@ -1622,9 +1613,9 @@ def build_time_window_payload(
         **extra: 扩展字段
 
     Returns:
-        SyncJobPayloadV1 对象
+        SyncJobPayloadV2 对象
     """
-    return SyncJobPayloadV1(
+    return SyncJobPayloadV2(
         window_type=WindowType.TIME.value,
         since_ts=since_ts,
         until_ts=until_ts,
@@ -1646,7 +1637,7 @@ def build_rev_window_payload(
     diff_mode: str = DiffMode.BEST_EFFORT.value,
     strict: bool = False,
     **extra: Any,
-) -> SyncJobPayloadV1:
+) -> SyncJobPayloadV2:
     """
     构建 revision 窗口 payload（用于 SVN）
 
@@ -1660,9 +1651,9 @@ def build_rev_window_payload(
         **extra: 扩展字段
 
     Returns:
-        SyncJobPayloadV1 对象
+        SyncJobPayloadV2 对象
     """
-    return SyncJobPayloadV1(
+    return SyncJobPayloadV2(
         window_type=WindowType.REV.value,
         start_rev=start_rev,
         end_rev=end_rev,

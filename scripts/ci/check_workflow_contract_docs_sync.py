@@ -2,7 +2,7 @@
 """
 Workflow Contract 与文档同步校验脚本
 
-校验 workflow_contract.v1.json 中的关键元素是否在 contract.md 文档中有对应描述。
+校验 workflow_contract.v2.json 中的关键元素是否在 contract.md 文档中有对应描述。
 
 校验模式：
 1. **受控块模式**（推荐）：当文档包含 markers 时，渲染期望块并逐字比对
@@ -124,7 +124,7 @@ DOCS_SYNC_ERROR_TYPES = frozenset({
 # Constants
 # ============================================================================
 
-DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
+DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v2.json"
 DEFAULT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
 
 # 文档中各 workflow 章节的锚点关键字（用于章节定位和切片）
@@ -1132,7 +1132,7 @@ def format_json_output(result: SyncResult) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="校验 workflow_contract.v1.json 与 contract.md 的同步一致性",
+        description="校验 workflow_contract.v2.json 与 contract.md 的同步一致性",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

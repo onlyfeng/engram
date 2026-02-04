@@ -54,7 +54,7 @@ def project_root() -> Path:
 @pytest.fixture
 def contract_path(project_root: Path) -> Path:
     """合约文件路径"""
-    return project_root / "scripts" / "ci" / "workflow_contract.v1.json"
+    return project_root / "scripts" / "ci" / "workflow_contract.v2.json"
 
 
 @pytest.fixture

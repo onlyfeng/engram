@@ -259,7 +259,7 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Mcp-Session-Id
 }
 ```
 
-**Schema 定义**：[`schemas/reliability_report_v1.schema.json`](../../schemas/reliability_report_v1.schema.json)
+**Schema 定义**：[`schemas/reliability_report_v2.schema.json`](../../schemas/reliability_report_v2.schema.json)
 
 **测试引用**：
 - [`test_reliability_report_contract.py`](../../tests/gateway/test_reliability_report_contract.py) - 报告结构契约
@@ -1157,7 +1157,7 @@ python -m gateway.reconcile_outbox --once -v
 - 次版本号变更（1.0 → 1.1）：向后兼容，仅新增可选字段
 
 **单一事实来源**：
-- Schema 定义：[`schemas/audit_event_v1.schema.json`](../../schemas/audit_event_v1.schema.json)
+- Schema 定义：[`schemas/audit_event_v2.schema.json`](../../schemas/audit_event_v2.schema.json)
 - 代码实现：[`audit_event.py:AUDIT_EVENT_SCHEMA_VERSION`](../../src/engram/gateway/audit_event.py)
 
 ### 核心字段（必需）
@@ -1290,7 +1290,7 @@ reason 采用分层命名，区分业务层与协议/依赖层：
 | `git_commit` | string | 否 | Git commit SHA |
 | `mr` | integer | 否 | Merge Request ID |
 
-**Schema 单一事实来源**：[`schemas/audit_event_v1.schema.json`](../../schemas/audit_event_v1.schema.json)
+**Schema 单一事实来源**：[`schemas/audit_event_v2.schema.json`](../../schemas/audit_event_v2.schema.json)
 
 ---
 
@@ -1404,10 +1404,10 @@ reason 采用分层命名，区分业务层与协议/依赖层：
 
 | 契约 | Schema 文件 | 验证测试 |
 |------|-------------|----------|
-| audit_event 结构 | `schemas/audit_event_v1.schema.json` | `test_audit_event_contract.py::TestAuditEventSchema` |
-| evidence_refs_json 结构 | `schemas/audit_event_v1.schema.json` | `test_audit_event_contract.py::TestEvidenceRefsJsonSchema` |
-| reliability_report 结构 | `schemas/reliability_report_v1.schema.json` | `test_reliability_report_contract.py` |
-| object_store_audit 结构 | `schemas/object_store_audit_event_v1.schema.json` | `test_audit_event_contract.py::TestObjectStoreAuditEventSchema` |
+| audit_event 结构 | `schemas/audit_event_v2.schema.json` | `test_audit_event_contract.py::TestAuditEventSchema` |
+| evidence_refs_json 结构 | `schemas/audit_event_v2.schema.json` | `test_audit_event_contract.py::TestEvidenceRefsJsonSchema` |
+| reliability_report 结构 | `schemas/reliability_report_v2.schema.json` | `test_reliability_report_contract.py` |
+| object_store_audit 结构 | `schemas/object_store_audit_event_v2.schema.json` | `test_audit_event_contract.py::TestObjectStoreAuditEventSchema` |
 
 ### 代码为单一事实来源
 
@@ -1449,4 +1449,4 @@ reason 采用分层命名，区分业务层与协议/依赖层：
 | 治理开关 | [docs/gateway/04_governance_switch.md](./04_governance_switch.md) |
 | 验收测试矩阵 | [docs/acceptance/00_acceptance_matrix.md](../acceptance/00_acceptance_matrix.md) |
 | MCP 集成指南 | [docs/gateway/02_mcp_integration_cursor.md](./02_mcp_integration_cursor.md) |
-| v1.0 升级指南 | [docs/gateway/upgrade_v1_0_remove_handler_di_compat.md](./upgrade_v1_0_remove_handler_di_compat.md) |
+| v2.0 升级指南 | [docs/gateway/upgrade_v2_0_remove_handler_di_compat.md](./upgrade_v2_0_remove_handler_di_compat.md) |

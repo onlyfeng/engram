@@ -15,7 +15,7 @@ test_minio_audit_webhook - MinIO Audit Webhook 端点测试
    - 有效请求返回 200
    - 返回 event_id
 4. 归一化映射测试
-   - MinIO 事件归一化后符合 object_store_audit_event_v1 schema
+   - MinIO 事件归一化后符合 object_store_audit_event_v2 schema
    - schema_version/provider/raw 字段正确设置
 """
 
@@ -309,7 +309,7 @@ class TestMinioAuditSuccess:
 
         # 检查调用参数（归一化后的结构）
         call_args = mock_db_insert.call_args[0][0]
-        assert call_args["schema_version"] == "1.0"
+        assert call_args["schema_version"] == "2.0"
         assert call_args["provider"] == "minio"
         assert call_args["operation"] == "s3:PutObject"
         assert call_args["bucket"] == "engram"
@@ -488,11 +488,11 @@ class TestMinioAuditIntegration:
 
 
 def _find_schema_path() -> Path:
-    """查找 object_store_audit_event_v1.schema.json 路径"""
+    """查找 object_store_audit_event_v2.schema.json 路径"""
     current = Path(__file__).resolve().parent
 
     for _ in range(10):
-        candidate = current / "schemas" / "object_store_audit_event_v1.schema.json"
+        candidate = current / "schemas" / "object_store_audit_event_v2.schema.json"
         if candidate.exists():
             return candidate
         current = current.parent
@@ -500,13 +500,13 @@ def _find_schema_path() -> Path:
     fallback = (
         Path(__file__).resolve().parent.parent.parent.parent.parent
         / "schemas"
-        / "object_store_audit_event_v1.schema.json"
+        / "object_store_audit_event_v2.schema.json"
     )
     return fallback
 
 
 def load_object_store_schema():
-    """加载 object_store_audit_event_v1 schema"""
+    """加载 object_store_audit_event_v2 schema"""
     schema_path = _find_schema_path()
     if not schema_path.exists():
         pytest.skip(f"Schema 文件不存在: {schema_path}")
@@ -554,7 +554,7 @@ class TestMinioAuditNormalization:
         validate(instance=normalized, schema=schema)
 
         # 验证关键字段
-        assert normalized["schema_version"] == "1.0"
+        assert normalized["schema_version"] == "2.0"
         assert normalized["provider"] == "minio"
         assert normalized["bucket"] == "engram"
         assert normalized["object_key"] == "scm/1/git/commits/abc123.diff"
@@ -581,7 +581,7 @@ class TestMinioAuditNormalization:
         validate(instance=normalized, schema=schema)
 
         # 验证空字段处理
-        assert normalized["schema_version"] == "1.0"
+        assert normalized["schema_version"] == "2.0"
         assert normalized["provider"] == "minio"
         assert normalized["bucket"] == "unknown"  # 默认值
         assert normalized["object_key"] is None
@@ -731,7 +731,7 @@ class TestMinioAuditDbInsertWithSchema:
 
             # 验证插入数据包含归一化字段
             call_args = mock_insert.call_args[0][0]
-            assert call_args["schema_version"] == "1.0"
+            assert call_args["schema_version"] == "2.0"
             assert call_args["provider"] == "minio"
             assert "raw" in call_args
             assert call_args["raw"] == valid_minio_event

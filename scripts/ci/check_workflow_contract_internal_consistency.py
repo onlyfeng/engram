@@ -2,7 +2,7 @@
 """
 check_workflow_contract_internal_consistency.py
 
-校验 workflow_contract.v1.json 的内部不变量。
+校验 workflow_contract.v2.json 的内部不变量。
 
 校验规则（参见 _changelog_v2.10.0）：
 1. job_ids/job_names 长度一致（位置匹配）
@@ -48,7 +48,7 @@ from scripts.ci.workflow_contract_common import (
 # ============================================================================
 
 # 默认合约文件路径
-DEFAULT_CONTRACT_PATH = Path(__file__).parent / "workflow_contract.v1.json"
+DEFAULT_CONTRACT_PATH = Path(__file__).parent / "workflow_contract.v2.json"
 
 # Error types (align with validate_workflows.py / contract.md)
 CONTRACT_JOB_IDS_NAMES_LENGTH_MISMATCH = "contract_job_ids_names_length_mismatch"
@@ -188,7 +188,7 @@ class WorkflowContractInternalConsistencyChecker:
                     message=(
                         f"Contract error: {workflow}.job_ids ({len(job_ids)}) and "
                         f"{workflow}.job_names ({len(job_names)}) must have the same length "
-                        f"for position matching. Fix scripts/ci/workflow_contract.v1.json "
+                        f"for position matching. Fix scripts/ci/workflow_contract.v2.json "
                         f"fields: {workflow}.job_ids / {workflow}.job_names."
                     ),
                     key=f"job_ids={len(job_ids)}, job_names={len(job_names)}",
@@ -206,7 +206,7 @@ class WorkflowContractInternalConsistencyChecker:
                         workflow=workflow,
                         message=(
                             f"Contract error: Duplicate job_id '{job_id}' in {workflow}.job_ids. "
-                            f"Fix scripts/ci/workflow_contract.v1.json field: {workflow}.job_ids."
+                            f"Fix scripts/ci/workflow_contract.v2.json field: {workflow}.job_ids."
                         ),
                         key=job_id,
                     )
@@ -229,7 +229,7 @@ class WorkflowContractInternalConsistencyChecker:
                         workflow=workflow,
                         message=(
                             f"Contract error: Duplicate required_job id '{job_id}' in "
-                            f"{workflow}.required_jobs. Fix scripts/ci/workflow_contract.v1.json "
+                            f"{workflow}.required_jobs. Fix scripts/ci/workflow_contract.v2.json "
                             f"field: {workflow}.required_jobs[*].id."
                         ),
                         key=job_id,
@@ -253,7 +253,7 @@ class WorkflowContractInternalConsistencyChecker:
                         workflow=workflow,
                         message=(
                             f"Contract error: required_job id '{job_id}' is not defined in "
-                            f"{workflow}.job_ids. Fix scripts/ci/workflow_contract.v1.json: "
+                            f"{workflow}.job_ids. Fix scripts/ci/workflow_contract.v2.json: "
                             f"add '{job_id}' to {workflow}.job_ids or remove it from "
                             f"{workflow}.required_jobs."
                         ),

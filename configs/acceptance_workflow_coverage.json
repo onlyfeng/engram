@@ -1,6 +1,6 @@
 {
-  "$schema": "../schemas/acceptance_workflow_coverage_v1.schema.json",
-  "version": "1.0.0",
+  "$schema": "../schemas/acceptance_workflow_coverage_v2.schema.json",
+  "version": "2.0.0",
 
   "_note": "本文件为 Acceptance Workflow Coverage 参考文档，非门禁 SSOT。实际门禁逻辑由 check_acceptance_coverage_contract.py 定义。record_acceptance_run.py 和 render_acceptance_matrix.py 仅在 nightly.yml 中执行，ci.yml 不包含这些步骤。",
 

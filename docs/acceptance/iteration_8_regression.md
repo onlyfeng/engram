@@ -33,7 +33,7 @@
 ### 待修复问题
 
 1. **mypy 类型错误** (31 errors): 需要修复 `src/engram/logbook/` 和 `src/engram/gateway/` 中的类型注解
-2. **workflow 合约缺失 target**: `check-workflow-contract-doc-anchors` 未在 `workflow_contract.v1.json` 中声明
+2. **workflow 合约缺失 target**: `check-workflow-contract-doc-anchors` 未在 `workflow_contract.v2.json` 中声明
 3. **CI 测试版本同步**: 合约版本 2.17.0 未同步到文档
 
 ---
@@ -121,7 +121,7 @@ workflow 合约校验完成（严格模式）
 
 ### 说明
 
-当前 workflow 合约处于 **Phase 0**（定义于 `scripts/ci/workflow_contract.v1.json`）：
+当前 workflow 合约处于 **Phase 0**（定义于 `scripts/ci/workflow_contract.v2.json`）：
 
 - 仅校验 `ci.yml`，`nightly.yml` 暂不纳入合约
 - 后续 Phase 1 将重新引入 nightly/release 合约
@@ -132,8 +132,8 @@ workflow 合约校验完成（严格模式）
 |------|------|------|
 | `.github/workflows/ci.yml` | ✅ 符合合约 | 12 个 job 全部通过验证 |
 | `.github/workflows/nightly.yml` | ⏸️ 暂不纳入 | Phase 0 范围外 |
-| `scripts/ci/workflow_contract.v1.json` | ✅ 无变更 | 合约版本 v2.0.0 |
-| `scripts/ci/workflow_contract.v1.schema.json` | ✅ 无变更 | Schema 校验通过 |
+| `scripts/ci/workflow_contract.v2.json` | ✅ 无变更 | 合约版本 v2.0.0 |
+| `scripts/ci/workflow_contract.v2.schema.json` | ✅ 无变更 | Schema 校验通过 |
 
 ### 变更点
 
@@ -391,7 +391,7 @@ make verify-permissions
 | 项目 | 值 |
 |------|-----|
 | **证据文件** | [`iteration_8_evidence.json`](evidence/iteration_8_evidence.json) |
-| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **Schema 版本** | `iteration_evidence_v2.schema.json` |
 | **记录时间** | 2026-02-01T20:35:41Z |
 | **Commit SHA** | `11fb91d` |
 | **整体结果** | PARTIAL (10 PASS / 3 FAIL) |
@@ -414,7 +414,7 @@ make verify-permissions
 | `make check-mcp-error-docs-sync` | ✅ PASS | all enums synced |
 | `pytest tests/ci/ -q` | ❌ FAIL | 786 passed, 2 failed, 3 skipped |
 
-> **证据校验命令**: `python -m jsonschema -i docs/acceptance/evidence/iteration_8_evidence.json schemas/iteration_evidence_v1.schema.json`
+> **证据校验命令**: `python -m jsonschema -i docs/acceptance/evidence/iteration_8_evidence.json schemas/iteration_evidence_v2.schema.json`
 
 ---
 
@@ -429,7 +429,7 @@ make verify-permissions
 | 文件 | 状态 | 门禁 |
 |------|------|------|
 | `.github/workflows/ci.yml` | ✅ 修改 | validate-workflows-strict |
-| `scripts/ci/workflow_contract.v1.json` | ✅ 修改 | check-workflow-contract-docs-sync |
+| `scripts/ci/workflow_contract.v2.json` | ✅ 修改 | check-workflow-contract-docs-sync |
 | `scripts/ci/validate_workflows.py` | ✅ 修改 | check-workflow-contract-version-policy |
 
 **门禁结果**: ✅ 全部通过

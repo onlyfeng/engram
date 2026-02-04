@@ -2,7 +2,7 @@
 """
 Suggest Workflow Contract Updates
 
-读取 workflow_contract.v1.json 与当前 workflow YAML，对比并建议需要更新的内容。
+读取 workflow_contract.v2.json 与当前 workflow YAML，对比并建议需要更新的内容。
 
 功能:
 - 缺失的 job_id（workflow 中有但 contract 未声明）
@@ -200,7 +200,7 @@ def find_project_root() -> Path:
 
 def find_contract_path(project_root: Path) -> Path:
     """查找合约文件路径"""
-    contract_path = project_root / "scripts" / "ci" / "workflow_contract.v1.json"
+    contract_path = project_root / "scripts" / "ci" / "workflow_contract.v2.json"
     if contract_path.exists():
         return contract_path
     raise FileNotFoundError(f"找不到合约文件: {contract_path}")
@@ -288,12 +288,12 @@ class WorkflowContractSuggestionAnalyzer:
         ============================================================================
 
         本脚本使用 discover_workflow_keys() 动态发现 workflow 定义，无需硬编码。
-        当 release.yml 纳入合约时，只需在 workflow_contract.v1.json 中添加 release
+        当 release.yml 纳入合约时，只需在 workflow_contract.v2.json 中添加 release
         字段定义即可自动被本脚本发现和分析。
 
         纳入 release.yml 时的同步 Checklist（本脚本无需代码修改）：
 
-        1. [workflow_contract.v1.json] 添加 release 字段：
+        1. [workflow_contract.v2.json] 添加 release 字段：
            - file: ".github/workflows/release.yml"
            - job_ids: release workflow 的所有 job ID
            - job_names: 与 job_ids 位置对应的 job name
@@ -866,8 +866,8 @@ class ContractApplier:
         diff = difflib.unified_diff(
             before_lines,
             after_lines,
-            fromfile="workflow_contract.v1.json (before)",
-            tofile="workflow_contract.v1.json (after)",
+            fromfile="workflow_contract.v2.json (before)",
+            tofile="workflow_contract.v2.json (after)",
         )
         return "".join(diff)
 

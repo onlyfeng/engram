@@ -100,10 +100,10 @@ deps = GatewayDeps.for_testing(logbook_adapter=adapter)
 
 | 引用模式 | 文件位置 | 行号 | 内容类型 | 替代路径 |
 |----------|----------|------|----------|----------|
-| `deps.db` | `docs/gateway/upgrade_v1_0_remove_handler_di_compat.md` | 24, 104-107, 565-572, 647-651, 682-724 | 升级指南 | `deps.logbook_adapter` |
-| `container.db` | `docs/gateway/upgrade_v1_0_remove_handler_di_compat.md` | 25, 107, 583-592, 650, 685, 697, 715, 723 | 升级指南 | `container.logbook_adapter` |
-| `get_logbook_db()` | `docs/gateway/upgrade_v1_0_remove_handler_di_compat.md` | 26, 96, 612-617, 651, 687 | 升级指南 | `get_gateway_deps().logbook_adapter` |
-| `engram.gateway.logbook_db` | `docs/gateway/upgrade_v1_0_remove_handler_di_compat.md` | 27, 113, 612, 652, 688, 698 | 模块弃用说明 | `engram.gateway.logbook_adapter` |
+| `deps.db` | `docs/gateway/upgrade_v2_0_remove_handler_di_compat.md` | 24, 104-107, 565-572, 647-651, 682-724 | 升级指南 | `deps.logbook_adapter` |
+| `container.db` | `docs/gateway/upgrade_v2_0_remove_handler_di_compat.md` | 25, 107, 583-592, 650, 685, 697, 715, 723 | 升级指南 | `container.logbook_adapter` |
+| `get_logbook_db()` | `docs/gateway/upgrade_v2_0_remove_handler_di_compat.md` | 26, 96, 612-617, 651, 687 | 升级指南 | `get_gateway_deps().logbook_adapter` |
+| `engram.gateway.logbook_db` | `docs/gateway/upgrade_v2_0_remove_handler_di_compat.md` | 27, 113, 612, 652, 688, 698 | 模块弃用说明 | `engram.gateway.logbook_adapter` |
 | `deps.db` | `docs/architecture/adr_gateway_di_and_entry_boundary.md` | 960-986, 1120 | ADR 弃用说明 | `deps.logbook_adapter` |
 | `container.db` | `docs/architecture/adr_gateway_di_and_entry_boundary.md` | 312, 984 | ADR 依赖图 | `container.logbook_adapter` |
 | `LogbookDatabase` | `docs/architecture/adr_gateway_di_and_entry_boundary.md` | 312 | ADR 依赖图 | `LogbookAdapter` |
@@ -172,7 +172,7 @@ from engram.gateway.services.ports import LogbookPort
 
 ### 4.2 文档更新
 
-- [x] `docs/gateway/upgrade_v1_0_remove_handler_di_compat.md` - 包含完整迁移指南
+- [x] `docs/gateway/upgrade_v2_0_remove_handler_di_compat.md` - 包含完整迁移指南
 - [x] `docs/architecture/adr_gateway_di_and_entry_boundary.md` - 包含弃用说明
 - [x] `docs/gateway/06_gateway_design.md` - 包含弃用表格
 - [x] `docs/architecture/gateway_module_boundaries.md` - 包含禁止模式说明
@@ -205,7 +205,7 @@ from engram.gateway.services.ports import LogbookPort
 
 | 文档 | 路径 | 说明 |
 |------|------|------|
-| v1.0 升级指南 | `docs/gateway/upgrade_v1_0_remove_handler_di_compat.md` | 完整迁移步骤 |
+| v2.0 升级指南 | `docs/gateway/upgrade_v2_0_remove_handler_di_compat.md` | 完整迁移步骤 |
 | Gateway DI ADR | `docs/architecture/adr_gateway_di_and_entry_boundary.md` | 架构决策记录 |
 | Gateway 设计 | `docs/gateway/06_gateway_design.md` | Gateway 整体设计 |
 | 模块边界 | `docs/architecture/gateway_module_boundaries.md` | DI 边界检查规则 |

@@ -1,5 +1,5 @@
 {
-  "version": "1",
+  "version": "2.0",
   "description": "Gateway deps.db 直接访问例外允许列表。支持两种标记方式：allowlist id 引用（# DEPS-DB-ALLOW: <id>）和 inline 声明（# DEPS-DB-ALLOW: <reason>; expires=YYYY-MM-DD; owner=<team>）。过期条目、缺失 owner、无效 id 引用均会导致 CI 失败。",
   "entries": []
 }

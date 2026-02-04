@@ -1,6 +1,6 @@
 {
-  "$schema": "../schemas/mypy_strict_island_candidates_v1.schema.json",
-  "version": "1",
+  "$schema": "../schemas/mypy_strict_island_candidates_v2.schema.json",
+  "version": "2",
   "description": "Mypy Strict Island 准入候选清单（SSOT）。候选模块需先清零 baseline 错误后方可纳入 Strict Island。",
   "candidates": [
     "src/engram/logbook/scm_db.py",

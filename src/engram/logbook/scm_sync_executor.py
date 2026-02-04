@@ -64,7 +64,7 @@ class SyncHandler(Protocol):
             payload: 任务负载
 
         Returns:
-            符合 scm_sync_result_v1.schema.json 的结果字典
+            符合 scm_sync_result_v2.schema.json 的结果字典
         """
         ...
 
@@ -104,7 +104,7 @@ def validate_sync_result_contract(result: Dict[str, Any]) -> tuple[bool, list[st
     """
     校验同步结果是否符合 contract
 
-    根据 scm_sync_result_v1.schema.json 进行基本校验。
+    根据 scm_sync_result_v2.schema.json 进行基本校验。
 
     Args:
         result: 同步结果字典

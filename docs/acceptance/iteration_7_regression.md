@@ -82,7 +82,7 @@ ruff check --fix src/ tests/
 **相关文件**:
 - `scripts/ci/check_no_root_wrappers_usage.py`
 - `scripts/ci/no_root_wrappers_allowlist.json`
-- `schemas/no_root_wrappers_allowlist_v1.schema.json`
+- `schemas/no_root_wrappers_allowlist_v2.schema.json`
 
 ### 3. Mypy Gate 文档对齐
 

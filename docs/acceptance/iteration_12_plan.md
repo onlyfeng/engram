@@ -117,7 +117,7 @@
 | [iteration_11_regression.md](iteration_11_regression.md) | 上一迭代回归记录（基准） |
 | [00_acceptance_matrix.md](00_acceptance_matrix.md) | 验收测试矩阵总览 |
 | [adr_gateway_audit_atomicity.md](../architecture/adr_gateway_audit_atomicity.md) | 两阶段审计原子性方案 |
-| [mcp_jsonrpc_error_v1.md](../contracts/mcp_jsonrpc_error_v1.md) | MCP JSON-RPC 错误码契约 |
+| [mcp_jsonrpc_error_v2.md](../contracts/mcp_jsonrpc_error_v2.md) | MCP JSON-RPC 错误码契约 |
 
 ---
 

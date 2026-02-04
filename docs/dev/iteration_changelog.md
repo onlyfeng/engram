@@ -172,7 +172,7 @@ pytest tests/acceptance/ -v  # 143 通过, 50 跳过
 | 文件 | 变更类型 | 说明 |
 |------|----------|------|
 | `scripts/ci/check_gateway_di_boundaries.py` | feature | DI 边界检查脚本 |
-| `scripts/ci/workflow_contract.v1.json` | feature | Workflow 合约定义 |
+| `scripts/ci/workflow_contract.v2.json` | feature | Workflow 合约定义 |
 | `scripts/verify_cli_entrypoints_consistency.py` | feature | CLI 入口点检查 |
 | `sql/*.sql` | verified | 14 个文件通过一致性检查 |
 

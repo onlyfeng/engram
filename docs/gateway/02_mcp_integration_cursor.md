@@ -567,7 +567,7 @@ Gateway `/mcp` 端点支持两种协议格式，通过请求体字段自动识�
 
 | ADR | 说明 |
 |-----|------|
-| [MCP JSON-RPC 错误码契约](../contracts/mcp_jsonrpc_error_v1.md) | 本项目 MCP 错误码映射规范 |
+| [MCP JSON-RPC 错误码契约](../contracts/mcp_jsonrpc_error_v2.md) | 本项目 MCP 错误码映射规范 |
 
 ---
 

@@ -1,0 +1,34 @@
+{
+  "schema_version": "2.0",
+  "source": "gateway",
+  "operation": "memory_store",
+  "correlation_id": "corr-1234567890abcdef",
+  "actor_user_id": "user2",
+  "requested_space": "personal",
+  "final_space": "team:fallback",
+  "decision": {
+    "action": "redirect",
+    "reason": "team_write_disabled"
+  },
+  "payload_sha": null,
+  "payload_len": 512,
+  "evidence_summary": {
+    "count": 0,
+    "has_strong": false,
+    "uris": []
+  },
+  "trim": {
+    "was_trimmed": false,
+    "why": null,
+    "original_len": null
+  },
+  "refs": [],
+  "event_ts": "2024-01-15T11:00:00.000000+00:00",
+  "policy": {
+    "mode": "compat",
+    "mode_reason": "default",
+    "policy_version": "v1",
+    "is_pointerized": false,
+    "policy_source": "settings"
+  }
+}

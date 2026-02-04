@@ -496,7 +496,7 @@ def execute_sync_job(job: Dict[str, Any]) -> Dict[str, Any]:
         job: 任务字典，包含 job_type, repo_id, mode, payload 等字段
 
     Returns:
-        结果字典，符合 scm_sync_result_v1.schema.json
+        结果字典，符合 scm_sync_result_v2.schema.json
     """
     executor = get_executor()
     return executor(job)

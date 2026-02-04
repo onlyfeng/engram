@@ -319,15 +319,15 @@ docs/logbook/ 新增:
   docs/logbook/sql_file_inventory.md
 
 docs/ 其他修改:
-  docs/contracts/gateway_policy_v1.md
+  docs/contracts/gateway_policy_v2.md
   docs/gateway/07_capability_boundary.md
   docs/installation.md
   docs/reference/environment_variables.md
 
 其他:
   README.md
-  schemas/scm_sync_job_payload_v1.schema.json
-  schemas/fixtures/scm_sync_job_payload_v1/probe_mode.json
+  schemas/scm_sync_job_payload_v2.schema.json
+  schemas/fixtures/scm_sync_job_payload_v2/probe_mode.json
   .agentx/ (新增)
 ```
 

@@ -2,7 +2,7 @@
 """
 Workflow Contract 与 Coupling Map 同步校验脚本
 
-校验 workflow_contract.v1.json 中的关键元素是否在 coupling_map.md 文档中有对应记录。
+校验 workflow_contract.v2.json 中的关键元素是否在 coupling_map.md 文档中有对应记录。
 
 校验模式：
 1. **受控块模式**（推荐）：当文档包含 markers 时，渲染期望块并逐字比对
@@ -105,7 +105,7 @@ COUPLING_MAP_SYNC_ERROR_TYPES = frozenset({
 # Constants
 # ============================================================================
 
-DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
+DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v2.json"
 DEFAULT_COUPLING_MAP_PATH = "docs/ci_nightly_workflow_refactor/coupling_map.md"
 
 # 需要检查的核心 Make targets（子集）
@@ -652,7 +652,7 @@ def format_json_output(result: SyncResult) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="校验 workflow_contract.v1.json 与 coupling_map.md 的同步一致性",
+        description="校验 workflow_contract.v2.json 与 coupling_map.md 的同步一致性",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

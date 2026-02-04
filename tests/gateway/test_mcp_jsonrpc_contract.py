@@ -9,7 +9,7 @@ MCP JSON-RPC 2.0 协议契约测试
 4. tools/call 返回 content[] 格式
 5. 旧 {tool, arguments} 格式仍返回原 MCPResponse 结构
 6. 每个工具的 inputSchema.required 与实际实现一致
-7. 所有错误响应包含结构化 error.data（契约: docs/contracts/mcp_jsonrpc_error_v1.md）
+7. 所有错误响应包含结构化 error.data（契约: docs/contracts/mcp_jsonrpc_error_v2.md）
 """
 
 import json
@@ -39,7 +39,7 @@ from engram.gateway.error_codes import PUBLIC_MCP_ERROR_REASONS
 VALID_ERROR_CATEGORIES = ["protocol", "validation", "business", "dependency", "internal"]
 
 # 有效的错误原因码（从 PUBLIC_MCP_ERROR_REASONS 构建，用于断言）
-# 契约参见: docs/contracts/mcp_jsonrpc_error_v1.md §4
+# 契约参见: docs/contracts/mcp_jsonrpc_error_v2.md §4
 VALID_ERROR_REASONS: set[str] = set(PUBLIC_MCP_ERROR_REASONS)
 
 
@@ -55,7 +55,7 @@ def assert_error_data_contract(
     - retryable: 是否可重试 (布尔值)
     - correlation_id: 追踪 ID (格式: corr-{16位十六进制})
 
-    参见: docs/contracts/mcp_jsonrpc_error_v1.md
+    参见: docs/contracts/mcp_jsonrpc_error_v2.md
 
     Args:
         error_data: error.data 字典
@@ -785,7 +785,7 @@ class TestErrorDataStructure:
     """
     测试所有错误响应包含结构化的 ErrorData
 
-    契约: docs/contracts/mcp_jsonrpc_error_v1.md
+    契约: docs/contracts/mcp_jsonrpc_error_v2.md
     所有 JSON-RPC 错误响应必须包含:
     - error.data.category
     - error.data.reason
@@ -1294,7 +1294,7 @@ class TestToolsCallErrorAlignment:
     """
     测试 tools/call 的参数错误与未知工具错误对齐
 
-    契约: docs/contracts/mcp_jsonrpc_error_v1.md §5
+    契约: docs/contracts/mcp_jsonrpc_error_v2.md §5
 
     所有 tools/call 错误应统一使用:
     - 错误码: -32602 (INVALID_PARAMS)
@@ -1452,7 +1452,7 @@ class TestErrorDataContractCompliance:
     """
     全面测试 error.data 契约合规性
 
-    验证所有可能的错误场景都符合 mcp_jsonrpc_error_v1.md 契约
+    验证所有可能的错误场景都符合 mcp_jsonrpc_error_v2.md 契约
     """
 
     def test_all_error_scenarios_have_required_fields(self, client):
@@ -3662,7 +3662,7 @@ class TestErrorCodeBoundaryMisuse:
     确保 ToolResultErrorCode.* 不会被误用到 error.data.reason 字段，
     反之亦然（McpErrorReason.* 不应出现在 result.error_code 中）。
 
-    契约参见: docs/contracts/mcp_jsonrpc_error_v1.md §3.0
+    契约参见: docs/contracts/mcp_jsonrpc_error_v2.md §3.0
     """
 
     def test_tool_result_error_codes_not_in_mcp_error_reasons(self):

@@ -45,7 +45,7 @@ def create_project_structure(
     """创建临时项目结构，包含 contract JSON 和 doc Markdown 文件
 
     Args:
-        contract_data: workflow_contract.v1.json 的内容
+        contract_data: workflow_contract.v2.json 的内容
         doc_content: contract.md 的内容
 
     Returns:
@@ -57,7 +57,7 @@ def create_project_structure(
     # 创建 scripts/ci 目录并写入 contract JSON
     contract_dir = temp_dir / "scripts" / "ci"
     contract_dir.mkdir(parents=True, exist_ok=True)
-    contract_path = contract_dir / "workflow_contract.v1.json"
+    contract_path = contract_dir / "workflow_contract.v2.json"
     with open(contract_path, "w", encoding="utf-8") as f:
         json.dump(contract_data, f, indent=2)
 
@@ -82,7 +82,7 @@ def make_contract(version: str, last_updated: str) -> dict[str, Any]:
         contract dict
     """
     return {
-        "$schema": "workflow_contract.v1.schema.json",
+        "$schema": "workflow_contract.v2.schema.json",
         "version": version,
         "description": "Test contract",
         "last_updated": last_updated,
@@ -253,7 +253,7 @@ class TestUpdateContractVersion:
         updated = update_contract_version(contract, "2.19.0", "2026-02-02")
 
         # 保留的字段
-        assert updated["$schema"] == "workflow_contract.v1.schema.json"
+        assert updated["$schema"] == "workflow_contract.v2.schema.json"
         assert updated["description"] == "Test contract"
         assert "ci" in updated
         assert updated["ci"]["job_ids"] == ["test"]
@@ -531,7 +531,7 @@ class TestBumperWriteFiles:
         assert result.success is True
 
         # 验证文件已更新
-        contract_path = project_root / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = project_root / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "r", encoding="utf-8") as f:
             updated_contract = json.load(f)
 
@@ -568,7 +568,7 @@ class TestBumperWriteFiles:
         assert result.success is True
 
         # 验证文件未更新
-        contract_path = project_root / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = project_root / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "r", encoding="utf-8") as f:
             original_contract = json.load(f)
 
@@ -608,7 +608,7 @@ class TestBumperErrorHandling:
         temp_dir = Path(tempfile.mkdtemp())
         contract_dir = temp_dir / "scripts" / "ci"
         contract_dir.mkdir(parents=True, exist_ok=True)
-        contract_path = contract_dir / "workflow_contract.v1.json"
+        contract_path = contract_dir / "workflow_contract.v2.json"
         with open(contract_path, "w", encoding="utf-8") as f:
             json.dump(contract, f, indent=2)
 

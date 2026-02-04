@@ -47,7 +47,7 @@
 | MCP-INV-06 | 同一请求的 correlation_id 必须唯一且一致 | 入口生成后传递到所有子调用，确保审计可追溯 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestCorrelationIdSingleSourceContract` |
 | MCP-INV-07 | 旧协议格式必须被兼容处理 | `{tool, arguments}` 格式自动识别并正确路由 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestLegacyProtocolComplete` |
 | MCP-INV-08 | 错误码与分类必须一一对应 | -32700→protocol, -32602→validation, -32001→dependency 等 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorDataContractCompliance` |
-| MCP-INV-09 | ErrorReason 公开常量必须与 Schema enum 一致 | 通过反射提取 `McpErrorReason` 公开常量，与 `mcp_jsonrpc_error_v1.schema.json` 的 `error_reason.enum` 完全相等 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorReasonWhitelistConsistency` |
+| MCP-INV-09 | ErrorReason 公开常量必须与 Schema enum 一致 | 通过反射提取 `McpErrorReason` 公开常量，与 `mcp_jsonrpc_error_v2.schema.json` 的 `error_reason.enum` 完全相等 | `tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorReasonWhitelistConsistency` |
 
 ### 1.2 允许变更
 
@@ -646,10 +646,10 @@ except Exception as e:
 
 | 层级 | 命名规则 | 示例 | 单一事实来源 |
 |------|----------|------|--------------|
-| **协议层** | 大写 + 下划线 | `PARSE_ERROR`, `METHOD_NOT_FOUND` | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
-| **校验层** | 大写 + 下划线 | `MISSING_REQUIRED_PARAM`, `UNKNOWN_TOOL` | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
+| **协议层** | 大写 + 下划线 | `PARSE_ERROR`, `METHOD_NOT_FOUND` | `schemas/mcp_jsonrpc_error_v2.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
+| **校验层** | 大写 + 下划线 | `MISSING_REQUIRED_PARAM`, `UNKNOWN_TOOL` | `schemas/mcp_jsonrpc_error_v2.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
 | **业务层** | 小写 + 下划线 | `policy_passed`, `team_write_disabled` | `policy.py` |
-| **依赖层** | 大写 + 下划线 | `OPENMEMORY_CONNECTION_FAILED` | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
+| **依赖层** | 大写 + 下划线 | `OPENMEMORY_CONNECTION_FAILED` | `schemas/mcp_jsonrpc_error_v2.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` |
 | **Outbox 层** | 小写 + 下划线 | `outbox_flush_success`, `outbox_stale` | `engram_logbook.errors:ErrorCode` |
 
 > **门禁验证**：MCP 层（协议/校验/依赖）ErrorReason 一致性由 `scripts/ci/check_mcp_jsonrpc_error_contract.py` 验证。
@@ -754,7 +754,7 @@ except Exception as e:
 ### 4.6.1 -32000 (TOOL_EXECUTION_ERROR) 废弃决策
 
 > **决策状态**: 已废弃（v1.0+）  
-> **详细 ADR**: [mcp_jsonrpc_error_v1.md §13.5](./mcp_jsonrpc_error_v1.md#135--32000-错误码最终决策)
+> **详细 ADR**: [mcp_jsonrpc_error_v2.md §13.5](./mcp_jsonrpc_error_v2.md#135--32000-错误码最终决策)
 
 | 项目 | 内容 |
 |------|------|
@@ -769,7 +769,7 @@ except Exception as e:
 |------|------|------|
 | **代码** | 禁止新增 `-32000` 错误响应生成 | 新代码应使用 `-32602`（参数问题）或 `-32603`（内部错误） |
 | **测试** | 禁止新增期望 `-32000` 的测试用例 | 现有测试仅用于验证废弃常量存在，不验证响应生成 |
-| **Schema** | `mcp_jsonrpc_error_v1.schema.json` 枚举暂时保留 | v2.0 时移除，避免破坏向后兼容性校验 |
+| **Schema** | `mcp_jsonrpc_error_v2.schema.json` 枚举暂时保留 | v3.0 时移除，避免破坏向后兼容性校验 |
 
 **迁移检查清单**：
 - [ ] 新增错误处理代码不使用 `McpErrorCode.TOOL_EXECUTION_ERROR`
@@ -850,7 +850,7 @@ outbox_worker 层流程：
 ## 4.8 intended_action 与 conflict_intended_operation 字段定义
 
 > **单一事实来源**：本节定义两个易混淆字段的语义边界，确保审计追踪的精确性。
-> **Schema 权威**：`schemas/audit_event_v1.schema.json`
+> **Schema 权威**：`schemas/audit_event_v2.schema.json`
 
 ### 4.8.1 intended_action（策略层面原意动作）
 
@@ -1324,15 +1324,15 @@ Reconcile → 通过 correlation_id 追溯完整链路
 | 文档 | 路径 |
 |------|------|
 | **Gateway Public API / JSON-RPC SSOT 地图** | [gateway_public_api_jsonrpc_ssot_map.md](./gateway_public_api_jsonrpc_ssot_map.md) |
-| MCP JSON-RPC 错误模型契约 | [mcp_jsonrpc_error_v1.md](./mcp_jsonrpc_error_v1.md) |
-| MCP 契约决策与版本策略 (ADR) | [mcp_jsonrpc_error_v1.md §13](./mcp_jsonrpc_error_v1.md#13-契约决策与版本策略-adr) |
+| MCP JSON-RPC 错误模型契约 | [mcp_jsonrpc_error_v2.md](./mcp_jsonrpc_error_v2.md) |
+| MCP 契约决策与版本策略 (ADR) | [mcp_jsonrpc_error_v2.md §13](./mcp_jsonrpc_error_v2.md#13-契约决策与版本策略-adr) |
 | Gateway 能力边界 | [../gateway/07_capability_boundary.md](../gateway/07_capability_boundary.md) |
 | Gateway 审计原子性 ADR | [../architecture/adr_gateway_audit_atomicity.md](../architecture/adr_gateway_audit_atomicity.md) |
 | Gateway Public API JSON-RPC Surface ADR | [../architecture/adr_gateway_public_api_jsonrpc_surface.md](../architecture/adr_gateway_public_api_jsonrpc_surface.md) |
 | Gateway Public API Surface 导出项分析 | [../architecture/gateway_public_api_surface.md](../architecture/gateway_public_api_surface.md) |
 | Gateway Logbook 边界契约 | [gateway_logbook_boundary.md](./gateway_logbook_boundary.md) |
 | 审计/证据/关联性契约 | [gateway_audit_evidence_correlation_contract.md](./gateway_audit_evidence_correlation_contract.md) |
-| Outbox Lease 契约 | [outbox_lease_v1.md](./outbox_lease_v1.md) |
+| Outbox Lease 契约 | [outbox_lease_v2.md](./outbox_lease_v2.md) |
 
 ---
 
@@ -1372,7 +1372,7 @@ Reconcile → 通过 correlation_id 追溯完整链路
 
 | 契约元素 | 权威来源 | 路径 | 说明 |
 |----------|----------|------|------|
-| ErrorData 结构 | JSON Schema | `schemas/mcp_jsonrpc_error_v1.schema.json` | 结构定义的最高权威 |
+| ErrorData 结构 | JSON Schema | `schemas/mcp_jsonrpc_error_v2.schema.json` | 结构定义的最高权威 |
 | ErrorCategory 枚举 | 代码 | `src/engram/gateway/error_codes.py:McpErrorCategory` | 运行时枚举定义 |
 | ErrorReason 常量 | 代码 | `src/engram/gateway/error_codes.py:McpErrorReason` | 公开常量定义 |
 | error.data.reason 枚举 | JSON Schema + 代码 + 门禁 | 见下方三源 SSOT | 三源一致性由门禁保证 |
@@ -1385,7 +1385,7 @@ Reconcile → 通过 correlation_id 追溯完整链路
 
 | 权威来源 | 路径 | 作用 |
 |----------|------|------|
-| **JSON Schema** | `schemas/mcp_jsonrpc_error_v1.schema.json` 的 `definitions.error_reason.enum` | 结构验证的最高权威 |
+| **JSON Schema** | `schemas/mcp_jsonrpc_error_v2.schema.json` 的 `definitions.error_reason.enum` | 结构验证的最高权威 |
 | **代码实现** | `src/engram/gateway/error_codes.py:McpErrorReason` | 运行时常量定义 |
 | **门禁脚本** | `scripts/ci/check_mcp_jsonrpc_error_contract.py` | 双向验证一致性 |
 
@@ -1396,13 +1396,13 @@ make check-mcp-error-contract
 
 **校验链**：
 ```
-mcp_jsonrpc_error_v1.schema.json (definitions.error_reason.enum)
+mcp_jsonrpc_error_v2.schema.json (definitions.error_reason.enum)
     ↓ 双向验证
 McpErrorReason (error_codes.py)
     ↓ 被测试于
 TestErrorReasonWhitelistConsistency (test_mcp_jsonrpc_contract.py)
     ↓ 被描述于
-mcp_jsonrpc_error_v1.md
+mcp_jsonrpc_error_v2.md
 ```
 
 > **⚠️ 已废弃**：`mcp_rpc.py:VALID_ERROR_REASONS` 已废弃，不再作为权威来源。
@@ -1412,14 +1412,14 @@ mcp_jsonrpc_error_v1.md
 
 | 契约元素 | 权威来源 | 路径 | 说明 |
 |----------|----------|------|------|
-| 审计事件结构 | JSON Schema | `schemas/audit_event_v1.schema.json` | 结构定义的最高权威 |
+| 审计事件结构 | JSON Schema | `schemas/audit_event_v2.schema.json` | 结构定义的最高权威 |
 | source 枚举 | 代码 | `src/engram/gateway/services/audit_service.py` | 事件来源定义 |
 | decision.action 枚举 | 代码 | `src/engram/gateway/policy.py` | allow/redirect/reject |
 | evidence_refs_json 字段 | 测试 | `test_audit_event_contract.py::TestEvidenceRefsJsonLogbookQueryContract` | SQL 查询依赖字段 |
 
 **校验链**：
 ```
-audit_event_v1.schema.json
+audit_event_v2.schema.json
     ↓ 被引用于
 AuditEvent 构造 (audit_service.py)
     ↓ 被测试于
@@ -1453,7 +1453,7 @@ gateway_contract_convergence.md §3.2
 | 契约元素 | 权威来源 | 路径 | 说明 |
 |----------|----------|------|------|
 | JSON-RPC 错误码 | 代码 | `src/engram/gateway/error_codes.py:McpErrorCode` | -32xxx 常量 |
-| ErrorReason 枚举 | Schema + 代码 | `schemas/mcp_jsonrpc_error_v1.schema.json` + `error_codes.py:McpErrorReason` | 三源 SSOT，详见 §9.2.1 |
+| ErrorReason 枚举 | Schema + 代码 | `schemas/mcp_jsonrpc_error_v2.schema.json` + `error_codes.py:McpErrorReason` | 三源 SSOT，详见 §9.2.1 |
 | ErrorReason 契约列表 | 代码 | `src/engram/gateway/error_codes.py:PUBLIC_MCP_ERROR_REASONS` | 对外承诺的 reason 码集合 |
 | reason 命名规范 | 文档 | `gateway_contract_convergence.md §4.3` | 大写/小写规则 |
 
@@ -1485,11 +1485,11 @@ gateway_contract_convergence.md §3.2
 
 | 域 | 权威文件 | 作用 |
 |----|----------|------|
-| MCP 错误结构 | `schemas/mcp_jsonrpc_error_v1.schema.json` | ErrorData 结构定义 |
-| MCP ErrorReason 枚举 | `schemas/mcp_jsonrpc_error_v1.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` | JSON-RPC reason 码定义（三源 SSOT） |
+| MCP 错误结构 | `schemas/mcp_jsonrpc_error_v2.schema.json` | ErrorData 结构定义 |
+| MCP ErrorReason 枚举 | `schemas/mcp_jsonrpc_error_v2.schema.json` + `src/engram/gateway/error_codes.py:McpErrorReason` | JSON-RPC reason 码定义（三源 SSOT） |
 | MCP 错误码合约门禁 | `scripts/ci/check_mcp_jsonrpc_error_contract.py` | Schema ↔ 代码一致性验证 |
-| 审计事件结构 | `schemas/audit_event_v1.schema.json` | AuditEvent 结构定义 |
-| 可靠性报告结构 | `schemas/reliability_report_v1.schema.json` | ReliabilityReport 结构定义 |
+| 审计事件结构 | `schemas/audit_event_v2.schema.json` | AuditEvent 结构定义 |
+| 可靠性报告结构 | `schemas/reliability_report_v2.schema.json` | ReliabilityReport 结构定义 |
 | ErrorCode 枚举 | `src/engram/logbook/errors.py` | Outbox reason 码定义 |
 | 契约测试 | `tests/gateway/test_*_contract.py` | 各域契约守护 |
 | 契约文档 | `docs/contracts/*.md` | 人类可读契约说明 |

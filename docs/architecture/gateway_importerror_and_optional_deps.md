@@ -703,7 +703,7 @@ pytest tests/acceptance/test_gateway_startup.py -v
 |------|------|
 | [gateway_public_api_surface.md](./gateway_public_api_surface.md) | **插件作者导入指南单一入口** — Tier 分层定义、导出项分析、可复制代码片段 |
 | [gateway_contract_convergence.md §11](../contracts/gateway_contract_convergence.md#11-public-api-向后兼容策略) | 向后兼容策略不变量 |
-| [mcp_jsonrpc_error_v1.md](../contracts/mcp_jsonrpc_error_v1.md) | 错误码契约 |
+| [mcp_jsonrpc_error_v2.md](../contracts/mcp_jsonrpc_error_v2.md) | 错误码契约 |
 
 ---
 

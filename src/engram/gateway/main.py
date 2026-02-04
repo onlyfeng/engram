@@ -105,8 +105,8 @@ except ImportError:
 
 # ===================== 兼容层导出 =====================
 # 注意：以下导出仅供旧代码使用，新代码路径必须显式传入 deps 参数
-# 兼容层将在 v1.0 版本中移除，请尽快迁移
-# 详见: docs/gateway/upgrade_v1_0_remove_handler_di_compat.md
+# 兼容层将在 v2.0 版本中移除，请尽快迁移
+# 详见: docs/gateway/upgrade_v2_0_remove_handler_di_compat.md
 
 
 from .startup import check_logbook_db_on_startup

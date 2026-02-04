@@ -12,7 +12,7 @@ Workflow Contract Validator 单元测试
 Phase 2 说明：
 - 校验 ci.yml、nightly.yml 与 release.yml
 - Nightly 验证为结构契约校验（job/step/artifact 定义），不执行 docker compose
-- 合约定义参见 scripts/ci/workflow_contract.v1.json
+- 合约定义参见 scripts/ci/workflow_contract.v2.json
 """
 
 import json
@@ -439,7 +439,7 @@ class TestRealWorkflowValidation:
 
     def test_validate_real_workflows_no_critical_errors(self, real_workspace):
         """测试验证真实 workflow 文件（关键治理项无 ERROR 断言）"""
-        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v2.json"
 
         # 如果合约文件不存在，跳过测试
         if not contract_path.exists():
@@ -479,7 +479,7 @@ class TestContractCIWorkflowIntegration:
     """集成测试：对仓库真实 contract + ci.yml 运行完整验证
 
     这是 Phase 0 的核心集成测试，验证：
-    1. workflow_contract.v1.json 与 ci.yml 的一致性
+    1. workflow_contract.v2.json 与 ci.yml 的一致性
     2. 所有 required jobs 存在
     3. 所有 required steps 存在
     4. frozen job/step names 未被修改（冻结项改名报 ERROR）
@@ -500,11 +500,11 @@ class TestContractCIWorkflowIntegration:
         """核心集成测试：验证 contract + ci.yml 无 critical errors
 
         此测试确保：
-        - workflow_contract.v1.json 正确定义了 ci.yml 的合约
+        - workflow_contract.v2.json 正确定义了 ci.yml 的合约
         - ci.yml 符合合约要求
         - 无 critical validation errors
         """
-        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         ci_workflow_path = real_workspace / ".github" / "workflows" / "ci.yml"
 
         # 前置条件检查
@@ -550,11 +550,11 @@ class TestContractCIWorkflowIntegration:
         """核心集成测试：验证 contract + nightly.yml 无 critical errors
 
         此测试确保：
-        - workflow_contract.v1.json 正确定义了 nightly.yml 的合约
+        - workflow_contract.v2.json 正确定义了 nightly.yml 的合约
         - nightly.yml 符合合约要求
         - 无 critical validation errors
         """
-        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         nightly_workflow_path = real_workspace / ".github" / "workflows" / "nightly.yml"
 
         # 前置条件检查
@@ -598,7 +598,7 @@ class TestContractCIWorkflowIntegration:
 
     def test_contract_defines_ci_workflow(self, real_workspace):
         """验证 contract 正确定义了 ci workflow"""
-        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v2.json"
 
         if not contract_path.exists():
             pytest.skip(f"Contract file not found: {contract_path}")
@@ -622,7 +622,7 @@ class TestContractCIWorkflowIntegration:
 
     def test_frozen_names_consistency(self, real_workspace):
         """验证 frozen job/step names 与实际 workflow 一致"""
-        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = real_workspace / "scripts" / "ci" / "workflow_contract.v2.json"
 
         if not contract_path.exists():
             pytest.skip(f"Contract file not found: {contract_path}")
@@ -680,7 +680,7 @@ class TestSchemaValidation:
             json.dump(invalid_contract, f)
 
         # 手动复制 schema 到与 contract 同目录，使用正确的文件名
-        schema_dest = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_dest = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_dest, "w") as f:
             json.dump(schema_content, f)
 
@@ -716,7 +716,7 @@ class TestSchemaValidation:
                 },
             },
         }
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -751,7 +751,7 @@ class TestSchemaValidation:
             "required": ["version"],
             "properties": {"version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}},
         }
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -783,7 +783,7 @@ class TestSchemaValidation:
             "required": ["version"],
             "properties": {"version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}},
         }
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -822,7 +822,7 @@ class TestSchemaValidation:
                 }
             },
         }
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -875,7 +875,7 @@ class TestSchemaValidation:
                 },
             },
         }
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -907,7 +907,7 @@ class TestSchemaValidation:
             Path(__file__).parent.parent.parent
             / "scripts"
             / "ci"
-            / "workflow_contract.v1.schema.json"
+            / "workflow_contract.v2.schema.json"
         )
         if not real_schema_path.exists():
             pytest.skip("Real schema file not found")
@@ -915,7 +915,7 @@ class TestSchemaValidation:
         with open(real_schema_path) as f:
             schema_content = json.load(f)
 
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -956,7 +956,7 @@ class TestSchemaValidation:
             Path(__file__).parent.parent.parent
             / "scripts"
             / "ci"
-            / "workflow_contract.v1.schema.json"
+            / "workflow_contract.v2.schema.json"
         )
         if not real_schema_path.exists():
             pytest.skip("Real schema file not found")
@@ -964,7 +964,7 @@ class TestSchemaValidation:
         with open(real_schema_path) as f:
             schema_content = json.load(f)
 
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -1005,7 +1005,7 @@ class TestSchemaValidation:
             Path(__file__).parent.parent.parent
             / "scripts"
             / "ci"
-            / "workflow_contract.v1.schema.json"
+            / "workflow_contract.v2.schema.json"
         )
         if not real_schema_path.exists():
             pytest.skip("Real schema file not found")
@@ -1013,7 +1013,7 @@ class TestSchemaValidation:
         with open(real_schema_path) as f:
             schema_content = json.load(f)
 
-        schema_path = temp_workspace / "workflow_contract.v1.schema.json"
+        schema_path = temp_workspace / "workflow_contract.v2.schema.json"
         with open(schema_path, "w") as f:
             json.dump(schema_content, f)
 
@@ -1283,7 +1283,7 @@ jobs:
     def test_real_contract_internal_consistency(self):
         """集成测试：验证真实 contract 的内部一致性"""
         workspace = Path(__file__).parent.parent.parent
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
 
         if not contract_path.exists():
             pytest.skip(f"Contract file not found: {contract_path}")
@@ -1850,7 +1850,7 @@ class TestWorkflowContractDocsSync:
                 "allowlist": ["Checkout repository"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -1910,7 +1910,7 @@ targets_required 说明
                 "allowlist": ["Checkout repository"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -1972,7 +1972,7 @@ targets_required 说明
                 ],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2032,7 +2032,7 @@ targets_required 说明
                 "targets_required": ["check-test"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2120,7 +2120,7 @@ targets_required 包含以下 target：
             "ci": {"job_ids": []},
             "frozen_step_text": {"allowlist": []},
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2156,7 +2156,7 @@ targets_required 包含以下 target：
                 "allowlist": ["Checkout repository"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2208,7 +2208,7 @@ targets_required 包含以下 target：
                 "allowlist": ["Checkout repository"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2270,7 +2270,7 @@ make targets 说明
                 ],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2333,7 +2333,7 @@ targets_required 包含以下 target：
                 "targets_required": ["some-target"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2391,7 +2391,7 @@ Version: 1.0.0
                 "targets_required": ["check-mypy-baseline-policy"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2454,7 +2454,7 @@ targets_required 包含以下 target：
                 "targets_required": ["some-target"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2519,7 +2519,7 @@ targets_required 包含以下 target：
                 "targets_required": ["some-target"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2583,7 +2583,7 @@ targets_required 包含以下 target：
                 "targets_required": ["some-target"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2632,10 +2632,10 @@ targets_required 包含以下 target：
     def test_real_contract_and_doc_sync(self):
         """集成测试：验证真实 contract 和文档的同步一致性
 
-        验证真实 workflow_contract.v1.json 与 contract.md 文档同步。
+        验证真实 workflow_contract.v2.json 与 contract.md 文档同步。
         """
         workspace = Path(__file__).parent.parent.parent
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
 
         if not contract_path.exists():
@@ -2694,7 +2694,7 @@ targets_required 包含以下 target：
                 "allowlist": ["Checkout repository"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2767,7 +2767,7 @@ targets_required 说明
                 "allowlist": ["Checkout repository", "Run tests"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2841,7 +2841,7 @@ targets_required 说明
                 "allowlist": ["Checkout repository", "Run tests"],
             },
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -2940,7 +2940,7 @@ class TestNightlyWorkflowDocsSync:
             },
             "frozen_step_text": {"allowlist": []},
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -3011,7 +3011,7 @@ targets_required 说明
             },
             "frozen_step_text": {"allowlist": []},
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -3073,7 +3073,7 @@ targets_required 说明
             },
             "frozen_step_text": {"allowlist": []},
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -3135,7 +3135,7 @@ targets_required 说明
             },
             "frozen_step_text": {"allowlist": []},
         }
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         with open(contract_path, "w") as f:
             json.dump(contract, f)
 
@@ -3177,7 +3177,7 @@ targets_required 说明
     def test_real_contract_nightly_docs_sync(self):
         """集成测试：验证真实合约中 nightly 部分与文档同步"""
         workspace = Path(__file__).parent.parent.parent
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         doc_path = workspace / "docs" / "ci_nightly_workflow_refactor" / "contract.md"
 
         if not contract_path.exists():
@@ -3515,7 +3515,7 @@ jobs:
     def test_real_nightly_workflow_validation(self):
         """集成测试：验证真实 nightly workflow 符合合约"""
         workspace = Path(__file__).parent.parent.parent
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
         nightly_path = workspace / ".github" / "workflows" / "nightly.yml"
 
         if not contract_path.exists():
@@ -3573,18 +3573,18 @@ class TestContractSchemaValidationNightly:
 
             # 复制真实 schema 文件
             real_workspace = Path(__file__).parent.parent.parent
-            real_schema = real_workspace / "scripts" / "ci" / "workflow_contract.v1.schema.json"
+            real_schema = real_workspace / "scripts" / "ci" / "workflow_contract.v2.schema.json"
             if real_schema.exists():
                 import shutil
 
-                shutil.copy(real_schema, workspace / "workflow_contract.v1.schema.json")
+                shutil.copy(real_schema, workspace / "workflow_contract.v2.schema.json")
 
             yield workspace
 
     def test_nightly_schema_validation_passes(self, temp_workspace_with_schema):
         """测试符合 schema 的 nightly 合约通过校验"""
         workspace = temp_workspace_with_schema
-        schema_path = workspace / "workflow_contract.v1.schema.json"
+        schema_path = workspace / "workflow_contract.v2.schema.json"
 
         if not schema_path.exists():
             pytest.skip("Schema file not found")
@@ -3616,7 +3616,10 @@ class TestContractSchemaValidationNightly:
                     }
                 ],
                 "required_env_vars": ["POSTGRES_USER"],
-                "artifact_archive": {"required_artifact_paths": [".artifacts/verify-results.json"]},
+                "artifact_archive": {
+                    "required_artifact_paths": [".artifacts/verify-results.json"],
+                    "artifact_step_names": ["Upload verify results"],
+                },
             },
             "make": {"targets_required": ["test"]},
             "frozen_step_text": {"allowlist": ["Checkout repository"]},
@@ -3635,7 +3638,7 @@ class TestContractSchemaValidationNightly:
     def test_nightly_schema_error_invalid_file_path(self, temp_workspace_with_schema):
         """测试 nightly.file 路径格式错误应报告 schema_error"""
         workspace = temp_workspace_with_schema
-        schema_path = workspace / "workflow_contract.v1.schema.json"
+        schema_path = workspace / "workflow_contract.v2.schema.json"
 
         if not schema_path.exists():
             pytest.skip("Schema file not found")
@@ -3662,8 +3665,8 @@ class TestContractSchemaValidationNightly:
     def test_real_contract_schema_validation(self):
         """集成测试：验证真实合约文件通过 schema 校验"""
         workspace = Path(__file__).parent.parent.parent
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
-        schema_path = workspace / "scripts" / "ci" / "workflow_contract.v1.schema.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
+        schema_path = workspace / "scripts" / "ci" / "workflow_contract.v2.schema.json"
 
         if not contract_path.exists():
             pytest.skip(f"Contract file not found: {contract_path}")
@@ -4711,7 +4714,7 @@ class TestCILabelsRealFileValidation:
 
         # 获取项目根目录
         workspace_root = Path(__file__).parent.parent.parent
-        contract_path = workspace_root / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace_root / "scripts" / "ci" / "workflow_contract.v2.json"
         script_path = workspace_root / "scripts" / "ci" / "gh_pr_labels_to_outputs.py"
 
         if not contract_path.exists() or not script_path.exists():
@@ -5441,7 +5444,7 @@ jobs:
         undeclared_errors = [e for e in result.errors if e.error_type == "undeclared_make_target"]
         assert len(undeclared_errors) == 1
         assert undeclared_errors[0].key == "format"
-        assert "not declared in workflow_contract.v1.json" in undeclared_errors[0].message
+        assert "not declared in workflow_contract.v2.json" in undeclared_errors[0].message
 
     def test_declared_make_targets_pass(self, temp_workspace):
         """测试所有 make target 都在 contract 中声明时通过"""
@@ -6031,7 +6034,7 @@ class TestWorkflowContractCommon:
         from scripts.ci.workflow_contract_common import discover_workflow_keys
 
         contract = {
-            "$schema": "workflow_contract.v1.schema.json",
+            "$schema": "workflow_contract.v2.schema.json",
             "version": "2.14.0",
             "description": "Test contract",
             "last_updated": "2026-02-02",
@@ -6103,7 +6106,7 @@ class TestWorkflowContractCommon:
 
         # 模拟未来可能新增的 metadata key（含 dict 结构但无 file 字段）
         contract = {
-            "$schema": "workflow_contract.v1.schema.json",
+            "$schema": "workflow_contract.v2.schema.json",
             "version": "3.0.0",
             # 现有 metadata
             "frozen_step_text": {"allowlist": ["Step 1"]},

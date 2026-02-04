@@ -42,7 +42,7 @@ Gateway ErrorCode 适配层
 
 边界检查由 CI 门禁强制执行：
 - 测试: tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorCodeBoundaryMisuse
-- 文档: docs/contracts/mcp_jsonrpc_error_v1.md §3.0
+- 文档: docs/contracts/mcp_jsonrpc_error_v2.md §3.0
 
 参见: result_error_codes.py 的对应边界声明
 ================================================================================
@@ -75,7 +75,7 @@ class McpErrorCode:
     已废弃:
     - TOOL_EXECUTION_ERROR (-32000): 已废弃，参见 §13.5
 
-    参见: docs/contracts/mcp_jsonrpc_error_v1.md
+    参见: docs/contracts/mcp_jsonrpc_error_v2.md
     """
 
     PARSE_ERROR = -32700  # 解析错误
@@ -86,7 +86,7 @@ class McpErrorCode:
     # 自定义服务器错误 (-32000 to -32099)
     # ⚠️ 已废弃：不再生成此错误码，仅为向后兼容保留定义
     # 迁移指南：参数问题使用 -32602，内部错误使用 -32603
-    # 参见: docs/contracts/mcp_jsonrpc_error_v1.md §13.5
+    # 参见: docs/contracts/mcp_jsonrpc_error_v2.md §13.5
     TOOL_EXECUTION_ERROR = -32000  # @deprecated since v1.0
     DEPENDENCY_UNAVAILABLE = -32001  # 依赖服务不可用
     BUSINESS_REJECTION = -32002  # 业务拒绝
@@ -105,7 +105,7 @@ class McpErrorCategory:
     - dependency: 依赖服务错误（OpenMemory/Logbook 不可用）
     - internal: 内部错误（未处理的异常）
 
-    参见: docs/contracts/mcp_jsonrpc_error_v1.md
+    参见: docs/contracts/mcp_jsonrpc_error_v2.md
     """
 
     PROTOCOL = "protocol"  # 协议层错误
@@ -132,7 +132,7 @@ class McpErrorReason:
     - ToolResultErrorCode: 用于业务层 result.error_code，表示工具执行时依赖缺失
     - 参见: engram.gateway.result_error_codes.ToolResultErrorCode
 
-    参见: docs/contracts/mcp_jsonrpc_error_v1.md
+    参见: docs/contracts/mcp_jsonrpc_error_v2.md
     """
 
     # 协议层
@@ -173,7 +173,7 @@ class McpErrorReason:
 # 此 tuple 定义了 MCP JSON-RPC 错误响应中 error.data.reason 字段的所有有效值。
 #
 # SSOT（单一事实来源）策略：
-# - Schema (schemas/mcp_jsonrpc_error_v1.schema.json) 为枚举值权威来源
+# - Schema (schemas/mcp_jsonrpc_error_v2.schema.json) 为枚举值权威来源
 # - 本列表跟随 Schema 同步
 # - McpErrorReason 类与本列表保持一致
 #
@@ -181,15 +181,15 @@ class McpErrorReason:
 # 1. Schema enum (definitions.error_reason.enum)
 # 2. McpErrorReason 类常量
 # 3. PUBLIC_MCP_ERROR_REASONS tuple
-# 4. docs/contracts/mcp_jsonrpc_error_v1.md §4 表格
+# 4. docs/contracts/mcp_jsonrpc_error_v2.md §4 表格
 #
 # 验证命令：
 # - make check-mcp-error-contract
 # - pytest tests/gateway/test_mcp_jsonrpc_contract.py::TestErrorReasonWhitelistConsistency -q
 #
 # 参见:
-# - docs/contracts/mcp_jsonrpc_error_v1.md §13.3
-# - docs/contracts/mcp_jsonrpc_error_v1_drift_matrix.md
+# - docs/contracts/mcp_jsonrpc_error_v2.md §13.3
+# - docs/contracts/mcp_jsonrpc_error_v2_drift_matrix.md
 # =============================================================================
 
 PUBLIC_MCP_ERROR_REASONS: tuple[str, ...] = (

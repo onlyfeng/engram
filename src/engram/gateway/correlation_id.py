@@ -17,7 +17,7 @@ Correlation ID 生成与校验模块
 ================
 1. 纯 Python 实现，无第三方依赖
 2. 不依赖 pydantic/fastapi，可在任意模块安全导入
-3. 与 schemas/audit_event_v1.schema.json 中定义的格式一致
+3. 与 schemas/audit_event_v2.schema.json 中定义的格式一致
 
 使用方式:
 ================
@@ -46,7 +46,7 @@ Correlation ID 生成与校验模块
 应从本模块导入这些函数，确保行为一致。
 
 详见:
-- docs/contracts/mcp_jsonrpc_error_v1.md
+- docs/contracts/mcp_jsonrpc_error_v2.md
 - docs/gateway/07_capability_boundary.md
 """
 
@@ -62,7 +62,7 @@ def generate_correlation_id() -> str:
     生成关联 ID
 
     格式: corr-{16位十六进制}
-    与 schemas/audit_event_v1.schema.json 中定义的格式一致。
+    与 schemas/audit_event_v2.schema.json 中定义的格式一致。
 
     此函数是 correlation_id 生成的单一来源，其他模块应从本模块导入使用。
 
@@ -76,7 +76,7 @@ def generate_correlation_id() -> str:
     return f"corr-{uuid.uuid4().hex[:16]}"
 
 
-# correlation_id 格式校验正则表达式（与 schemas/audit_event_v1.schema.json 对齐）
+# correlation_id 格式校验正则表达式（与 schemas/audit_event_v2.schema.json 对齐）
 # 格式: corr-{16位十六进制}
 CORRELATION_ID_PATTERN = re.compile(r"^corr-[a-fA-F0-9]{16}$")
 

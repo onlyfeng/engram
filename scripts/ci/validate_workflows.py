@@ -2,17 +2,17 @@
 """
 Workflow Contract Validator
 
-校验 GitHub Actions workflow 文件是否符合 workflow_contract.v1.json 定义的合约。
+校验 GitHub Actions workflow 文件是否符合 workflow_contract.v2.json 定义的合约。
 
 功能:
-- 读取 workflow_contract.v1.json
+- 读取 workflow_contract.v2.json
 - 解析 .github/workflows/*.yml
 - 输出清晰的失败信息（指出具体文件/键名/引用点）
 - 对 step name 变化做 diff 提示（旧值/新值）
 
 用法:
     python scripts/ci/validate_workflows.py
-    python scripts/ci/validate_workflows.py --contract scripts/ci/workflow_contract.v1.json
+    python scripts/ci/validate_workflows.py --contract scripts/ci/workflow_contract.v2.json
     python scripts/ci/validate_workflows.py --json  # 输出 JSON 格式
 """
 
@@ -531,7 +531,7 @@ class WorkflowContractValidator:
             bool: 校验通过返回 True，失败返回 False
         """
         # 查找 schema 文件（与 contract 同目录）
-        schema_path = self.contract_path.parent / "workflow_contract.v1.schema.json"
+        schema_path = self.contract_path.parent / "workflow_contract.v2.schema.json"
 
         if not schema_path.exists():
             # schema 文件不存在，跳过校验
@@ -623,7 +623,7 @@ class WorkflowContractValidator:
                 "^\\.github/workflows/nightly\\.yml$": ".github/workflows/nightly.yml",
                 "^_[a-z][a-z0-9_]*$": "underscore-prefixed field (e.g., _comment)",
                 "^_changelog_v[0-9]+\\.[0-9]+\\.[0-9]+$": "changelog field (e.g., _changelog_v2.5.0)",
-                "^workflow_contract\\.v1\\.schema\\.json$": "workflow_contract.v1.schema.json",
+                "^workflow_contract\\.v2\\.schema\\.json$": "workflow_contract.v2.schema.json",
                 "^[a-z][a-z0-9:_-]*$": "lowercase with optional colon (e.g., openmemory:freeze-override)",
             }
             hint = pattern_hints.get(pattern, pattern)
@@ -808,7 +808,7 @@ class WorkflowContractValidator:
                                     f"Frozen step '{required_step}' was renamed to '{fuzzy_match}' in job '{job_id}'. "
                                     f"此 step 属于冻结文案，不能改名。如确需改名，必须满足以下最小组合:\n"
                                     f"  【必需步骤 - 缺一不可】\n"
-                                    f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
+                                    f"  1. 更新 scripts/ci/workflow_contract.v2.json:\n"
                                     f"     - frozen_step_text.allowlist: 添加新名称，移除旧名称\n"
                                     f"     - required_jobs[].required_steps: 如有引用，同步更新\n"
                                     f"  2. 版本 bump（使用 bump_workflow_contract_version.py）:\n"
@@ -847,7 +847,7 @@ class WorkflowContractValidator:
                             key=required_step,
                             message=(
                                 f"Required step '{required_step}' not found in job '{job_id}'. "
-                                f"此步骤在 workflow_contract.v1.json 的 required_steps 中声明，必须存在于 workflow 中。\n"
+                                f"此步骤在 workflow_contract.v2.json 的 required_steps 中声明，必须存在于 workflow 中。\n"
                                 f"修复方法:\n"
                                 f"  方案 A：在 workflow 中添加此步骤（推荐，如果步骤属于核心验证/产物生成类）\n"
                                 f"  方案 B：从 contract 的 required_steps 中移除（仅当步骤确实不再需要时）\n"
@@ -959,7 +959,7 @@ class WorkflowContractValidator:
                                     f"Job '{extra_job_id}' (name: '{extra_job_name}') exists in workflow "
                                     f"but is not declared in contract job_ids. "
                                     f"如需将此 job 纳入合约管理，请执行以下步骤:\n"
-                                    f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
+                                    f"  1. 更新 scripts/ci/workflow_contract.v2.json:\n"
                                     f"     - {workflow_name}.job_ids: 添加 '{extra_job_id}'\n"
                                     f"     - {workflow_name}.job_names: 添加对应的 job name\n"
                                     f"  2. 更新 docs/ci_nightly_workflow_refactor/contract.md:\n"
@@ -1040,7 +1040,7 @@ class WorkflowContractValidator:
                                     f"Frozen job name '{expected_name}' was changed to '{actual_name}' "
                                     f"for job '{job_id}'. 此 job name 属于冻结文案，不能改名。如确需改名，必须满足以下最小组合:\n"
                                     f"  【必需步骤 - 缺一不可】\n"
-                                    f"  1. 更新 scripts/ci/workflow_contract.v1.json:\n"
+                                    f"  1. 更新 scripts/ci/workflow_contract.v2.json:\n"
                                     f"     - frozen_job_names.allowlist: 添加新名称，移除旧名称\n"
                                     f"     - job_names[]: 同步更新对应位置\n"
                                     f"  2. 版本 bump（使用 bump_workflow_contract_version.py）:\n"
@@ -1236,7 +1236,7 @@ class WorkflowContractValidator:
                             f"but {workflow_name}.job_names has {len(job_names)} items. "
                             f"These arrays must have the same length (positional mapping). "
                             f"修复方法:\n"
-                            f"  1. 检查 scripts/ci/workflow_contract.v1.json 中 {workflow_name}.job_ids 和 {workflow_name}.job_names\n"
+                            f"  1. 检查 scripts/ci/workflow_contract.v2.json 中 {workflow_name}.job_ids 和 {workflow_name}.job_names\n"
                             f"  2. 确保两个数组长度相同，且位置一一对应\n"
                             f"  3. 运行 make validate-workflows 验证"
                         ),
@@ -1264,7 +1264,7 @@ class WorkflowContractValidator:
                                     f"(first at index {seen_job_ids[job_id]}, duplicate at index {idx}). "
                                     f"Each job_id must be unique within a workflow. "
                                     f"修复方法:\n"
-                                    f"  1. 检查 scripts/ci/workflow_contract.v1.json 中 {workflow_name}.job_ids\n"
+                                    f"  1. 检查 scripts/ci/workflow_contract.v2.json 中 {workflow_name}.job_ids\n"
                                     f"  2. 移除重复的 job_id '{job_id}'\n"
                                     f"  3. 运行 make validate-workflows 验证"
                                 ),
@@ -1297,7 +1297,7 @@ class WorkflowContractValidator:
                                     f"(first at index {seen_required_ids[job_id]}, duplicate at index {idx}). "
                                     f"Each required_job id must be unique. "
                                     f"修复方法:\n"
-                                    f"  1. 检查 scripts/ci/workflow_contract.v1.json 中 {workflow_name}.required_jobs\n"
+                                    f"  1. 检查 scripts/ci/workflow_contract.v2.json 中 {workflow_name}.required_jobs\n"
                                     f"  2. 移除重复的 required_job 条目 (id='{job_id}')\n"
                                     f"  3. 运行 make validate-workflows 验证"
                                 ),
@@ -1403,7 +1403,7 @@ class WorkflowContractValidator:
                             message=(
                                 f"Job name '{job_name}' (job_id: '{job_id}') in workflow '{workflow_name}' job_names "
                                 f"is not in frozen_job_names.allowlist. 修复方法:\n"
-                                f"  1. 如果此 job name 需要冻结保护，请将其添加到 scripts/ci/workflow_contract.v1.json 的 frozen_job_names.allowlist\n"
+                                f"  1. 如果此 job name 需要冻结保护，请将其添加到 scripts/ci/workflow_contract.v2.json 的 frozen_job_names.allowlist\n"
                                 f"  2. 同步更新 contract.md 'Frozen Job Names' 节 (contract.md#51-frozen-job-names)\n"
                                 f"  3. 运行 make validate-workflows 验证"
                             ),
@@ -1429,7 +1429,7 @@ class WorkflowContractValidator:
                                 message=(
                                     f"Job name '{job_name}' in required_jobs[{job_id}] (workflow '{workflow_name}') "
                                     f"is not in frozen_job_names.allowlist. 修复方法:\n"
-                                    f"  1. 如果此 job name 需要冻结保护，请将其添加到 scripts/ci/workflow_contract.v1.json 的 frozen_job_names.allowlist\n"
+                                    f"  1. 如果此 job name 需要冻结保护，请将其添加到 scripts/ci/workflow_contract.v2.json 的 frozen_job_names.allowlist\n"
                                     f"  2. 同步更新 contract.md 'Frozen Job Names' 节 (contract.md#51-frozen-job-names)\n"
                                     f"  3. 运行 make validate-workflows 验证"
                                 ),
@@ -1449,22 +1449,22 @@ class WorkflowContractValidator:
         ============================================================================
 
         本脚本使用 discover_workflow_keys() 动态发现 workflow 定义，无需硬编码。
-        当 release.yml 纳入合约时，只需在 workflow_contract.v1.json 中添加 release
+        当 release.yml 纳入合约时，只需在 workflow_contract.v2.json 中添加 release
         字段定义即可自动被本脚本发现和校验。
 
         纳入 release.yml 时的同步 Checklist（本脚本无需代码修改）：
 
-        1. [workflow_contract.v1.json] 添加 release 字段（必需）：
+        1. [workflow_contract.v2.json] 添加 release 字段（必需）：
            - file: ".github/workflows/release.yml"
            - job_ids / job_names
            - required_jobs[].required_steps
            - artifact_archive.required_artifact_paths
 
-        2. [workflow_contract.v1.json] 更新 frozen allowlist（如需冻结）：
+        2. [workflow_contract.v2.json] 更新 frozen allowlist（如需冻结）：
            - frozen_job_names.allowlist: 添加 release 核心 job names
            - frozen_step_text.allowlist: 添加 release 核心 step names
 
-        3. [workflow_contract.v1.json] 更新 make.targets_required（如有）：
+        3. [workflow_contract.v2.json] 更新 make.targets_required（如有）：
            - 添加 release 专用 make targets（如 release-build）
 
         4. [本脚本] 无需修改 - 自动发现并校验 release workflow
@@ -1522,7 +1522,7 @@ class WorkflowContractValidator:
         # - 不一致会报 ERROR
         #
         # 参见：
-        # - workflow_contract.v1.json 的 _changelog_v2.3.0 说明
+        # - workflow_contract.v2.json 的 _changelog_v2.3.0 说明
         # - docs/ci_nightly_workflow_refactor/contract.md 第 5 章（冻结范围）
         # - docs/ci_nightly_workflow_refactor/contract.md 第 5.5 节（required_steps 覆盖原则）
         # - docs/ci_nightly_workflow_refactor/maintenance.md 第 3.1 节
@@ -1788,7 +1788,7 @@ class WorkflowContractValidator:
                         key=target,
                         message=(
                             f"ERROR: Required make target '{target}' not found in Makefile. "
-                            f"If you removed this target, please update workflow_contract.v1.json "
+                            f"If you removed this target, please update workflow_contract.v2.json "
                             f"to remove it from make.targets_required."
                         ),
                         expected=target,
@@ -1851,7 +1851,7 @@ class WorkflowContractValidator:
                             key=target,
                             message=(
                                 f"ERROR: make target '{target}' called in workflow but not declared "
-                                f"in workflow_contract.v1.json make.targets_required. "
+                                f"in workflow_contract.v2.json make.targets_required. "
                                 f"Job: {call.job_id}, Step: {call.step_name or '(unnamed)'}. "
                                 f"Please add '{target}' to make.targets_required or add it to the ignore list."
                             ),
@@ -1919,7 +1919,7 @@ class WorkflowContractValidator:
                             f"ERROR: Label '{label}' is defined in contract.ci.labels but not found "
                             f"as a LABEL_* constant in gh_pr_labels_to_outputs.py. "
                             f"Please add a corresponding LABEL_* constant to the script, or remove "
-                            f"the label from workflow_contract.v1.json ci.labels."
+                            f"the label from workflow_contract.v2.json ci.labels."
                         ),
                         expected=f"LABEL_* constant for '{label}'",
                         actual="(not found)",
@@ -1936,13 +1936,13 @@ class WorkflowContractValidator:
                 self.result.errors.append(
                     ValidationError(
                         workflow="ci",
-                        file="scripts/ci/workflow_contract.v1.json",
+                        file="scripts/ci/workflow_contract.v2.json",
                         error_type="label_missing_in_contract",
                         key=label,
                         message=(
                             f"ERROR: Label '{label}' is defined as LABEL_* constant in "
                             f"gh_pr_labels_to_outputs.py but not found in contract.ci.labels. "
-                            f"Please add the label to workflow_contract.v1.json ci.labels, or remove "
+                            f"Please add the label to workflow_contract.v2.json ci.labels, or remove "
                             f"the LABEL_* constant from the script."
                         ),
                         expected=f"Label '{label}' in ci.labels",
@@ -2106,8 +2106,8 @@ def main():
     parser.add_argument(
         "--contract",
         type=Path,
-        default=Path("scripts/ci/workflow_contract.v1.json"),
-        help="Path to contract JSON file (default: scripts/ci/workflow_contract.v1.json)",
+        default=Path("scripts/ci/workflow_contract.v2.json"),
+        help="Path to contract JSON file (default: scripts/ci/workflow_contract.v2.json)",
     )
     parser.add_argument(
         "--workspace",

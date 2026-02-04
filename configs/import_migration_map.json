@@ -1,8 +1,8 @@
 {
-  "$schema": "../schemas/import_migration_map_v1.schema.json",
-  "version": "1",
+  "$schema": "../schemas/import_migration_map_v2.schema.json",
+  "version": "2",
   "description": "Import migration map - Single Source of Truth (SSOT) for root wrapper module deprecation",
-  "updated_at": "2026-02-01",
+  "updated_at": "2026-02-03",
   "modules": [
     {
       "old_module": "scm_sync_runner",

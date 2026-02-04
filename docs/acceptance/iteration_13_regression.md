@@ -168,7 +168,7 @@ pytest tests/gateway/test_reconcile_outbox.py -v
 | 文件 | 修改类型 | 说明 |
 |------|----------|------|
 | `.github/workflows/ci.yml` | 已有 | CI workflow 定义，包含 15 个检查 job |
-| `scripts/ci/workflow_contract.v1.json` | 已有 | CI 合约定义（v2.5.0），定义冻结 job/step |
+| `scripts/ci/workflow_contract.v2.json` | 已有 | CI 合约定义（v2.5.0），定义冻结 job/step |
 | `scripts/ci/validate_workflows.py` | 已有 | CI 校验脚本，支持 --strict 模式 |
 | `Makefile` | 已有（共享） | 门禁目标定义，由 CI 角色负责 |
 
@@ -380,7 +380,7 @@ Workflow Contract Docs Sync Check: PASSED
 | Gateway Public API Docs Sync | Gate | `scripts/ci/check_gateway_public_api_docs_sync.py` | 本次新增 | ✅ 已添加 |
 | mypy 类型错误（Gateway 层） | Type | `di.py`, `container.py`, `mcp_rpc.py`, `governance_update.py` | 本次修复 | ✅ 已修复 |
 | mypy baseline 更新 | Type | `scripts/ci/mypy_baseline.txt` | 本次更新 | ✅ 已更新 |
-| Workflow 合约 iteration-audit | Contract | `scripts/ci/workflow_contract.v1.json` | 2820db8 | ✅ 已修复 |
+| Workflow 合约 iteration-audit | Contract | `scripts/ci/workflow_contract.v2.json` | 2820db8 | ✅ 已修复 |
 | Workflow 文档 frozen step | Docs | `docs/ci_nightly_workflow_refactor/contract.md` | 2820db8 | ✅ 已修复 |
 | test_consistent_all_and_tier_b | Test | `tests/ci/test_gateway_public_api_import_surface.py` | 2820db8 | ✅ 已修复 |
 | test_nightly_schema_validation_passes | Test | `tests/ci/test_workflow_contract.py` | 2820db8 | ✅ 已修复 |
@@ -444,7 +444,7 @@ make typecheck-gate
 **问题**：nightly workflow 新增 `iteration-audit` job 但未同步到合约文件。
 
 **涉及文件**：
-- `scripts/ci/workflow_contract.v1.json`
+- `scripts/ci/workflow_contract.v2.json`
 - `.github/workflows/nightly.yml`
 
 **修复策略**：
@@ -493,7 +493,7 @@ pytest tests/ci/test_gateway_public_api_import_surface.py::TestAllConsistency::t
 
 **涉及文件**：
 - `tests/ci/test_workflow_contract.py`
-- `scripts/ci/workflow_contract.v1.schema.json`
+- `scripts/ci/workflow_contract.v2.schema.json`
 
 **修复策略**：
 1. 更新测试用例中的 nightly 合约结构以符合 schema

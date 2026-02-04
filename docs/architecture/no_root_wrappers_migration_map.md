@@ -657,7 +657,7 @@ EOF
 |----------|----------|------|
 | **模块迁移映射** | `configs/import_migration_map.json` | **SSOT** - 弃用模块、保留模块、迁移路径的唯一定义 |
 | **例外允许列表** | `scripts/ci/no_root_wrappers_allowlist.json` | Allowlist 方式例外的唯一定义 |
-| **例外 Schema** | `schemas/no_root_wrappers_allowlist_v1.schema.json` | Allowlist 数据格式定义 |
+| **例外 Schema** | `schemas/no_root_wrappers_allowlist_v2.schema.json` | Allowlist 数据格式定义 |
 | **迁移映射解释** | 本文档（`no_root_wrappers_migration_map.md`） | 迁移策略与进度的唯一文档 |
 | **CLI 命令定义** | `pyproject.toml [project.scripts]` | CLI 入口的唯一定义 |
 

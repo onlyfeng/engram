@@ -4,7 +4,7 @@
 check_mcp_jsonrpc_error_contract.py - MCP JSON-RPC 错误码合约一致性检查
 
 功能:
-  校验 schemas/mcp_jsonrpc_error_v1.schema.json 中的 error_reason enum
+  校验 schemas/mcp_jsonrpc_error_v2.schema.json 中的 error_reason enum
   与 src/engram/gateway/error_codes.py:McpErrorReason 的公开常量集合是否一致。
 
 SSOT（单一事实来源）策略:
@@ -20,7 +20,7 @@ SSOT（单一事实来源）策略:
 豁免清单说明:
   - SCHEMA_ONLY_EXEMPT: 仅存在于 Schema 中的豁免项（当前为空）
   - CODE_ONLY_EXEMPT: 仅存在于代码中的豁免项（当前为空）
-  - 新增豁免需说明原因并更新 docs/contracts/mcp_jsonrpc_error_v1.md
+  - 新增豁免需说明原因并更新 docs/contracts/mcp_jsonrpc_error_v2.md
 
 使用方法:
   python scripts/ci/check_mcp_jsonrpc_error_contract.py           # 标准检查
@@ -37,8 +37,8 @@ SSOT（单一事实来源）策略:
   - CI: lint job 或独立 job
 
 参见:
-  - docs/contracts/mcp_jsonrpc_error_v1.md §13.3（SSOT 定义）
-  - docs/contracts/mcp_jsonrpc_error_v1_drift_matrix.md（漂移矩阵）
+  - docs/contracts/mcp_jsonrpc_error_v2.md §13.3（SSOT 定义）
+  - docs/contracts/mcp_jsonrpc_error_v2_drift_matrix.md（漂移矩阵）
   - src/engram/gateway/error_codes.py
 """
 
@@ -57,7 +57,7 @@ from typing import Any, Optional, Set
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # Schema 文件路径
-SCHEMA_PATH = PROJECT_ROOT / "schemas" / "mcp_jsonrpc_error_v1.schema.json"
+SCHEMA_PATH = PROJECT_ROOT / "schemas" / "mcp_jsonrpc_error_v2.schema.json"
 
 # error_codes.py 模块路径
 ERROR_CODES_MODULE = "engram.gateway.error_codes"
@@ -72,7 +72,7 @@ SCHEMA_ENUM_PATH = ["definitions", "error_reason", "enum"]
 # 注意：当前豁免清单为空，因为：
 # - DEPENDENCY_MISSING 仅属于业务层 ToolResultErrorCode，不在 Schema 中定义
 # - Schema enum 与 McpErrorReason 公开常量保持完全一致
-# 参见: docs/contracts/mcp_jsonrpc_error_v1.md §3.2
+# 参见: docs/contracts/mcp_jsonrpc_error_v2.md §3.2
 SCHEMA_ONLY_EXEMPT: Set[str] = set()
 
 # 豁免清单：仅存在于代码中的合法项
@@ -317,7 +317,7 @@ def format_fix_steps(result: ContractCheckResult) -> list[str]:
             steps.append(f"  - {reason}")
         steps.append("")
         steps.append("修复方案:")
-        steps.append("  A) 在 schemas/mcp_jsonrpc_error_v1.schema.json 的 error_reason.enum 中添加")
+        steps.append("  A) 在 schemas/mcp_jsonrpc_error_v2.schema.json 的 error_reason.enum 中添加")
         steps.append("  B) 或者在本脚本的 CODE_ONLY_EXEMPT 中添加豁免（需说明原因）")
         steps.append("")
 

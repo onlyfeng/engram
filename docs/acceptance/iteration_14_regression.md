@@ -221,7 +221,7 @@ make lint && \
 | 项目 | 值 |
 |------|-----|
 | **证据文件** | [`iteration_14_evidence.json`](evidence/iteration_14_evidence.json) |
-| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **Schema 版本** | `iteration_evidence_v2.schema.json` |
 | **记录时间** | 2026-02-02T01:15:50Z |
 | **Commit SHA** | `2633ebb` |
 

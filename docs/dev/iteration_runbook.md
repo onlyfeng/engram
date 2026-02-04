@@ -322,7 +322,7 @@ make check-iteration-docs-superseded-only
 
 入口： [迭代 fixtures 漂移治理规范](iteration_fixtures_drift_governance.md)
 
-> 受控块契约如有 breaking 变更，必须新增 `docs/contracts/iteration_regression_generated_blocks_v2.md`，禁止覆盖 v1。
+> 受控块契约如有 breaking 变更，必须新增 `docs/contracts/iteration_regression_generated_blocks_v3.md`，禁止覆盖 v2。
 
 **最短路径命令示例**（仅处理 fixtures 漂移）：
 

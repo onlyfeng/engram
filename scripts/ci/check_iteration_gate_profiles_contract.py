@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_PATH = Path("configs/iteration_gate_profiles.v1.json")
+CONFIG_PATH = Path("configs/iteration_gate_profiles.v2.json")
 
 
 @dataclass

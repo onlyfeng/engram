@@ -962,7 +962,7 @@ class LogbookAdapter:
         获取可靠性统计报告
 
         聚合 logbook.outbox_memory 和 governance.write_audit 表的统计数据。
-        报告结构符合 schemas/reliability_report_v1.schema.json。
+        报告结构符合 schemas/reliability_report_v2.schema.json。
 
         Returns:
             可靠性报告字典，包含：

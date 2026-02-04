@@ -53,8 +53,8 @@ NC = "\033[0m"  # No Color
 
 # 部署模式与 manifest 路径映射（相对于 engram 源码根目录）
 MODE_MANIFEST_MAP = {
-    "unified": "docs/guides/manifests/unified_stack_import_v1.json",
-    "logbook-only": "docs/guides/manifests/logbook_only_import_v1.json",
+    "unified": "docs/guides/manifests/unified_stack_import_v2.json",
+    "logbook-only": "docs/guides/manifests/logbook_only_import_v2.json",
 }
 
 # 默认模式

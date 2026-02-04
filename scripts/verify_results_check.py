@@ -152,7 +152,7 @@ REQUIRED_STEPS_FULL = ["db_invariants", "degradation"]
 REQUIRED_STEPS_HTTP_ONLY = ["health_checks", "memory_store", "memory_query"]
 
 # 默认 schema 文件路径（相对于脚本目录）
-DEFAULT_SCHEMA_PATH = Path(__file__).parent.parent / "schemas" / "unified_stack_verify_results_v1.schema.json"
+DEFAULT_SCHEMA_PATH = Path(__file__).parent.parent / "schemas" / "unified_stack_verify_results_v2.schema.json"
 
 
 def _get_required_steps_fallback(profile: str, full_mode: bool = False) -> list[str]:

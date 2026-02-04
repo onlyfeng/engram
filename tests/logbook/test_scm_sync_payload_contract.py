@@ -29,7 +29,7 @@ except ImportError:
 from engram.logbook.scm_sync_payload import (
     DiffMode,
     JobPayloadVersion,
-    SyncJobPayloadV1,
+    SyncJobPayloadV2,
     SyncMode,
     WindowType,
     build_rev_window_payload,
@@ -39,7 +39,7 @@ from engram.logbook.scm_sync_payload import (
 
 # Schema 文件路径（tests/logbook -> tests -> repo root）
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_PATH = str(REPO_ROOT / "schemas" / "scm_sync_job_payload_v1.schema.json")
+SCHEMA_PATH = str(REPO_ROOT / "schemas" / "scm_sync_job_payload_v2.schema.json")
 
 
 @pytest.fixture(scope="module")
@@ -84,7 +84,7 @@ class TestMinimalPayload:
     def test_minimal_incremental_payload(self, validator):
         """最小增量同步 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "mode": "incremental",
         }
         is_valid, errors = validate_against_schema(validator, payload)
@@ -94,7 +94,7 @@ class TestMinimalPayload:
     def test_minimal_probe_payload(self, validator):
         """最小 probe 模式 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "mode": "probe",
         }
         is_valid, errors = validate_against_schema(validator, payload)
@@ -104,7 +104,7 @@ class TestMinimalPayload:
     def test_minimal_time_window_payload(self, validator):
         """最小时间窗口 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "window_type": "time",
             "since": "2024-01-01T00:00:00Z",
             "until": "2024-01-02T00:00:00Z",
@@ -117,7 +117,7 @@ class TestMinimalPayload:
     def test_minimal_rev_window_payload(self, validator):
         """最小 revision 窗口 payload（SVN）"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "window_type": "rev",
             "start_rev": 1000,
             "end_rev": 1100,
@@ -137,7 +137,7 @@ class TestUnknownFields:
     def test_unknown_fields_allowed(self, validator):
         """未知字段应该被允许（additionalProperties: true）"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             # 未知字段
             "future_feature": True,
@@ -151,7 +151,7 @@ class TestUnknownFields:
     def test_unknown_fields_preserved_in_parse(self, validator):
         """未知字段在解析后应该保留在 extra 中"""
         payload_dict = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "custom_field_1": "value1",
             "custom_field_2": {"nested": "value"},
@@ -170,7 +170,7 @@ class TestUnknownFields:
     def test_roundtrip_preserves_unknown_fields(self, validator):
         """往返转换应该保留未知字段"""
         original = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "unknown_key": "unknown_value",
         }
@@ -308,8 +308,8 @@ class TestBuilderSchemaConsistency:
 
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_default_payload_valid(self, validator):
-        """默认 SyncJobPayloadV1 应该通过 schema 验证"""
-        payload = SyncJobPayloadV1()
+        """默认 SyncJobPayloadV2 应该通过 schema 验证"""
+        payload = SyncJobPayloadV2()
         payload_dict = payload.to_json_dict()
 
         is_valid, errors = validate_against_schema(validator, payload_dict)
@@ -318,8 +318,8 @@ class TestBuilderSchemaConsistency:
     @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
     def test_full_payload_valid(self, validator):
         """完整 payload（所有字段都有值）应该通过 schema 验证"""
-        payload = SyncJobPayloadV1(
-            version=JobPayloadVersion.V1.value,
+        payload = SyncJobPayloadV2(
+            version=JobPayloadVersion.V2.value,
             gitlab_instance="gitlab.example.com",
             tenant_id="tenant-1",
             project_key="group/project",
@@ -353,7 +353,7 @@ class TestCircuitBreakerPayload:
     def test_degraded_payload_valid(self, validator):
         """降级模式 payload 应该有效"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "is_backfill_only": True,
             "circuit_state": "half_open",
@@ -367,7 +367,7 @@ class TestCircuitBreakerPayload:
     def test_probe_mode_payload_valid(self, validator):
         """探测模式 payload 应该有效"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "is_probe_mode": True,
             "probe_budget": 10,
@@ -433,7 +433,7 @@ class TestChunkPayload:
     def test_chunk_payload_valid(self, validator):
         """分块 payload 应该有效"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "mode": "backfill",
             "chunk_size": 86400,
             "total_chunks": 10,
@@ -457,7 +457,7 @@ class TestChunkPayload:
     def test_chunk_index_alias_valid(self, validator):
         """chunk_index/chunk_total 别名字段应该有效"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "mode": "backfill",
             "window_type": "time",
             "window_since": "2024-01-01T00:00:00+00:00",
@@ -472,7 +472,7 @@ class TestChunkPayload:
     def test_revision_window_chunk_valid(self, validator):
         """SVN revision 窗口分块 payload 应该有效"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "mode": "backfill",
             "window_type": "revision",
             "window_start_rev": 1000,
@@ -525,7 +525,7 @@ class TestSchedulerMetadata:
     def test_scheduler_metadata_valid(self, validator):
         """调度器元数据应该有效"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "reason": "incremental_due",
             "scheduled_at": "2024-01-15T10:00:00+00:00",
@@ -704,7 +704,7 @@ class TestExtraFieldPreservation:
     def test_roundtrip_with_extra_fields(self):
         """往返转换保留所有 extra 字段"""
         original = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "batch_size": 100,
             "custom_field_1": "preserved",
@@ -716,7 +716,7 @@ class TestExtraFieldPreservation:
         result = payload.to_json_dict()
 
         # 已知字段保留
-        assert result["version"] == "v1"
+        assert result["version"] == "v2"
         assert result["gitlab_instance"] == "gitlab.example.com"
         assert result["batch_size"] == 100
 
@@ -803,7 +803,7 @@ class TestErrorMessages:
         # batch_size 无法解析时变为 None
         assert payload.batch_size is None
         # 其他字段使用默认值
-        assert payload.version == "v1"
+        assert payload.version == "v2"
         assert payload.mode == "incremental"
 
     def test_none_input_returns_default_payload(self):
@@ -811,7 +811,7 @@ class TestErrorMessages:
         payload = parse_payload(None)
 
         assert payload is not None
-        assert payload.version == "v1"
+        assert payload.version == "v2"
         assert payload.mode == "incremental"
         assert payload.diff_mode == "best_effort"
 
@@ -820,7 +820,7 @@ class TestErrorMessages:
         payload = parse_payload({})
 
         assert payload is not None
-        assert payload.version == "v1"
+        assert payload.version == "v2"
         assert payload.mode == "incremental"
 
 
@@ -836,8 +836,8 @@ class TestSchemaImplementationConsistency:
 
         # version enum
         version_enum = props.get("version", {}).get("enum", [])
-        assert "v1" in version_enum
-        assert JobPayloadVersion.V1.value in version_enum
+        assert "v2" in version_enum
+        assert JobPayloadVersion.V2.value in version_enum
 
         # mode enum
         mode_enum = props.get("mode", {}).get("enum", [])
@@ -873,10 +873,10 @@ class TestSchemaImplementationConsistency:
         props = payload_schema.get("properties", {})
 
         # 创建默认 payload
-        default_payload = SyncJobPayloadV1()
+        default_payload = SyncJobPayloadV2()
 
         # version default
-        assert default_payload.version == props.get("version", {}).get("default", "v1")
+        assert default_payload.version == props.get("version", {}).get("default", "v2")
 
         # mode default
         assert default_payload.mode == props.get("mode", {}).get("default", "incremental")
@@ -898,22 +898,22 @@ class TestSchemaImplementationConsistency:
     def test_schema_range_constraints_enforced(self):
         """Schema 中的范围约束应在实现中强制执行"""
         # batch_size 范围 1-10000
-        payload = SyncJobPayloadV1(batch_size=5000)
+        payload = SyncJobPayloadV2(batch_size=5000)
         errors = payload.validate()
         assert len(errors) == 0, "Valid batch_size should pass"
 
-        payload = SyncJobPayloadV1(batch_size=0)
+        payload = SyncJobPayloadV2(batch_size=0)
         errors = payload.validate()
         assert len(errors) > 0, "batch_size=0 should fail validation"
 
-        payload = SyncJobPayloadV1(batch_size=100000)
+        payload = SyncJobPayloadV2(batch_size=100000)
         errors = payload.validate()
         assert len(errors) > 0, "batch_size=100000 should fail validation"
 
     def test_revision_range_constraints_enforced(self):
         """Revision 范围约束应在实现中强制执行"""
         # 负数 revision 无效
-        payload = SyncJobPayloadV1(
+        payload = SyncJobPayloadV2(
             window_type=WindowType.REV.value,
             start_rev=-1,
         )
@@ -928,12 +928,12 @@ class TestDryRunDefaultBehavior:
     """测试 dry_run 默认行为契约
 
     验证 payload 中 dry_run 字段的默认行为符合预期：
-    - SyncJobPayloadV1 中 dry_run 作为 extra 字段透传
+    - SyncJobPayloadV2 中 dry_run 作为 extra 字段透传
     - JSON Schema 允许 dry_run 字段
     - 往返序列化保留原始值
 
-    注意：dry_run 不是 SyncJobPayloadV1 的直接属性（它是运行时 SyncJobPayload 的属性）
-    在 SyncJobPayloadV1 中，dry_run 会被存储在 extra 字段中进行透传。
+    注意：dry_run 不是 SyncJobPayloadV2 的直接属性（它是运行时 SyncJobPayload 的属性）
+    在 SyncJobPayloadV2 中，dry_run 会被存储在 extra 字段中进行透传。
     """
 
     def test_dry_run_preserved_in_extra(self):
@@ -960,7 +960,7 @@ class TestDryRunDefaultBehavior:
     def test_dry_run_preserved_with_other_fields(self):
         """dry_run 与其他字段一起保留"""
         original = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "batch_size": 100,
             "dry_run": True,
@@ -1088,7 +1088,7 @@ class TestCompletePayloadScenarios:
     def test_full_gitlab_incremental_payload(self, validator):
         """完整的 GitLab 增量同步 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "tenant_id": "tenant-acme",
             "project_key": "group/project",
@@ -1110,7 +1110,7 @@ class TestCompletePayloadScenarios:
     def test_full_svn_backfill_payload(self, validator):
         """完整的 SVN backfill payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "tenant_id": "tenant-acme",
             "window_type": "rev",
             "start_rev": 1000,
@@ -1130,7 +1130,7 @@ class TestCompletePayloadScenarios:
     def test_full_chunked_time_window_payload(self, validator):
         """完整的时间窗口分块 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "window_type": "time",
             "window_since": "2024-01-01T00:00:00+00:00",
@@ -1147,7 +1147,7 @@ class TestCompletePayloadScenarios:
     def test_full_degraded_mode_payload(self, validator):
         """完整的熔断降级 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "mode": "incremental",
             "is_backfill_only": True,
@@ -1164,7 +1164,7 @@ class TestCompletePayloadScenarios:
     def test_full_probe_mode_payload(self, validator):
         """完整的探测模式 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "mode": "probe",  # probe 模式
             "circuit_state": "half_open",
@@ -1179,7 +1179,7 @@ class TestCompletePayloadScenarios:
     def test_probe_mode_with_degraded_params(self, validator):
         """probe 模式配合降级参数 payload"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "mode": "probe",
             "circuit_state": "half_open",
@@ -1217,7 +1217,7 @@ class TestUnknownFieldsDeepPassthrough:
     def test_mixed_known_unknown_fields_roundtrip(self):
         """已知字段和未知字段混合的往返测试"""
         original = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "batch_size": 100,
             "mode": "backfill",
@@ -1233,7 +1233,7 @@ class TestUnknownFieldsDeepPassthrough:
         result = payload.to_json_dict()
 
         # 已知字段保留
-        assert result["version"] == "v1"
+        assert result["version"] == "v2"
         assert result["gitlab_instance"] == "gitlab.example.com"
         assert result["batch_size"] == 100
 
@@ -1248,7 +1248,7 @@ class TestUnknownFieldsDeepPassthrough:
     def test_roundtrip_result_passes_schema(self, validator):
         """往返结果应该通过 schema 验证"""
         original = {
-            "version": "v1",
+            "version": "v2",
             "gitlab_instance": "gitlab.example.com",
             "mode": "backfill",
             "future_field_1": "value1",
@@ -1270,49 +1270,49 @@ class TestPythonValidation:
 
     def test_validate_invalid_batch_size_zero(self):
         """batch_size=0 应该验证失败"""
-        payload = SyncJobPayloadV1(batch_size=0)
+        payload = SyncJobPayloadV2(batch_size=0)
         errors = payload.validate()
         assert len(errors) > 0
         assert any("batch_size" in e for e in errors)
 
     def test_validate_invalid_batch_size_negative(self):
         """batch_size 负数应该验证失败"""
-        payload = SyncJobPayloadV1(batch_size=-1)
+        payload = SyncJobPayloadV2(batch_size=-1)
         errors = payload.validate()
         assert len(errors) > 0
 
     def test_validate_invalid_forward_window_seconds(self):
         """forward_window_seconds 超出范围应该验证失败"""
         # 太小
-        payload = SyncJobPayloadV1(forward_window_seconds=30)
+        payload = SyncJobPayloadV2(forward_window_seconds=30)
         errors = payload.validate()
         assert len(errors) > 0
 
         # 太大
-        payload = SyncJobPayloadV1(forward_window_seconds=3000000)
+        payload = SyncJobPayloadV2(forward_window_seconds=3000000)
         errors = payload.validate()
         assert len(errors) > 0
 
     def test_validate_invalid_chunk_size(self):
         """chunk_size 超出范围应该验证失败"""
-        payload = SyncJobPayloadV1(chunk_size=0)
+        payload = SyncJobPayloadV2(chunk_size=0)
         errors = payload.validate()
         assert len(errors) > 0
 
-        payload = SyncJobPayloadV1(chunk_size=200000)
+        payload = SyncJobPayloadV2(chunk_size=200000)
         errors = payload.validate()
         assert len(errors) > 0
 
     def test_validate_invalid_current_chunk_exceeds_total(self):
         """current_chunk >= total_chunks 应该验证失败"""
-        payload = SyncJobPayloadV1(total_chunks=5, current_chunk=5)
+        payload = SyncJobPayloadV2(total_chunks=5, current_chunk=5)
         errors = payload.validate()
         assert len(errors) > 0
         assert any("current_chunk" in e for e in errors)
 
     def test_validate_invalid_time_window_order(self):
         """since_ts > until_ts 应该验证失败"""
-        payload = SyncJobPayloadV1(
+        payload = SyncJobPayloadV2(
             window_type=WindowType.TIME.value,
             since_ts=2000000000,
             until_ts=1000000000,
@@ -1323,7 +1323,7 @@ class TestPythonValidation:
 
     def test_validate_invalid_rev_window_order(self):
         """start_rev > end_rev 应该验证失败"""
-        payload = SyncJobPayloadV1(
+        payload = SyncJobPayloadV2(
             window_type=WindowType.REV.value,
             start_rev=2000,
             end_rev=1000,
@@ -1333,7 +1333,7 @@ class TestPythonValidation:
 
     def test_validate_negative_revision(self):
         """负数 revision 应该验证失败"""
-        payload = SyncJobPayloadV1(
+        payload = SyncJobPayloadV2(
             window_type=WindowType.REV.value,
             start_rev=-1,
         )
@@ -1342,7 +1342,7 @@ class TestPythonValidation:
 
     def test_validate_timestamp_out_of_range(self):
         """时间戳超出范围应该验证失败"""
-        payload = SyncJobPayloadV1(
+        payload = SyncJobPayloadV2(
             window_type=WindowType.TIME.value,
             since_ts=5000000000,  # > 4102444800
         )
@@ -1367,7 +1367,7 @@ class TestProbeModeContract:
 
     def test_probe_mode_validation_passes(self):
         """probe 模式验证通过"""
-        payload = SyncJobPayloadV1(mode=SyncMode.PROBE.value)
+        payload = SyncJobPayloadV2(mode=SyncMode.PROBE.value)
         errors = payload.validate()
         assert len(errors) == 0, f"Probe mode should be valid: {errors}"
 
@@ -1389,7 +1389,7 @@ class TestProbeModeContract:
     def test_probe_mode_roundtrip(self):
         """probe 模式往返序列化"""
         original = {
-            "version": "v1",
+            "version": "v2",
             "mode": "probe",
             "gitlab_instance": "gitlab.example.com",
             "is_probe_mode": True,
@@ -1412,6 +1412,6 @@ class TestProbeModeContract:
     def test_all_sync_modes_valid(self):
         """所有 SyncMode 枚举值都能通过验证"""
         for mode in SyncMode:
-            payload = SyncJobPayloadV1(mode=mode.value)
+            payload = SyncJobPayloadV2(mode=mode.value)
             errors = payload.validate()
             assert len(errors) == 0, f"Mode '{mode.value}' should be valid: {errors}"

@@ -2,7 +2,7 @@
 """
 Workflow Contract 受控块渲染器
 
-从 workflow_contract.v1.json 读取数据，生成 Markdown 受控块内容。
+从 workflow_contract.v2.json 读取数据，生成 Markdown 受控块内容。
 输出用于 contract.md 和 coupling_map.md 中的受控区域。
 
 受控块使用 HTML 注释作为 markers：
@@ -45,7 +45,7 @@ from scripts.ci.workflow_contract_common import discover_workflow_keys
 # Constants
 # ============================================================================
 
-DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
+DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v2.json"
 
 # 文档路径
 DEFAULT_CONTRACT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
@@ -728,7 +728,7 @@ To add markers for block '{block_name}', insert the following at the appropriate
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="渲染 workflow_contract.v1.json 到 Markdown 受控块",
+        description="渲染 workflow_contract.v2.json 到 Markdown 受控块",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

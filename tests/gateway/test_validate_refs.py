@@ -1284,7 +1284,7 @@ class TestStrictModeBlockingContract:
     """
     strict 模式阻断行为契约测试
 
-    契约来源: docs/contracts/gateway_policy_v1.md
+    契约来源: docs/contracts/gateway_policy_v2.md
 
     验证 strict 模式下：
     1. 缺少 sha256 的 evidence 必须阻断请求（返回 reject）
@@ -1467,7 +1467,7 @@ class TestStrictModeAuditValidationContract:
         """
         契约测试: 阻断时审计事件必须包含完整的 validation 子结构
 
-        契约来源: docs/contracts/gateway_policy_v1.md
+        契约来源: docs/contracts/gateway_policy_v2.md
         """
         from engram.gateway.audit_event import (
             build_gateway_audit_event,

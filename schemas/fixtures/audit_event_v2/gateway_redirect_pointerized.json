@@ -1,0 +1,49 @@
+{
+  "schema_version": "2.0",
+  "source": "gateway",
+  "operation": "memory_store",
+  "correlation_id": "corr-abcdef1234567890",
+  "actor_user_id": "user_pointerized",
+  "requested_space": "personal:user1",
+  "final_space": "team:shared",
+  "decision": {
+    "action": "redirect",
+    "reason": "pointerized_redirect"
+  },
+  "payload_sha": "pointersha256xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "payload_len": 800,
+  "evidence_summary": {
+    "count": 1,
+    "has_strong": true,
+    "uris": ["memory://attachments/999/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"]
+  },
+  "trim": {
+    "was_trimmed": false,
+    "why": null,
+    "original_len": null
+  },
+  "refs": ["memory://attachments/999/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
+  "event_ts": "2024-01-15T16:00:00.000000+00:00",
+  "policy": {
+    "mode": "strict",
+    "mode_reason": "settings_explicit",
+    "policy_version": "v2",
+    "is_pointerized": true,
+    "policy_source": "settings"
+  },
+  "validation": {
+    "validate_refs_effective": true,
+    "validate_refs_reason": "strict_mode",
+    "evidence_validation": {
+      "is_valid": true,
+      "mode": "strict",
+      "error_code": null
+    }
+  },
+  "pointer": {
+    "from_space": "personal:user1",
+    "to_space": "team:shared",
+    "reason": "dedup_redirect",
+    "preserved": true
+  }
+}

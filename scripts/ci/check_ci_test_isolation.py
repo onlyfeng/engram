@@ -50,7 +50,7 @@ DEFAULT_SCRIPTS_SCAN_DIR = "scripts/ci"
 
 # 默认 allowlist 文件路径（相对于项目根）
 DEFAULT_ALLOWLIST_FILE = "configs/ci_test_isolation_allowlist.json"
-DEFAULT_SCHEMA_FILE = "schemas/ci_test_isolation_allowlist_v1.schema.json"
+DEFAULT_SCHEMA_FILE = "schemas/ci_test_isolation_allowlist_v2.schema.json"
 
 # 保留旧配置名以保持向后兼容
 DEFAULT_SCAN_DIR = DEFAULT_TESTS_SCAN_DIR
@@ -310,7 +310,7 @@ def load_allowlist(allowlist_path: Path) -> Allowlist | None:
                 pass  # 无效日期格式
 
     return Allowlist(
-        version=data.get("version", "1"),
+        version=data.get("version", "2"),
         description=data.get("description", ""),
         entries=entries,
         expired_entries=expired_entries,

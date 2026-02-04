@@ -1,0 +1,534 @@
+{
+  "$schema": "workflow_contract.v2.schema.json",
+  "version": "2.26.0",
+  "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
+  "last_updated": "2026-02-03",
+  "_changelog_v2.26.0": "chore: migrate workflow contract file/schema to v2 naming and drop v1 assets",
+  "_changelog_v2.25.1": "fix: version policy checker handles shallow history conservatively",
+  "_changelog_v2.25.0": "Phase 2: add release workflow",
+  "_changelog_v2.24.0": "新增 Error Types 文档同步门禁：新增 check_workflow_contract_error_types_docs_sync.py 并接入 CI/Makefile；补全第 13 章表格",
+  "_changelog_v2.23.0": "新增 iteration fixtures freshness 检查：iteration-tools-test job 添加检查步骤；新增 Makefile/CI 入口",
+  "_changelog_v2.22.1": "docs: enable controlled blocks for contract.md/coupling_map.md",
+  "_changelog_v2.22.0": "新增 ci-test-isolation job 到 CI workflow 合约：CI 测试隔离检查；新增 make.targets_required: 'check-ci-test-isolation'；修复 MAKE_TARGET_IGNORE_LIST 添加 'targets'（echo 中的 false positive）",
+  "_changelog_v2.21.0": "新增 workflow make targets 一致性检查：workflow-contract job required_steps 添加 'Check workflow make targets consistency'；make.targets_required 添加 'check-workflow-make-targets-consistency'",
+  "_changelog_v2.20.0": "新增 workflow-contract job required_steps：'Check workflow contract internal consistency'；新增 make.targets_required：'check-workflow-contract-internal-consistency'",
+  "_changelog_v2.19.0": "更新 lint job required_steps：将 'Run mypy (type check)' 重命名为 'Run mypy (baseline mode)'；新增 'Run mypy (strict-island mode)' 步骤（双层 mypy 检查策略）",
+  "_changelog_v2.18.0": "新增 step_name_aliases 可选字段：支持为 required_steps 定义别名映射；当 step 通过 alias 匹配时报告 step_name_alias_matched WARNING 而非 ERROR；新增 contract.md 5.6 节文档",
+  "_changelog_v2.17.1": "将 drift report 产物（artifacts/workflow_contract_drift.json, .md）从 required_artifact_paths 移除，改为 Optional；CI upload-artifact 添加 if-no-files-found: ignore；contract.md 8.7/8.10 节明确策略边界",
+  "_changelog_v2.17.0": "补全 CI workflow 中缺失的 required_steps：gateway-public-api-surface 添加 'Check Gateway Public API docs sync'；workflow-contract 添加 'Check workflow contract doc anchors'；make.targets_required 添加 'check-workflow-contract-doc-anchors'",
+  "_changelog_v2.16.0": "新增 contract.md 第 13 章 Error Type 体系与版本策略：罗列全部 error_type/warning_type/drift_type；规定新增/弃用 error_type 的版本策略；各脚本 error_type 收敛为常量集合（ErrorTypes/WarningTypes/DocsSyncErrorTypes/VersionPolicyErrorTypes/DriftTypes 等）",
+  "_changelog_v2.15.0": "重构版本策略检查脚本：统一 critical file 规则定义（CRITICAL_*_RULES）；新增 trigger_reasons 字段支持；新增 contract.md 11.5 节最小修复步骤",
+  "_changelog_v2.14.0": "新增 contract.md 第 0 章合约系统概览：关键文件清单、检查脚本详细说明（运行命令/exit code/artifact 路径）、CI 阻断策略边界定义；章节重编号（原 13 章改为 14 章）",
+  "_changelog_v2.13.0": "新增 Drift Report 漂移报告合约：补充 contract.md 8.7 节和 maintenance.md 第 4 章；更新 artifact_archive 配置包含 drift report 输出",
+  "_changelog_v2.12.0": "新增 mcp-error-contract job 到 CI workflow 合约：MCP JSON-RPC 错误码合约与文档同步检查",
+  "_changelog_v2.11.0": "新增 iteration-audit job 到 nightly workflow 合约：迭代文档审计（轻量级 job）；新增 iteration-audit make target",
+  "_changelog_v2.10.0": "新增 contract 内部一致性检查：job_ids/job_names 长度一致、job_ids 无重复、required_jobs id 无重复、required_jobs id 在 job_ids 中",
+  "_changelog_v2.9.0": "新增 iteration-tools-test job：运行迭代工具脚本测试（无需数据库依赖）",
+  "_changelog_v2.8.0": "新增 workflow contract version policy 检查：关键文件变更时强制要求 version/last_updated 更新并同步到 contract.md 版本控制表",
+  "_changelog_v2.7.1": "新增 required_steps 覆盖原则文档（contract.md 5.5 节）：定义核心子集/全量两档策略；更新 validate_workflows.py 报错文案",
+  "_changelog_v2.6.0": "新增 gateway-correlation-id-single-source job：检查 Gateway correlation_id 单一来源（SSOT 模块）",
+  "_changelog_v2.5.0": "新增 gateway-import-surface job：检查 Gateway __init__.py 懒加载策略（禁止 eager-import）",
+  "_changelog_v2.4.0": "新增 gateway-public-api-surface job：检查 Gateway Public API 导入表面（__all__ 与实际导出一致性）",
+  "_changelog_v2.3.0": "重构冻结范围：frozen_job_names 精简为 4 个核心 job（Required Checks 引用）；frozen_step_text 精简为 12 个核心 step（artifact/验证流程）；非冻结项改名仅产生 WARNING",
+  "_changelog_v2.2.0": "新增 iteration-docs-check job：检查 .iteration/ 链接和 SUPERSEDED 一致性",
+  "_changelog_v2.1.0": "CI 合约完善：补全所有 job 的 required_steps（含 cache、verify、artifact 上传步骤）；添加 required_artifact_paths 覆盖 ci.yml 中的 artifact 上传路径",
+  "_changelog_v2.0.0": "Phase 1 范围收敛：移除 release workflow 合约（Phase 2 预留）；统一版本号到 semver 格式；移除 SeekDB 组件",
+  "_changelog_v1.11.0": "Nightly workflow 优化：核心验证链收敛到 acceptance-unified-full（方案 A）",
+  "ci": {
+    "file": ".github/workflows/ci.yml",
+    "detect_changes": {
+      "_comment": "当前 CI workflow 不使用 detect-changes job，此部分保留供未来扩展",
+      "outputs": []
+    },
+    "labels": [
+      "openmemory:freeze-override"
+    ],
+    "job_ids": [
+      "test",
+      "lint",
+      "no-iteration-tracked",
+      "env-var-consistency",
+      "schema-validate",
+      "logbook-consistency",
+      "migration-sanity",
+      "sql-safety",
+      "gateway-di-boundaries",
+      "scm-sync-consistency",
+      "gateway-error-reason-usage",
+      "gateway-import-surface",
+      "gateway-public-api-surface",
+      "gateway-correlation-id-single-source",
+      "mcp-error-contract",
+      "iteration-docs-check",
+      "ci-test-isolation",
+      "iteration-tools-test",
+      "workflow-contract"
+    ],
+    "job_names": [
+      "Test (Python ${{ matrix.python-version }})",
+      "Lint",
+      "No .iteration/ Tracked Files",
+      "Environment Variable Consistency",
+      "Schema Validation",
+      "Logbook Consistency Check",
+      "Migration Sanity Check",
+      "SQL Migration Safety Check",
+      "Gateway DI Boundaries Check",
+      "SCM Sync Consistency Check",
+      "Gateway ErrorReason Usage Check",
+      "Gateway Import Surface Check",
+      "Gateway Public API Import Surface Check",
+      "Gateway correlation_id Single Source Check",
+      "MCP Error Contract Check",
+      "Iteration Docs Check",
+      "CI Test Isolation Check",
+      "Iteration Tools Test",
+      "Workflow Contract Validation"
+    ],
+    "required_jobs": [
+      {
+        "id": "test",
+        "name": "Test (Python ${{ matrix.python-version }})",
+        "_comment": "单元测试、集成测试和验收测试（含数据库迁移验证）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Cache pip dependencies",
+          "Install dependencies",
+          "Run database migrations",
+          "Verify database migrations",
+          "Run unit and integration tests",
+          "Run acceptance tests",
+          "Upload test results",
+          "Upload migration logs"
+        ]
+      },
+      {
+        "id": "lint",
+        "name": "Lint",
+        "_comment": "代码风格检查（ruff）和类型检查（mypy baseline + strict-island 双层策略）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Run ruff check (lint)",
+          "Run ruff format check",
+          "Run mypy (baseline mode)",
+          "Run mypy (strict-island mode)"
+        ]
+      },
+      {
+        "id": "no-iteration-tracked",
+        "name": "No .iteration/ Tracked Files",
+        "_comment": "检查 .iteration/ 目录下无被 Git 追踪的文件",
+        "required_steps": [
+          "Checkout repository",
+          "Check no .iteration files tracked"
+        ]
+      },
+      {
+        "id": "env-var-consistency",
+        "name": "Environment Variable Consistency",
+        "_comment": "环境变量配置一致性检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check environment variable consistency"
+        ]
+      },
+      {
+        "id": "schema-validate",
+        "name": "Schema Validation",
+        "_comment": "JSON Schema 校验",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Run schema validation",
+          "Upload validation results"
+        ]
+      },
+      {
+        "id": "logbook-consistency",
+        "name": "Logbook Consistency Check",
+        "_comment": "Logbook 配置一致性检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check logbook configuration consistency"
+        ]
+      },
+      {
+        "id": "migration-sanity",
+        "name": "Migration Sanity Check",
+        "_comment": "SQL 迁移文件存在性和基础语法检查",
+        "required_steps": [
+          "Checkout repository",
+          "Check SQL migration files exist",
+          "Check SQL syntax (basic validation)"
+        ]
+      },
+      {
+        "id": "sql-safety",
+        "name": "SQL Migration Safety Check",
+        "_comment": "SQL 迁移安全性检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Run SQL safety check"
+        ]
+      },
+      {
+        "id": "gateway-di-boundaries",
+        "name": "Gateway DI Boundaries Check",
+        "_comment": "Gateway DI 边界检查（禁止 deps.db 直接使用）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway DI boundaries"
+        ]
+      },
+      {
+        "id": "scm-sync-consistency",
+        "name": "SCM Sync Consistency Check",
+        "_comment": "SCM Sync 配置一致性检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Check SCM Sync consistency"
+        ]
+      },
+      {
+        "id": "gateway-error-reason-usage",
+        "name": "Gateway ErrorReason Usage Check",
+        "_comment": "Gateway ErrorReason 使用规范检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway ErrorReason usage"
+        ]
+      },
+      {
+        "id": "gateway-import-surface",
+        "name": "Gateway Import Surface Check",
+        "_comment": "Gateway __init__.py 懒加载策略检查（禁止 eager-import）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway import surface"
+        ]
+      },
+      {
+        "id": "gateway-public-api-surface",
+        "name": "Gateway Public API Import Surface Check",
+        "_comment": "Gateway Public API 导入表面（__all__ 与实际导出一致性）及文档同步检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway Public API import surface",
+          "Check Gateway Public API docs sync"
+        ]
+      },
+      {
+        "id": "gateway-correlation-id-single-source",
+        "name": "Gateway correlation_id Single Source Check",
+        "_comment": "Gateway correlation_id 单一来源（SSOT 模块）检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check Gateway correlation_id single source"
+        ]
+      },
+      {
+        "id": "mcp-error-contract",
+        "name": "MCP Error Contract Check",
+        "_comment": "MCP JSON-RPC 错误码合约与文档同步检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Check MCP JSON-RPC error contract",
+          "Check MCP JSON-RPC error docs sync",
+          "Generate contract report (JSON)",
+          "Generate sync report (JSON)",
+          "Upload contract report",
+          "Upload sync report"
+        ]
+      },
+      {
+        "id": "iteration-docs-check",
+        "name": "Iteration Docs Check",
+        "_comment": "迭代文档规范检查（.iteration/ 链接和 SUPERSEDED 一致性）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check iteration docs consistency"
+        ]
+      },
+      {
+        "id": "ci-test-isolation",
+        "name": "CI Test Isolation Check",
+        "_comment": "CI 测试隔离检查（tests/ci/ 测试文件禁止被外部导入）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Check CI test isolation",
+          "Generate isolation report (JSON)",
+          "Upload isolation report"
+        ]
+      },
+      {
+        "id": "iteration-tools-test",
+        "name": "Iteration Tools Test",
+        "_comment": "迭代工具脚本测试（无数据库依赖）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Run iteration tools tests",
+          "Check iteration fixtures freshness"
+        ]
+      },
+      {
+        "id": "workflow-contract",
+        "name": "Workflow Contract Validation",
+        "_comment": "Workflow 合约校验（strict 模式）、文档同步、版本策略和内部一致性检查",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Run CI script tests",
+          "Validate workflow contract",
+          "Check workflow contract docs sync",
+          "Check workflow contract error types docs sync",
+          "Check workflow contract version policy",
+          "Check workflow contract doc anchors",
+          "Check workflow contract internal consistency",
+          "Check workflow make targets consistency",
+          "Generate validation report (JSON)",
+          "Generate docs sync report (JSON)",
+          "Generate drift report (JSON)",
+          "Generate drift report (Markdown)",
+          "Upload validation report",
+          "Upload docs sync report",
+          "Upload drift report"
+        ]
+      }
+    ],
+    "required_env_vars": [],
+    "artifact_archive": {
+      "_comment": "CI workflow 的 artifact 上传配置；drift report 产物为 Optional（不列入 required_artifact_paths），使用 if-no-files-found: ignore",
+      "required_artifact_paths": [
+        "test-results-*.xml",
+        "acceptance-results-*.xml",
+        "migration-output-*.log",
+        "verify-output-*.log",
+        "schema-validation-results.json",
+        "artifacts/workflow_contract_validation.json",
+        "artifacts/workflow_contract_docs_sync.json"
+      ],
+      "artifact_step_names": [
+        "Upload test results",
+        "Upload migration logs",
+        "Upload validation results",
+        "Upload validation report",
+        "Upload docs sync report",
+        "Upload drift report"
+      ]
+    }
+  },
+  "nightly": {
+    "file": ".github/workflows/nightly.yml",
+    "job_ids": [
+      "unified-stack-full",
+      "iteration-audit",
+      "notify-results"
+    ],
+    "job_names": [
+      "Unified Stack Full Verification",
+      "Iteration Docs Audit",
+      "Notify Results"
+    ],
+    "required_jobs": [
+      {
+        "id": "unified-stack-full",
+        "name": "Unified Stack Full Verification",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Detect environment capabilities",
+          "Validate gate contract (full profile)",
+          "Start unified stack with Docker Compose",
+          "Wait for services to be healthy",
+          "Run Gateway integration tests (full profile)",
+          "Run unified stack verification (full)",
+          "Run make verify-unified (full mode)",
+          "Stop unified stack",
+          "Record acceptance run",
+          "Render acceptance matrix",
+          "Upload test results"
+        ],
+        "_comment": "完整验证流程：环境检测 -> Gate Contract 校验 -> Docker Compose 启动 -> 服务健康检查 -> 集成测试 -> 验证 -> 清理 -> 记录 -> 上传"
+      },
+      {
+        "id": "iteration-audit",
+        "name": "Iteration Docs Audit",
+        "_comment": "迭代文档审计（轻量级检查）",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Run iteration-audit",
+          "Upload iteration audit report"
+        ]
+      },
+      {
+        "id": "notify-results",
+        "name": "Notify Results",
+        "_comment": "Nightly 运行结果通知",
+        "required_steps": [
+          "Check job results"
+        ]
+      }
+    ],
+    "required_env_vars": [
+      "POSTGRES_USER",
+      "POSTGRES_PASSWORD",
+      "POSTGRES_DB",
+      "GATEWAY_PORT",
+      "OM_PORT"
+    ],
+    "artifact_archive": {
+      "_comment": "Nightly workflow 的 artifact 上传配置；使用 if-no-files-found: ignore，故 required_artifact_paths 为空（不保证生成）",
+      "required_artifact_paths": [],
+      "artifact_step_names": [
+        "Upload test results"
+      ]
+    }
+  },
+  "release": {
+    "file": ".github/workflows/release.yml",
+    "_comment": "Release workflow 合约（Phase 2）：核心步骤沿用冻结名称，其余步骤允许演进",
+    "job_ids": [
+      "build",
+      "publish",
+      "notify"
+    ],
+    "job_names": [
+      "Build Release",
+      "Publish Release Artifacts",
+      "Notify Release"
+    ],
+    "required_jobs": [
+      {
+        "id": "build",
+        "name": "Build Release",
+        "_comment": "构建发布产物（wheel/sdist）并归档",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Build package",
+          "Upload release artifacts"
+        ]
+      },
+      {
+        "id": "publish",
+        "name": "Publish Release Artifacts",
+        "_comment": "发布产物到目标仓库（默认 dry-run）",
+        "required_steps": [
+          "Download release artifacts",
+          "Publish release artifacts"
+        ]
+      },
+      {
+        "id": "notify",
+        "name": "Notify Release",
+        "_comment": "发布完成通知",
+        "required_steps": [
+          "Notify release status"
+        ]
+      }
+    ],
+    "required_env_vars": [],
+    "artifact_archive": {
+      "_comment": "Release workflow 产物归档（wheel/sdist）",
+      "required_artifact_paths": [
+        "dist/*.whl",
+        "dist/*.tar.gz"
+      ],
+      "artifact_step_names": [
+        "Upload release artifacts"
+      ]
+    },
+    "labels": []
+  },
+  "make": {
+    "targets_required": [
+      "ci",
+      "lint",
+      "format",
+      "format-check",
+      "typecheck",
+      "check-env-consistency",
+      "check-logbook-consistency",
+      "check-schemas",
+      "check-migration-sanity",
+      "check-scm-sync-consistency",
+      "check-gateway-error-reason-usage",
+      "check-gateway-public-api-surface",
+      "check-gateway-di-boundaries",
+      "check-gateway-import-surface",
+      "check-gateway-correlation-id-single-source",
+      "check-iteration-docs",
+      "check-iteration-fixtures-freshness",
+      "iteration-audit",
+      "validate-workflows-strict",
+      "check-workflow-contract-docs-sync",
+      "check-workflow-contract-error-types-docs-sync",
+      "check-workflow-contract-version-policy",
+      "check-workflow-contract-doc-anchors",
+      "check-workflow-contract-internal-consistency",
+      "check-workflow-make-targets-consistency",
+      "check-ci-test-isolation",
+      "verify-unified",
+      "verify-permissions",
+      "verify-permissions-strict",
+      "migrate-ddl",
+      "migrate-plan",
+      "apply-roles",
+      "apply-openmemory-grants"
+    ]
+  },
+  "frozen_job_names": {
+    "_comment": "仅冻结被 GitHub Required Checks 引用或外部系统依赖的核心 Job Names。非核心 job 改名只产生 WARNING",
+    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 job_names[]；3) 更新 contract.md 'Frozen Job Names' 节 (contract.md#51-frozen-job-names)；4) 运行 make validate-workflows；详见 maintenance.md#62-冻结-step-rename-标准流程",
+    "allowlist": [
+      "Test (Python ${{ matrix.python-version }})",
+      "Lint",
+      "Workflow Contract Validation",
+      "Unified Stack Full Verification"
+    ]
+  },
+  "frozen_step_text": {
+    "_comment": "仅冻结被外部系统引用（如 artifact 名称、日志搜索）或核心验证流程的 Step Names。非核心 step 改名只产生 WARNING",
+    "_rename_process": "改名流程：1) 更新此 allowlist；2) 更新 required_jobs[].required_steps（如有引用）；3) 更新 contract.md 'Frozen Step Names' 节 (contract.md#52-frozen-step-names)；4) 运行 make validate-workflows；详见 maintenance.md#62-冻结-step-rename-标准流程",
+    "allowlist": [
+      "Checkout repository",
+      "Set up Python",
+      "Install dependencies",
+      "Run unit and integration tests",
+      "Run acceptance tests",
+      "Upload test results",
+      "Upload migration logs",
+      "Upload validation results",
+      "Upload validation report",
+      "Upload drift report",
+      "Validate workflow contract",
+      "Start unified stack with Docker Compose",
+      "Run unified stack verification (full)"
+    ]
+  }
+}

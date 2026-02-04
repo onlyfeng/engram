@@ -53,7 +53,7 @@ ALLOWED_PROFILES = ("full", "regression", "docs-only", "ci-only", "gateway-only"
 
 # 配置文件路径
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_PATH = REPO_ROOT / "configs" / "iteration_gate_profiles.v1.json"
+CONFIG_PATH = REPO_ROOT / "configs" / "iteration_gate_profiles.v2.json"
 
 
 @dataclass

@@ -1,6 +1,6 @@
 # 团队可写开关（team_write_enabled）与策略治理
 
-> **完整 policy_json Schema**: 参见 [Gateway Policy V1 Contract](../contracts/gateway_policy_v1.md)
+> **完整 policy_json Schema**: 参见 [Gateway Policy V2 Contract](../contracts/gateway_policy_v2.md)
 
 ## 开关含义
 - team_write_enabled = true：允许写入 team:<project>（仍需通过策略校验）
@@ -27,7 +27,7 @@
 - `compat`: 兼容模式（默认），接受 v1/v2 格式，不强制 sha256
 - `strict`: 严格模式，要求 v2 格式且 sha256 必填
 
-> 详细说明参见 [Gateway Policy V1 Contract](../contracts/gateway_policy_v1.md#evidence_mode)
+> 详细说明参见 [Gateway Policy V2 Contract](../contracts/gateway_policy_v2.md#evidence_mode)
 
 ## 便捷函数 decide_write
 

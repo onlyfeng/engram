@@ -48,7 +48,7 @@ def write_contract(workspace: Path, contract: dict[str, Any]) -> Path:
     """写入 contract JSON 文件"""
     scripts_ci = workspace / "scripts" / "ci"
     scripts_ci.mkdir(parents=True, exist_ok=True)
-    contract_path = scripts_ci / "workflow_contract.v1.json"
+    contract_path = scripts_ci / "workflow_contract.v2.json"
     with open(contract_path, "w", encoding="utf-8") as f:
         json.dump(contract, f, indent=2)
     return contract_path
@@ -162,7 +162,7 @@ class TestMakeDriftItemHelper:
         write_contract(temp_workspace, contract)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
 
@@ -203,7 +203,7 @@ class TestMakeDriftItemHelper:
         write_contract(temp_workspace, contract)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
 
@@ -226,7 +226,7 @@ class TestMakeDriftItemHelper:
         write_contract(temp_workspace, contract)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
 
@@ -250,7 +250,7 @@ class TestMakeDriftItemHelper:
         write_contract(temp_workspace, contract)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
 
@@ -401,7 +401,7 @@ class TestWorkflowContractDriftAnalyzer:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -438,7 +438,7 @@ class TestWorkflowContractDriftAnalyzer:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -473,7 +473,7 @@ class TestWorkflowContractDriftAnalyzer:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -522,7 +522,7 @@ class TestWorkflowContractDriftAnalyzer:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -568,7 +568,7 @@ class TestWorkflowContractDriftAnalyzer:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -608,7 +608,7 @@ class TestWorkflowContractDriftAnalyzer:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -644,7 +644,7 @@ class TestWorkflowContractDriftAnalyzer:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -676,7 +676,7 @@ class TestWorkflowContractDriftAnalyzer:
         )
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
             workflow_filter="ci",
         )
@@ -1111,7 +1111,7 @@ class TestArtifactPathNormalization:
         write_contract(temp_workspace, contract)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
 
@@ -1157,7 +1157,7 @@ class TestArtifactPathNormalization:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1203,7 +1203,7 @@ class TestArtifactPathNormalization:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1265,7 +1265,7 @@ class TestArtifactPathDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1325,7 +1325,7 @@ class TestArtifactPathDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1389,7 +1389,7 @@ test:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1450,7 +1450,7 @@ test:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1509,7 +1509,7 @@ def main():
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1558,7 +1558,7 @@ def main():
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1628,7 +1628,7 @@ class TestStepRenameDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1677,7 +1677,7 @@ class TestStepRenameDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1730,7 +1730,7 @@ class TestStepRenameDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1787,7 +1787,7 @@ class TestStepRenameDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1851,7 +1851,7 @@ class TestStepRenameDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -1904,7 +1904,7 @@ class TestStepRenameDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -2033,7 +2033,7 @@ class TestOutputStability:
 
         # 执行两次分析
         analyzer1 = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report1 = analyzer1.analyze()
@@ -2041,7 +2041,7 @@ class TestOutputStability:
         data1 = json.loads(output1)
 
         analyzer2 = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report2 = analyzer2.analyze()
@@ -2118,7 +2118,7 @@ class TestRenameClassificationStability:
         results = []
         for _ in range(3):
             analyzer = WorkflowContractDriftAnalyzer(
-                contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+                contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
                 workspace_root=temp_workspace,
             )
             report = analyzer.analyze()
@@ -2179,7 +2179,7 @@ class TestRenameClassificationStability:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -2238,7 +2238,7 @@ class TestArtifactPathNormalizationNoDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -2282,7 +2282,7 @@ class TestArtifactPathNormalizationNoDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -2326,7 +2326,7 @@ class TestArtifactPathNormalizationNoDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -2390,7 +2390,7 @@ class TestArtifactPathNormalizationNoDrift:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -2438,7 +2438,7 @@ class TestIntegration:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()
@@ -2480,7 +2480,7 @@ class TestIntegration:
         write_workflow(temp_workspace, "ci", workflow)
 
         analyzer = WorkflowContractDriftAnalyzer(
-            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json",
+            contract_path=temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json",
             workspace_root=temp_workspace,
         )
         report = analyzer.analyze()

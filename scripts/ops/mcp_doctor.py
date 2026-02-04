@@ -1147,7 +1147,7 @@ def main() -> int:
         if config_parse_error:
             next_steps = [
                 "确认配置文件为有效 JSON",
-                "参考 schemas/cursor_mcp_config_template_v1.schema.json",
+                "参考 schemas/cursor_mcp_config_template_v2.schema.json",
             ]
             if args.json:
                 _print_json(
@@ -1203,7 +1203,7 @@ def main() -> int:
             else:
                 next_steps = [
                     "检查 mcpServers 配置是否包含 type 与 url",
-                    "参考 schemas/cursor_mcp_config_template_v1.schema.json",
+                    "参考 schemas/cursor_mcp_config_template_v2.schema.json",
                 ]
             if args.json:
                 _print_json(

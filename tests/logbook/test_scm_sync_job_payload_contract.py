@@ -29,7 +29,7 @@ def _find_schema_path() -> Path:
     current = Path(__file__).resolve().parent
 
     for _ in range(10):
-        candidate = current / "schemas" / "scm_sync_job_payload_v1.schema.json"
+        candidate = current / "schemas" / "scm_sync_job_payload_v2.schema.json"
         if candidate.exists():
             return candidate
         current = current.parent
@@ -38,7 +38,7 @@ def _find_schema_path() -> Path:
     fallback = (
         Path(__file__).resolve().parent.parent.parent.parent.parent
         / "schemas"
-        / "scm_sync_job_payload_v1.schema.json"
+        / "scm_sync_job_payload_v2.schema.json"
     )
     return fallback
 
@@ -47,7 +47,7 @@ SCHEMA_PATH = _find_schema_path()
 
 
 def load_schema() -> Dict[str, Any]:
-    """加载 scm_sync_job_payload_v1 schema"""
+    """加载 scm_sync_job_payload_v2 schema"""
     if not SCHEMA_PATH.exists():
         pytest.skip(f"Schema 文件不存在: {SCHEMA_PATH}")
 
@@ -58,7 +58,7 @@ def load_schema() -> Dict[str, Any]:
 def create_mock_job_payload_incremental() -> Dict[str, Any]:
     """创建一个符合规范的 mock incremental 模式 job payload"""
     return {
-        "version": "v1",
+        "version": "v2",
         "gitlab_instance": "gitlab.example.com",
         "mode": "incremental",
         "diff_mode": "best_effort",
@@ -70,7 +70,7 @@ def create_mock_job_payload_incremental() -> Dict[str, Any]:
 def create_mock_job_payload_time_window() -> Dict[str, Any]:
     """创建一个符合规范的 mock 时间窗口 backfill payload"""
     return {
-        "version": "v1",
+        "version": "v2",
         "window_type": "time",
         "since": "2024-01-01T00:00:00Z",
         "until": "2024-01-02T00:00:00Z",
@@ -82,7 +82,7 @@ def create_mock_job_payload_time_window() -> Dict[str, Any]:
 def create_mock_job_payload_revision_window() -> Dict[str, Any]:
     """创建一个符合规范的 mock revision 窗口 backfill payload"""
     return {
-        "version": "v1",
+        "version": "v2",
         "window_type": "rev",
         "start_rev": 1000,
         "end_rev": 1100,
@@ -93,7 +93,7 @@ def create_mock_job_payload_revision_window() -> Dict[str, Any]:
 def create_mock_job_payload_with_degradation() -> Dict[str, Any]:
     """创建一个包含熔断降级信息的 mock payload"""
     return {
-        "version": "v1",
+        "version": "v2",
         "gitlab_instance": "gitlab.example.com",
         "mode": "incremental",
         "diff_mode": "none",
@@ -136,7 +136,7 @@ class TestJobPayloadSchema:
 
     def test_minimal_payload_passes(self, schema):
         """最小 payload（仅版本）应通过 schema 校验"""
-        payload = {"version": "v1"}
+        payload = {"version": "v2"}
         validate(instance=payload, schema=schema)
 
     def test_empty_payload_passes(self, schema):
@@ -153,9 +153,9 @@ class TestVersionField:
     def schema(self):
         return load_schema()
 
-    def test_valid_version_v1(self, schema):
-        """有效的 version v1 应通过"""
-        payload = {"version": "v1"}
+    def test_valid_version_v2(self, schema):
+        """有效的 version v2 应通过"""
+        payload = {"version": "v2"}
         validate(instance=payload, schema=schema)
 
     def test_invalid_version_fails(self, schema):
@@ -460,7 +460,7 @@ class TestAdditionalProperties:
     def test_additional_properties_allowed(self, schema):
         """额外的属性应被允许（additionalProperties: true）"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "custom_field": "custom_value",
             "another_custom": 123,
         }
@@ -470,7 +470,7 @@ class TestAdditionalProperties:
     def test_complex_additional_properties(self, schema):
         """复杂的额外属性应被允许"""
         payload = {
-            "version": "v1",
+            "version": "v2",
             "custom_object": {"nested": "value"},
             "custom_array": [1, 2, 3],
         }

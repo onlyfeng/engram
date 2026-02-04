@@ -77,7 +77,7 @@ pending ────────────────────────
     └──────────────────────────────> dead   (重试耗尽)
 ```
 
-**详细契约**：[`docs/contracts/outbox_lease_v1.md`](../contracts/outbox_lease_v1.md)
+**详细契约**：[`docs/contracts/outbox_lease_v2.md`](../contracts/outbox_lease_v2.md)
 
 ### 5. Governance Settings + Write Audit
 
@@ -243,7 +243,7 @@ Logbook-only 部署支持两种验收级别，详见 [03_deploy_verify_troublesh
 | **Logbook 单元测试** | `make test-logbook-unit` | 全部通过 | `.artifacts/test/logbook-unit.xml` | 查看测试报告 |
 | **Gateway 单元测试** | `make test-gateway-unit` | 全部通过 | `.artifacts/test/gateway-unit.xml` | 查看测试报告 |
 | **集成测试** | `make test-gateway-integration` | 全部通过 | `.artifacts/test/integration.xml` | 查看测试报告 |
-| **Outbox Lease 测试** | pytest `test_outbox_lease.py` | 全部通过 | `.artifacts/test/outbox-lease.xml` | [outbox_lease_v1.md](../contracts/outbox_lease_v1.md) |
+| **Outbox Lease 测试** | pytest `test_outbox_lease.py` | 全部通过 | `.artifacts/test/outbox-lease.xml` | [outbox_lease_v2.md](../contracts/outbox_lease_v2.md) |
 | **URI 解析测试** | pytest `test_uri.py` | 全部通过 | `.artifacts/test/uri.xml` | 检查 `uri.py` |
 
 ### With SeekDB 验收
@@ -698,7 +698,7 @@ engram-logbook create_item --item-type task --title "Test" --json-out result.jso
 | [03_deploy_verify_troubleshoot.md](03_deploy_verify_troubleshoot.md) | 部署排错（含部署级别与验收能力定义） |
 | [05_definition_of_done.md](05_definition_of_done.md) | Definition of Done |
 | [gateway_logbook_boundary.md](../contracts/gateway_logbook_boundary.md) | Gateway ↔ Logbook 边界契约 |
-| [outbox_lease_v1.md](../contracts/outbox_lease_v1.md) | Outbox 租约协议 |
+| [outbox_lease_v2.md](../contracts/outbox_lease_v2.md) | Outbox 租约协议 |
 | [evidence_packet.md](../contracts/evidence_packet.md) | 证据包契约 |
 | [00_acceptance_matrix.md](../acceptance/00_acceptance_matrix.md) | 验收测试矩阵 |
 | [integrate_existing_project.md](../guides/integrate_existing_project.md) | 项目集成指南（含部署级别选择） |

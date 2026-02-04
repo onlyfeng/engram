@@ -197,4 +197,4 @@ make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 - [Iteration 11 回归记录](iteration_11_regression.md)
 - [验收测试矩阵](00_acceptance_matrix.md)
 - [Gateway 审计原子性 ADR](../architecture/adr_gateway_audit_atomicity.md)
-- [MCP JSON-RPC 错误码契约](../contracts/mcp_jsonrpc_error_v1.md)
+- [MCP JSON-RPC 错误码契约](../contracts/mcp_jsonrpc_error_v2.md)

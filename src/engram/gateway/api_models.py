@@ -401,7 +401,7 @@ class ReliabilityReportResponse(BaseModel):
     """
     可靠性报告响应模型
 
-    结构与 schemas/reliability_report_v1.schema.json 保持一致。
+    结构与 schemas/reliability_report_v2.schema.json 保持一致。
 
     降级语义（依赖缺失时的行为）：
     =================================

@@ -3,7 +3,7 @@
 Audit Event Schema 契约测试
 
 【变更检查清单关联】
-- Schema 文件: schemas/audit_event_v1.schema.json
+- Schema 文件: schemas/audit_event_v2.schema.json
 - Checklist 文档: docs/gateway/06_gateway_design.md#审计事件-schema-变更检查清单
 
 修改 Schema 时必须确保:
@@ -17,7 +17,7 @@ Audit Event Schema 契约测试
 2. evidence_refs_json 返回结构符合 JSON Schema
 3. 字段级校验：必需字段、格式校验、枚举值
 4. schema 中的 examples 有效性校验
-5. object_store_audit_event_v1 归一化结构校验
+5. object_store_audit_event_v2 归一化结构校验
 6. 对账查询依赖字段可查询性契约
 """
 
@@ -31,7 +31,7 @@ from jsonschema import ValidationError, validate
 
 
 # Schema 文件路径计算
-def _find_schema_path(schema_name: str = "audit_event_v1.schema.json") -> Path:
+def _find_schema_path(schema_name: str = "audit_event_v2.schema.json") -> Path:
     """查找 schema 文件路径，支持多种执行上下文"""
     current = Path(__file__).resolve().parent
 
@@ -46,11 +46,11 @@ def _find_schema_path(schema_name: str = "audit_event_v1.schema.json") -> Path:
 
 
 SCHEMA_PATH = _find_schema_path()
-OBJECT_STORE_SCHEMA_PATH = _find_schema_path("object_store_audit_event_v1.schema.json")
+OBJECT_STORE_SCHEMA_PATH = _find_schema_path("object_store_audit_event_v2.schema.json")
 
 
 def load_schema() -> Dict[str, Any]:
-    """加载 audit_event_v1 schema"""
+    """加载 audit_event_v2 schema"""
     if not SCHEMA_PATH.exists():
         pytest.skip(f"Schema 文件不存在: {SCHEMA_PATH}")
 
@@ -61,7 +61,7 @@ def load_schema() -> Dict[str, Any]:
 def create_mock_audit_event() -> Dict[str, Any]:
     """创建一个符合规范的 mock audit_event"""
     return {
-        "schema_version": "1.1",
+        "schema_version": "2.0",
         "source": "gateway",
         "operation": "memory_store",
         "correlation_id": "corr-a1b2c3d4e5f67890",
@@ -461,7 +461,7 @@ class TestPointerSubstructure:
 
 
 def load_object_store_schema() -> Dict[str, Any]:
-    """加载 object_store_audit_event_v1 schema"""
+    """加载 object_store_audit_event_v2 schema"""
     if not OBJECT_STORE_SCHEMA_PATH.exists():
         pytest.skip(f"Schema 文件不存在: {OBJECT_STORE_SCHEMA_PATH}")
 
@@ -472,7 +472,7 @@ def load_object_store_schema() -> Dict[str, Any]:
 def create_mock_object_store_audit_event() -> Dict[str, Any]:
     """创建一个符合规范的 mock object_store_audit_event"""
     return {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "provider": "minio",
         "event_ts": "2024-01-15T10:00:00.000Z",
         "bucket": "engram-artifacts",
@@ -502,7 +502,7 @@ def create_mock_object_store_audit_event() -> Dict[str, Any]:
 
 
 class TestObjectStoreAuditEventSchema:
-    """测试 object_store_audit_event_v1 schema 校验"""
+    """测试 object_store_audit_event_v2 schema 校验"""
 
     @pytest.fixture(scope="class")
     def schema(self):
@@ -644,7 +644,7 @@ class TestObjectStoreAuditEventSchema:
     def test_minimal_event(self, schema):
         """最小化事件（仅必需字段）应通过"""
         minimal_event = {
-            "schema_version": "1.0",
+            "schema_version": "2.0",
             "provider": "minio",
             "event_ts": "2024-01-15T10:00:00.000Z",
             "bucket": "test-bucket",
@@ -666,7 +666,7 @@ class TestObjectStoreAuditEventSchema:
 
 
 class TestObjectStoreAuditEventTimestamp:
-    """测试 object_store_audit_event_v1 时间戳格式"""
+    """测试 object_store_audit_event_v2 时间戳格式"""
 
     @pytest.fixture(scope="class")
     def schema(self):
@@ -706,7 +706,7 @@ class TestObjectStoreAuditEventTimestamp:
 
 
 class TestObjectStoreAuditEventIpAddress:
-    """测试 object_store_audit_event_v1 IP 地址格式"""
+    """测试 object_store_audit_event_v2 IP 地址格式"""
 
     @pytest.fixture(scope="class")
     def schema(self):
@@ -1293,7 +1293,7 @@ class TestOpenMemoryFailureAuditEventSchema:
         契约测试：OpenMemory 失败路径生成的 audit_event 应通过 schema 校验
 
         验证 build_gateway_audit_event 在 OpenMemory 失败场景下生成的结构
-        符合 audit_event_v1.schema.json 定义。
+        符合 audit_event_v2.schema.json 定义。
         """
         from engram.gateway.audit_event import (
             build_gateway_audit_event,
@@ -1334,7 +1334,7 @@ class TestOpenMemoryFailureAuditEventSchema:
         契约测试：OpenMemory 失败路径生成的 evidence_refs_json 应通过 schema 校验
 
         验证 build_evidence_refs_json 在 OpenMemory 失败场景下生成的结构
-        符合 audit_event_v1.schema.json 定义。
+        符合 audit_event_v2.schema.json 定义。
         """
         from engram.gateway.audit_event import (
             build_evidence_refs_json,
@@ -1521,7 +1521,7 @@ class TestStrictModeEvidenceValidationAuditContract:
     """
     strict 模式 evidence 校验阻断时的审计契约测试
 
-    契约来源: docs/contracts/gateway_policy_v1.md
+    契约来源: docs/contracts/gateway_policy_v2.md
 
     验证:
     1. 阻断时审计事件必须包含完整的 validation 子结构
@@ -2165,7 +2165,7 @@ class TestGatewayEventPolicyValidationConsistency:
     """
     测试 gateway_event 的 policy 和 validation 子结构一致性
 
-    契约要求（v1.1+）：
+    契约要求（v2.0+）：
     - 所有返回分支的审计事件必须包含 policy 和 validation 子结构
     - 即使值为 None，字段也应该存在以保持一致性
     - 这确保了审计数据的结构稳定，便于下游查询和分析
@@ -2493,11 +2493,11 @@ class TestMemoryStoreImplAuditPayloadContract:
     测试策略：
     1. Mock 依赖（get_config, logbook_adapter, get_db, get_client, create_engine_from_settings）
     2. 捕获传给 insert_audit(evidence_refs_json=...) 的 payload
-    3. 使用 schemas/audit_event_v1.schema.json 对 gateway_event 子对象进行校验
+    3. 使用 schemas/audit_event_v2.schema.json 对 gateway_event 子对象进行校验
     4. 断言 evidence_refs_json 顶层字段满足 reconcile/outbox 查询契约
 
     契约要点：
-    - evidence_refs_json.gateway_event 必须通过 audit_event_v1.schema.json 校验
+    - evidence_refs_json.gateway_event 必须通过 audit_event_v2.schema.json 校验
     - evidence_refs_json 顶层必须包含 source, correlation_id, payload_sha（用于 SQL 查询）
     - OpenMemory 失败场景：顶层必须包含 outbox_id, intended_action
     """
@@ -2508,14 +2508,14 @@ class TestMemoryStoreImplAuditPayloadContract:
 
     @pytest.fixture(scope="class")
     def schema(self):
-        """加载 audit_event_v1 schema"""
+        """加载 audit_event_v2 schema"""
         return load_schema()
 
     def _validate_gateway_event(self, evidence_refs_json: Dict[str, Any], schema: Dict[str, Any]):
         """
         校验 evidence_refs_json.gateway_event 是否符合 schema
 
-        使用 audit_event_v1.schema.json 中的 audit_event 定义校验
+        使用 audit_event_v2.schema.json 中的 audit_event 定义校验
         """
         gateway_event = evidence_refs_json.get("gateway_event")
         assert gateway_event is not None, "evidence_refs_json 必须包含 gateway_event"
@@ -3895,7 +3895,7 @@ class TestSchemaVersionGuardrail:
             f"AUDIT_EVENT_SCHEMA_VERSION ({AUDIT_EVENT_SCHEMA_VERSION}) "
             f"与 schema examples 版本 ({schema_example_version}) 不一致。"
             f"请同步更新 src/engram/gateway/audit_event.py 和 "
-            f"schemas/audit_event_v1.schema.json"
+            f"schemas/audit_event_v2.schema.json"
         )
 
     def test_v1_1_policy_substructure_minimal_example(self, schema):

@@ -448,7 +448,7 @@ pytest tests/gateway/ -v
 | [Gateway 模块边界与 Import 规则](./gateway_module_boundaries.md) | DI 边界、禁止/允许的 import 模式 |
 | [Gateway ImportError 与可选依赖处理规范](./gateway_importerror_and_optional_deps.md) | 各模块的 ImportError 处理详情 |
 | [ADR: Gateway DI 与入口边界统一](./adr_gateway_di_and_entry_boundary.md) | 设计决策与迁移计划 |
-| [v1.0 升级指南](../gateway/upgrade_v1_0_remove_handler_di_compat.md) | Legacy 参数移除与迁移清单 |
+| [v2.0 升级指南](../gateway/upgrade_v2_0_remove_handler_di_compat.md) | Legacy 参数移除与迁移清单 |
 
 ---
 

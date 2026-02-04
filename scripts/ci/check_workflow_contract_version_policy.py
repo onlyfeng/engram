@@ -3,8 +3,8 @@
 Workflow Contract 版本策略检查脚本
 
 当关键文件变更时，强制要求：
-1. workflow_contract.v1.json 的 version 字段已更新
-2. workflow_contract.v1.json 的 last_updated 字段已更新
+1. workflow_contract.v2.json 的 version 字段已更新
+2. workflow_contract.v2.json 的 last_updated 字段已更新
 3. contract.md 版本控制表（第 14 章）包含该版本
 
 关键文件规则（统一定义，详见 CRITICAL_*_RULES）：
@@ -71,7 +71,7 @@ from scripts.ci.workflow_contract_common import (
 # Constants
 # ============================================================================
 
-DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
+DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v2.json"
 DEFAULT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
 
 
@@ -581,7 +581,7 @@ def check_version_policy_pure(
             VersionPolicyViolation(
                 error_type=VersionPolicyErrorTypes.CONTRACT_PARSE_ERROR,
                 message=f"Failed to parse new contract JSON: {e}",
-                suggestion="Fix JSON syntax in workflow_contract.v1.json",
+                suggestion="Fix JSON syntax in workflow_contract.v2.json",
             )
         )
         return VersionPolicyCheckOutput(
@@ -627,7 +627,7 @@ def check_version_policy_pure(
                 error_type=VersionPolicyErrorTypes.VERSION_NOT_UPDATED,
                 message=(
                     f"Critical files changed but 'version' field not updated in "
-                    f"workflow_contract.v1.json (current: {new_version})"
+                    f"workflow_contract.v2.json (current: {new_version})"
                 ),
                 suggestion=(
                     "Update 'version' field according to SemVer policy: "
@@ -642,7 +642,7 @@ def check_version_policy_pure(
                 error_type=VersionPolicyErrorTypes.LAST_UPDATED_NOT_UPDATED,
                 message=(
                     f"Critical files changed but 'last_updated' field not updated in "
-                    f"workflow_contract.v1.json (current: {new_last_updated})"
+                    f"workflow_contract.v2.json (current: {new_last_updated})"
                 ),
                 suggestion=f"Update 'last_updated' to today's date: {date.today().isoformat()}",
             )
@@ -1150,7 +1150,7 @@ class WorkflowContractVersionChecker:
                 VersionError(
                     error_type="contract_not_found",
                     message=f"Contract file not found: {self.contract_path}",
-                    suggestion="Ensure workflow_contract.v1.json exists",
+                    suggestion="Ensure workflow_contract.v2.json exists",
                 )
             )
             return False
@@ -1166,7 +1166,7 @@ class WorkflowContractVersionChecker:
                 VersionError(
                     error_type="contract_parse_error",
                     message=f"Failed to parse contract JSON: {e}",
-                    suggestion="Fix JSON syntax in workflow_contract.v1.json",
+                    suggestion="Fix JSON syntax in workflow_contract.v2.json",
                 )
             )
             return False
@@ -1425,7 +1425,7 @@ class WorkflowContractVersionChecker:
                     error_type="version_not_updated",
                     message=(
                         f"Critical files changed but 'version' field not updated in "
-                        f"workflow_contract.v1.json (current: {self.result.contract_version})"
+                        f"workflow_contract.v2.json (current: {self.result.contract_version})"
                     ),
                     suggestion=(
                         "Update 'version' field according to SemVer policy: "
@@ -1446,7 +1446,7 @@ class WorkflowContractVersionChecker:
                     error_type="last_updated_not_updated",
                     message=(
                         f"Critical files changed but 'last_updated' field not updated in "
-                        f"workflow_contract.v1.json (current: {self.result.contract_last_updated})"
+                        f"workflow_contract.v2.json (current: {self.result.contract_last_updated})"
                     ),
                     suggestion=f"Update 'last_updated' to today's date: {date.today().isoformat()}",
                 )
@@ -1589,8 +1589,8 @@ def main() -> int:
   [special] Makefile（仅 CI 相关变更触发）
 
 版本策略要求：
-  1. workflow_contract.v1.json 的 version 字段必须更新
-  2. workflow_contract.v1.json 的 last_updated 字段必须更新
+  1. workflow_contract.v2.json 的 version 字段必须更新
+  2. workflow_contract.v2.json 的 last_updated 字段必须更新
   3. contract.md 版本控制表（第 14 章）必须包含新版本
 
 版本升级建议：

@@ -576,7 +576,7 @@ class TestPathMatchingEdgeCases:
 
     def test_glob_pattern_with_directory(self):
         """测试带目录的 glob 模式"""
-        upload_steps = [{"step_name": "Upload", "paths": ["artifacts/report-v1.json"]}]
+        upload_steps = [{"step_name": "Upload", "paths": ["artifacts/report-v2.json"]}]
         required_paths = ["artifacts/*.json"]
 
         covered, missing = check_artifact_path_coverage(upload_steps, required_paths)

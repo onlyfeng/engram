@@ -10,7 +10,7 @@ Gateway 测试 Helper 模块
                        correlation_id 规范
 ================================================================================
 
-根据 schemas/audit_event_v1.schema.json 定义：
+根据 schemas/audit_event_v2.schema.json 定义：
 - correlation_id 格式必须是: ^corr-[a-fA-F0-9]{16}$
 - 即: "corr-" 前缀 + 16 位十六进制字符
 

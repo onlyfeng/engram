@@ -403,7 +403,7 @@ async def memory_store_impl(..., deps: GatewayDeps):
 | 文档 | 说明 |
 |------|------|
 | [ADR: Gateway 依赖注入与入口边界统一](adr_gateway_di_and_entry_boundary.md) | 设计决策与迁移计划 |
-| [v1.0 升级指南](../gateway/upgrade_v1_0_remove_handler_di_compat.md) | Legacy 参数移除与迁移清单 |
+| [v2.0 升级指南](../gateway/upgrade_v2_0_remove_handler_di_compat.md) | Legacy 参数移除与迁移清单 |
 | [CI 门禁 Runbook](../dev/ci_gate_runbook.md) | 门禁运行说明与常见修复步骤 |
 
 ---

@@ -309,7 +309,7 @@ python scripts/import_preflight.py . --verbose
 python scripts/import_preflight.py . --json
 
 # 检查特定 manifest
-python scripts/import_preflight.py . --manifest docs/guides/manifests/unified_stack_import_v1.json
+python scripts/import_preflight.py . --manifest docs/guides/manifests/unified_stack_import_v2.json
 ```
 
 ### 预检内容
@@ -372,6 +372,6 @@ Engram 项目导入预检
 | 文档 | 说明 |
 |------|------|
 | [集成指南](./integrate_existing_project.md) | 完整的项目导入流程 |
-| [统一栈 Manifest](./manifests/unified_stack_import_v1.json) | 机器可读的文件清单 |
+| [统一栈 Manifest](./manifests/unified_stack_import_v2.json) | 机器可读的文件清单 |
 | [Gateway Dockerfile](../../docker/engram.Dockerfile) | Gateway 构建配置源码 |
 | [docker-compose.unified.yml](../../docker-compose.unified.yml) | 统一栈 Compose 配置 |

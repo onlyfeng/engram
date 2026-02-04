@@ -6,7 +6,7 @@
 
 ## 0. 摘要（受控）
 
-> 本节内容由 `workflow_contract.v1.json` 自动渲染，请勿手动修改。
+> 本节内容由 `workflow_contract.v2.json` 自动渲染，请勿手动修改。
 > 更新命令：`python -m scripts.ci.render_workflow_contract_docs --target coupling_map --with-markers`
 
 ### CI Workflow Jobs 清单
@@ -352,7 +352,7 @@
 
 | 文件 | 用途 |
 |------|------|
-| `scripts/ci/workflow_contract.v1.json` | Workflow 合约定义（jobs、steps、artifacts） |
+| `scripts/ci/workflow_contract.v2.json` | Workflow 合约定义（jobs、steps、artifacts） |
 | `docs/ci_nightly_workflow_refactor/contract.md` | 人类可读的合约文档 |
 | `docs/ci_nightly_workflow_refactor/maintenance.md` | 维护指南和 checklist |
 

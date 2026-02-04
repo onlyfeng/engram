@@ -2,8 +2,8 @@
 """
 MCP JSON-RPC 错误码文档与 Schema 同步校验脚本
 
-校验 docs/contracts/mcp_jsonrpc_error_v1.md 文档中定义的错误码是否与
-schemas/mcp_jsonrpc_error_v1.schema.json 中的定义保持同步。
+校验 docs/contracts/mcp_jsonrpc_error_v2.md 文档中定义的错误码是否与
+schemas/mcp_jsonrpc_error_v2.schema.json 中的定义保持同步。
 
 校验范围：
 1. error_reason: 错误原因码（如 PARSE_ERROR, UNKNOWN_TOOL）
@@ -35,8 +35,8 @@ from typing import Any
 # Constants
 # ============================================================================
 
-DEFAULT_DOC_PATH = "docs/contracts/mcp_jsonrpc_error_v1.md"
-DEFAULT_SCHEMA_PATH = "schemas/mcp_jsonrpc_error_v1.schema.json"
+DEFAULT_DOC_PATH = "docs/contracts/mcp_jsonrpc_error_v2.md"
+DEFAULT_SCHEMA_PATH = "schemas/mcp_jsonrpc_error_v2.schema.json"
 
 # 文档中各章节的锚点关键字（用于提取区块）
 # 3.1-3.5 节定义了各类 error_reason
@@ -566,7 +566,7 @@ def format_json_output(result: SyncResult) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="校验 mcp_jsonrpc_error_v1.md 与 mcp_jsonrpc_error_v1.schema.json 的同步一致性",
+        description="校验 mcp_jsonrpc_error_v2.md 与 mcp_jsonrpc_error_v2.schema.json 的同步一致性",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

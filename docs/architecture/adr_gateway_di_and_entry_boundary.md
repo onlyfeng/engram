@@ -709,7 +709,7 @@ async def memory_store_impl(
 | [Gateway 能力边界](../gateway/07_capability_boundary.md) | correlation_id 契约定义 |
 | [Gateway 设计](../gateway/06_gateway_design.md) | 整体架构 |
 | [ADR: Gateway 审计原子性](./adr_gateway_audit_atomicity.md) | 审计相关决策 |
-| [v1.0 升级指南：移除 Handler DI 兼容层](../gateway/upgrade_v1_0_remove_handler_di_compat.md) | Legacy 参数移除与迁移清单 |
+| [v2.0 升级指南：移除 Handler DI 兼容层](../gateway/upgrade_v2_0_remove_handler_di_compat.md) | Legacy 参数移除与迁移清单 |
 
 ---
 

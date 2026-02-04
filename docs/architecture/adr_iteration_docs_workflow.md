@@ -518,7 +518,7 @@ python scripts/iteration/record_iteration_evidence.py <N> \
 python -c "
 import json
 from jsonschema import validate
-with open('schemas/iteration_evidence_v1.schema.json') as f:
+with open('schemas/iteration_evidence_v2.schema.json') as f:
     schema = json.load(f)
 with open('docs/acceptance/evidence/iteration_<N>_evidence.json') as f:
     data = json.load(f)
@@ -947,5 +947,6 @@ done
 | 2026-02-02 | v1.8 | 增补「2.4 跨人协作与可链接引用」：声明 `.iteration/` 存在性不保证、定义跨人协作场景的入口选择（SSOT/导出分享包/文本提示） |
 | 2026-02-02 | v1.9 | 增补「3.4 Nightly 审计报告策略」：定义 nightly 审计报告定位（非 SSOT、仅观察、90 天保留） |
 | 2026-02-02 | v1.10 | 增补「3.5 版本化证据文件」：定义 `docs/acceptance/evidence/` 版本化证据文件规范，明确 `.artifacts/` 引用约束（与 `.iteration/` 一致禁止 Markdown 链接），扩展证据引用推荐格式 |
-| 2026-02-02 | v1.11 | 增补证据格式 SSOT：引用 `schemas/iteration_evidence_v1.schema.json` 作为版本化证据文件的格式 SSOT，添加 Schema 约束摘要表格及安全约束说明 |
+| 2026-02-02 | v1.11 | 增补证据格式 SSOT：明确证据 schema 作为版本化证据文件的格式 SSOT，添加 Schema 约束摘要表格及安全约束说明 |
+| 2026-02-03 | v2.0 | 证据格式 SSOT 升级为 `schemas/iteration_evidence_v2.schema.json`，移除 v1 兼容与引用 |
 | 2026-02-02 | v1.12 | 收敛「3.5 版本化证据文件」命名规范为统一套（canonical + snapshot）、添加回归文档引用策略、补充占位符/草稿策略及可执行清单 |

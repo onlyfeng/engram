@@ -28,7 +28,7 @@ python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787 --header "A
 
 ## Workflow Contract / CI Shared Files Checklist
 
-- [ ] **是否修改以下文件**：`.github/workflows/ci.yml`、`Makefile`、`scripts/ci/workflow_contract.v1.json`
+- [ ] **是否修改以下文件**：`.github/workflows/ci.yml`、`Makefile`、`scripts/ci/workflow_contract.v2.json`
 - [ ] **是否执行版本号 bump**：`python scripts/ci/bump_workflow_contract_version.py <major|minor|patch> --message "..."`（或 `make bump-workflow-contract-version ...`）并说明为何选择该等级
 - [ ] **是否执行并粘贴**最小验证命令集的通过日志摘要
 - [ ] **如文档受控块有变更**，已运行 `make update-workflow-contract-docs` 且 `make check-workflow-contract-docs-generated` 通过
@@ -77,10 +77,10 @@ python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787 --header "A
 
 ### CI/Workflow Contract 变更检查（如修改以下文件则必填）
 
-> 涉及 `.github/workflows/**`、`Makefile`、`scripts/ci/workflow_contract.v1.json`、`docs/ci_nightly_workflow_refactor/**` 时，请勾选并说明：
+> 涉及 `.github/workflows/**`、`Makefile`、`scripts/ci/workflow_contract.v2.json`、`docs/ci_nightly_workflow_refactor/**` 时，请勾选并说明：
 
 - [ ] **已阅读** [CI/Nightly Workflow 维护指南](docs/ci_nightly_workflow_refactor/maintenance.md)
-- [ ] **已同步更新** `scripts/ci/workflow_contract.v1.json`（如新增/修改 job、step、output key）
+- [ ] **已同步更新** `scripts/ci/workflow_contract.v2.json`（如新增/修改 job、step、output key）
 - [ ] **已同步更新** `docs/ci_nightly_workflow_refactor/contract.md`（如影响合约基准）
 - [ ] **已运行** `make validate-workflows` 本地验证通过
 - [ ] **已生成变更证据**：`python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_before.json` 与 `python scripts/ci/generate_workflow_contract_snapshot.py --output artifacts/workflow_snapshot_after.json`（或至少 `make workflow-contract-drift-report-all` + `make workflow-contract-suggest`）

@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/mcp_jsonrpc_error_v2.schema.json",
+  "title": "MCP JSON-RPC Error V2 Schema",
+  "description": "MCP Gateway JSON-RPC 2.0 错误响应结构 JSON Schema (V2)，覆盖 error.data 字段结构",
+
+  "definitions": {
+    "correlation_id": {
+      "type": "string",
+      "description": "关联追踪 ID，格式: corr-{16位十六进制}",
+      "pattern": "^corr-[a-fA-F0-9]{16}$"
+    },
+
+    "error_category": {
+      "type": "string",
+      "description": "错误分类",
+      "enum": ["protocol", "validation", "business", "dependency", "internal"]
+    },
+
+    "error_reason": {
+      "type": "string",
+      "description": "错误原因码",
+      "enum": [
+        "PARSE_ERROR",
+        "INVALID_REQUEST",
+        "METHOD_NOT_FOUND",
+        "MISSING_REQUIRED_PARAM",
+        "INVALID_PARAM_TYPE",
+        "INVALID_PARAM_VALUE",
+        "UNKNOWN_TOOL",
+        "POLICY_REJECT",
+        "AUTH_FAILED",
+        "ACTOR_UNKNOWN",
+        "GOVERNANCE_UPDATE_DENIED",
+        "OPENMEMORY_UNAVAILABLE",
+        "OPENMEMORY_CONNECTION_FAILED",
+        "OPENMEMORY_API_ERROR",
+        "LOGBOOK_DB_UNAVAILABLE",
+        "LOGBOOK_DB_CHECK_FAILED",
+        "INTERNAL_ERROR",
+        "TOOL_EXECUTOR_NOT_REGISTERED",
+        "UNHANDLED_EXCEPTION"
+      ]
+    },
+
+    "error_data": {
+      "type": "object",
+      "description": "JSON-RPC 错误响应的 error.data 结构",
+      "required": ["category", "reason", "retryable", "correlation_id"],
+      "additionalProperties": true,
+      "properties": {
+        "category": {
+          "$ref": "#/definitions/error_category"
+        },
+        "reason": {
+          "$ref": "#/definitions/error_reason"
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "是否建议重试"
+        },
+        "correlation_id": {
+          "$ref": "#/definitions/correlation_id"
+        },
+        "details": {
+          "type": "object",
+          "description": "附加详情（如 tool 名称、service 名称）",
+          "additionalProperties": true
+        }
+      }
+    },
+
+    "jsonrpc_error": {
+      "type": "object",
+      "description": "JSON-RPC 2.0 标准 error 对象",
+      "required": ["code", "message", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "integer",
+          "description": "JSON-RPC 错误码（-32000 TOOL_EXECUTION_ERROR 已废弃，参见 docs/contracts/mcp_jsonrpc_error_v2.md §13.5）",
+          "enum": [-32700, -32600, -32601, -32602, -32603, -32001, -32002]
+        },
+        "message": {
+          "type": "string",
+          "description": "错误消息"
+        },
+        "data": {
+          "$ref": "#/definitions/error_data"
+        }
+      }
+    },
+
+    "jsonrpc_error_response": {
+      "type": "object",
+      "description": "完整的 JSON-RPC 2.0 错误响应",
+      "required": ["jsonrpc", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0",
+          "description": "JSON-RPC 版本，固定为 2.0"
+        },
+        "id": {
+          "type": ["integer", "string", "null"],
+          "description": "请求 ID"
+        },
+        "error": {
+          "$ref": "#/definitions/jsonrpc_error"
+        }
+      }
+    }
+  },
+
+  "oneOf": [
+    {
+      "$ref": "#/definitions/error_data",
+      "description": "单独的 error.data 结构"
+    },
+    {
+      "$ref": "#/definitions/jsonrpc_error",
+      "description": "JSON-RPC error 对象（包含 code, message, data）"
+    },
+    {
+      "$ref": "#/definitions/jsonrpc_error_response",
+      "description": "完整的 JSON-RPC 错误响应"
+    }
+  ],
+
+  "examples": [
+    {
+      "category": "validation",
+      "reason": "UNKNOWN_TOOL",
+      "retryable": false,
+      "correlation_id": "corr-a1b2c3d4e5f67890"
+    },
+    {
+      "code": -32602,
+      "message": "未知工具: nonexistent_tool",
+      "data": {
+        "category": "validation",
+        "reason": "UNKNOWN_TOOL",
+        "retryable": false,
+        "correlation_id": "corr-a1b2c3d4e5f67890"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32601,
+        "message": "未知方法: unknown/method",
+        "data": {
+          "category": "protocol",
+          "reason": "METHOD_NOT_FOUND",
+          "retryable": false,
+          "correlation_id": "corr-fedcba0987654321"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "error": {
+        "code": -32602,
+        "message": "缺少必需参数: name",
+        "data": {
+          "category": "validation",
+          "reason": "MISSING_REQUIRED_PARAM",
+          "retryable": false,
+          "correlation_id": "corr-1234567890abcdef"
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "error": {
+        "code": -32600,
+        "message": "无效请求: params 必须是对象",
+        "data": {
+          "category": "protocol",
+          "reason": "INVALID_REQUEST",
+          "retryable": false,
+          "correlation_id": "corr-0123456789abcdef"
+        }
+      }
+    }
+  ]
+}

@@ -158,12 +158,12 @@ make test              # 可选：运行测试（需数据库）
 | `pyproject.toml` | CI 代理 | 依赖、入口点、工具配置 |
 | `Makefile` | CI 代理 | 构建和门禁目标 |
 | `scripts/ci/mypy_baseline.txt` | CI 代理 | mypy 基线（需串行更新） |
-| `scripts/ci/workflow_contract.v1.json` | CI 代理 | CI 合约定义（合约系统关键路径，建议单 PR/单 owner 串行修改） |
-| `scripts/ci/check_workflow_contract_version_policy.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
-| `scripts/ci/check_workflow_contract_docs_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
-| `scripts/ci/check_workflow_contract_coupling_map_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
-| `scripts/ci/render_workflow_contract_docs.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
-| `scripts/ci/workflow_contract_common.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/workflow_contract.v2.json` | CI 代理 | CI 合约定义（合约系统关键路径，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/check_workflow_contract_version_policy.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/check_workflow_contract_docs_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/check_workflow_contract_coupling_map_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/render_workflow_contract_docs.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） |
+| `scripts/ci/workflow_contract_common.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） |
 | `.github/workflows/ci.yml` | CI 代理 | CI 流水线定义 |
 | `docs/reference/environment_variables.md` | 文档代理 | 环境变量 SSOT |
 

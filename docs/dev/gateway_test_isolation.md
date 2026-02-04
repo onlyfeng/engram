@@ -496,7 +496,7 @@ deps = GatewayDeps.for_testing(logbook_adapter=adapter)  # ✅
 |------|----------|
 | Gateway 能力边界 | [docs/gateway/07_capability_boundary.md](../gateway/07_capability_boundary.md) |
 | 两阶段审计 DB 隔离 | [docs/dev/two_phase_audit_e2e_db_isolation.md](two_phase_audit_e2e_db_isolation.md) |
-| v1.0 升级指南 | [docs/gateway/upgrade_v1_0_remove_handler_di_compat.md](../gateway/upgrade_v1_0_remove_handler_di_compat.md) |
+| v2.0 升级指南 | [docs/gateway/upgrade_v2_0_remove_handler_di_compat.md](../gateway/upgrade_v2_0_remove_handler_di_compat.md) |
 | 弃用 logbook_db 参考 | [docs/architecture/deprecated_logbook_db_references_ssot.md](../architecture/deprecated_logbook_db_references_ssot.md) |
 
 ---

@@ -5,7 +5,7 @@ test_audit_event - 审计事件构建模块的单元测试
 1. build_audit_event 必须包含 schema_version 和 correlation_id
 2. 各种便捷函数的正确性
 3. 兼容旧字段的保留
-4. JSON Schema 校验（audit_event_v1.schema.json）
+4. JSON Schema 校验（audit_event_v2.schema.json）
 """
 
 import json
@@ -35,17 +35,17 @@ from engram.gateway.audit_event import (
 
 
 def _get_schema_path() -> Path:
-    """获取 audit_event_v1.schema.json 的路径"""
+    """获取 audit_event_v2.schema.json 的路径"""
     # 从测试文件向上找到项目根目录
     current = Path(__file__).resolve()
     # test_audit_event.py -> tests/ -> gateway/ -> openmemory_gateway/ -> apps/ -> engram/
     project_root = current.parent.parent.parent.parent.parent
-    schema_path = project_root / "schemas" / "audit_event_v1.schema.json"
+    schema_path = project_root / "schemas" / "audit_event_v2.schema.json"
     return schema_path
 
 
 def _load_schema() -> dict:
-    """加载 audit_event_v1.schema.json"""
+    """加载 audit_event_v2.schema.json"""
     schema_path = _get_schema_path()
     if not schema_path.exists():
         pytest.skip(f"Schema file not found: {schema_path}")
@@ -89,8 +89,8 @@ class TestBuildAuditEvent:
 
         assert "schema_version" in event
         assert event["schema_version"] == AUDIT_EVENT_SCHEMA_VERSION
-        # v1.1: 新增 gateway_event.policy 和 gateway_event.validation 稳定子结构
-        assert event["schema_version"] == "1.1"
+        # v2.0: 进入 v2 命名体系（结构不变）
+        assert event["schema_version"] == "2.0"
 
     def test_must_contain_correlation_id(self):
         """验证审计事件必须包含 correlation_id"""
@@ -900,7 +900,7 @@ class TestBuildEvidenceRefsJson:
 
 
 class TestGatewayEventPolicySubstructure:
-    """v1.1 新增: gateway_event.policy 子结构测试"""
+    """v2.0 命名升级: gateway_event.policy 子结构测试"""
 
     def test_policy_substructure_created_when_fields_provided(self):
         """验证提供 policy 字段时创建 policy 子结构"""
@@ -967,7 +967,7 @@ class TestGatewayEventPolicySubstructure:
 
 
 class TestGatewayEventValidationSubstructure:
-    """v1.1 新增: gateway_event.validation 子结构测试"""
+    """v2.0 命名升级: gateway_event.validation 子结构测试"""
 
     def test_validation_substructure_created_when_fields_provided(self):
         """验证提供 validation 字段时创建 validation 子结构"""
@@ -1038,17 +1038,17 @@ class TestGatewayEventValidationSubstructure:
 class TestSchemaVersionBackwardCompatibility:
     """schema_version 向后兼容性测试"""
 
-    def test_schema_version_is_1_1(self):
-        """验证当前 schema_version 为 1.1"""
-        assert AUDIT_EVENT_SCHEMA_VERSION == "1.1"
+    def test_schema_version_is_2_0(self):
+        """验证当前 schema_version 为 2.0"""
+        assert AUDIT_EVENT_SCHEMA_VERSION == "2.0"
 
     def test_schema_version_minor_change_only(self):
-        """验证 schema_version 只做次版本扩展（1.0 -> 1.1）"""
-        # 主版本号保持为 1
-        assert AUDIT_EVENT_SCHEMA_VERSION.startswith("1.")
-        # 次版本号 >= 1（表示有新增字段）
+        """验证 schema_version 只做次版本扩展（2.0 -> 2.x）"""
+        # 主版本号保持为 2
+        assert AUDIT_EVENT_SCHEMA_VERSION.startswith("2.")
+        # 次版本号 >= 0
         minor_version = int(AUDIT_EVENT_SCHEMA_VERSION.split(".")[1])
-        assert minor_version >= 1
+        assert minor_version >= 0
 
     def test_old_fields_still_present(self):
         """验证旧字段仍然存在（向后兼容）"""
@@ -1063,7 +1063,7 @@ class TestSchemaVersionBackwardCompatibility:
             evidence_refs=["ref1", "ref2"],
         )
 
-        # v1.0 核心字段仍存在
+        # 核心字段仍存在
         assert "schema_version" in event
         assert "source" in event
         assert "operation" in event
@@ -1080,7 +1080,7 @@ class TestSchemaVersionBackwardCompatibility:
 
     def test_new_fields_optional(self):
         """验证新增字段为可选（不提供时不创建子结构）"""
-        # 不提供 v1.1 新增字段
+        # 不提供 v2.0 命名升级字段
         event = build_gateway_audit_event(
             operation="memory_store",
             actor_user_id="user1",
@@ -1161,8 +1161,8 @@ class TestEvidenceRefsJsonWithPolicyValidation:
         """
         验证写入审计时 evidence_refs_json 必须包含完整结构
 
-        当使用 v1.1 功能时，gateway_event 应包含：
-        - schema_version: "1.1"
+        当使用 v2.0 命名升级时，gateway_event 应包含：
+        - schema_version: "2.0"
         - policy 子结构（如果提供了相关字段）
         - validation 子结构（如果提供了相关字段）
         """
@@ -1183,13 +1183,13 @@ class TestEvidenceRefsJsonWithPolicyValidation:
             reason="policy_passed",
             payload_sha="abc123",
             evidence=evidence,
-            # v1.1 policy 子结构
+            # v2.0 policy 子结构
             policy_mode="strict",
             policy_mode_reason="explicit_header",
             policy_version="v2",
             policy_is_pointerized=False,
             policy_source="settings",
-            # v1.1 validation 子结构
+            # v2.0 validation 子结构
             validate_refs_effective=True,
             validate_refs_reason="strict_mode",
             evidence_validation=evidence_validation,
@@ -1205,7 +1205,7 @@ class TestEvidenceRefsJsonWithPolicyValidation:
         gw = result["gateway_event"]
 
         # schema_version
-        assert gw["schema_version"] == "1.1"
+        assert gw["schema_version"] == "2.0"
 
         # policy 子结构
         assert "policy" in gw
@@ -1227,7 +1227,7 @@ class TestEvidenceRefsJsonWithPolicyValidation:
 
 
 # ============================================================================
-# Schema 校验测试：验证生成的审计事件符合 audit_event_v1.schema.json
+# Schema 校验测试：验证生成的审计事件符合 audit_event_v2.schema.json
 # ============================================================================
 
 
@@ -1290,7 +1290,7 @@ class TestAuditEventSchemaValidation:
         _validate_audit_event(event, schema)
 
         # 校验关键字段
-        assert event["schema_version"] == "1.1"
+        assert event["schema_version"] == "2.0"
         assert re.match(r"^corr-[a-fA-F0-9]{16}$", event["correlation_id"])
         assert event["decision"]["action"] == "allow"
         assert event["decision"]["reason"] == "policy_passed"
@@ -2132,7 +2132,7 @@ class TestReconcileAuditEventSchemaValidation:
     """reconcile_outbox 对账审计事件的 schema 校验测试
 
     验证 build_reconcile_audit_event 和 build_evidence_refs_json 输出
-    满足 audit_event_v1.schema.json 的要求。
+    满足 audit_event_v2.schema.json 的要求。
 
     覆盖三种对账场景：
     - sent: 补写 outbox_flush_success 审计

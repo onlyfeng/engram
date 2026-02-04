@@ -77,7 +77,7 @@
 
 > **详细设计**：完整的 DI 架构、分层图和迁移计划参见 [ADR: Gateway DI 与入口边界统一](../architecture/adr_gateway_di_and_entry_boundary.md)。
 >
-> **v1.0 升级指南**：Legacy 参数移除、签名变更和迁移检查清单参见 [v1.0 升级指南：移除 Handler DI 兼容层](./upgrade_v1_0_remove_handler_di_compat.md)。
+> **v2.0 升级指南**：Legacy 参数移除、签名变更和迁移检查清单参见 [v2.0 升级指南：移除 Handler DI 兼容层](./upgrade_v2_0_remove_handler_di_compat.md)。
 
 **推荐方式（生产环境）**：
 

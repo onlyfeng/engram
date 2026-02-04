@@ -339,7 +339,7 @@ Cursor 2.4 引入的 [Skills](https://cursor.com/docs/context/skills) 与声明�
 | `scripts/ci/gateway_deps_db_allowlist.json` | CI 代理 | Gateway deps.db 迁移 allowlist |
 | `.github/workflows/ci.yml` | CI 代理 | CI 流水线定义 |
 | `.github/workflows/nightly.yml` | CI 代理 | Nightly 流水线定义 |
-| `scripts/ci/workflow_contract.v1.json` | CI 代理 | Workflow 合约定义（需与 ci.yml 同步） |
+| `scripts/ci/workflow_contract.v2.json` | CI 代理 | Workflow 合约定义（需与 ci.yml 同步） |
 | `docs/reference/environment_variables.md` | 文档代理 | 环境变量参考（SSOT） |
 | `docs/architecture/cli_entrypoints.md` | 文档代理 | CLI 入口点文档 |
 | `configs/import_migration_map.json` | CI 代理 | 导入迁移映射 |
@@ -761,7 +761,7 @@ ruff format src/ tests/
 - 更新核心门禁脚本表格：添加 `check_mcp_jsonrpc_error_docs_sync.py` 和 `check_workflow_contract_version_policy.py` 映射
 - 更新 Gateway 代理最小门禁命令：添加 `check-gateway-public-api-docs-sync`、`check-gateway-import-surface`、`check-mcp-error-contract`、`check-mcp-error-docs-sync`
 - 更新门禁命令速查表：Gateway 代理完整包含所有 gateway 和 MCP 相关检查
-- 更新共享文件单点负责表格：添加 `scripts/ci/workflow_contract.v1.json`
+- 更新共享文件单点负责表格：添加 `scripts/ci/workflow_contract.v2.json`
 - 同步更新根目录 AGENTS.md
 
 ### v1.7 (2026-02-02)
@@ -777,7 +777,7 @@ ruff format src/ tests/
 ### v1.5 (2026-02-02)
 - `make ci` 依赖链对齐 GitHub Actions：添加 `check-iteration-docs`, `validate-workflows-strict`, `check-workflow-contract-docs-sync`
 - 更新门禁命令速查表：CI 代理添加 `check-workflow-contract-docs-sync`；文档代理添加 `check-iteration-docs`；Gateway 代理添加 `check-gateway-public-api-surface`
-- 同步更新 `workflow_contract.v1.json` 的 `make.targets_required`
+- 同步更新 `workflow_contract.v2.json` 的 `make.targets_required`
 
 ### v1.4 (2026-02-02)
 - 新增「最小验证工作流」段落中对迭代回归 Runbook 的链接

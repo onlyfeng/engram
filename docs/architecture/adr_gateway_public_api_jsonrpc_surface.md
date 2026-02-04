@@ -611,7 +611,7 @@ from engram.gateway.mcp_rpc import ErrorReason  # 应从 public_api 导入
 |------|------|----------|
 | Public API Surface 导出项分析 | [gateway_public_api_surface.md](./gateway_public_api_surface.md) | 完整导出清单 |
 | Gateway 契约收敛文档 | [gateway_contract_convergence.md](../contracts/gateway_contract_convergence.md) | §1 MCP JSON-RPC 域, §11 Public API 向后兼容策略 |
-| MCP JSON-RPC 错误模型契约 | [mcp_jsonrpc_error_v1.md](../contracts/mcp_jsonrpc_error_v1.md) | 错误响应结构 |
+| MCP JSON-RPC 错误模型契约 | [mcp_jsonrpc_error_v2.md](../contracts/mcp_jsonrpc_error_v2.md) | 错误响应结构 |
 | Gateway ImportError 规范 | [gateway_importerror_and_optional_deps.md](./gateway_importerror_and_optional_deps.md) | Tier B 失败语义 |
 
 ---

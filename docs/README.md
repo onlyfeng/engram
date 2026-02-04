@@ -57,10 +57,10 @@
 | 契约 | 说明 |
 |------|------|
 | [gateway_logbook_boundary.md](contracts/gateway_logbook_boundary.md) | Gateway ↔ Logbook 边界与数据流 |
-| [gateway_policy_v1.md](contracts/gateway_policy_v1.md) | Gateway 策略规范 |
+| [gateway_policy_v2.md](contracts/gateway_policy_v2.md) | Gateway 策略规范 |
 | [evidence_packet.md](contracts/evidence_packet.md) | 证据包契约 |
-| [outbox_lease_v1.md](contracts/outbox_lease_v1.md) | Outbox 租约协议 |
-| [mcp_jsonrpc_error_v1.md](contracts/mcp_jsonrpc_error_v1.md) | MCP JSON-RPC 错误规范 |
+| [outbox_lease_v2.md](contracts/outbox_lease_v2.md) | Outbox 租约协议 |
+| [mcp_jsonrpc_error_v2.md](contracts/mcp_jsonrpc_error_v2.md) | MCP JSON-RPC 错误规范 |
 
 ---
 

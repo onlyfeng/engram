@@ -43,7 +43,7 @@ def create_temp_files(contract_data: dict[str, Any], doc_content: str) -> tuple[
     temp_dir = Path(tempfile.mkdtemp())
 
     # 写入 contract JSON
-    contract_path = temp_dir / "workflow_contract.v1.json"
+    contract_path = temp_dir / "workflow_contract.v2.json"
     with open(contract_path, "w", encoding="utf-8") as f:
         json.dump(contract_data, f, indent=2)
 
@@ -1093,7 +1093,7 @@ class TestIntegrationWithRealFormat:
 
 ### 5.1 Frozen Job Names
 
-以下 Job Name 为"禁止回归"基准，在 `workflow_contract.v1.json` 的 `frozen_job_names.allowlist` 中定义。
+以下 Job Name 为"禁止回归"基准，在 `workflow_contract.v2.json` 的 `frozen_job_names.allowlist` 中定义。
 
 **仅冻结被 GitHub Required Checks 引用的核心 Jobs（共 4 个）：**
 
@@ -1135,7 +1135,7 @@ class TestIntegrationWithRealFormat:
 
 ## 3. PR Label 列表与语义
 
-> **SSOT 说明**: `scripts/ci/workflow_contract.v1.json` 的 `ci.labels` 字段是 PR Labels 的唯一真实来源（SSOT）。
+> **SSOT 说明**: `scripts/ci/workflow_contract.v2.json` 的 `ci.labels` 字段是 PR Labels 的唯一真实来源（SSOT）。
 
 | Label | 语义 | 使用场景 |
 |-------|------|----------|

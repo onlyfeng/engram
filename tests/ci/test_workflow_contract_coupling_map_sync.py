@@ -43,7 +43,7 @@ def create_temp_files(
     temp_dir = Path(tempfile.mkdtemp())
 
     # 写入 contract JSON
-    contract_path = temp_dir / "workflow_contract.v1.json"
+    contract_path = temp_dir / "workflow_contract.v2.json"
     with open(contract_path, "w", encoding="utf-8") as f:
         json.dump(contract_data, f, indent=2)
 

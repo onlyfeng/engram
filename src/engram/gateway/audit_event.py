@@ -74,7 +74,7 @@ Evidence v2 → Logbook evidence_refs_json 映射（最小字段集合）：
 
 schema_version 版本演进策略：
 
-    当前版本: "1.1"
+    当前版本: "2.0"
 
     版本约束规则：
     - 主版本号变更（如 1.x → 2.x）：不兼容变更，需要迁移脚本
@@ -89,6 +89,7 @@ schema_version 版本演进策略：
     版本历史：
     - 1.0: 初始版本，包含 source/operation/correlation_id/decision/evidence_summary 等核心字段
     - 1.1: 新增 gateway_event.policy 和 gateway_event.validation 稳定子结构
+    - 2.0: 审计事件 schema 进入 v2 命名体系（结构不变）
            policy: {mode, mode_reason, policy_version, is_pointerized, policy_source}
            validation: {validate_refs_effective, validate_refs_reason, evidence_validation}
 
@@ -204,8 +205,8 @@ class AuditWriteError(Exception):
 
 
 # 审计事件 schema 版本号
-# v1.1: 新增 gateway_event.policy 和 gateway_event.validation 稳定子结构
-AUDIT_EVENT_SCHEMA_VERSION = "1.1"
+# v2.0: 进入 v2 命名体系（结构不变）
+AUDIT_EVENT_SCHEMA_VERSION = "2.0"
 
 # SHA256 合法性校验正则表达式（64 位十六进制）
 SHA256_PATTERN = re.compile(r"^[a-fA-F0-9]{64}$")

@@ -5,7 +5,7 @@
 功能:
 1. 扫描 docs/acceptance/evidence/ 下的 evidence JSON 文件
 2. 校验文件名符合命名规范（canonical 或 snapshot 格式）
-3. 使用当前 schema 校验 JSON 内容（默认 v2，兼容 v1）
+3. 使用当前 v2 schema 校验 JSON 内容
 4. 扫描字符串字段中的模板占位符（如 {PLACEHOLDER}/{N}/TBD）
 5. （可选）检查 evidence 文件中的 iteration_number 与文件名一致性
 
@@ -36,11 +36,9 @@ from typing import Any, List, Optional
 
 from scripts.iteration.iteration_evidence_schema import (
     CURRENT_SCHEMA_FILENAME,
+    CURRENT_SCHEMA_ID,
     CURRENT_SCHEMA_PATH as CURRENT_EVIDENCE_SCHEMA_PATH,
     CURRENT_SCHEMA_REF,
-    LEGACY_SCHEMA_FILENAME,
-    LEGACY_SCHEMA_PATH as LEGACY_EVIDENCE_SCHEMA_PATH,
-    resolve_schema_name,
 )
 
 # 尝试导入 jsonschema，如果不可用则标记
@@ -67,9 +65,8 @@ EVIDENCE_DIR = get_project_root() / "docs" / "acceptance" / "evidence"
 
 # Schema 文件路径
 CURRENT_SCHEMA_PATH = CURRENT_EVIDENCE_SCHEMA_PATH
-LEGACY_SCHEMA_PATH = LEGACY_EVIDENCE_SCHEMA_PATH
-# 兼容旧测试/调用方：保留 SCHEMA_PATH 指向 v1 schema
-SCHEMA_PATH = LEGACY_SCHEMA_PATH
+# 兼容旧测试/调用方：保留 SCHEMA_PATH 指向当前 v2 schema
+SCHEMA_PATH = CURRENT_SCHEMA_PATH
 
 
 # ============================================================================
@@ -237,10 +234,9 @@ def load_schema(schema_path: Path) -> Optional[dict[str, Any]]:
 
 
 def load_schemas() -> dict[str, Optional[dict[str, Any]]]:
-    """加载当前与 legacy JSON Schema。"""
+    """加载当前 JSON Schema。"""
     return {
         "current": load_schema(CURRENT_SCHEMA_PATH),
-        "legacy": load_schema(LEGACY_SCHEMA_PATH),
     }
 
 
@@ -248,21 +244,20 @@ def resolve_schema_for_content(
     content: Any,
     schemas: dict[str, Optional[dict[str, Any]]],
 ) -> tuple[Optional[dict[str, Any]], str]:
-    """根据 evidence 内容选择应使用的 schema。"""
-    # 如果 content 不是字典，使用当前 schema
-    if not isinstance(content, dict):
-        return schemas.get("current"), CURRENT_SCHEMA_FILENAME
-    schema_value = content.get("$schema") if isinstance(content.get("$schema"), str) else None
-    schema_name = resolve_schema_name(schema_value)
-    if schema_name == LEGACY_SCHEMA_FILENAME:
-        return schemas.get("legacy"), schema_name
-    return schemas.get("current"), schema_name
+    """根据 evidence 内容选择应使用的 schema（仅 v2）。"""
+    return schemas.get("current"), CURRENT_SCHEMA_FILENAME
+
+
+def is_current_schema_ref(schema_value: str) -> bool:
+    """判断 $schema 是否指向当前 v2 schema。"""
+    schema_value = schema_value.strip()
+    return schema_value.endswith(CURRENT_SCHEMA_FILENAME) or schema_value == CURRENT_SCHEMA_ID
 
 
 def validate_schema_ref(
-    filepath: Path, content: dict[str, Any], strict_schema_ref: bool
+    filepath: Path, content: dict[str, Any]
 ) -> tuple[List[EvidenceViolation], List[EvidenceWarning]]:
-    """校验证据文件的 $schema 引用版本。"""
+    """校验证据文件的 $schema 引用版本（仅允许 v2）。"""
     violations: List[EvidenceViolation] = []
     warnings: List[EvidenceWarning] = []
 
@@ -270,30 +265,17 @@ def validate_schema_ref(
     if not isinstance(schema_value, str):
         return violations, warnings
 
-    schema_name = resolve_schema_name(schema_value)
-    if schema_name != LEGACY_SCHEMA_FILENAME:
+    if is_current_schema_ref(schema_value):
         return violations, warnings
 
-    message = (
-        f"$schema 仍指向 v1: {schema_value}。"
-        f"建议更新为 v2 引用: {CURRENT_SCHEMA_REF}"
+    message = f"$schema 未指向 v2: {schema_value}。请更新为: {CURRENT_SCHEMA_REF}"
+    violations.append(
+        EvidenceViolation(
+            file=filepath,
+            violation_type="schema_ref",
+            message=message,
+        )
     )
-    if strict_schema_ref:
-        violations.append(
-            EvidenceViolation(
-                file=filepath,
-                violation_type="schema_ref",
-                message=message,
-            )
-        )
-    else:
-        warnings.append(
-            EvidenceWarning(
-                file=filepath,
-                warning_type="schema_ref",
-                message=message,
-            )
-        )
 
     return violations, warnings
 
@@ -370,7 +352,7 @@ def validate_json_content(
 
     Args:
         filepath: 文件路径
-        schemas: JSON Schema 字典集合（current/legacy）
+        schemas: JSON Schema 字典集合（current）
 
     Returns:
         违规列表
@@ -649,7 +631,6 @@ def scan_evidence_files(
     evidence_dir: Optional[Path] = None,
     verbose: bool = False,
     project_root: Optional[Path] = None,
-    strict_schema_ref: bool = False,
 ) -> tuple[List[EvidenceViolation], List[EvidenceWarning], int]:
     """扫描并校验所有证据文件。
 
@@ -657,7 +638,6 @@ def scan_evidence_files(
         evidence_dir: 证据目录（默认使用 EVIDENCE_DIR）
         verbose: 是否显示详细输出
         project_root: 项目根目录（默认自动获取）
-        strict_schema_ref: 是否对 v1 $schema 引用严格阻断
 
     Returns:
         (违规列表, 警告列表, 总扫描文件数)
@@ -689,8 +669,6 @@ def scan_evidence_files(
     schemas = load_schemas()
     if schemas.get("current") is None and verbose:
         print(f"[WARN] 无法加载 JSON Schema: {CURRENT_SCHEMA_PATH}")
-    if schemas.get("legacy") is None and verbose:
-        print(f"[WARN] 无法加载 legacy JSON Schema: {LEGACY_SCHEMA_PATH}")
     if not HAS_JSONSCHEMA and verbose:
         print("[WARN] jsonschema 库未安装，将跳过 Schema 校验")
 
@@ -719,9 +697,9 @@ def scan_evidence_files(
             pass
 
         if content is not None and isinstance(content, dict):
-            # 3a. $schema 引用版本校验（可选严格）
+            # 3a. $schema 引用版本校验（仅允许 v2）
             schema_ref_violations, schema_ref_warnings = validate_schema_ref(
-                filepath, content, strict_schema_ref
+                filepath, content
             )
             file_violations.extend(schema_ref_violations)
             file_warnings.extend(schema_ref_warnings)
@@ -875,10 +853,6 @@ def print_report(
         print("修复建议:")
         print()
         warning_types = {w.warning_type for w in warnings}
-        if "schema_ref" in warning_types:
-            print("  对于 $schema 仍指向 v1 的证据文件:")
-            print(f"  - 更新为 v2 引用: {CURRENT_SCHEMA_REF}")
-            print()
         if "missing_links" in warning_types:
             print("  对于历史 evidence 文件缺少 links 的情况:")
             print("  1. 使用 record script 重新生成（推荐）:")
@@ -919,11 +893,6 @@ def main() -> int:
         default=None,
         help="证据目录路径（默认: docs/acceptance/evidence/）",
     )
-    parser.add_argument(
-        "--strict-schema-ref",
-        action="store_true",
-        help="将 $schema 仍指向 v1 视为违规（默认仅警告）",
-    )
 
     args = parser.parse_args()
 
@@ -937,7 +906,6 @@ def main() -> int:
     violations, warnings, total_files = scan_evidence_files(
         evidence_dir=evidence_dir,
         verbose=args.verbose,
-        strict_schema_ref=args.strict_schema_ref,
     )
 
     print_report(

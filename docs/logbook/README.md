@@ -27,7 +27,7 @@
 |------|------|
 | [gateway_logbook_boundary.md](../contracts/gateway_logbook_boundary.md) | Gateway ↔ Logbook 边界与数据流 |
 | [evidence_packet.md](../contracts/evidence_packet.md) | 证据包契约（与 SeekDB 共用） |
-| [outbox_lease_v1.md](../contracts/outbox_lease_v1.md) | Outbox 租约协议 |
+| [outbox_lease_v2.md](../contracts/outbox_lease_v2.md) | Outbox 租约协议 |
 
 ### 相关组件文档
 

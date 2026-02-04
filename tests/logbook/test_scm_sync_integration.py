@@ -980,7 +980,7 @@ class TestEndToEndFlow:
 
 def mock_sync_executor_success(job: dict) -> dict:
     """
-    Mock 执行器：返回成功结果（符合 scm_sync_result_v1 schema）
+    Mock 执行器：返回成功结果（符合 scm_sync_result_v2 schema）
 
     用于测试 worker 处理流程，不依赖外部 GitLab API。
     """

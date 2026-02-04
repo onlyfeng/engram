@@ -63,10 +63,10 @@ def valid_allowlist_data() -> dict:
     """有效的 allowlist 数据。"""
     future_date = (date.today() + timedelta(days=365)).isoformat()
     return {
-        "version": "1",
+        "version": "2",
         "entries": [
             {
-                "id": "adapter-internal-audit-v1",
+                "id": "adapter-internal-audit-v2",
                 "file_glob": "src/engram/gateway/services/audit_service.py",
                 "reason": "Audit service 内部需要直接访问连接进行批量写入优化",
                 "owner": "@platform-team",
@@ -317,8 +317,8 @@ class TestValidateIdFormat:
     def test_valid_id(self) -> None:
         """有效的 id 应通过。"""
         result = ValidationResult()
-        entry = {"id": "adapter-internal-audit-v1"}
-        assert validate_id_format(entry, "adapter-internal-audit-v1", result)
+        entry = {"id": "adapter-internal-audit-v2"}
+        assert validate_id_format(entry, "adapter-internal-audit-v2", result)
         assert len(result.errors) == 0
 
     def test_empty_id_fails(self) -> None:
@@ -338,7 +338,7 @@ class TestValidateIdFormat:
 
     def test_id_pattern_regex(self) -> None:
         """ID_PATTERN 正则应正确匹配。"""
-        assert ID_PATTERN.match("adapter-internal-audit-v1")
+        assert ID_PATTERN.match("adapter-internal-audit-v2")
         assert ID_PATTERN.match("test_entry_123")
         assert ID_PATTERN.match("simple")
         assert not ID_PATTERN.match("Has-Uppercase")
@@ -420,7 +420,7 @@ class TestValidateAgainstSchema:
     def test_valid_data(self, minimal_schema: dict) -> None:
         """有效数据应通过。"""
         result = ValidationResult()
-        data = {"version": "1", "entries": []}
+        data = {"version": "2", "entries": []}
         assert validate_against_schema(data, minimal_schema, result)
         assert len(result.schema_errors) == 0
 
@@ -434,21 +434,21 @@ class TestValidateAgainstSchema:
     def test_missing_entries(self, minimal_schema: dict) -> None:
         """缺少 entries 应报错。"""
         result = ValidationResult()
-        data = {"version": "1"}
+        data = {"version": "2"}
         assert not validate_against_schema(data, minimal_schema, result)
         assert any("entries" in e for e in result.schema_errors)
 
     def test_invalid_version(self, minimal_schema: dict) -> None:
         """无效版本号应报错。"""
         result = ValidationResult()
-        data = {"version": "2.0", "entries": []}
+        data = {"version": "3.0", "entries": []}
         assert not validate_against_schema(data, minimal_schema, result)
         assert any("version" in e for e in result.schema_errors)
 
-    def test_version_1_0_accepted(self, minimal_schema: dict) -> None:
-        """版本 1.0 应被接受。"""
+    def test_version_2_0_accepted(self, minimal_schema: dict) -> None:
+        """版本 2.0 应被接受。"""
         result = ValidationResult()
-        data = {"version": "1.0", "entries": []}
+        data = {"version": "2.0", "entries": []}
         assert validate_against_schema(data, minimal_schema, result)
 
 
@@ -599,7 +599,7 @@ class TestValidateAllowlist:
         fixed_today = date(2026, 2, 2)
         past_date = (fixed_today - timedelta(days=1)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "expired-entry",
@@ -630,7 +630,7 @@ class TestValidateAllowlist:
         """缺少 owner 应导致校验失败。"""
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "no-owner-entry",
@@ -660,7 +660,7 @@ class TestValidateAllowlist:
         """重复 id 应导致校验失败。"""
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "same-id",
@@ -700,7 +700,7 @@ class TestValidateAllowlist:
         """无效的 owner 格式应导致校验失败。"""
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "bad-owner-entry",
@@ -731,7 +731,7 @@ class TestValidateAllowlist:
         """无效的 category 应导致校验失败。"""
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "bad-category-entry",
@@ -778,7 +778,7 @@ class TestMaxExpiryIntegration:
         # 设置一个距离今天 200 天的过期日期（超过 180 天限制）
         far_future_date = (date.today() + timedelta(days=200)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "far-future-entry",
@@ -832,7 +832,7 @@ class TestMaxExpiryIntegration:
         # 设置一个距离今天 10 天的过期日期（在 14 天预警期内）
         soon_date = (fixed_today + timedelta(days=10)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "expiring-soon-entry",
@@ -902,7 +902,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 8, 1)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-exceeds-max",
@@ -967,7 +967,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 8, 1)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-exceeds-max-fail",
@@ -1025,7 +1025,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 4, 1)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-within-max",
@@ -1074,7 +1074,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = fixed_today + timedelta(days=180)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-boundary-180",
@@ -1120,7 +1120,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = fixed_today + timedelta(days=181)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-boundary-181",
@@ -1160,7 +1160,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 8, 1)  # 超过 180 天
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "json-test-exceeds",
@@ -1224,7 +1224,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 8, 1)  # 超过 180 天
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "json-test-exceeds-fail",
@@ -1381,7 +1381,7 @@ class TestMainFunction:
 
         # 缺少必需字段的 allowlist
         invalid_data = {
-            "version": "1",
+            "version": "2",
             "entries": [{"id": "bad-entry"}],  # 缺少其他必需字段
         }
 

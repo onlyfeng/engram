@@ -453,7 +453,7 @@ class TestAllowedPaths:
         # docs/architecture/ 下其他文件不在白名单中（仅特定文档被白名单）
         assert is_allowed_path("docs/architecture/README.md") is False
         # CI workflow contract 不在白名单中（已清理完毕）
-        assert is_allowed_path("scripts/ci/workflow_contract.v1.json") is False
+        assert is_allowed_path("scripts/ci/workflow_contract.v2.json") is False
 
     def test_allowed_paths_matches_source_definition(self):
         """验证测试覆盖了 ALLOWED_PATHS 中的所有路径"""

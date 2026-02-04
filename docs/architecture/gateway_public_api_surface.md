@@ -554,7 +554,7 @@ from engram.gateway.logbook_adapter import LogbookAdapter, get_adapter
 
 ## 契约文档交叉引用
 
-### 与 `mcp_jsonrpc_error_v1.md` 的关联
+### 与 `mcp_jsonrpc_error_v2.md` 的关联
 
 | public_api 导出项 | 契约文档章节 | 说明 |
 |-------------------|-------------|------|
@@ -567,7 +567,7 @@ from engram.gateway.logbook_adapter import LogbookAdapter, get_adapter
 - `error.data.reason` 只能使用 `McpErrorReason.*`
 - `result.error_code` 只能使用 `ToolResultErrorCode.*`
 
-参见: [mcp_jsonrpc_error_v1.md](../contracts/mcp_jsonrpc_error_v1.md)
+参见: [mcp_jsonrpc_error_v2.md](../contracts/mcp_jsonrpc_error_v2.md)
 
 ### 与 `gateway_contract_convergence.md` 的关联
 
@@ -1070,7 +1070,7 @@ make test-gateway
 | 文档 | 路径 |
 |------|------|
 | **Gateway Public API / JSON-RPC SSOT 地图** | [docs/contracts/gateway_public_api_jsonrpc_ssot_map.md](../contracts/gateway_public_api_jsonrpc_ssot_map.md) |
-| MCP JSON-RPC 错误模型契约 | [docs/contracts/mcp_jsonrpc_error_v1.md](../contracts/mcp_jsonrpc_error_v1.md) |
+| MCP JSON-RPC 错误模型契约 | [docs/contracts/mcp_jsonrpc_error_v2.md](../contracts/mcp_jsonrpc_error_v2.md) |
 | Gateway 契约收敛文档 | [docs/contracts/gateway_contract_convergence.md](../contracts/gateway_contract_convergence.md) |
 | Gateway Public API JSON-RPC Surface ADR | [docs/architecture/adr_gateway_public_api_jsonrpc_surface.md](./adr_gateway_public_api_jsonrpc_surface.md) |
 | Gateway ImportError 规范 | [docs/architecture/gateway_importerror_and_optional_deps.md](./gateway_importerror_and_optional_deps.md) |

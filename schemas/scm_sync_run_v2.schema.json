@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/engram/schemas/scm_sync_run_v2.schema.json",
+  "title": "SCM Sync Run V2 Schema",
+  "description": "Engram SCM 同步运行记录 (sync_runs) 的 JSON Schema (V2)",
+  
+  "type": "object",
+  "required": ["status", "counts"],
+  "additionalProperties": true,
+  
+  "definitions": {
+    "counts": {
+      "type": "object",
+      "description": "同步计数统计",
+      "required": ["synced_count"],
+      "additionalProperties": true,
+      "properties": {
+        "synced_count": {
+          "type": "integer",
+          "description": "同步的条目数",
+          "minimum": 0
+        },
+        "diff_count": {
+          "type": "integer",
+          "description": "获取到 diff 的条目数",
+          "minimum": 0,
+          "default": 0
+        },
+        "bulk_count": {
+          "type": "integer",
+          "description": "批量写入的条目数",
+          "minimum": 0,
+          "default": 0
+        },
+        "degraded_count": {
+          "type": "integer",
+          "description": "降级处理的条目数",
+          "minimum": 0,
+          "default": 0
+        },
+        "skipped_count": {
+          "type": "integer",
+          "description": "跳过的条目数",
+          "minimum": 0,
+          "default": 0
+        },
+        "diff_none_count": {
+          "type": "integer",
+          "description": "diff_mode=none 时跳过 diff 获取的条目数",
+          "minimum": 0,
+          "default": 0
+        },
+        "scanned_count": {
+          "type": "integer",
+          "description": "扫描的 MR 数（GitLab MRs）",
+          "minimum": 0,
+          "default": 0
+        },
+        "inserted_count": {
+          "type": "integer",
+          "description": "插入的 MR 数（GitLab MRs）",
+          "minimum": 0,
+          "default": 0
+        },
+        "synced_mr_count": {
+          "type": "integer",
+          "description": "同步的 MR 数（GitLab Reviews）",
+          "minimum": 0,
+          "default": 0
+        },
+        "synced_event_count": {
+          "type": "integer",
+          "description": "同步的事件数（GitLab Reviews）",
+          "minimum": 0,
+          "default": 0
+        },
+        "skipped_event_count": {
+          "type": "integer",
+          "description": "跳过的事件数（GitLab Reviews）",
+          "minimum": 0,
+          "default": 0
+        },
+        "patch_success": {
+          "type": "integer",
+          "description": "SVN patch 成功数",
+          "minimum": 0,
+          "default": 0
+        },
+        "patch_failed": {
+          "type": "integer",
+          "description": "SVN patch 失败数",
+          "minimum": 0,
+          "default": 0
+        },
+        "skipped_by_controller": {
+          "type": "integer",
+          "description": "被控制器跳过的 SVN 条目数",
+          "minimum": 0,
+          "default": 0
+        },
+        "total_requests": {
+          "type": "integer",
+          "description": "总请求数",
+          "minimum": 0,
+          "default": 0
+        },
+        "total_429_hits": {
+          "type": "integer",
+          "description": "429 限流次数",
+          "minimum": 0,
+          "default": 0
+        },
+        "timeout_count": {
+          "type": "integer",
+          "description": "超时次数",
+          "minimum": 0,
+          "default": 0
+        },
+        "avg_wait_time_ms": {
+          "type": "integer",
+          "description": "平均等待时间（毫秒）",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    
+    "error_summary": {
+      "type": "object",
+      "description": "错误摘要",
+      "additionalProperties": true,
+      "properties": {
+        "error_category": {
+          "type": "string",
+          "description": "错误分类",
+          "enum": [
+            "timeout",
+            "connection",
+            "network",
+            "auth_error",
+            "auth_missing",
+            "auth_invalid",
+            "permission_denied",
+            "repo_not_found",
+            "repo_type_unknown",
+            "rate_limit",
+            "server_error",
+            "exception",
+            "lease_lost",
+            "unknown_job_type",
+            "payload_contract_mismatch",
+            "api_error",
+            "validation_error",
+            "unknown"
+          ]
+        },
+        "error_message": {
+          "type": "string",
+          "description": "错误消息（已脱敏）",
+          "maxLength": 2000
+        },
+        "exception_type": {
+          "type": "string",
+          "description": "异常类型名"
+        },
+        "stack_trace": {
+          "type": "string",
+          "description": "堆栈跟踪（截断）",
+          "maxLength": 4000
+        },
+        "attempts": {
+          "type": "integer",
+          "description": "尝试次数",
+          "minimum": 0
+        },
+        "max_attempts": {
+          "type": "integer",
+          "description": "最大尝试次数",
+          "minimum": 0
+        },
+        "backoff_seconds": {
+          "type": "integer",
+          "description": "退避等待时间（秒），优先级：retry_after > error_category > default",
+          "minimum": 0
+        },
+        "backoff_source": {
+          "type": "string",
+          "description": "退避时间来源",
+          "enum": ["retry_after", "error_category", "default", ""]
+        },
+        "retry_after": {
+          "type": ["integer", "null"],
+          "description": "服务端返回的 Retry-After 值（秒），如 429 响应头",
+          "minimum": 0
+        },
+        "context": {
+          "type": "object",
+          "description": "额外上下文信息",
+          "additionalProperties": true
+        }
+      }
+    },
+    
+    "degradation_snapshot": {
+      "type": "object",
+      "description": "降级快照",
+      "additionalProperties": true,
+      "properties": {
+        "is_degraded": {
+          "type": "boolean",
+          "description": "是否处于降级模式"
+        },
+        "degraded_reasons": {
+          "type": "object",
+          "description": "降级原因统计 {reason: count}",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "circuit_state": {
+          "type": "string",
+          "description": "熔断状态",
+          "enum": ["closed", "half_open", "open", "degraded", ""]
+        },
+        "is_backfill_only": {
+          "type": "boolean",
+          "description": "是否仅执行 backfill"
+        },
+        "suggested_batch_size": {
+          "type": ["integer", "null"],
+          "description": "建议的批量大小"
+        },
+        "suggested_diff_mode": {
+          "type": ["string", "null"],
+          "description": "建议的 diff 模式"
+        },
+        "degraded_at": {
+          "type": ["string", "null"],
+          "description": "降级时间（ISO8601）"
+        }
+      }
+    },
+    
+    "request_stats": {
+      "type": "object",
+      "description": "请求统计",
+      "additionalProperties": true,
+      "properties": {
+        "total_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "success_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failure_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_429_hits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeout_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "avg_latency_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_latency_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_latency_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "avg_wait_time_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_wait_time_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  
+  "properties": {
+    "status": {
+      "type": "string",
+      "description": "运行状态",
+      "enum": ["running", "completed", "failed", "no_data"]
+    },
+    
+    "counts": {
+      "$ref": "#/definitions/counts"
+    },
+    
+    "error_summary_json": {
+      "$ref": "#/definitions/error_summary"
+    },
+    
+    "degradation_json": {
+      "$ref": "#/definitions/degradation_snapshot"
+    },
+    
+    "request_stats": {
+      "$ref": "#/definitions/request_stats"
+    },
+    
+    "cursor_before": {
+      "type": ["object", "null"],
+      "description": "同步前的游标（用于记录同步起点，支持断点续传和审计）",
+      "additionalProperties": true
+    },
+    
+    "cursor_after": {
+      "type": ["object", "null"],
+      "description": "同步后的游标",
+      "additionalProperties": true
+    },
+    
+    "logbook_item_id": {
+      "type": ["integer", "null"],
+      "description": "关联的 logbook item ID"
+    }
+  },
+  
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "failed" }
+        }
+      },
+      "then": {
+        "required": ["error_summary_json"],
+        "properties": {
+          "error_summary_json": {
+            "type": "object",
+            "description": "失败状态必须包含错误摘要"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "no_data" }
+        }
+      },
+      "then": {
+        "properties": {
+          "counts": {
+            "properties": {
+              "synced_count": {
+                "const": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  
+  "examples": [
+    {
+      "status": "completed",
+      "counts": {
+        "synced_count": 100,
+        "diff_count": 95,
+        "bulk_count": 100
+      }
+    },
+    {
+      "status": "failed",
+      "counts": {
+        "synced_count": 0
+      },
+      "error_summary_json": {
+        "error_category": "timeout",
+        "error_message": "Request timed out after 30s",
+        "exception_type": "TimeoutError"
+      }
+    },
+    {
+      "status": "no_data",
+      "counts": {
+        "synced_count": 0
+      }
+    },
+    {
+      "status": "completed",
+      "counts": {
+        "synced_count": 50,
+        "degraded_count": 10
+      },
+      "degradation_json": {
+        "is_degraded": true,
+        "degraded_reasons": {
+          "diff_timeout": 10
+        },
+        "circuit_state": "half_open"
+      }
+    }
+  ]
+}

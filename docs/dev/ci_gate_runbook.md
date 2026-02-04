@@ -66,7 +66,7 @@ CI 门禁依赖以下 3 条主线的配置文件作为 SSOT：
 | **类型检查** | `pyproject.toml` | mypy 配置、strict-island 路径、工具配置 | `lint` |
 | | `scripts/ci/mypy_baseline.txt` | mypy 错误基线（当前已知错误列表） | `lint` |
 | **代码风格** | `pyproject.toml` | ruff lint/format 规则、lint-island 路径 | `lint` |
-| **Workflow 合约** | `scripts/ci/workflow_contract.v1.json` | CI job/step 合约定义 | `workflow-contract` |
+| **Workflow 合约** | `scripts/ci/workflow_contract.v2.json` | CI job/step 合约定义 | `workflow-contract` |
 
 **配置位置详情**：
 
@@ -79,7 +79,7 @@ CI 门禁依赖以下 3 条主线的配置文件作为 SSOT：
 | | `[tool.engram.ruff].lint_island_paths` | ruff lint-island 模块列表 |
 | | `[tool.engram.ruff].p1_rules` | P1 规则集（B, UP, SIM, PERF, PTH） |
 | `scripts/ci/mypy_baseline.txt` | - | 行格式：`file:line: error: message [error-code]` |
-| `scripts/ci/workflow_contract.v1.json` | `ci.job_ids` | 必须存在的 Job ID |
+| `scripts/ci/workflow_contract.v2.json` | `ci.job_ids` | 必须存在的 Job ID |
 | | `ci.job_names` | Job 显示名称 |
 | | `required_jobs[].required_steps` | 必须存在的 Step |
 | | `frozen_step_text.allowlist` | 冻结的 Step 名称 |
@@ -214,12 +214,12 @@ python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787 \
 | `Makefile` | CI 代理 | 构建和门禁目标定义 | 中：目标名称变更影响文档和 CI |
 | `.github/workflows/ci.yml` | CI 代理 | CI 流水线定义 | 高：与 workflow_contract 强关联 |
 | `scripts/ci/mypy_baseline.txt` | CI 代理 | mypy 基线文件 | 高：行级冲突难以解决 |
-| `scripts/ci/workflow_contract.v1.json` | CI 代理 | CI 合约定义（合约系统关键路径，建议单 PR/单 owner 串行修改） | 高：与 ci.yml/文档/校验脚本强耦合 |
-| `scripts/ci/check_workflow_contract_version_policy.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：版本策略与合约字段同步 |
-| `scripts/ci/check_workflow_contract_docs_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：文档/合约同步风险 |
-| `scripts/ci/check_workflow_contract_coupling_map_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：耦合映射同步风险 |
-| `scripts/ci/render_workflow_contract_docs.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：生成文档一致性风险 |
-| `scripts/ci/workflow_contract_common.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v1.json 强耦合，建议单 PR/单 owner 串行修改） | 高：共享逻辑影响多脚本 |
+| `scripts/ci/workflow_contract.v2.json` | CI 代理 | CI 合约定义（合约系统关键路径，建议单 PR/单 owner 串行修改） | 高：与 ci.yml/文档/校验脚本强耦合 |
+| `scripts/ci/check_workflow_contract_version_policy.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） | 高：版本策略与合约字段同步 |
+| `scripts/ci/check_workflow_contract_docs_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） | 高：文档/合约同步风险 |
+| `scripts/ci/check_workflow_contract_coupling_map_sync.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） | 高：耦合映射同步风险 |
+| `scripts/ci/render_workflow_contract_docs.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） | 高：生成文档一致性风险 |
+| `scripts/ci/workflow_contract_common.py` | CI 代理 | 合约系统关键路径（与 workflow_contract.v2.json 强耦合，建议单 PR/单 owner 串行修改） | 高：共享逻辑影响多脚本 |
 | `docs/reference/environment_variables.md` | 文档代理 | 环境变量 SSOT | 中：多处文档引用 |
 
 这些路径由 CODEOWNERS 强制双审。
@@ -230,13 +230,13 @@ python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787 \
 1. **串行更新**：修改上述文件时，确保同一时间只有一个代理在操作
 2. **合并前验证**：完成修改后运行 `make ci` 确保无冲突
 3. **变更同步**：
-   - 修改 `ci.yml` 时，同步更新 `workflow_contract.v1.json`
+   - 修改 `ci.yml` 时，同步更新 `workflow_contract.v2.json`
    - 修改 `pyproject.toml` 中的 mypy/ruff 配置时，同步更新本文档
    - 新增环境变量时，同步更新 `docs/reference/environment_variables.md`
 
 ### 共享文件变更最小验证命令集（ci.yml/Makefile/workflow_contract）
 
-当修改 `.github/workflows/ci.yml`、`Makefile`、`scripts/ci/workflow_contract.v1.json` 或其相关文档时，至少执行以下命令以确保合约与文档一致。
+当修改 `.github/workflows/ci.yml`、`Makefile`、`scripts/ci/workflow_contract.v2.json` 或其相关文档时，至少执行以下命令以确保合约与文档一致。
 
 **上位规则**：任何变更完成后**必须**运行 `make ci`。更完整的流程与顺序请参见 [维护指南：0-快速变更流程（SSOT-first）](../ci_nightly_workflow_refactor/maintenance.md#0-快速变更流程ssot-first)。
 
@@ -357,7 +357,7 @@ pytest tests/ci/ -q
 | **env consistency** | `make check-env-consistency` | `env-var-consistency` | - | - | 环境变量文档/代码不一致 | 同步 `.env.example`, docs, 代码 |
 | **schema validation** | `make check-schemas` | `schema-validate` | - | - | JSON Schema 校验失败 | 修复 schema 或 fixture |
 | **migration sanity** | `make check-migration-sanity` | `migration-sanity` | - | - | SQL 文件命名/分类违规 | 参见 `docs/logbook/sql_file_inventory.md` |
-| **workflow contract** | `make validate-workflows-strict` | `workflow-contract` | `scripts/ci/workflow_contract.v1.json` | 改用非严格模式 `validate-workflows` | job/step 名称变更 | 同步更新合约文件 |
+| **workflow contract** | `make validate-workflows-strict` | `workflow-contract` | `scripts/ci/workflow_contract.v2.json` | 改用非严格模式 `validate-workflows` | job/step 名称变更 | 同步更新合约文件 |
 | **cli entrypoints** | `make check-cli-entrypoints` | `cli-entrypoints-consistency` | - | - | pyproject.toml 与代码/文档不一致 | 同步 CLI 入口点 |
 | **gateway di** | `make check-gateway-di-boundaries` | `gateway-di-boundaries` | `--phase removal --disallow-allow-markers` | 改用 `check-gateway-di-boundaries-compat` | DI 边界违规、残留 allow-markers | 参见 `docs/architecture/adr_gateway_di_and_entry_boundary.md` |
 | **strict-island admission** | `python -m scripts.ci.check_strict_island_admission` | - | `configs/mypy_strict_island_candidates.json`、`CANDIDATE`、`CANDIDATES_FILE` | - | baseline 错误非 0 / 缺少 override / 配置错误 | 参见 `docs/dev/mypy_baseline.md` §5.3 |
@@ -863,7 +863,7 @@ ignore = ["E501"]
 
 ### 1.4 Workflow Contract 门禁
 
-Workflow Contract 校验 GitHub Actions workflow 文件是否符合 `workflow_contract.v1.json` 定义的合约。
+Workflow Contract 校验 GitHub Actions workflow 文件是否符合 `workflow_contract.v2.json` 定义的合约。
 
 > **场景化操作指南**：常见 workflow 变更场景（新增 Job、修改冻结名称、新增 Make Target 等）的完整操作流程和辅助工具使用方法，请参见 **[maintenance.md 第 9 章"常见场景最小演练"](../ci_nightly_workflow_refactor/maintenance.md#9-常见场景最小演练)**。
 
@@ -933,7 +933,7 @@ diff <(jq -S . /tmp/before.json) <(jq -S . /tmp/after.json)
 # ============================================
 # 4. 同步更新合约文件（根据 diff 结果）
 # ============================================
-# - scripts/ci/workflow_contract.v1.json
+# - scripts/ci/workflow_contract.v2.json
 # - docs/ci_nightly_workflow_refactor/contract.md
 # 详见下方 "合约文件修改指南"
 
@@ -946,7 +946,7 @@ make check-workflow-contract-docs-sync
 
 **合约文件修改指南**：
 
-| 变更类型 | `workflow_contract.v1.json` 修改位置 | `contract.md` 修改位置 |
+| 变更类型 | `workflow_contract.v2.json` 修改位置 | `contract.md` 修改位置 |
 |----------|--------------------------------------|------------------------|
 | 新增 Job | `job_ids`, `job_names`, `required_jobs`, `frozen_job_names.allowlist` | 第 2 章 Job ID 对照表 |
 | 修改 Job Name | `job_names`, `frozen_job_names.allowlist`, `required_jobs[].name` | 第 2 章 Job ID 对照表 |
@@ -958,7 +958,7 @@ make check-workflow-contract-docs-sync
 
 | 文件 | 说明 |
 |------|------|
-| `scripts/ci/workflow_contract.v1.json` | 合约定义文件 |
+| `scripts/ci/workflow_contract.v2.json` | 合约定义文件 |
 | `scripts/ci/validate_workflows.py` | 校验脚本 |
 | `scripts/ci/generate_workflow_contract_snapshot.py` | 快照生成脚本 |
 | `.github/workflows/ci.yml` | CI workflow 文件 |
@@ -1069,7 +1069,7 @@ python -m scripts.ci.check_no_root_wrappers_usage --json    # JSON 输出
 | 文件 | 说明 |
 |------|------|
 | `scripts/ci/no_root_wrappers_allowlist.json` | 允许导入根目录 wrapper 的文件列表 |
-| `schemas/no_root_wrappers_allowlist_v1.schema.json` | allowlist 的 JSON Schema |
+| `schemas/no_root_wrappers_allowlist_v2.schema.json` | allowlist 的 JSON Schema |
 | `configs/import_migration_map.json` | 导入迁移映射（SSOT）|
 | `scripts/ci/check_no_root_wrappers_allowlist.py` | allowlist 有效性检查脚本 |
 | `scripts/ci/check_no_root_wrappers_usage.py` | 使用检查脚本 |
@@ -1448,7 +1448,7 @@ python -m scripts.ci.check_gateway_di_boundaries --phase compat
 |------|------|
 | [docs/architecture/gateway_module_boundaries.md](../architecture/gateway_module_boundaries.md) | SSOT 文档：模块边界与 import 规则 |
 | [docs/architecture/adr_gateway_di_and_entry_boundary.md](../architecture/adr_gateway_di_and_entry_boundary.md) | ADR：设计决策与迁移计划 |
-| [docs/gateway/upgrade_v1_0_remove_handler_di_compat.md](../gateway/upgrade_v1_0_remove_handler_di_compat.md) | v1.0 升级指南 |
+| [docs/gateway/upgrade_v2_0_remove_handler_di_compat.md](../gateway/upgrade_v2_0_remove_handler_di_compat.md) | v2.0 升级指南 |
 
 ### 1.8 Gateway 测试规范
 
@@ -1702,7 +1702,7 @@ make validate-workflows
 make validate-workflows
 
 # 2. 编辑合约文件，更新对应的 job/step 名称
-# scripts/ci/workflow_contract.v1.json
+# scripts/ci/workflow_contract.v2.json
 
 # 3. 验证更新后合约通过
 make validate-workflows-strict
@@ -2529,7 +2529,7 @@ conn = deps.db  # DEPS-DB-ALLOW: invalid-id-not-in-allowlist
 | 文件 | 说明 |
 |------|------|
 | `scripts/ci/gateway_deps_db_allowlist.json` | deps.db 直接访问例外允许列表 |
-| `schemas/gateway_deps_db_allowlist_v1.schema.json` | allowlist 的 JSON Schema |
+| `schemas/gateway_deps_db_allowlist_v2.schema.json` | allowlist 的 JSON Schema |
 
 **Reviewer 检查清单**：
 
@@ -2741,7 +2741,7 @@ time make lint
 | 修改 `scripts/ci/check_mypy_gate.py` | `Makefile` (typecheck-* 目标)、`.github/workflows/ci.yml` (lint job)、`docs/dev/mypy_baseline.md` |
 | 修改 `scripts/ci/check_noqa_policy.py` | `Makefile` (check-noqa-policy)、`.github/workflows/ci.yml` (lint job)、本文档 |
 | 修改 `scripts/ci/check_no_root_wrappers_usage.py` | `Makefile` (check-no-root-wrappers)、本文档 |
-| 修改 `scripts/ci/validate_workflows.py` | `scripts/ci/workflow_contract.v1.json`、`docs/ci_nightly_workflow_refactor/maintenance.md` |
+| 修改 `scripts/ci/validate_workflows.py` | `scripts/ci/workflow_contract.v2.json`、`docs/ci_nightly_workflow_refactor/maintenance.md` |
 | 修改 `scripts/ci/check_ruff_gate.py` | `Makefile` (ruff-gate*)、本文档 |
 | 新增 CI 检查脚本 | `Makefile`、`.github/workflows/ci.yml`、本文档、`AGENTS.md` |
 
@@ -2759,7 +2759,7 @@ time make lint
 
 | 变更场景 | 必须同步的文件 |
 |----------|----------------|
-| 修改 `scripts/ci/no_root_wrappers_allowlist.json` | 确保符合 `schemas/no_root_wrappers_allowlist_v1.schema.json`、本文档 Section 1.6 |
+| 修改 `scripts/ci/no_root_wrappers_allowlist.json` | 确保符合 `schemas/no_root_wrappers_allowlist_v2.schema.json`、本文档 Section 1.6 |
 | 新增 `per-file-ignores` (ruff) | `pyproject.toml [tool.ruff.lint.per-file-ignores]`、本文档 Section 1.2 |
 | 新增 type: ignore (strict-island) | PR 描述需包含例外申请（见 5.3 节） |
 
@@ -2790,11 +2790,11 @@ make check-workflow-contract-docs-sync
 
 | 变更场景 | 必须同步的文件 |
 |----------|----------------|
-| 新增/删除 job | `.github/workflows/ci.yml`、`scripts/ci/workflow_contract.v1.json`、`docs/ci_nightly_workflow_refactor/contract.md`、`Makefile` |
-| 修改 job name | `scripts/ci/workflow_contract.v1.json` (job_names, frozen_job_names)、`docs/ci_nightly_workflow_refactor/contract.md` |
-| 修改 step name | `scripts/ci/workflow_contract.v1.json` (required_steps, frozen_step_text)、`docs/ci_nightly_workflow_refactor/contract.md` |
+| 新增/删除 job | `.github/workflows/ci.yml`、`scripts/ci/workflow_contract.v2.json`、`docs/ci_nightly_workflow_refactor/contract.md`、`Makefile` |
+| 修改 job name | `scripts/ci/workflow_contract.v2.json` (job_names, frozen_job_names)、`docs/ci_nightly_workflow_refactor/contract.md` |
+| 修改 step name | `scripts/ci/workflow_contract.v2.json` (required_steps, frozen_step_text)、`docs/ci_nightly_workflow_refactor/contract.md` |
 | 新增环境变量 | `docs/reference/environment_variables.md`、本文档 |
-| 修改 artifact 名称 | `scripts/ci/workflow_contract.v1.json`、下游依赖脚本 |
+| 修改 artifact 名称 | `scripts/ci/workflow_contract.v2.json`、下游依赖脚本 |
 
 ### 8.5 修改 Makefile 时
 
@@ -2802,7 +2802,7 @@ make check-workflow-contract-docs-sync
 |----------|----------------|
 | 新增 Make 目标 | `AGENTS.md` (门禁命令)、本文档 Section 0.1 |
 | 修改 `ci` 目标依赖 | `.github/workflows/ci.yml`、本文档 Section 0.2 |
-| 删除 Make 目标 | `scripts/ci/workflow_contract.v1.json` (make.targets_required) |
+| 删除 Make 目标 | `scripts/ci/workflow_contract.v2.json` (make.targets_required) |
 | 修改目标名称 | 全局搜索 `make <target>` 引用 |
 
 ### 8.6 快速检查命令
@@ -2834,7 +2834,7 @@ make check-env-consistency
 - [ ] 若修改了阈值/例外：PR 描述包含变更原因
 - [ ] 若修改了 workflow：
   - [ ] 遵循标准 SOP（变更前 before 快照、变更后 after 快照并 diff）
-  - [ ] 同步更新 `workflow_contract.v1.json` 和 `contract.md`
+  - [ ] 同步更新 `workflow_contract.v2.json` 和 `contract.md`
   - [ ] 运行 `make validate-workflows-strict`
   - [ ] 运行 `make check-workflow-contract-docs-sync`
 - [ ] 若新增了门禁：更新本文档 Section 0.1 和 0.3

@@ -2,11 +2,11 @@
 """
 Workflow Contract 版本升级工具
 
-用于自动更新 workflow_contract.v1.json 的 version 和 last_updated 字段，
+用于自动更新 workflow_contract.v2.json 的 version 和 last_updated 字段，
 并同步更新 contract.md 版本控制表。
 
 功能：
-1. 读取 workflow_contract.v1.json
+1. 读取 workflow_contract.v2.json
 2. 按参数（major/minor/patch 或显式版本）更新 version 与 last_updated
 3. 在 docs/ci_nightly_workflow_refactor/contract.md 第 14 章表格顶部插入新行模板
 4. 可选：在 JSON 顶层插入 _changelog_vX.Y.Z 的空模板
@@ -54,7 +54,7 @@ from typing import Any
 # Constants
 # ============================================================================
 
-DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v1.json"
+DEFAULT_CONTRACT_PATH = "scripts/ci/workflow_contract.v2.json"
 DEFAULT_DOC_PATH = "docs/ci_nightly_workflow_refactor/contract.md"
 
 # 版本升级类型
@@ -609,7 +609,7 @@ def format_text_output(result: BumpResult, dry_run: bool = False) -> str:
             lines.append("Files updated successfully.")
             lines.append("")
             lines.append("Next steps:")
-            lines.append("  1. Edit the changelog message in workflow_contract.v1.json")
+            lines.append("  1. Edit the changelog message in workflow_contract.v2.json")
             lines.append("  2. Edit the change description in contract.md")
             lines.append("  3. Run: make check-workflow-contract-version-policy")
 

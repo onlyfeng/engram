@@ -1,0 +1,73 @@
+{
+  "gateway_event": {
+    "schema_version": "2.0",
+    "source": "gateway",
+    "operation": "memory_store",
+    "correlation_id": "corr-0123456789abcdef",
+    "actor_user_id": "user1",
+    "requested_space": "team:project",
+    "final_space": "team:project",
+    "decision": {
+      "action": "allow",
+      "reason": "policy_passed"
+    },
+    "payload_sha": "content_sha256_64chars_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "payload_len": 2048,
+    "evidence_summary": {
+      "count": 2,
+      "has_strong": true,
+      "uris": [
+        "memory://patch_blobs/git/1:abc123/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "https://example.com/doc"
+      ]
+    },
+    "trim": {
+      "was_trimmed": false,
+      "why": null,
+      "original_len": null
+    },
+    "refs": [
+      "memory://patch_blobs/git/1:abc123/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "https://example.com/doc"
+    ],
+    "event_ts": "2024-01-15T14:00:00.000000+00:00",
+    "policy": {
+      "mode": "strict",
+      "mode_reason": "explicit_header",
+      "policy_version": "v2",
+      "is_pointerized": false,
+      "policy_source": "settings"
+    },
+    "validation": {
+      "validate_refs_effective": true,
+      "validate_refs_reason": "strict_mode",
+      "evidence_validation": {
+        "is_valid": true,
+        "mode": "strict",
+        "error_code": null
+      }
+    }
+  },
+  "patches": [
+    {
+      "artifact_uri": "memory://patch_blobs/git/1:abc123/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_type": "git",
+      "source_id": "1:abc123",
+      "kind": "patch"
+    }
+  ],
+  "external": [
+    {
+      "uri": "https://example.com/doc"
+    }
+  ],
+  "evidence_summary": {
+    "count": 2,
+    "has_strong": true,
+    "uris": [
+      "memory://patch_blobs/git/1:abc123/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "https://example.com/doc"
+    ]
+  }
+}

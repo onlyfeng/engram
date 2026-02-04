@@ -90,7 +90,7 @@ def generate_correlation_id() -> str:
     """生成关联 ID"""
     return f"corr-{uuid.uuid4().hex[:16]}"
 
-# correlation_id 格式校验正则表达式（与 schemas/audit_event_v1.schema.json 对齐）
+# correlation_id 格式校验正则表达式（与 schemas/audit_event_v2.schema.json 对齐）
 CORRELATION_ID_PATTERN = re.compile(r"^corr-[a-fA-F0-9]{16}$")
 ```
 
@@ -653,8 +653,8 @@ WHERE sync.status = 'redirected'
 
 | 位置 | 版本号 | 说明 |
 |------|--------|------|
-| `src/engram/gateway/audit_event.py` | `AUDIT_EVENT_SCHEMA_VERSION = "1.1"` | 代码中的常量 |
-| `schemas/audit_event_v1.schema.json` | `"schema_version": {"pattern": "^\\d+\\.\\d+$"}` | JSON Schema 格式约束 |
+| `src/engram/gateway/audit_event.py` | `AUDIT_EVENT_SCHEMA_VERSION = "2.0"` | 代码中的常量 |
+| `schemas/audit_event_v2.schema.json` | `"schema_version": {"pattern": "^\\d+\\.\\d+$"}` | JSON Schema 格式约束 |
 
 ### 6.2 版本演进规则
 
@@ -686,7 +686,7 @@ WHERE sync.status = 'redirected'
 
 ### 6.5 Schema 文件引用
 
-完整 Schema 定义见：`schemas/audit_event_v1.schema.json`
+完整 Schema 定义见：`schemas/audit_event_v2.schema.json`
 
 关键 definitions：
 
@@ -813,9 +813,9 @@ pytest tests/gateway/test_audit_event_contract.py \
 | [ADR: Gateway DI 与入口边界统一](../architecture/adr_gateway_di_and_entry_boundary.md) | 依赖注入与 correlation_id 生成位置设计决策 |
 | [Gateway ImportError 与可选依赖处理规范](../architecture/gateway_importerror_and_optional_deps.md) | 模块导入时机与可选性 |
 | [Gateway ↔ Logbook 边界契约](./gateway_logbook_boundary.md) | Logbook 原语接口定义 |
-| [Outbox Lease 契约](./outbox_lease_v1.md) | Outbox Worker 租约协议 |
+| [Outbox Lease 契约](./outbox_lease_v2.md) | Outbox Worker 租约协议 |
 | [**Audit/Outbox E2E 矩阵测试追溯**](./gateway_audit_outbox_e2e_matrix_traceability.md) | 场景矩阵、主测试映射、覆盖点、缺口识别 |
-| [audit_event_v1.schema.json](../../schemas/audit_event_v1.schema.json) | 审计事件 JSON Schema |
+| [audit_event_v2.schema.json](../../schemas/audit_event_v2.schema.json) | 审计事件 JSON Schema |
 
 ---
 

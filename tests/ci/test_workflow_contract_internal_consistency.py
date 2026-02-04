@@ -470,7 +470,7 @@ class TestRealContractIntegration:
     def test_real_contract_internal_consistency(self) -> None:
         """验证真实 contract 的内部一致性"""
         workspace = Path(__file__).parent.parent.parent
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
 
         if not contract_path.exists():
             pytest.skip(f"Contract file not found: {contract_path}")
@@ -493,7 +493,7 @@ class TestRealContractIntegration:
     def test_real_contract_has_expected_workflows(self) -> None:
         """验证真实 contract 包含预期的 workflow"""
         workspace = Path(__file__).parent.parent.parent
-        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v1.json"
+        contract_path = workspace / "scripts" / "ci" / "workflow_contract.v2.json"
 
         if not contract_path.exists():
             pytest.skip(f"Contract file not found: {contract_path}")

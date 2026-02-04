@@ -761,7 +761,7 @@ jobs:
         run: |
           echo "=== Workflow Contract Validation (Phase 1) ==="
           echo "校验范围: ci.yml + nightly.yml"
-          echo "合约文件: scripts/ci/workflow_contract.v1.json"
+          echo "合约文件: scripts/ci/workflow_contract.v2.json"
           echo ""
           make validate-workflows-strict
 

@@ -555,7 +555,7 @@ def build_run_finish_payload_from_result(
         >>> payload.status
         'completed'
     """
-    # 确定状态（对齐 schemas/scm_sync_run_v1.schema.json 的语义）
+    # 确定状态（对齐 schemas/scm_sync_run_v2.schema.json 的语义）
     # 优先级：
     # 1) 显式 status（completed/failed/no_data）
     # 2) 有 error / error_category -> failed

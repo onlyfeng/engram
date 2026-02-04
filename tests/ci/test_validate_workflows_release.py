@@ -129,7 +129,7 @@ def _build_release_workflow(upload_paths: list[str]) -> dict:
 
 
 def _run_validator(workspace: Path, contract: dict) -> WorkflowContractValidator:
-    contract_path = workspace / "workflow_contract.v1.json"
+    contract_path = workspace / "workflow_contract.v2.json"
     _write_json(contract_path, contract)
     validator = WorkflowContractValidator(contract_path, workspace)
     assert validator.load_contract() is True

@@ -6,8 +6,8 @@
 
 ## 1. SSOT 与 Schema
 
-- **SSOT**：`scripts/ci/workflow_contract.v1.json`
-- **Schema**：`scripts/ci/workflow_contract.v1.schema.json`
+- **SSOT**：`scripts/ci/workflow_contract.v2.json`
+- **Schema**：`scripts/ci/workflow_contract.v2.schema.json`
 - **受控文档（由 SSOT 驱动）**：
   - `docs/ci_nightly_workflow_refactor/contract.md`
   - `docs/ci_nightly_workflow_refactor/coupling_map.md`
@@ -60,15 +60,15 @@
 
 | trigger_reasons（示例） | 优先检查 | 常见修复文件 |
 |---|---|---|
-| Phase 1 workflow 文件（ci.yml/nightly.yml） | `validate_workflows.py --strict` + docs/coupling 同步 | `.github/workflows/ci.yml` / `.github/workflows/nightly.yml` / `workflow_contract.v1.json` / `contract.md` / `coupling_map.md` |
-| 合约定义 JSON 文件 | internal-consistency + docs/coupling 同步 | `scripts/ci/workflow_contract.v1.json` / `contract.md` / `coupling_map.md` |
+| Phase 1 workflow 文件（ci.yml/nightly.yml） | `validate_workflows.py --strict` + docs/coupling 同步 | `.github/workflows/ci.yml` / `.github/workflows/nightly.yml` / `workflow_contract.v2.json` / `contract.md` / `coupling_map.md` |
+| 合约定义 JSON 文件 | internal-consistency + docs/coupling 同步 | `scripts/ci/workflow_contract.v2.json` / `contract.md` / `coupling_map.md` |
 | 合约文档（docs/ci_nightly_workflow_refactor/） | docs-sync + doc-anchors | `contract.md` / `coupling_map.md` |
-| 合约 JSON Schema | `validate_workflows.py --strict` + 相关 schema 校验 | `scripts/ci/workflow_contract.v1.schema.json` / `validate_workflows.py` / `workflow_contract.v1.json` |
+| 合约 JSON Schema | `validate_workflows.py --strict` + 相关 schema 校验 | `scripts/ci/workflow_contract.v2.schema.json` / `validate_workflows.py` / `workflow_contract.v2.json` |
 | 合约校验器核心脚本 | `pytest tests/ci/ -q` + strict 校验 | `scripts/ci/validate_workflows.py` / `tests/ci/*.py` |
 | 文档同步校验脚本 | `pytest tests/ci/ -q` + docs-sync | `scripts/ci/check_workflow_contract_docs_sync.py` / `tests/ci/*.py` |
 | 漂移报告生成脚本 | `pytest tests/ci/ -q` + drift report | `scripts/ci/workflow_contract_drift_report.py` / `tests/ci/*.py` |
 | 快照生成脚本 | `pytest tests/ci/ -q` + snapshot | `scripts/ci/generate_workflow_contract_snapshot.py` / `tests/ci/*.py` |
-| Makefile CI/workflow 相关目标变更 | make-targets-consistency + version-policy | `Makefile` / `workflow_contract.v1.json` / `coupling_map.md` |
+| Makefile CI/workflow 相关目标变更 | make-targets-consistency + version-policy | `Makefile` / `workflow_contract.v2.json` / `coupling_map.md` |
 
 > 实操建议：先定位触发原因，再执行最小必要门禁，最后补齐受控块与版本策略校验。
 
@@ -82,12 +82,12 @@
    - 文件：`contract.md` / `coupling_map.md`
    - 工具：`render_workflow_contract_docs.py`
 2. **合约字段/校验逻辑变更（必须 bump）**
-   - 文件：`workflow_contract.v1.json` / `workflow_contract.v1.schema.json` / `validate_workflows.py` / 相关 check 脚本
+   - 文件：`workflow_contract.v2.json` / `workflow_contract.v2.schema.json` / `validate_workflows.py` / 相关 check 脚本
 3. **CI/Nightly workflow 编排变更（必须 bump，附 drift/suggest）**
    - 文件：`.github/workflows/ci.yml` / `.github/workflows/nightly.yml`
    - 建议附：`workflow_contract_drift_report.py` / `suggest_workflow_contract_updates.py` 输出
 4. **Makefile 目标新增/改名（同步两处）**
-   - 文件：`Makefile` / `workflow_contract.v1.json` / `coupling_map.md`
+   - 文件：`Makefile` / `workflow_contract.v2.json` / `coupling_map.md`
 
 ---
 

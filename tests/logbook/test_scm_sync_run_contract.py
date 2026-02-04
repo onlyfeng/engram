@@ -1138,8 +1138,8 @@ class TestEdgeCases:
 # tests/ -> scripts/ -> logbook_postgres/ -> apps/ -> engram/
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CANDIDATE_PATHS = [
-    _REPO_ROOT / "schemas" / "scm_sync_run_v1.schema.json",
-    _REPO_ROOT.parent / "schemas" / "scm_sync_run_v1.schema.json",
+    _REPO_ROOT / "schemas" / "scm_sync_run_v2.schema.json",
+    _REPO_ROOT.parent / "schemas" / "scm_sync_run_v2.schema.json",
 ]
 for _candidate in _CANDIDATE_PATHS:
     if _candidate.exists():
@@ -2602,7 +2602,7 @@ class TestFailedMustIncludeErrorSummary:
     """
     核心契约测试：failed 状态必须包含 error_summary_json
 
-    根据 scm_sync_run_v1.schema.json 的 allOf 规则：
+    根据 scm_sync_run_v2.schema.json 的 allOf 规则：
     当 status = "failed" 时，error_summary_json 是必需字段。
     """
 

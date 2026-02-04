@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DRIFT_MAP_PATH = REPO_ROOT / "configs" / "iteration_toolchain_drift_map.v1.json"
+DRIFT_MAP_PATH = REPO_ROOT / "configs" / "iteration_toolchain_drift_map.v2.json"
 RERUN_ADVICE_KEYS = ("fixture_refresh_commands", "minimal_tests", "minimal_gates")
 
 

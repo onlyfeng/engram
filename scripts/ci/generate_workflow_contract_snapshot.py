@@ -294,7 +294,7 @@ def main():
 
 用途:
   在修改 workflow 前后分别运行此脚本，然后对比 JSON 差异，
-  确保所有变更都被正确反映到 workflow_contract.v1.json 中。
+  确保所有变更都被正确反映到 workflow_contract.v2.json 中。
 """
     )
 

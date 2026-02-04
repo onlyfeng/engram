@@ -13,7 +13,7 @@
 | 1 | [gateway_logbook_boundary.md](gateway_logbook_boundary.md) | Gateway ↔ Logbook 边界：数据流、职责划分 |
 | 2 | [logbook_seekdb_boundary.md](logbook_seekdb_boundary.md) | Logbook ↔ SeekDB 边界：数据依赖、禁用开关 |
 | 3 | [evidence_packet.md](evidence_packet.md) | 证据包契约：SeekDB 输出、Gateway 消费 |
-| 4 | [outbox_lease_v1.md](outbox_lease_v1.md) | Outbox 租约协议：降级写入、重试机制 |
+| 4 | [outbox_lease_v2.md](outbox_lease_v2.md) | Outbox 租约协议：降级写入、重试机制 |
 | 5 | [versioning.md](versioning.md) | 版本控制策略：Schema 迁移、API 版本 |
 
 ---
@@ -32,7 +32,7 @@
 
 | 契约 | 涉及场景 | 协议类型 |
 |------|----------|----------|
-| [outbox_lease_v1.md](outbox_lease_v1.md) | Gateway 降级、Worker 消费 | 租约协议 |
+| [outbox_lease_v2.md](outbox_lease_v2.md) | Gateway 降级、Worker 消费 | 租约协议 |
 | [versioning.md](versioning.md) | Schema 迁移、API 演进 | 版本策略 |
 
 ---
@@ -41,8 +41,8 @@
 
 | 组件 | 文档路径 | 涉及契约 |
 |------|----------|----------|
-| Logbook | [docs/logbook/](../logbook/) | gateway_logbook_boundary, outbox_lease_v1 |
-| Gateway | [docs/gateway/](../gateway/) | gateway_logbook_boundary, evidence_packet, outbox_lease_v1 |
+| Logbook | [docs/logbook/](../logbook/) | gateway_logbook_boundary, outbox_lease_v2 |
+| Gateway | [docs/gateway/](../gateway/) | gateway_logbook_boundary, evidence_packet, outbox_lease_v2 |
 | SeekDB | [docs/seekdb/](../seekdb/) | evidence_packet |
 
 ---

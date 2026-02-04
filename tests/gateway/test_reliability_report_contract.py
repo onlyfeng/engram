@@ -26,7 +26,7 @@ def _find_schema_path() -> Path:
 
     # 尝试向上查找直到找到 schemas 目录
     for _ in range(10):  # 最多向上 10 层
-        candidate = current / "schemas" / "reliability_report_v1.schema.json"
+        candidate = current / "schemas" / "reliability_report_v2.schema.json"
         if candidate.exists():
             return candidate
         current = current.parent
@@ -35,10 +35,10 @@ def _find_schema_path() -> Path:
     fallback_paths = [
         Path(__file__).resolve().parent.parent.parent.parent.parent
         / "schemas"
-        / "reliability_report_v1.schema.json",
+        / "reliability_report_v2.schema.json",
         Path(__file__).resolve().parent.parent.parent.parent.parent.parent
         / "schemas"
-        / "reliability_report_v1.schema.json",
+        / "reliability_report_v2.schema.json",
     ]
 
     for p in fallback_paths:
@@ -52,7 +52,7 @@ SCHEMA_PATH = _find_schema_path()
 
 
 def load_schema() -> Dict[str, Any]:
-    """加载 reliability_report_v1 schema"""
+    """加载 reliability_report_v2 schema"""
     if not SCHEMA_PATH.exists():
         pytest.skip(f"Schema 文件不存在: {SCHEMA_PATH}")
 
@@ -727,7 +727,7 @@ class TestActualReportStructure:
     def test_actual_report_matches_schema_structure(self, schema):
         """
         验证 logbook_adapter.get_reliability_report() 返回的结构
-        符合 reliability_report_v1.schema.json 定义
+        符合 reliability_report_v2.schema.json 定义
 
         此测试使用 mock 数据库连接来验证函数返回的数据结构
         """

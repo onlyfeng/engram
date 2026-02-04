@@ -63,8 +63,8 @@ from .correlation_id import is_valid_correlation_id as is_valid_correlation_id
 from .correlation_id import normalize_correlation_id as normalize_correlation_id
 
 # 从 error_codes.py 导入权威定义，保持单一事实来源（SSOT）
-# 提供向后兼容别名：JsonRpcErrorCode, ErrorCategory, ErrorReason
-# 参见: docs/contracts/mcp_jsonrpc_error_v1.md
+# 提供别名：JsonRpcErrorCode, ErrorCategory, ErrorReason
+# 参见: docs/contracts/mcp_jsonrpc_error_v2.md
 from .error_codes import McpErrorCategory, McpErrorCode, McpErrorReason
 from .error_redaction import (
     DEFAULT_PUBLIC_ERROR_MESSAGE,
@@ -129,9 +129,9 @@ def _is_exception_type(obj: Any, type_name: str) -> bool:
 # SSOT 原则：
 # - McpErrorCode, McpErrorCategory, McpErrorReason 定义在 error_codes.py
 # - 本模块通过别名复用，避免重复定义和不一致
-# - JsonRpcErrorCode, ErrorCategory, ErrorReason 是兼容别名，指向 Mcp* 类
+# - JsonRpcErrorCode, ErrorCategory, ErrorReason 是别名，指向 Mcp* 类
 #
-# 参见: docs/contracts/mcp_jsonrpc_error_v1.md
+# 参见: docs/contracts/mcp_jsonrpc_error_v2.md
 
 # 向后兼容别名：旧代码使用 JsonRpcErrorCode, ErrorCategory, ErrorReason
 # 新代码推荐直接使用 McpErrorCode, McpErrorCategory, McpErrorReason
@@ -253,7 +253,7 @@ class ErrorData(BaseModel):
 # 参见:
 # - error_codes.py 的边界声明
 # - result_error_codes.py::ToolResultErrorCode
-# - docs/contracts/mcp_jsonrpc_error_v1.md §3.0
+# - docs/contracts/mcp_jsonrpc_error_v2.md §3.0
 ErrorReason = McpErrorReason
 
 

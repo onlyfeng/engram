@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_PATH = Path("configs/iteration_gate_profiles.v1.json")
+CONFIG_PATH = Path("configs/iteration_gate_profiles.v2.json")
 MAKEFILE_PATH = Path("Makefile")
 TARGET_PATTERN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*):")
 

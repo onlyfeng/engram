@@ -1,0 +1,260 @@
+{
+  "$schema": "../schemas/iteration_gate_profiles_v2.schema.json",
+  "version": "2.0.0",
+  "default_profile": "full",
+  "profiles_order": [
+    "full",
+    "regression",
+    "docs-only",
+    "ci-only",
+    "gateway-only",
+    "sql-only"
+  ],
+  "profiles": {
+    "full": {
+      "description": "完整 CI 门禁（make ci）",
+      "commands": [
+        {
+          "command": "make lint",
+          "check_item": "代码风格检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make format-check",
+          "check_item": "格式检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make typecheck",
+          "check_item": "mypy 类型检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-schemas",
+          "check_item": "JSON Schema 校验",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-env-consistency",
+          "check_item": "环境变量一致性检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-logbook-consistency",
+          "check_item": "Logbook 配置一致性检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-migration-sanity",
+          "check_item": "SQL 迁移文件检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-scm-sync-consistency",
+          "check_item": "SCM Sync 一致性检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-error-reason-usage",
+          "check_item": "Gateway ErrorReason 使用规范检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-public-api-surface",
+          "check_item": "Gateway Public API 导入表面检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-public-api-docs-sync",
+          "check_item": "Gateway Public API 文档同步检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-di-boundaries",
+          "check_item": "Gateway DI 边界检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-import-surface",
+          "check_item": "Gateway 懒加载策略检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-correlation-id-single-source",
+          "check_item": "Gateway correlation_id 单一来源检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-iteration-docs",
+          "check_item": "迭代文档规范检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make validate-workflows-strict",
+          "check_item": "Workflow 合约校验",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-workflow-contract-docs-sync",
+          "check_item": "Workflow 合约文档同步检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-workflow-contract-version-policy",
+          "check_item": "Workflow 合约版本策略检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-mcp-error-contract",
+          "check_item": "MCP 错误码合约检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-mcp-error-docs-sync",
+          "check_item": "MCP 错误码文档同步检查",
+          "pass_criterion": "退出码 0"
+        }
+      ]
+    },
+    "regression": {
+      "description": "回归最小集",
+      "commands": [
+        {
+          "command": "make validate-workflows-strict",
+          "check_item": "Workflow 合约校验",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-workflow-contract-docs-sync",
+          "check_item": "Workflow 合约文档同步检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-public-api-surface",
+          "check_item": "Gateway Public API 导入表面检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-public-api-docs-sync",
+          "check_item": "Gateway Public API 文档同步检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-iteration-docs",
+          "check_item": "迭代文档规范检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "pytest tests/ci/ -q",
+          "check_item": "CI 脚本测试",
+          "pass_criterion": "无 FAILED，退出码 0"
+        }
+      ]
+    },
+    "docs-only": {
+      "description": "文档代理最小门禁",
+      "commands": [
+        {
+          "command": "make check-env-consistency",
+          "check_item": "环境变量一致性检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-iteration-docs",
+          "check_item": "迭代文档规范检查",
+          "pass_criterion": "退出码 0"
+        }
+      ]
+    },
+    "ci-only": {
+      "description": "CI 代理最小门禁",
+      "commands": [
+        {
+          "command": "make typecheck",
+          "check_item": "mypy 类型检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make validate-workflows-strict",
+          "check_item": "Workflow 合约校验",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-workflow-contract-docs-sync",
+          "check_item": "Workflow 合约文档同步检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-workflow-contract-version-policy",
+          "check_item": "Workflow 合约版本策略检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-workflow-contract-doc-anchors",
+          "check_item": "Workflow 合约文档锚点检查",
+          "pass_criterion": "退出码 0"
+        }
+      ]
+    },
+    "gateway-only": {
+      "description": "Gateway 代理最小门禁",
+      "commands": [
+        {
+          "command": "make lint",
+          "check_item": "代码风格检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-di-boundaries",
+          "check_item": "Gateway DI 边界检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-public-api-surface",
+          "check_item": "Gateway Public API 导入表面检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-public-api-docs-sync",
+          "check_item": "Gateway Public API 文档同步检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-import-surface",
+          "check_item": "Gateway 懒加载策略检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-gateway-correlation-id-single-source",
+          "check_item": "Gateway correlation_id 单一来源检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-mcp-error-contract",
+          "check_item": "MCP 错误码合约检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make check-mcp-error-docs-sync",
+          "check_item": "MCP 错误码文档同步检查",
+          "pass_criterion": "退出码 0"
+        }
+      ]
+    },
+    "sql-only": {
+      "description": "SQL 代理最小门禁",
+      "commands": [
+        {
+          "command": "make check-migration-sanity",
+          "check_item": "SQL 迁移文件检查",
+          "pass_criterion": "退出码 0"
+        },
+        {
+          "command": "make verify-permissions",
+          "check_item": "数据库权限验证",
+          "pass_criterion": "退出码 0"
+        }
+      ]
+    }
+  }
+}

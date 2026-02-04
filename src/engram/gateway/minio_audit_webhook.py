@@ -162,10 +162,10 @@ def _parse_minio_audit_event(body: bytes) -> Dict[str, Any]:
 
 def normalize_to_schema(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    将 MinIO 审计事件归一化为 object_store_audit_event_v1 schema 格式
+    将 MinIO 审计事件归一化为 object_store_audit_event_v2 schema 格式
 
     归一化结构包含:
-    - schema_version: 固定为 "1.0"
+    - schema_version: 固定为 "2.0"
     - provider: 固定为 "minio"
     - raw: 完整保留原始事件
     - 以及其他标准化字段
@@ -200,7 +200,7 @@ def normalize_to_schema(event: Dict[str, Any]) -> Dict[str, Any]:
         event: MinIO 原始审计事件
 
     Returns:
-        归一化后的事件字典，符合 object_store_audit_event_v1 schema
+        归一化后的事件字典，符合 object_store_audit_event_v2 schema
     """
     api_info = event.get("api", {})
     request_claims = event.get("requestClaims", {})
@@ -244,7 +244,7 @@ def normalize_to_schema(event: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         # Schema 核心字段
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "provider": "minio",
         "event_ts": event.get("time"),
         "bucket": bucket,
@@ -287,7 +287,7 @@ def _insert_audit_to_db(audit_data: Dict[str, Any]) -> int:
     - 以及其他标准化字段
 
     Args:
-        audit_data: 归一化后的审计数据字典（符合 object_store_audit_event_v1 schema）
+        audit_data: 归一化后的审计数据字典（符合 object_store_audit_event_v2 schema）
 
     Returns:
         创建的 event_id

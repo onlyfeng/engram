@@ -613,7 +613,7 @@ class TestConstants:
 
     def test_schema_path(self):
         """测试 SCHEMA_PATH 路径格式"""
-        assert SCHEMA_PATH.name == "iteration_evidence_v1.schema.json"
+        assert SCHEMA_PATH.name == "iteration_evidence_v2.schema.json"
         assert SCHEMA_PATH.parent.name == "schemas"
 
 

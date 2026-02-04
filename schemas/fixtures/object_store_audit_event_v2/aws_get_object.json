@@ -1,0 +1,27 @@
+{
+  "schema_version": "2.0",
+  "provider": "aws",
+  "event_ts": "2024-01-15T11:30:00.000Z",
+  "bucket": "my-bucket",
+  "object_key": "data/file.json",
+  "operation": "s3:GetObject",
+  "status_code": 200,
+  "success": true,
+  "request_id": "A1B2C3D4E5F67890",
+  "principal": "arn:aws:iam::123456789012:user/admin",
+  "remote_ip": "203.0.113.45",
+  "user_agent": "aws-cli/2.0",
+  "bytes_sent": 2048,
+  "bytes_received": 0,
+  "duration_ms": 45,
+  "raw": {
+    "eventVersion": "1.08",
+    "eventSource": "s3.amazonaws.com",
+    "eventName": "GetObject",
+    "awsRegion": "us-east-1",
+    "requestParameters": {
+      "bucketName": "my-bucket",
+      "key": "data/file.json"
+    }
+  }
+}

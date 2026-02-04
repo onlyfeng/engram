@@ -666,11 +666,11 @@ python scripts/iteration/record_iteration_evidence.py 13 --dry-run
 
 示例：`iteration_13_evidence.json`
 
-输出 JSON 结构（符合 `iteration_evidence_v1.schema.json`）：
+输出 JSON 结构（符合 `iteration_evidence_v2.schema.json`）：
 
 ```json
 {
-  "$schema": "../../../schemas/iteration_evidence_v1.schema.json",
+  "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
   "iteration_number": 13,
   "recorded_at": "2026-02-02T14:30:25Z",
   "commit_sha": "abc1234567890abcdef...",
@@ -766,7 +766,7 @@ python scripts/iteration/record_iteration_evidence.py 13 --dry-run
 
 ```bash
 # 校验证据文件是否符合 schema（推荐在提交前运行）
-python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v1.schema.json
+python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v2.schema.json
 
 # 校验成功无输出，失败会显示具体错误
 ```
@@ -789,7 +789,7 @@ python scripts/iteration/record_iteration_evidence.py 13 \
   --ci-run-url https://github.com/org/repo/actions/runs/123
 
 # 3. 校验 schema（可选但推荐）
-python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v1.schema.json
+python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v2.schema.json
 
 # 4. 提交证据
 git add docs/acceptance/evidence/iteration_13_evidence.json
@@ -806,11 +806,11 @@ git commit -m "evidence: Iteration 13 验收证据"
 | 项目 | 值 |
 |------|-----|
 | **证据文件** | [`iteration_13_evidence.json`](evidence/iteration_13_evidence.json) |
-| **Schema 版本** | `iteration_evidence_v1.schema.json` |
+| **Schema 版本** | `iteration_evidence_v2.schema.json` |
 | **记录时间** | 2026-02-02T14:30:25Z |
 | **Commit SHA** | `abc1234` |
 
-> **校验命令**: `python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v1.schema.json`
+> **校验命令**: `python -m jsonschema -i docs/acceptance/evidence/iteration_13_evidence.json schemas/iteration_evidence_v2.schema.json`
 ```
 
 完整模板参见 [iteration_evidence_snippet.template.md](../acceptance/_templates/iteration_evidence_snippet.template.md)

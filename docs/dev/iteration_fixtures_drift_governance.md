@@ -5,7 +5,7 @@
 - `tests/iteration/fixtures/` 是迭代脚本输出的快照基线，用于保证行为稳定。
 - 覆盖脚本：`render_min_gate_block.py`、`render_iteration_evidence_snippet.py`、`sync_iteration_regression.py` 及其受控块逻辑（`generated_blocks.py`）。
 - 回归文档中的受控块（`min_gate_block` / `evidence_snippet`）必须通过脚本刷新，禁止手工编辑区块内容。
-- 受控块格式契约见 [iteration_regression_generated_blocks_v1.md](../contracts/iteration_regression_generated_blocks_v1.md)，包含 marker/H2-H3/表格列/空行/emoji 的稳定性承诺与 breaking 判定。
+- 受控块格式契约见 [iteration_regression_generated_blocks_v2.md](../contracts/iteration_regression_generated_blocks_v2.md)，包含 marker/H2-H3/表格列/空行/emoji 的稳定性承诺与 breaking 判定。
 
 ## 变更分级（non-breaking vs breaking）
 
@@ -28,11 +28,11 @@
 
 | 变更范围（文件/目录） | 触发 | 刷新动作 | 验证命令 |
 |---|---|---|---|
-| `configs/iteration_gate_profiles.v1.json`、`schemas/iteration_gate_profiles_v1.schema.json`、`scripts/iteration/render_min_gate_block.py`、`scripts/iteration/update_render_min_gate_block_fixtures.py` | 最小门禁输出变化 | `python scripts/iteration/update_render_min_gate_block_fixtures.py` 或 `python scripts/iteration/update_iteration_fixtures.py --min-gate` | `pytest tests/iteration/test_render_min_gate_block.py -q` + `python scripts/ci/check_iteration_gate_profiles_contract.py` + `python scripts/ci/check_min_gate_profiles_consistency.py` + `make check-schemas` |
-| `scripts/iteration/render_iteration_evidence_snippet.py`、`docs/acceptance/evidence/`、`schemas/iteration_evidence_v2.schema.json`（含 v1 legacy） | 证据片段渲染或 Schema 变更 | `python scripts/iteration/update_iteration_fixtures.py --evidence-snippet` | `pytest tests/iteration/test_render_iteration_evidence_snippet.py -q` + `make check-iteration-evidence` |
+| `configs/iteration_gate_profiles.v2.json`、`schemas/iteration_gate_profiles_v2.schema.json`、`scripts/iteration/render_min_gate_block.py`、`scripts/iteration/update_render_min_gate_block_fixtures.py` | 最小门禁输出变化 | `python scripts/iteration/update_render_min_gate_block_fixtures.py` 或 `python scripts/iteration/update_iteration_fixtures.py --min-gate` | `pytest tests/iteration/test_render_min_gate_block.py -q` + `python scripts/ci/check_iteration_gate_profiles_contract.py` + `python scripts/ci/check_min_gate_profiles_consistency.py` + `make check-schemas` |
+| `scripts/iteration/render_iteration_evidence_snippet.py`、`docs/acceptance/evidence/`、`schemas/iteration_evidence_v2.schema.json` | 证据片段渲染或 Schema 变更 | `python scripts/iteration/update_iteration_fixtures.py --evidence-snippet` | `pytest tests/iteration/test_render_iteration_evidence_snippet.py -q` + `make check-iteration-evidence` |
 | `scripts/iteration/sync_iteration_regression.py`、`scripts/iteration/generated_blocks.py` | 受控块插入/同步逻辑变更 | `python scripts/iteration/update_iteration_fixtures.py --sync-regression --iteration-cycle` | `pytest tests/iteration/test_sync_iteration_regression.py -q` |
 | `docs/acceptance/iteration_*_regression.md`、`docs/acceptance/_templates/` | 受控块内容与脚本输出不一致 | `python scripts/iteration/sync_iteration_regression.py <N> --write` 或 `python scripts/iteration/update_min_gate_block_in_regression.py <N>` | `make check-iteration-docs` |
-| `configs/iteration_toolchain_drift_map.v1.json`、`schemas/iteration_toolchain_drift_map_v1.schema.json` | rerun 建议映射变更 | 无需刷新 fixtures | `python scripts/ci/check_iteration_toolchain_drift_map_contract.py` + `make check-schemas` |
+| `configs/iteration_toolchain_drift_map.v2.json`、`schemas/iteration_toolchain_drift_map_v2.schema.json` | rerun 建议映射变更 | 无需刷新 fixtures | `python scripts/ci/check_iteration_toolchain_drift_map_contract.py` + `make check-schemas` |
 
 ## 推荐入口（PR diff → rerun 建议）
 

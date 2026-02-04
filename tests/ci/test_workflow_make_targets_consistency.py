@@ -476,7 +476,7 @@ class TestWorkflowMakeTargetsChecker:
         # Setup
         (temp_workspace / "Makefile").write_text(sample_makefile_content)
         (temp_workspace / ".github" / "workflows" / "ci.yml").write_text(sample_workflow_content)
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             sample_contract_content
         )
 
@@ -502,7 +502,7 @@ jobs:
         run: make unknown-target
 """
         (temp_workspace / ".github" / "workflows" / "ci.yml").write_text(workflow_content)
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             '{"version": "1.0.0"}'
         )
 
@@ -529,7 +529,7 @@ jobs:
   }
 }
 """
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             contract_content
         )
 
@@ -556,7 +556,7 @@ jobs:
   }
 }
 """
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             contract_content
         )
 
@@ -590,7 +590,7 @@ jobs:
         run: make test && make test
 """
         (temp_workspace / ".github" / "workflows" / "ci.yml").write_text(workflow_content)
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             '{"version": "1.0.0"}'
         )
 
@@ -631,7 +631,7 @@ jobs:
 """
         )
 
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             '{"version": "1.0.0"}'
         )
 
@@ -750,7 +750,7 @@ jobs:
           echo "Done"
 """
         (temp_workspace / ".github" / "workflows" / "ci.yml").write_text(workflow_content)
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             '{"make": {"targets_required": ["test", "ci"]}}'
         )
 
@@ -778,7 +778,7 @@ jobs:
         run: echo "Hello"
 """
         (temp_workspace / ".github" / "workflows" / "ci.yml").write_text(workflow_content)
-        (temp_workspace / "scripts" / "ci" / "workflow_contract.v1.json").write_text(
+        (temp_workspace / "scripts" / "ci" / "workflow_contract.v2.json").write_text(
             '{"version": "1.0.0"}'
         )
 

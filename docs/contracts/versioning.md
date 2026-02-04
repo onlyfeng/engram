@@ -12,9 +12,9 @@
 
 | Schema 文件 | 用途 | 契约测试 |
 |------------|------|----------|
-| [`audit_event_v1.schema.json`](../../schemas/audit_event_v1.schema.json) | Gateway 审计事件格式 | `test_audit_event_contract.py` |
-| `object_store_audit_event_v1.schema.json` | 对象存储审计事件归一化格式 | `test_audit_event_contract.py` |
-| [`reliability_report_v1.schema.json`](../../schemas/reliability_report_v1.schema.json) | 可靠性报告格式 | `test_reliability_report_contract.py` |
+| [`audit_event_v2.schema.json`](../../schemas/audit_event_v2.schema.json) | Gateway 审计事件格式 | `test_audit_event_contract.py` |
+| `object_store_audit_event_v2.schema.json` | 对象存储审计事件归一化格式 | `test_audit_event_contract.py` |
+| [`reliability_report_v2.schema.json`](../../schemas/reliability_report_v2.schema.json) | 可靠性报告格式 | `test_reliability_report_contract.py` |
 
 ---
 
@@ -25,7 +25,7 @@
 **文件命名规范**：`*_v{major}.schema.json`
 
 - **文件名中的 major 版本号固定**，仅在破坏性变更时递增
-- **Schema 内部 `schema_version` 字段**允许 `1.x` 演进（如 `1.0` → `1.1` → `1.2`）
+- **Schema 内部 `schema_version` 字段**允许 `2.x` 演进（如 `2.0` → `2.1` → `2.2`）
 
 **版本演进规则**：
 
@@ -45,8 +45,8 @@
 **文件命名**：`docs/contracts/<contract_name>_v<major>.md`
 
 **示例**：
-- `docs/contracts/outbox_lease_v1.md` — Outbox Worker 租约机制
-- `docs/contracts/evidence_packet_v1.md` — Evidence Packet 结构
+- `docs/contracts/outbox_lease_v2.md` — Outbox Worker 租约机制
+- `docs/contracts/evidence_packet_v2.md` — Evidence Packet 结构
 
 **版本升级规则**：
 - 重大行为变化（如租约超时语义改变、协议握手流程变更）→ 新开 v2 文档
@@ -103,12 +103,12 @@ Schema 文件名包含版本号：`<name>_v<major>.schema.json`
 
 ```
 # 当前版本（向后兼容演进）
-audit_event_v1.schema.json          # 文件名不变
-  └── schema_version: "1.0" → "1.1" → "1.2"  # 内部版本递增
+audit_event_v2.schema.json          # 文件名不变
+  └── schema_version: "2.0" → "2.1" → "2.2"  # 内部版本递增
 
 # 破坏性变更后
-audit_event_v2.schema.json  # 新文件，schema_version: "2.0"
-audit_event_v1.schema.json  # 保留旧版本，标记 deprecated
+audit_event_v3.schema.json  # 新文件，schema_version: "3.0"
+audit_event_v2.schema.json  # 保留旧版本，标记 deprecated
 ```
 
 ---

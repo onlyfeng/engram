@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from difflib import get_close_matches
 from pathlib import Path
 
-CONFIG_PATH = Path("configs/iteration_toolchain_drift_map.v1.json")
+CONFIG_PATH = Path("configs/iteration_toolchain_drift_map.v2.json")
 MAKEFILE_PATH = Path("Makefile")
 TARGET_PATTERN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*):")
 

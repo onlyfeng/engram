@@ -3,7 +3,7 @@
 > 本文档固化 workflow 的关键标识符、环境变量、标签语义等，作为"禁止回归"的基准。
 > 任何修改需经过 review 并更新本文档。
 
-> **范围说明**: 当前合约版本（详见第 14 章版本控制表或 `workflow_contract.v1.json` 的 `version` 字段）覆盖 CI、Nightly 与 Release workflow。
+> **范围说明**: 当前合约版本（详见第 14 章版本控制表或 `workflow_contract.v2.json` 的 `version` 字段）覆盖 CI、Nightly 与 Release workflow。
 
 ---
 
@@ -15,8 +15,8 @@
 
 | 文件路径 | 角色 | 说明 |
 |----------|------|------|
-| `scripts/ci/workflow_contract.v1.json` | **SSOT（合约定义）** | 所有合约字段的唯一真实来源，供校验脚本自动校验 |
-| `scripts/ci/workflow_contract.v1.schema.json` | **Schema** | 定义 contract JSON 的字段约束和结构规范 |
+| `scripts/ci/workflow_contract.v2.json` | **SSOT（合约定义）** | 所有合约字段的唯一真实来源，供校验脚本自动校验 |
+| `scripts/ci/workflow_contract.v2.schema.json` | **Schema** | 定义 contract JSON 的字段约束和结构规范 |
 | `.github/workflows/ci.yml` | **实现（CI workflow）** | CI workflow 的实际定义 |
 | `.github/workflows/nightly.yml` | **实现（Nightly workflow）** | Nightly workflow 的实际定义 |
 | `.github/workflows/release.yml` | **实现（Release workflow）** | Release workflow 的实际定义 |
@@ -41,7 +41,7 @@
 | **CI Artifact 名称** | `workflow-contract-validation` |
 
 **功能说明**：
-- 校验 workflow YAML 与 `workflow_contract.v1.json` 的一致性
+- 校验 workflow YAML 与 `workflow_contract.v2.json` 的一致性
 - 检测 frozen job/step name 改名（ERROR）
 - 检测非冻结项改名（`--strict` 模式下为 ERROR）
 - 检测 extra jobs（workflow 中存在但 contract 未声明）
@@ -67,7 +67,7 @@
 | **CI Artifact 名称** | `workflow-contract-docs-sync` |
 
 **功能说明**：
-- 校验 `workflow_contract.v1.json` 与 `contract.md` 的同步状态
+- 校验 `workflow_contract.v2.json` 与 `contract.md` 的同步状态
 - 检测 job_ids/job_names/labels 等字段在文档中的同步情况
 - 检测版本号是否在文档第 14 章中记录
 
@@ -325,9 +325,9 @@ CRITICAL_WORKFLOW_RULES = [
 
 | 步骤 | 文件 | 操作 |
 |------|------|------|
-| 1 | `workflow_contract.v1.json` | 添加 `release` 字段定义 |
-| 2 | `workflow_contract.v1.json` | 更新 `frozen_*` allowlist（如需） |
-| 3 | `workflow_contract.v1.json` | 更新 `make.targets_required`（如有 release 专用 targets） |
+| 1 | `workflow_contract.v2.json` | 添加 `release` 字段定义 |
+| 2 | `workflow_contract.v2.json` | 更新 `frozen_*` allowlist（如需） |
+| 3 | `workflow_contract.v2.json` | 更新 `make.targets_required`（如有 release 专用 targets） |
 | 4 | `check_workflow_contract_version_policy.py` | 扩展 `CRITICAL_WORKFLOW_RULES` 正则 |
 | 5 | `check_workflow_contract_docs_sync.py` | 扩展 `WORKFLOW_DOC_ANCHORS` |
 | 6 | `validate_workflows.py` | 无需修改（自动发现 workflow keys） |
@@ -340,7 +340,7 @@ CRITICAL_WORKFLOW_RULES = [
 
 ## 3. PR Label 列表与语义
 
-> **SSOT 说明**: `scripts/ci/workflow_contract.v1.json` 的 `ci.labels` 字段是 PR Labels 的唯一真实来源（SSOT）。本节内容必须与该 JSON 文件保持同步。
+> **SSOT 说明**: `scripts/ci/workflow_contract.v2.json` 的 `ci.labels` 字段是 PR Labels 的唯一真实来源（SSOT）。本节内容必须与该 JSON 文件保持同步。
 >
 > **当前状态**: CI workflow 当前**不消费** PR labels。`gh_pr_labels_to_outputs.py` 脚本存在但未被 ci.yml 调用。Labels 仅用于合约定义和一致性校验。
 
@@ -447,7 +447,7 @@ some-job:
 
 | 文件 | 更新内容 |
 |------|----------|
-| `workflow_contract.v1.json` | 如有新 label：更新 `ci.labels`；如有新 job：更新 `job_ids`、`job_names`、`required_jobs` |
+| `workflow_contract.v2.json` | 如有新 label：更新 `ci.labels`；如有新 job：更新 `job_ids`、`job_names`、`required_jobs` |
 | `contract.md` | 更新第 2 章（job 列表）、第 3 章（labels 说明） |
 | `maintenance.md` | 更新 1.4 节启用 checklist |
 
@@ -465,7 +465,7 @@ some-job:
 2. **值类型**：统一使用 `true`/`false` 字符串（便于 YAML 条件判断）
 3. **同步更新**：
    - 在 `gh_pr_labels_to_outputs.py` 添加 `LABEL_*` 常量
-   - 在 `workflow_contract.v1.json` 的 `ci.labels` 添加 label
+   - 在 `workflow_contract.v2.json` 的 `ci.labels` 添加 label
    - 运行 `make validate-workflows-strict` 验证一致性
 
 **示例：添加 `ci:skip-slow-tests` label**
@@ -549,7 +549,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ### 5.1 Frozen Job Names
 
-以下 Job Name 为"禁止回归"基准，在 `workflow_contract.v1.json` 的 `frozen_job_names.allowlist` 中定义。
+以下 Job Name 为"禁止回归"基准，在 `workflow_contract.v2.json` 的 `frozen_job_names.allowlist` 中定义。
 
 **仅冻结被 GitHub Required Checks 引用的核心 Jobs（共 4 个）：**
 
@@ -568,7 +568,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ### 5.2 Frozen Step Names
 
-以下 Step Name 为"禁止回归"基准，在 `workflow_contract.v1.json` 的 `frozen_step_text.allowlist` 中定义。
+以下 Step Name 为"禁止回归"基准，在 `workflow_contract.v2.json` 的 `frozen_step_text.allowlist` 中定义。
 
 **冻结 step 验证规则：**
 - `validate_workflows.py` 会检查所有 `required_steps` 中的 step name
@@ -606,7 +606,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 **Job Name 改名流程：**
 1. 更新 `.github/workflows/*.yml` 中的 job name
-2. 更新 `scripts/ci/workflow_contract.v1.json`:
+2. 更新 `scripts/ci/workflow_contract.v2.json`:
    - `frozen_job_names.allowlist`: 添加新名称，移除旧名称
    - `job_names[]`: 同步更新对应位置
    - `required_jobs[].name`: 同步更新
@@ -616,7 +616,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 **Step Name 改名流程：**
 1. 更新 `.github/workflows/*.yml` 中的 step name
-2. 更新 `scripts/ci/workflow_contract.v1.json`:
+2. 更新 `scripts/ci/workflow_contract.v2.json`:
    - `frozen_step_text.allowlist`: 添加新名称，移除旧名称
    - `required_jobs[].required_steps`: 如有引用，同步更新
 3. 更新本文档第 5.2 节
@@ -691,7 +691,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 当需要将新步骤纳入 `required_steps` 时：
 
 1. 评估步骤是否属于 5.5.2 的必须类型
-2. 更新 `scripts/ci/workflow_contract.v1.json` 的 `required_jobs[].required_steps`
+2. 更新 `scripts/ci/workflow_contract.v2.json` 的 `required_jobs[].required_steps`
 3. 如果步骤名称需要冻结保护，同步添加到 `frozen_step_text.allowlist`
 4. 运行 `make validate-workflows` 验证
 5. 更新本文档（如影响第 5.2 节的冻结步骤列表）
@@ -842,7 +842,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 
 ### 7.1 CI 核心目标（workflow 必需）
 
-以下 Make targets 在 `workflow_contract.v1.json` 的 `make.targets_required` 中定义，CI 校验会验证这些目标的存在：
+以下 Make targets 在 `workflow_contract.v2.json` 的 `make.targets_required` 中定义，CI 校验会验证这些目标的存在：
 
 <!-- BEGIN:MAKE_TARGETS_TABLE -->
 | Make Target | 用途 |
@@ -1082,7 +1082,7 @@ CI 产物按重要性分为三级：
 # 在 .github/workflows/ci.yml 中添加 upload-artifact 步骤
 
 # Step 2: 更新合约（如果是 Critical/Core 级别产物）
-# 编辑 scripts/ci/workflow_contract.v1.json:
+# 编辑 scripts/ci/workflow_contract.v2.json:
 #   - artifact_archive.required_artifact_paths: 添加路径
 #   - artifact_archive.artifact_step_names: 添加步骤名称（可选）
 
@@ -1106,7 +1106,7 @@ pytest tests/ci/test_validate_workflows_artifacts.py -v
 
 # Step 2: 同步更新
 # - workflow 文件的 upload-artifact 步骤
-# - workflow_contract.v1.json 的 required_artifact_paths
+# - workflow_contract.v2.json 的 required_artifact_paths
 
 # Step 3: 回归验证（重要！）
 make validate-workflows-strict
@@ -1163,7 +1163,7 @@ pytest tests/ci/test_validate_workflows_artifacts.py -v
 
 #### 8.10.1 概述
 
-Drift Report 用于检测 workflow 文件（`.github/workflows/*.yml`）与合约定义（`workflow_contract.v1.json`）之间的差异，生成漂移报告供开发者参考。
+Drift Report 用于检测 workflow 文件（`.github/workflows/*.yml`）与合约定义（`workflow_contract.v2.json`）之间的差异，生成漂移报告供开发者参考。
 
 #### 8.10.2 运行时机
 
@@ -1197,7 +1197,7 @@ Drift Report 用于检测 workflow 文件（`.github/workflows/*.yml`）与合�
    - 修改 `.github/workflows/ci.yml` 中 drift report 步骤，移除 `|| true`
    - 将 drift 产物添加到 `artifact_archive.required_artifact_paths`
    - 将 `Upload drift report` 步骤的 `if-no-files-found` 改为 `warn` 或 `error`
-3. **添加到 required_steps**：如需作为强制门禁，同步更新 `workflow_contract.v1.json` 的 `required_jobs[].required_steps`
+3. **添加到 required_steps**：如需作为强制门禁，同步更新 `workflow_contract.v2.json` 的 `required_jobs[].required_steps`
 
 > **设计原则**：Drift Report 定位为"参考性报告"，帮助识别潜在问题，而非强制门禁。详细说明参见 [maintenance.md#4-drift-report-漂移报告](maintenance.md#4-drift-report-漂移报告)。
 
@@ -1345,7 +1345,7 @@ make validate-workflows-strict  # 等价于 --strict
 
 如需将 extra job 纳入合约管理：
 
-1. 更新 `scripts/ci/workflow_contract.v1.json`:
+1. 更新 `scripts/ci/workflow_contract.v2.json`:
    - `<workflow>.job_ids`: 添加 job ID
    - `<workflow>.job_names`: 添加对应的 job name
    - 如果 job name 需要冻结，添加到 `frozen_job_names.allowlist`
@@ -1439,7 +1439,7 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
 
 ## 11. SemVer Policy / 版本策略
 
-本节定义 workflow contract 文件（`workflow_contract.v1.json`）、workflow 文件（`.github/workflows/*.yml`）及相关文档的版本变更规则。
+本节定义 workflow contract 文件（`workflow_contract.v2.json`）、workflow 文件（`.github/workflows/*.yml`）及相关文档的版本变更规则。
 
 ### 11.1 版本变更分类
 
@@ -1477,7 +1477,7 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
 | 文件路径 | 角色 | 版本影响 |
 |----------|------|----------|
 | `scripts/ci/validate_workflows.py` | 合约校验器核心脚本 | 校验逻辑变更需版本更新 |
-| `scripts/ci/workflow_contract.v1.schema.json` | 合约 JSON Schema | 字段约束变更需版本更新 |
+| `scripts/ci/workflow_contract.v2.schema.json` | 合约 JSON Schema | 字段约束变更需版本更新 |
 | `scripts/ci/check_workflow_contract_docs_sync.py` | 文档同步校验脚本 | 同步规则变更需版本更新 |
 | `scripts/ci/check_workflow_contract_error_types_docs_sync.py` | Error Types 文档同步校验脚本 | 表格同步规则变更需版本更新 |
 | `scripts/ci/workflow_contract_drift_report.py` | 漂移报告生成脚本 | 报告格式变更需版本更新 |
@@ -1491,7 +1491,7 @@ git commit --no-verify -m "紧急修复: 临时绕过合约校验"
 | **功能新增** | Minor | 新增校验规则、新增错误类型、新增命令行参数 |
 | **修复/优化** | Patch | 修复 bug、优化性能、完善错误提示文案 |
 
-**Schema (`workflow_contract.v1.schema.json`) 变更分类：**
+**Schema (`workflow_contract.v2.schema.json`) 变更分类：**
 
 | 变更类型 | 版本位 | 示例 |
 |----------|--------|------|
@@ -1537,15 +1537,15 @@ python scripts/ci/bump_workflow_contract_version.py minor --dry-run
 ```
 
 该工具会自动：
-1. 更新 `workflow_contract.v1.json` 的 `version` 和 `last_updated` 字段
+1. 更新 `workflow_contract.v2.json` 的 `version` 和 `last_updated` 字段
 2. 在 JSON 顶层插入 `_changelog_vX.Y.Z` 空模板
 3. 在 `contract.md` 第 14 章版本控制表顶部插入新行模板
 
 **方式二：手动更新**
 
 ```bash
-# 1. 更新 workflow_contract.v1.json 中的 version 字段
-# 2. 更新 workflow_contract.v1.json 中的 last_updated 字段
+# 1. 更新 workflow_contract.v2.json 中的 version 字段
+# 2. 更新 workflow_contract.v2.json 中的 last_updated 字段
 # 3. 更新 contract.md 第 14 章版本控制表
 # 4. 运行 make validate-workflows 验证一致性
 # 5. 运行 make check-workflow-contract-docs-sync 验证文档同步
@@ -1578,7 +1578,7 @@ python scripts/ci/check_workflow_contract_version_policy.py --pr-mode --verbose
 
 | 错误类型 | 错误信息 | 修复方法 |
 |----------|----------|----------|
-| `version_not_updated` | version 字段未更新 | 按 11.2 节规则升级 `workflow_contract.v1.json` 的 `version` 字段 |
+| `version_not_updated` | version 字段未更新 | 按 11.2 节规则升级 `workflow_contract.v2.json` 的 `version` 字段 |
 | `last_updated_not_updated` | last_updated 字段未更新 | 更新 `last_updated` 为当前日期（格式：`YYYY-MM-DD`） |
 | `version_not_in_doc` | 版本不在文档版本控制表中 | 在 `contract.md` 第 14 章添加版本记录行 |
 
@@ -1597,7 +1597,7 @@ python scripts/ci/bump_workflow_contract_version.py minor --message "变更说�
 # 或 major / patch，根据 Step 1 确定的类型
 
 # Step 3: 编辑生成的占位符内容
-# - 修改 workflow_contract.v1.json 中 _changelog_vX.Y.Z 的内容
+# - 修改 workflow_contract.v2.json 中 _changelog_vX.Y.Z 的内容
 # - 修改 contract.md 版本控制表中新行的变更说明
 
 # Step 4: 验证修复
@@ -1614,8 +1614,8 @@ make validate-workflows-strict
 # - Minor: 新增功能
 # - Patch: 修复/优化
 
-# Step 2: 更新 workflow_contract.v1.json
-# 编辑 scripts/ci/workflow_contract.v1.json，更新：
+# Step 2: 更新 workflow_contract.v2.json
+# 编辑 scripts/ci/workflow_contract.v2.json，更新：
 #   - "version": "X.Y.Z"  （按 SemVer 升级）
 #   - "last_updated": "YYYY-MM-DD"  （当前日期）
 
@@ -1648,7 +1648,7 @@ make validate-workflows-strict
 | 类别 | 描述 | 示例文件 |
 |------|------|----------|
 | `workflow_core` | Phase 2 workflow 文件 | `ci.yml`, `nightly.yml`, `release.yml` |
-| `contract_definition` | 合约定义和文档 | `workflow_contract.v1.json`, `contract.md` |
+| `contract_definition` | 合约定义和文档 | `workflow_contract.v2.json`, `contract.md` |
 | `tooling` | 工具脚本（影响合约执行） | `validate_workflows.py`, `*.schema.json` |
 | `special` | 特殊规则（如 Makefile CI 相关） | `Makefile`（仅 CI 相关变更） |
 
@@ -1660,31 +1660,31 @@ make validate-workflows-strict
 
 本章定义 workflow 合约的唯一真实来源（SSOT）及各类变更的同步更新要求。
 
-> **快速变更流程**：标准变更顺序和最小验证矩阵请参见 [maintenance.md 第 0 章](maintenance.md#0-快速变更流程ssot-first)。该流程明确了 SSOT-first 原则：先改 `workflow_contract.v1.json` → 同步 workflow YAML → 同步文档 → 必要时改 Makefile → 最后补测试。
+> **快速变更流程**：标准变更顺序和最小验证矩阵请参见 [maintenance.md 第 0 章](maintenance.md#0-快速变更流程ssot-first)。该流程明确了 SSOT-first 原则：先改 `workflow_contract.v2.json` → 同步 workflow YAML → 同步文档 → 必要时改 Makefile → 最后补测试。
 
 ### 12.1 合约字段 SSOT 定义
 
-以下表格定义了 `workflow_contract.v1.json` 中各字段的角色、存储位置及同步要求：
+以下表格定义了 `workflow_contract.v2.json` 中各字段的角色、存储位置及同步要求：
 
 | 字段 | SSOT 位置 | 描述 | 校验脚本 |
 |------|-----------|------|----------|
-| `version` | `workflow_contract.v1.json` | 合约版本号（SemVer 格式） | `validate_workflows.py` |
-| `last_updated` | `workflow_contract.v1.json` | 最后更新日期 | 手动维护 |
-| `ci.job_ids` | `workflow_contract.v1.json` | CI workflow 的 Job ID 列表 | `validate_workflows.py` |
-| `ci.job_names` | `workflow_contract.v1.json` | CI workflow 的 Job Name 列表 | `validate_workflows.py` |
-| `nightly.job_ids` | `workflow_contract.v1.json` | Nightly workflow 的 Job ID 列表 | `validate_workflows.py` |
-| `nightly.job_names` | `workflow_contract.v1.json` | Nightly workflow 的 Job Name 列表 | `validate_workflows.py` |
-| `release.job_ids` | `workflow_contract.v1.json` | Release workflow 的 Job ID 列表 | `validate_workflows.py` |
-| `release.job_names` | `workflow_contract.v1.json` | Release workflow 的 Job Name 列表 | `validate_workflows.py` |
-| `*.required_jobs[].required_steps` | `workflow_contract.v1.json` | 每个 Job 的必需 Step 列表 | `validate_workflows.py` |
-| `frozen_job_names.allowlist` | `workflow_contract.v1.json` | 禁止改名的 Job Name 冻结列表 | `validate_workflows.py` |
-| `frozen_step_text.allowlist` | `workflow_contract.v1.json` | 禁止改名的 Step Name 冻结列表 | `validate_workflows.py` |
-| `ci.artifact_archive` | `workflow_contract.v1.json` | CI workflow 必需上传的 Artifact 路径和步骤 | `validate_workflows.py` |
-| `nightly.artifact_archive` | `workflow_contract.v1.json` | Nightly workflow 的 Artifact 配置 | `validate_workflows.py` |
-| `release.artifact_archive` | `workflow_contract.v1.json` | Release workflow 的 Artifact 配置 | `validate_workflows.py` |
-| `make.targets_required` | `workflow_contract.v1.json` | workflow 依赖的 Makefile 目标列表 | `validate_workflows.py` |
-| `ci.labels` | `workflow_contract.v1.json` | 支持的 PR Label 列表 | `validate_workflows.py` |
-| `step_name_aliases` | `workflow_contract.v1.json` | Step 名称别名映射（canonical → aliases） | `validate_workflows.py` |
+| `version` | `workflow_contract.v2.json` | 合约版本号（SemVer 格式） | `validate_workflows.py` |
+| `last_updated` | `workflow_contract.v2.json` | 最后更新日期 | 手动维护 |
+| `ci.job_ids` | `workflow_contract.v2.json` | CI workflow 的 Job ID 列表 | `validate_workflows.py` |
+| `ci.job_names` | `workflow_contract.v2.json` | CI workflow 的 Job Name 列表 | `validate_workflows.py` |
+| `nightly.job_ids` | `workflow_contract.v2.json` | Nightly workflow 的 Job ID 列表 | `validate_workflows.py` |
+| `nightly.job_names` | `workflow_contract.v2.json` | Nightly workflow 的 Job Name 列表 | `validate_workflows.py` |
+| `release.job_ids` | `workflow_contract.v2.json` | Release workflow 的 Job ID 列表 | `validate_workflows.py` |
+| `release.job_names` | `workflow_contract.v2.json` | Release workflow 的 Job Name 列表 | `validate_workflows.py` |
+| `*.required_jobs[].required_steps` | `workflow_contract.v2.json` | 每个 Job 的必需 Step 列表 | `validate_workflows.py` |
+| `frozen_job_names.allowlist` | `workflow_contract.v2.json` | 禁止改名的 Job Name 冻结列表 | `validate_workflows.py` |
+| `frozen_step_text.allowlist` | `workflow_contract.v2.json` | 禁止改名的 Step Name 冻结列表 | `validate_workflows.py` |
+| `ci.artifact_archive` | `workflow_contract.v2.json` | CI workflow 必需上传的 Artifact 路径和步骤 | `validate_workflows.py` |
+| `nightly.artifact_archive` | `workflow_contract.v2.json` | Nightly workflow 的 Artifact 配置 | `validate_workflows.py` |
+| `release.artifact_archive` | `workflow_contract.v2.json` | Release workflow 的 Artifact 配置 | `validate_workflows.py` |
+| `make.targets_required` | `workflow_contract.v2.json` | workflow 依赖的 Makefile 目标列表 | `validate_workflows.py` |
+| `ci.labels` | `workflow_contract.v2.json` | 支持的 PR Label 列表 | `validate_workflows.py` |
+| `step_name_aliases` | `workflow_contract.v2.json` | Step 名称别名映射（canonical → aliases） | `validate_workflows.py` |
 
 #### 12.1.1 字段约束规则
 
@@ -1725,7 +1725,7 @@ make validate-workflows-strict
 
 | 文件路径 | 角色 | 说明 |
 |----------|------|------|
-| `scripts/ci/workflow_contract.v1.json` | **SSOT（机器可读合约）** | 所有合约字段的唯一真实来源，供 `validate_workflows.py` 自动校验 |
+| `scripts/ci/workflow_contract.v2.json` | **SSOT（机器可读合约）** | 所有合约字段的唯一真实来源，供 `validate_workflows.py` 自动校验 |
 | `.github/workflows/ci.yml` | **实现（CI workflow）** | CI workflow 的实际定义，必须与 contract JSON 保持一致 |
 | `.github/workflows/nightly.yml` | **实现（Nightly workflow）** | Nightly workflow 的实际定义，必须与 contract JSON 保持一致 |
 | `docs/ci_nightly_workflow_refactor/contract.md` | **文档（人类可读合约）** | 合约的人类可读版本，作为"禁止回归"的参考基准 |
@@ -1736,7 +1736,7 @@ make validate-workflows-strict
 | `scripts/ci/validate_workflows.py` | **校验（合约校验器）** | 自动校验 workflow 与 contract 的一致性；变更触发版本更新检查 |
 | `scripts/ci/check_workflow_contract_docs_sync.py` | **校验（文档同步校验器）** | 校验 contract JSON 与 contract.md 的同步状态；变更触发版本更新检查 |
 | `scripts/ci/check_workflow_contract_error_types_docs_sync.py` | **校验（Error Types 文档同步）** | 校验第 13 章 Error Types 表格与代码常量同步；变更触发版本更新检查 |
-| `scripts/ci/workflow_contract.v1.schema.json` | **Schema（合约结构定义）** | 定义 contract JSON 的字段约束；变更触发版本更新检查 |
+| `scripts/ci/workflow_contract.v2.schema.json` | **Schema（合约结构定义）** | 定义 contract JSON 的字段约束；变更触发版本更新检查 |
 | `scripts/ci/workflow_contract_drift_report.py` | **工具（漂移报告）** | 生成合约漂移报告；变更触发版本更新检查 |
 | `scripts/ci/generate_workflow_contract_snapshot.py` | **工具（快照生成）** | 生成合约快照；变更触发版本更新检查 |
 | `scripts/ci/check_workflow_contract_version_policy.py` | **校验（版本策略）** | 检查关键文件变更时版本是否已更新 |
@@ -1750,7 +1750,7 @@ make validate-workflows-strict
 ```bash
 # 需要更新的文件：
 1. .github/workflows/ci.yml          # 添加 job 定义
-2. scripts/ci/workflow_contract.v1.json:
+2. scripts/ci/workflow_contract.v2.json:
    - ci.job_ids[]                     # 添加 job ID
    - ci.job_names[]                   # 添加 job name
    - ci.required_jobs[]               # 添加 job 详细定义（含 required_steps）
@@ -1769,7 +1769,7 @@ make check-workflow-contract-docs-sync
 ```bash
 # 需要更新的文件：
 1. .github/workflows/*.yml            # 修改 job/step name
-2. scripts/ci/workflow_contract.v1.json:
+2. scripts/ci/workflow_contract.v2.json:
    - frozen_job_names.allowlist       # 或 frozen_step_text.allowlist
    - job_names[] / required_steps[]   # 同步更新引用
 3. docs/ci_nightly_workflow_refactor/contract.md:
@@ -1784,7 +1784,7 @@ make validate-workflows-strict
 ```bash
 # 需要更新的文件：
 1. Makefile                           # 添加新 target
-2. scripts/ci/workflow_contract.v1.json:
+2. scripts/ci/workflow_contract.v2.json:
    - make.targets_required[]          # 添加 target 名称
 3. docs/ci_nightly_workflow_refactor/contract.md:
    - 第 7 章                          # Make Target 清单
@@ -1800,7 +1800,7 @@ make validate-workflows-strict
 ```bash
 # 需要更新的文件：
 1. .github/workflows/*.yml            # 添加 upload-artifact 步骤
-2. scripts/ci/workflow_contract.v1.json:
+2. scripts/ci/workflow_contract.v2.json:
    - artifact_archive.required_artifact_paths[]
    - artifact_archive.artifact_step_names[]（可选）
 3. docs/ci_nightly_workflow_refactor/contract.md:
@@ -1816,7 +1816,7 @@ make validate-workflows-strict
 
 ```bash
 # 需要更新的文件：
-1. scripts/ci/workflow_contract.v1.json:
+1. scripts/ci/workflow_contract.v2.json:
    - ci.labels[]                      # SSOT，必须先更新
 2. scripts/ci/gh_pr_labels_to_outputs.py:
    - LABEL_* 常量                     # 添加新常量
@@ -1832,14 +1832,14 @@ make validate-workflows-strict        # 会自动校验 labels 一致性
 ```bash
 # 触发版本更新检查的文件：
 - scripts/ci/validate_workflows.py           # 合约校验器核心脚本
-- scripts/ci/workflow_contract.v1.schema.json # 合约 JSON Schema
+- scripts/ci/workflow_contract.v2.schema.json # 合约 JSON Schema
 - scripts/ci/check_workflow_contract_docs_sync.py # 文档同步校验脚本
 - scripts/ci/check_workflow_contract_error_types_docs_sync.py # Error Types 文档同步校验脚本
 - scripts/ci/workflow_contract_drift_report.py    # 漂移报告生成脚本
 - scripts/ci/generate_workflow_contract_snapshot.py # 快照生成脚本
 
 # 需要更新的文件：
-1. scripts/ci/workflow_contract.v1.json:
+1. scripts/ci/workflow_contract.v2.json:
    - version 字段                     # 版本号升级（按 11.2.1 节规则）
    - last_updated 字段                # 更新日期
 2. docs/ci_nightly_workflow_refactor/contract.md:
@@ -1858,11 +1858,11 @@ make validate-workflows-strict                # 合约校验
 
 #### 12.4.7 Schema 字段变更 Checklist
 
-当需要在 `workflow_contract.v1.schema.json` 中新增字段（如 `step_name_aliases`、`job_timeout_minutes` 等）时，按以下顺序操作：
+当需要在 `workflow_contract.v2.schema.json` 中新增字段（如 `step_name_aliases`、`job_timeout_minutes` 等）时，按以下顺序操作：
 
 **Step 1: 更新 Schema 文件**
 ```bash
-# 文件：scripts/ci/workflow_contract.v1.schema.json
+# 文件：scripts/ci/workflow_contract.v2.schema.json
 # 操作：
 1. 在 definitions 或 properties 中添加新字段定义
 2. 指定 type、description、pattern（如适用）
@@ -1914,7 +1914,7 @@ make check-workflow-contract-docs-sync
 
 **Step 5: 更新版本号**
 ```bash
-# 文件：scripts/ci/workflow_contract.v1.json
+# 文件：scripts/ci/workflow_contract.v2.json
 # 操作：
 1. version 字段升级（按下表规则）
 2. last_updated 更新为当前日期
@@ -2087,7 +2087,7 @@ make check-workflow-contract-version-policy   # 版本策略检查
 1. 在对应脚本的 `*ErrorTypes` 类中添加常量定义
 2. 在对应的 `*_ERROR_TYPES` 集合中添加该常量
 3. 更新本文档第 13 章对应的表格
-4. 更新 `workflow_contract.v1.json` 的 `version` 字段（Minor 升级）
+4. 更新 `workflow_contract.v2.json` 的 `version` 字段（Minor 升级）
 5. 在测试文件中添加覆盖测试
 
 **示例：新增 `missing_label` 错误类型**
@@ -2141,6 +2141,7 @@ class ErrorTypes:
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.26.0 | 2026-02-03 | chore: migrate workflow contract file/schema to v2 naming and drop v1 assets |
 | v2.25.1 | 2026-02-04 | fix: version policy checker handles shallow history conservatively |
 | v2.25.0 | 2026-02-03 | Phase 2: add release workflow |
 | v2.24.0 | 2026-02-03 | 新增 Error Types 文档同步门禁：新增 check_workflow_contract_error_types_docs_sync.py 并接入 CI/Makefile；补全第 13 章表格 |
