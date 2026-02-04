@@ -114,9 +114,10 @@ class LogbookDatabase:
             import psycopg
 
             # DSN 优先级: 显式参数 > POSTGRES_DSN > TEST_PG_DSN
-            self._dsn = dsn or os.environ.get("POSTGRES_DSN") or os.environ.get("TEST_PG_DSN", "")
-            if not self._dsn:
+            dsn_value = dsn or os.environ.get("POSTGRES_DSN") or os.environ.get("TEST_PG_DSN", "")
+            if not dsn_value:
                 raise ValueError("需要设置 POSTGRES_DSN 或 TEST_PG_DSN 环境变量或传入 dsn 参数")
+            self._dsn = dsn_value
             self._adapter = None  # type: ignore[assignment]  # 回退模式下不使用 adapter
             self._hashlib = hashlib
             self._json = json
@@ -587,12 +588,12 @@ def get_db(dsn: Optional[str] = None) -> LogbookDatabase:
     global _db_instances, _default_dsn
     import os
 
-    # 确定实际使用的 DSN
-    effective_dsn = dsn or _default_dsn or os.environ.get("POSTGRES_DSN", "")
+    # 确定实际使用的 DSN（确保为 str，避免 Optional 类型泄漏）
+    effective_dsn: str = dsn or _default_dsn or os.environ.get("POSTGRES_DSN") or ""
 
     # 使用 DSN 作为 key 缓存实例
     if effective_dsn not in _db_instances:
-        _db_instances[effective_dsn] = LogbookDatabase(dsn=dsn)
+        _db_instances[effective_dsn] = LogbookDatabase(dsn=effective_dsn or None)
         # 如果是首次调用且没有指定默认 DSN，设置为默认
         if _default_dsn is None and dsn:
             _default_dsn = dsn

@@ -126,11 +126,11 @@ def _extract_memory_id(payload: Any) -> Optional[str]:
     data = payload.get("data")
     if isinstance(data, dict):
         memory_id = data.get("id")
-        if memory_id:
+        if isinstance(memory_id, str) and memory_id:
             return memory_id
     for key in ("id", "memory_id"):
         memory_id = payload.get(key)
-        if memory_id:
+        if isinstance(memory_id, str) and memory_id:
             return memory_id
     return None
 
