@@ -135,9 +135,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 # Note: Use COUNT(1) so we always get 0/1 when the query succeeds.
 $dbExists = "0"
-$line = @($dbExistsRaw | Where-Object { $_ -match "\S" } | Select-Object -First 1)
-if ($line) { $dbExists = [string]$line }
-if ($dbExists.Trim() -ne "1") {
+$line = ($dbExistsRaw | Where-Object { $_ -match "\S" } | Select-Object -First 1)
+if ($null -ne $line) { $dbExists = ([string]$line).Trim() }
+if ($dbExists -ne "1") {
   & createdb -h $PgHost -p $PgPort -U $PgSuperUser $PgDb
   if ($LASTEXITCODE -ne 0) { throw "createdb failed (exit=$LASTEXITCODE)" }
 } else {
