@@ -66,6 +66,8 @@ env/
 .env
 .env.local
 .env.*.local
+.env.ps1
+scripts/windows/config.ps1
 
 # ------------------------------------------------------------------------------
 # Node.js

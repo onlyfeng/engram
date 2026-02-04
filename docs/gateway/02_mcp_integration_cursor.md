@@ -163,6 +163,12 @@ curl -sf http://127.0.0.1:8787/health && echo "Gateway OK"
 {"status":"ok","mode":"FULL","capabilities":{"openmemory":true,"logbook":true}}
 ```
 
+Windows PowerShell：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/health
+```
+
 **依赖服务检查**：
 
 ```bash
@@ -170,7 +176,14 @@ curl -sf http://127.0.0.1:8787/health && echo "Gateway OK"
 curl -sf http://127.0.0.1:8080/health && echo "OpenMemory OK"
 
 # PostgreSQL (通过 Logbook CLI)
-POSTGRES_DSN="postgresql://..." python -c "from engram_logbook.db import get_conn; print('Logbook OK')"
+engram-logbook health --dsn "postgresql://..."
+```
+
+Windows PowerShell：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/health
+engram-logbook health --dsn "postgresql://..."
 ```
 
 **MCP 端点检查**：
@@ -184,12 +197,25 @@ curl -X POST http://127.0.0.1:8787/mcp \
 # 预期：返回 tools 数组
 ```
 
+Windows PowerShell：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/mcp -ContentType "application/json" `
+  -Body '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
 **一键诊断（推荐）**：
 
 ```bash
 # 支持 GATEWAY_URL / MCP_DOCTOR_TIMEOUT / MCP_DOCTOR_AUTHORIZATION
 # 额外请求头可用 --header "Key: Value"（可重复）
 make mcp-doctor
+```
+
+Windows PowerShell（无 make）：
+
+```powershell
+python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787
 ```
 
 诊断字段与排障流程参见 [MCP Doctor 诊断 Runbook](../dev/ci_gate_runbook.md#06-mcp-doctor-诊断-runbook)，

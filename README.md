@@ -43,10 +43,14 @@ cd engram
 
 # Python 环境（推荐：venv）
 python3 -m venv .venv
-source .venv/bin/activate
+# 激活虚拟环境（二选一）：
+source .venv/bin/activate   # Linux/macOS/WSL
+# .\.venv\Scripts\Activate.ps1   # Windows PowerShell
 
 # 安装依赖（服务端部署建议 full）
 make install-full
+# Windows 无 make 时可直接执行：
+# pip install -e ".[full]"
 ```
 
 #### 2. 一键初始化数据库
@@ -59,8 +63,9 @@ make setup-db
 
 # Linux/WSL2 常见：使用 postgres 账号执行管理员操作（peer auth / unix socket）
 DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
-
 ```
+
+**Windows 无 make 时**：请使用 WSL 执行上述命令，或参考 [安装指南](docs/installation.md) 中的 Windows 与分步操作（db-create → bootstrap-roles → migrate-ddl → apply-roles → apply-openmemory-grants → verify-permissions）。
 
 > 详细安装（PostgreSQL、pgvector、多平台）请参考 [安装指南](docs/installation.md)
 
@@ -96,12 +101,21 @@ make gateway
 # make stack-doctor  # 全栈验证（OpenMemory health + memory_store 写入）
 ```
 
+**Windows PowerShell 无 make 时**：环境变量用 `$env:VAR="值"` 设置；若有 `.env.local` 可逐行执行其中的赋值，或先设再启动：
+```powershell
+$env:POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
+$env:OPENMEMORY_BASE_URL="http://localhost:8080"
+$env:PROJECT_KEY="default"
+uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
+# 验证（新终端）：python scripts/ops/mcp_doctor.py  或  python scripts/ops/stack_doctor.py
+```
+
 服务默认监听 `http://0.0.0.0:8787`（MCP: `/mcp`）。  
 **Cursor MCP 只需要连接 Gateway**，不会直连 OpenMemory；因此 OpenMemory **只要对 Gateway 可达即可**。  
 - **WSL2 场景**：如果你想在 Windows 浏览器打开 OpenMemory Dashboard/API，优先访问 `http://localhost:8080`；若不通，改用 `http://<wsl-ip>:8080`（在 WSL2 内 `hostname -I` 查看），或按 `docs/gateway/01_openmemory_deploy_windows.md` 的 “B.9” 做端口转发。
 
 > 常见提示：
-> - `opm serve` 报 `permission denied for schema openmemory`：先执行 `make openmemory-grant-svc-full` 再重启 OpenMemory
+> - `opm serve` 报 `permission denied for schema openmemory`：先执行 `make openmemory-grant-svc-full` 再重启 OpenMemory（Windows 无 make 时见 [安装指南](docs/installation.md) / [Gateway Windows 部署](docs/gateway/01_openmemory_deploy_windows.md)）
 > - `opm serve` 警告 `OM_TIER not set`：可在 `.env.local` 设置 `OM_TIER="hybrid"`（或 fast/smart/deep）
 
 ### 二、客户端配置
@@ -147,6 +161,8 @@ PROJECT_KEY=proj_a POSTGRES_DB=proj_a make gateway
 PROJECT_KEY=proj_b POSTGRES_DB=proj_b GATEWAY_PORT=8788 make gateway
 ```
 
+**Windows PowerShell**：先设置环境变量再启动，例如 `$env:PROJECT_KEY="proj_a"; $env:POSTGRES_DB="proj_a"; uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload`。
+
 新增一个项目（推荐流程：每项目一库 + 独立实例）：
 
 ```bash
@@ -164,6 +180,8 @@ OM_PORT=8081 opm serve
 set -a; . ./.env.local.proj_c; set +a
 GATEWAY_PORT=8788 OPENMEMORY_BASE_URL=http://localhost:8081 make gateway
 ```
+
+**Windows PowerShell**：步骤 2 的 `make env-write-local` 可改为 `python scripts/ops/write_env_local.py`（需先设置 `ENV_LOCAL_FILE`、`PROJECT_KEY` 等）。步骤 3/4 中加载 env 改为在 PowerShell 中逐行设置变量后执行 `opm serve` / `uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8788 --reload`。
 
 ### 用户隔离（Space 机制）
 
@@ -211,6 +229,19 @@ make format        # 代码格式化
 make ci            # 运行全部 CI 门禁
 make check-iteration-docs  # 迭代文档规范检查
 ```
+
+**Windows 无 make 时常用等价命令**（需先激活 venv 并设置 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 等环境变量）：
+
+| make 命令 | Windows PowerShell / 命令行 |
+|-----------|-----------------------------|
+| `make install-full` | `pip install -e ".[full]"` |
+| `make install-dev` | `pip install -e ".[full,dev]"` |
+| `make setup-db` | 建议使用 WSL 或参考 [安装指南](docs/installation.md) 分步执行 |
+| `make gateway` | `uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload` |
+| `make mcp-doctor` | `python scripts/ops/mcp_doctor.py` |
+| `make stack-doctor` | `python scripts/ops/stack_doctor.py` |
+| `make test` | `pytest` |
+| `make test-quick` | `pytest tests/acceptance/test_installation.py -v` |
 
 ---
 

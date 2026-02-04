@@ -1,13 +1,13 @@
 <#
-最小备份脚本（pg_dump）
-- 建议每天一次（计划任务触发）
-- 轮转：保留 N 天
+Minimal backup script (pg_dump)
+- Recommended: run daily (via scheduled task)
+- Rotation: keep N days
 #>
 
 param(
   [string]$PgHost = "127.0.0.1",
   [int]$PgPort = 5432,
-  [string]$PgDb = "engram_project",
+  [string]$PgDb = "engram",
   [string]$PgUser = "postgres",
   [string]$OutDir = "D:\engram-backups",
   [int]$KeepDays = 7
@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 
 function Require-Exe($name) {
   $cmd = Get-Command $name -ErrorAction SilentlyContinue
-  if (-not $cmd) { throw "找不到可执行文件：$name，请确保 Postgres bin 在 PATH" }
+  if (-not $cmd) { throw "Missing executable: $name. Ensure Postgres bin is on PATH." }
 }
 Require-Exe "pg_dump"
 
@@ -34,4 +34,4 @@ Get-ChildItem $OutDir -Filter "engram_${PgDb}_*.dump" |
   Where-Object { $_.LastWriteTime -lt $limit } |
   Remove-Item -Force
 
-Write-Host "✅ Backup done."
+Write-Host "OK: backup done."

@@ -11,6 +11,7 @@
 | **Logbook** | 事实账本层（PostgreSQL 存储），记录所有事实和事件 |
 | **Gateway** | MCP 网关（连接 Cursor IDE 与 OpenMemory），提供策略校验和审计 |
 | **OpenMemory** | 外部语义记忆服务（独立部署），用于 AI 记忆存储和检索 |
+| **SeekDB** | 证据检索/索引层（可选接入），以契约与接口约束为主 |
 
 **组件命名**：使用语义化名称 `Logbook`（事实账本）、`Gateway`（记忆网关）。详见 [命名规范](architecture/naming.md)。
 
@@ -32,6 +33,8 @@
 |------|----------|------|
 | **Logbook** | [`logbook/README.md`](logbook/README.md) | 事实账本：架构、API、部署 |
 | **Gateway** | [`gateway/README.md`](gateway/README.md) | MCP 网关：策略、审计、降级 |
+| **OpenMemory** | [`openmemory/README.md`](openmemory/README.md) | OpenMemory：上游镜像/补丁、升级回滚、CI 治理约束 |
+| **SeekDB** | [`seekdb/README.md`](seekdb/README.md) | SeekDB：证据检索/索引层（可选接入），以契约与接口约束为主 |
 
 ### 架构与契约
 
@@ -39,6 +42,13 @@
 |------|------|------|
 | **架构决策** | ADR、命名规范 | [`architecture/`](architecture/) |
 | **组件契约** | 接口定义、数据流 | [`contracts/`](contracts/) |
+
+### 工程与验收
+
+| 分类 | 入口 | 说明 |
+|------|------|------|
+| **开发与 CI** | [`dev/`](dev/) | CI gate、测试隔离、mypy/ruff 基线与排错手册 |
+| **验收与证据** | [`acceptance/00_acceptance_matrix.md`](acceptance/00_acceptance_matrix.md) | 迭代验收矩阵、证据模板与样例 |
 
 ---
 
@@ -72,10 +82,14 @@ docs/
 ├── README.md                 # 本文件
 ├── logbook/                  # Logbook 文档
 ├── gateway/                  # Gateway 文档
+├── openmemory/               # OpenMemory 文档
+├── seekdb/                   # SeekDB 文档
 ├── architecture/             # 架构决策
 ├── contracts/                # 组件契约
 ├── guides/                   # 集成指南
-└── reference/                # 参考文档
+├── reference/                # 参考文档
+├── dev/                      # 开发与 CI 文档
+└── acceptance/               # 验收与证据（含模板/样例）
 ```
 
 ---

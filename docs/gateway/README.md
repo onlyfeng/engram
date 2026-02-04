@@ -221,6 +221,20 @@ make verify-unified                    # 基础验证
 VERIFY_FULL=1 make verify-unified      # 完整验证（含降级测试）
 ```
 
+**Windows PowerShell（无 make）**：
+
+```powershell
+# 核心健康检查
+Invoke-RestMethod http://127.0.0.1:8787/health
+Invoke-RestMethod http://127.0.0.1:8080/health
+
+# MCP / 全栈诊断
+python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787
+python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787
+# 或 PowerShell 包装脚本（推荐）
+.\scripts\windows\stack_doctor.ps1 -GatewayUrl http://127.0.0.1:8787
+```
+
 **备用**：若无脚本入口，直接使用 `make verify-unified`。
 
 详细说明参见 [根 README §统一栈验证入口](../../README.md#统一栈验证入口)。

@@ -8,18 +8,37 @@
 
 适合：希望全部在 Windows 原生环境运行，且愿意处理 pgvector 编译安装。
 
+> 说明：本方案默认你主要在 **PowerShell** 操作（除 pgvector 编译需在 “x64 Native Tools Command Prompt”）。  
+> 下文如未特别说明，命令均在 **engram 仓库根目录** 执行。
+
 ### A.1 前置依赖
 - PostgreSQL 18+（建议 18）
 - Visual Studio C++ Build Tools（用于编译 pgvector）
 - Python 3.10+（建议 3.11）
 - Node.js（需 >=18，建议最新 LTS）
 - NSSM（把 Engram/OpenMemory 注册为服务）
+- Git（用于 clone 仓库）
+
+### A.1.1 获取 Engram 并安装依赖（PowerShell）
+
+```powershell
+git clone https://github.com/onlyfeng/engram.git
+cd engram
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 安装完整依赖（Gateway + SCM 等）
+pip install -e ".[full]"
+```
 
 ### A.2 安装 Postgres + pgvector
-1) 安装 PostgreSQL（官方安装包）并确保 `psql.exe` 在 PATH。  
+1) 安装 PostgreSQL（官方安装包）并确保 `psql.exe` 在 PATH。建议在 Windows 设置 `PGUSER=postgres`（默认连接用户），后续示例可不写 `-U postgres`。  
+   - 临时（仅当前终端）：PowerShell 用 `$env:PGUSER="postgres"`；cmd 用 `set "PGUSER=postgres"`  
+   - 永久（推荐）：系统设置 → 搜索“环境变量” → 环境变量 → 用户变量中新建 `PGUSER`=`postgres`（保存后重开终端生效）  
 2) 以管理员打开 **x64 Native Tools Command Prompt**，执行：  
 ```
-set "PGROOT=C:\Program Files\PostgreSQL\16"
+set "PGROOT=C:\Program Files\PostgreSQL\18"
 cd %TEMP%
 git clone --branch v0.8.1 https://github.com/pgvector/pgvector.git
 cd pgvector
@@ -27,45 +46,86 @@ nmake /F Makefile.win
 nmake /F Makefile.win install
 ```
 3) 启用扩展并验证：  
+> 说明：示例默认使用安装包自带超级用户 `postgres`（建议已设置 `PGUSER=postgres`；如未设置，请在命令中加回 `-U postgres`）。  
+> 如提示找不到 `psql`：将 PostgreSQL 安装目录的 `bin` 加入 PATH（例如 `%PGROOT%\bin`），或用 `"%PGROOT%\bin\psql.exe"` 替代 `psql`。  
 ```
-psql -d <db> -c "CREATE EXTENSION IF NOT EXISTS vector;"
-psql -d <db> -c "SELECT extversion FROM pg_extension WHERE extname='vector';"
+psql -d postgres -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql -d postgres -c "SELECT extname, extversion FROM pg_extension WHERE extname='vector';"
 ```
 
 ### A.3 初始化数据库与角色
-- 使用 `scripts/windows/install_db.ps1` 执行迁移与角色脚本  
-- 或手动执行：  
+1) 创建数据库并启用 pgvector 扩展（示例以 `engram` 为库名）：
+
+```powershell
+# 建议先设置 PGUSER=postgres（见 A.2），否则请在命令中加回 -U postgres
+createdb engram
+psql -d engram -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
-python logbook_postgres\scripts\db_migrate.py --dsn "<admin_dsn>" --apply-roles --apply-openmemory-grants
+
+2) 初始化服务账号 + 迁移 + 权限（推荐使用 CLI；需要能以管理员身份连接 Postgres）：
+
+```powershell
+# unified-stack 模式：必填（4 个密码缺一不可）
+# Windows 建议用环境变量提供（避免把密码写进脚本并提交）：
+# - 临时（仅当前终端）：直接设置 $env:...（如下）
+# - 永久（用户环境变量）：设置一次后，后续可省略这 4 行（需重开终端生效）
+#   setx LOGBOOK_MIGRATOR_PASSWORD "changeme1"
+#   setx LOGBOOK_SVC_PASSWORD "changeme2"
+#   setx OPENMEMORY_MIGRATOR_PASSWORD "changeme3"
+#   setx OPENMEMORY_SVC_PASSWORD "changeme4"
+$env:LOGBOOK_MIGRATOR_PASSWORD="changeme1"
+$env:LOGBOOK_SVC_PASSWORD="changeme2"
+$env:OPENMEMORY_MIGRATOR_PASSWORD="changeme3"
+$env:OPENMEMORY_SVC_PASSWORD="changeme4"
+
+engram-bootstrap-roles --dsn "postgresql://<admin_user>@localhost:5432/postgres"
+engram-migrate --dsn "postgresql://<admin_user>@localhost:5432/engram" --apply-roles --apply-openmemory-grants
+engram-migrate --dsn "postgresql://<admin_user>@localhost:5432/engram" --verify
 ```
+
+> 可选（venv 场景，不污染系统环境变量）：把上面 4 行 `$env:...` 保存到本地脚本（例如 `.\.env.ps1`，**不要提交到 git**），每次激活 venv 后执行：`. .\.env.ps1`。也可以直接运行 `scripts/windows/setup_db.ps1` 交互式生成/更新 `.\.env.ps1`。
+
+也可以使用 `scripts/windows/setup_db.ps1`（类似 `make setup-db`：可交互输入密码、生成/更新 `.\.env.ps1`，并调用 `scripts/windows/install_db.ps1`；读取 `scripts/windows/config.ps1`）一键执行上述步骤。
+
+> 注意：`scripts/windows/config.ps1` 是本地配置文件（从 `scripts/windows/config.ps1.example` 复制生成并按需修改），仓库已在 `.gitignore` 中忽略，请勿提交。
 
 ### A.4 部署 OpenMemory
 - 拉取 OpenMemory 后端（参考官方仓库），设置 `OM_METADATA_BACKEND=postgres` 和 `OM_PG_*` 变量  
 - 启动后端服务（HTTP + MCP + Dashboard），默认 8080
 
 ### A.5 部署 Engram Gateway
-```
-pip install -e ".[full]"
-set POSTGRES_DSN=postgresql://logbook_svc:<pwd>@localhost:5432/<db>
-set OPENMEMORY_BASE_URL=http://localhost:8080
-set OM_API_KEY=<your_om_key>
-engram-gateway
+```powershell
+# 如尚未安装依赖（未执行 A.1.1），先执行：
+# pip install -e ".[full]"
+
+# 如已生成/加载 `.\.env.ps1`，可省略下方 $env:... 赋值
+$env:POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/<db>"
+$env:OPENMEMORY_BASE_URL="http://localhost:8080"
+$env:OM_API_KEY="<your_om_key>"
+$env:PROJECT_KEY="default"
+
+# 开发模式（热重载）
+python -m uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
+
+# 或生产入口（无热重载）
+# engram-gateway
 ```
 
 ### A.6 运行方式（前台/后台）
 
 **OpenMemory（示例）**：
-```
+```powershell
+# 如已生成/加载 `.\.env.ps1`，可省略下方 $env:OM_* 赋值（仅保留 cd/npm 命令即可）
 cd C:\openmemory\backend
-set OM_METADATA_BACKEND=postgres
-set OM_PG_HOST=127.0.0.1
-set OM_PG_PORT=5432
-set OM_PG_DB=engram
-set OM_PG_USER=openmemory_svc
-set OM_PG_PASSWORD=<pwd>
-set OM_PG_SCHEMA=openmemory
-set OM_API_KEY=<your_om_key>
-set OM_PORT=8080
+$env:OM_METADATA_BACKEND="postgres"
+$env:OM_PG_HOST="127.0.0.1"
+$env:OM_PG_PORT="5432"
+$env:OM_PG_DB="engram"
+$env:OM_PG_USER="openmemory_svc"
+$env:OM_PG_PASSWORD="<pwd>"
+$env:OM_PG_SCHEMA="openmemory"
+$env:OM_API_KEY="<your_om_key>"
+$env:OM_PORT="8080"
 npm install
 npm run start
 ```
@@ -512,6 +572,15 @@ make openmemory-grant-svc-full
 OM_PG_SCHEMA=custom_openmemory make openmemory-grant-svc-full
 ```
 
+Windows PowerShell（无 make）：
+
+```powershell
+# 需要 psql 在 PATH；密码可用 $env:PGPASSWORD 或 pgpass.conf 提供
+.\scripts\windows\openmemory_grant_svc_full.ps1
+# .\scripts\windows\openmemory_grant_svc_full.ps1 -Schema "openmemory"
+# .\scripts\windows\openmemory_grant_svc_full.ps1 -AdminDsn "postgresql://postgres@127.0.0.1:5432/engram"
+```
+
 执行后重启 OpenMemory 服务（例如重新运行 `opm serve`，或重启 systemd/nssm 服务）。
 
 或执行补充授权（Windows 原生用 `psql`，WSL2 用 `sudo -u postgres psql`）：
@@ -519,8 +588,8 @@ OM_PG_SCHEMA=custom_openmemory make openmemory-grant-svc-full
 GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openmemory TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
 ```
 </details>
 
@@ -533,10 +602,23 @@ pgvector HNSW 索引要求 vector 列必须指定维度：
 OM_VEC_DIM=1536 make openmemory-fix-vector-dim
 ```
 
+Windows PowerShell（无 make）：
+
+```powershell
+# 需要 psql 在 PATH；密码可用 $env:PGPASSWORD 或 pgpass.conf 提供
+.\scripts\windows\openmemory_fix_vector_dim.ps1 -VecDim 1536
+# .\scripts\windows\openmemory_fix_vector_dim.ps1 -VecDim 1536 -Schema "openmemory"
+# .\scripts\windows\openmemory_fix_vector_dim.ps1 -VecDim 1536 -AdminDsn "postgresql://postgres@127.0.0.1:5432/engram"
+```
+
 或手动修复：
 ```bash
+# Windows 原生：建议已设置 PGUSER=postgres（见 A.2），否则请在命令中加回 -U postgres
 psql -d engram -c "DROP INDEX IF EXISTS openmemory.openmemory_vectors_v_idx;"
 psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);"
+# WSL2：更推荐用 sudo -u postgres psql（避免本地 peer 认证问题）
+# sudo -u postgres psql -d engram -c "DROP INDEX IF EXISTS openmemory.openmemory_vectors_v_idx;"
+# sudo -u postgres psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);"
 ```
 然后重启 OpenMemory 服务。
 </details>

@@ -1,16 +1,16 @@
-# 统一配置（复制为 config.ps1 并按需修改）
-# 说明：敏感信息（密码/密钥）建议用系统环境变量提供，避免落盘。
+# Unified config (copy to config.ps1 and edit as needed)
+# Note: keep secrets (passwords/keys) in environment variables; avoid writing to disk.
 
 $Global:EngramHome = "C:\engram"
 $Global:LogsDir    = "C:\engram\logs"
 $Global:BackupDir  = "D:\engram-backups"
 
-# 服务命令（按你的实际路径替换）
-# 推荐：使用 venv 的 engram-gateway.exe，或 python -m engram.gateway.main
+# Service command (replace with your actual paths)
+# Tip: prefer venv's engram-gateway.exe, or `python -m engram.gateway.main`
 $Global:EngramCmd  = "C:\engram\venv\Scripts\engram-gateway.exe"
 $Global:EngramArgs = ""
 
-# Engram 环境变量（示例）
+# Engram environment variables (example)
 $Global:EngramEnv = @{
   "PROJECT_KEY" = "default"
   "POSTGRES_DSN" = "postgresql://logbook_svc:<pwd>@127.0.0.1:5432/engram"
@@ -19,7 +19,7 @@ $Global:EngramEnv = @{
   "GATEWAY_PORT" = "8787"
 }
 
-# OpenMemory（Node 后端）
+# OpenMemory (Node backend)
 $Global:OpenMemoryCmd  = "C:\Program Files\nodejs\node.exe"
 $Global:OpenMemoryArgs = "C:\openmemory\backend\server.js"
 
@@ -33,19 +33,20 @@ $Global:OpenMemoryEnv = @{
   "OM_PG_SCHEMA" = "openmemory"
   "OM_API_KEY" = "<change_me>"
   "OM_PORT" = "8080"
+  "OM_TIER" = "hybrid"
 }
 
 # Postgres
 $Global:PgHost = "127.0.0.1"
 $Global:PgPort = 5432
-$Global:PgDb   = "engram_project"
+$Global:PgDb   = "engram"
 $Global:PgSuperUser = "postgres"
 
-# 端口
+# Ports
 $Global:OpenMemoryPort = 8080
 $Global:EngramPort     = 8787
 
-# 密钥（建议使用环境变量）
+# Secrets (prefer environment variables)
 # $env:ENGRAM_API_KEY
 # $env:OM_API_KEY
 # $env:PGPASSWORD

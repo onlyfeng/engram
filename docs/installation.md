@@ -28,6 +28,29 @@ docker compose -f docker-compose.unified.yml up -d --build
 make verify-unified
 ```
 
+**Windows PowerShell（Docker Desktop；不依赖 make）**：
+
+```powershell
+# 1) 复制环境变量模板并设置 4 个密码
+Copy-Item .env.example .env -Force
+
+# 2) 启动统一栈（Postgres + OpenMemory + Gateway + Worker）
+docker compose -f docker-compose.unified.yml up -d --build
+
+# 3) 验证（核心健康检查）
+Invoke-RestMethod http://127.0.0.1:8787/health
+Invoke-RestMethod http://127.0.0.1:8080/health
+
+# MCP 诊断（不依赖 OpenMemory）
+python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787
+
+# 全栈诊断（依赖 OpenMemory）
+python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787
+
+# 可选：检查 DB（容器内执行）
+docker compose -f docker-compose.unified.yml exec -T postgres psql -U postgres -d engram -c "SELECT 1 FROM logbook.facts LIMIT 0"
+```
+
 ### 方案 B（可控、贴近生产）：原生部署（推荐配合 make）
 
 适合：你要使用本机/WSL2 的 PostgreSQL（peer auth / systemd 托管等），并希望用 `make` 把步骤串起来。
@@ -40,10 +63,12 @@ make verify-unified
 ```bash
 # 创建并激活 venv（示例）
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Linux/macOS/WSL
+# .\.venv\Scripts\Activate.ps1   # Windows PowerShell
 
 # 安装（开发/部署都可用；如只需运行服务端可用 install-full）
 make install-full
+# Windows 无 make：pip install -e ".[full]"
 ```
 
 #### 一键初始化数据库与权限
@@ -54,6 +79,9 @@ make setup-db
 
 # Linux/WSL2 常见：使用 postgres 账号执行管理员操作（peer auth / unix socket）
 DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
+
+# Windows 无 make：请跳到下文 “2. 初始化数据库与角色（推荐）→ 本地手动初始化”，
+# 使用 engram-bootstrap-roles / engram-migrate 完成 bootstrap/migrate/verify。
 ```
 
 #### 启动 Gateway（OpenMemory 需另行启动）
@@ -64,6 +92,15 @@ export OPENMEMORY_BASE_URL="http://localhost:8080"
 export PROJECT_KEY="default"
 
 make gateway
+```
+
+**Windows PowerShell（无 make）**：
+
+```powershell
+$env:POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
+$env:OPENMEMORY_BASE_URL="http://localhost:8080"
+$env:PROJECT_KEY="default"
+python -m uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
 > WSL2 部署（含端口暴露到 Windows/局域网）请参考：`docs/gateway/01_openmemory_deploy_windows.md` 的 “方案 B：WSL2 + Debian 全栈”。 
@@ -154,19 +191,53 @@ export OPENMEMORY_MIGRATOR_PASSWORD=changeme3
 export OPENMEMORY_SVC_PASSWORD=changeme4
 
 # Step 1: 初始化服务账号（需要 admin 权限）
-# macOS 默认管理员通常是当前用户，Linux/Windows 常用 postgres
+# admin_user：默认使用 postgres（多数环境/Windows 安装包默认超级用户；需具备 SUPERUSER 或 CREATEROLE 权限）。
+# 如你的管理员用户不是 postgres，请替换为实际用户名。
+#
+# 注意（尤其 Windows 本机）：`engram-*` CLI 不会交互式询问数据库密码（不会弹出 Password prompt），
+# 需要你通过以下任一方式提供 postgres 密码：
+# - 方式 A（临时，当前终端）：设置 PGPASSWORD
+#     export PGPASSWORD='<your_postgres_password>'
+# - 方式 B（推荐，长期）：配置 pgpass（Windows: %APPDATA%\\postgresql\\pgpass.conf）
+#     127.0.0.1:5432:*:postgres:<your_postgres_password>
 engram-bootstrap-roles \
-  --dsn "postgresql://<admin_user>@localhost:5432/postgres"
+  --dsn "postgresql://postgres@127.0.0.1:5432/postgres"
 
 # Step 2: 执行迁移与权限脚本（需要 admin 权限）
 engram-migrate \
-  --dsn "postgresql://<admin_user>@localhost:5432/engram" \
+  --dsn "postgresql://postgres@127.0.0.1:5432/engram" \
   --apply-roles --apply-openmemory-grants
 
 # Step 3: 验证权限配置
 engram-migrate \
-  --dsn "postgresql://<admin_user>@localhost:5432/engram" \
+  --dsn "postgresql://postgres@127.0.0.1:5432/engram" \
   --verify
+```
+
+**Windows PowerShell 示例**（环境变量用 `$env:...`；其余命令相同；需确保 `psql/createdb` 已加入 PATH）：  
+
+```powershell
+# 创建数据库
+createdb engram
+
+# 连接数据库并启用 pgvector 扩展
+psql -d engram -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# unified-stack 模式：必填（需要设置齐 4 个）
+$env:LOGBOOK_MIGRATOR_PASSWORD="changeme1"
+$env:LOGBOOK_SVC_PASSWORD="changeme2"
+$env:OPENMEMORY_MIGRATOR_PASSWORD="changeme3"
+$env:OPENMEMORY_SVC_PASSWORD="changeme4"
+
+# admin_user：默认使用 postgres（Windows 安装包默认超级用户；需具备 SUPERUSER 或 CREATEROLE 权限）
+# 注意：`engram-*` CLI 不会弹出密码提示；请先用以下任一方式提供 postgres 密码：
+# - 临时（当前终端）：
+#   $env:PGPASSWORD = "<your_postgres_password>"
+# - 或配置 pgpass（推荐，长期）：%APPDATA%\postgresql\pgpass.conf
+#   127.0.0.1:5432:*:postgres:<your_postgres_password>
+engram-bootstrap-roles --dsn "postgresql://postgres@127.0.0.1:5432/postgres"
+engram-migrate --dsn "postgresql://postgres@127.0.0.1:5432/engram" --apply-roles --apply-openmemory-grants
+engram-migrate --dsn "postgresql://postgres@127.0.0.1:5432/engram" --verify
 ```
 
 ### 使用 Makefile 一键初始化（推荐）
@@ -357,6 +428,23 @@ set -a; [ -f .env ] && . ./.env; [ -f .env.local ] && . ./.env.local; set +a
 # set -a; [ -f /path/to/engram/.env ] && . /path/to/engram/.env; [ -f /path/to/engram/.env.local ] && . /path/to/engram/.env.local; set +a
 ```
 
+**Windows PowerShell 等价加载**（将 `.env`/`.env.local` 写入当前进程环境变量；在 engram 仓库根目录执行）：
+
+```powershell
+Get-Content .\.env, .\.env.local -ErrorAction SilentlyContinue |
+  Where-Object { $_ -and ($_ -notmatch '^\s*#') } |
+  ForEach-Object {
+    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$') {
+      $name = $matches[1]
+      $value = $matches[2].Trim()
+      if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+        $value = $value.Substring(1, $value.Length - 2)
+      }
+      [Environment]::SetEnvironmentVariable($name, $value, "Process")
+    }
+  }
+```
+
 也可以用 Makefile 生成“加载片段”（不打印任何密钥/密码）：
 
 ```bash
@@ -381,6 +469,13 @@ echo 'OM_TIER="hybrid"' >> /path/to/engram/.env.local  # 可选: hybrid/fast/sma
 set -a; . /path/to/engram/.env.local; set +a
 ```
 
+**Windows PowerShell 写入示例**（路径按实际替换；写完后用上面的 “PowerShell 等价加载” 片段重新加载即可）：
+
+```powershell
+Add-Content -Path "C:\\path\\to\\engram\\.env.local" -Value 'OM_API_KEY="change_me"'
+Add-Content -Path "C:\\path\\to\\engram\\.env.local" -Value 'OM_TIER="hybrid"'  # 可选: hybrid/fast/smart/deep
+```
+
 > 你也可以在 engram 仓库根目录执行 `OM_API_KEY=... make env-write-local` 将其写回 `.env.local`（不会自动写入当前 shell，需要重新加载）。
 
 - **如果你没有 `.env.local`（或你不想依赖它）**：按下面示例手动设置 OpenMemory 环境变量：
@@ -397,6 +492,20 @@ export OM_API_KEY="${OM_API_KEY:-<your_api_key>}"
 export OM_PORT="${OM_PORT:-8080}"
 ```
 
+**Windows PowerShell 示例**：
+
+```powershell
+$env:OM_METADATA_BACKEND="postgres"
+$env:OM_PG_HOST="localhost"
+$env:OM_PG_PORT="5432"
+$env:OM_PG_DB="engram"
+$env:OM_PG_USER="openmemory_svc"
+$env:OM_PG_PASSWORD="<your_openmemory_svc_password>"
+$env:OM_PG_SCHEMA="openmemory"
+$env:OM_API_KEY="<your_api_key>"
+$env:OM_PORT="8080"
+```
+
 4) 启动服务（以 `opm serve` 为主；或按上游 README 使用 `npm run dev`）
 
 > 如果首次启动出现 `permission denied for schema openmemory`，通常是因为 OpenMemory 会在启动时执行迁移/建表，而 `openmemory_svc` 默认没有目标 schema 的 CREATE 权限。  
@@ -409,6 +518,19 @@ export OM_PORT="${OM_PORT:-8080}"
 > # 或从任意目录执行（把 /path/to/engram 换成你的路径）
 > make -C /path/to/engram openmemory-grant-svc-full
 > ```
+
+**Windows PowerShell（无 make）**：用 `psql` 以管理员身份执行等价授权（将 `<admin_dsn>` / schema 按实际替换）：
+
+```powershell
+$schema = if ($env:OM_PG_SCHEMA) { $env:OM_PG_SCHEMA } else { "openmemory" }
+# admin_user：默认使用 postgres；如你使用其它管理员用户请替换
+$adminDsn = "postgresql://postgres:<pwd>@localhost:5432/<db>"
+psql "$adminDsn" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON SCHEMA $schema TO openmemory_svc;"
+psql "$adminDsn" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA $schema TO openmemory_svc;"
+psql "$adminDsn" -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA $schema TO openmemory_svc;"
+psql "$adminDsn" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA $schema GRANT ALL ON TABLES TO openmemory_svc;"
+psql "$adminDsn" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA $schema GRANT ALL ON SEQUENCES TO openmemory_svc;"
+```
 
 ```bash
 # 方式 A：opm CLI（推荐）
@@ -727,8 +849,10 @@ engram-migrate \
 # 补充授权（OpenMemory 运行时需要完整权限）
 psql -d engram -c "
 GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openmemory TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
 "
 
 # Step 5: 安装并启动 OpenMemory（新终端）
@@ -807,6 +931,15 @@ export LOGBOOK_SVC_PASSWORD=xxx
 export OPENMEMORY_MIGRATOR_PASSWORD=xxx
 export OPENMEMORY_SVC_PASSWORD=xxx
 ```
+
+Windows PowerShell：
+
+```powershell
+$env:LOGBOOK_MIGRATOR_PASSWORD="xxx"
+$env:LOGBOOK_SVC_PASSWORD="xxx"
+$env:OPENMEMORY_MIGRATOR_PASSWORD="xxx"
+$env:OPENMEMORY_SVC_PASSWORD="xxx"
+```
 </details>
 
 <details>
@@ -819,6 +952,15 @@ make openmemory-grant-svc-full
 OM_PG_SCHEMA=custom_openmemory make openmemory-grant-svc-full
 ```
 
+Windows PowerShell（无 make）：
+
+```powershell
+# 需要 psql 在 PATH；密码可用 $env:PGPASSWORD 或 pgpass.conf 提供
+.\scripts\windows\openmemory_grant_svc_full.ps1
+# .\scripts\windows\openmemory_grant_svc_full.ps1 -Schema "openmemory"
+# .\scripts\windows\openmemory_grant_svc_full.ps1 -AdminDsn "postgresql://postgres@127.0.0.1:5432/engram"
+```
+
 执行后重启 `opm serve`。
 
 或执行补充授权：
@@ -827,9 +969,19 @@ psql -d engram -c "
 GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openmemory TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;
+ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;
 "
+```
+
+Windows PowerShell（无 make，推荐逐条执行，避免引号/换行差异）：
+
+```powershell
+psql -d engram -c "GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;"
+psql -d engram -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;"
+psql -d engram -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openmemory TO openmemory_svc;"
+psql -d engram -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;"
+psql -d engram -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;"
 ```
 </details>
 
@@ -840,6 +992,15 @@ pgvector HNSW 索引要求 vector 列必须指定维度：
 ```bash
 # 推荐：用 Makefile 修复（维度需与 embeddings 一致）
 OM_VEC_DIM=1536 make openmemory-fix-vector-dim
+```
+
+Windows PowerShell（无 make）：
+
+```powershell
+# 需要 psql 在 PATH；密码可用 $env:PGPASSWORD 或 pgpass.conf 提供
+.\scripts\windows\openmemory_fix_vector_dim.ps1 -VecDim 1536
+# .\scripts\windows\openmemory_fix_vector_dim.ps1 -VecDim 1536 -Schema "openmemory"
+# .\scripts\windows\openmemory_fix_vector_dim.ps1 -VecDim 1536 -AdminDsn "postgresql://postgres@127.0.0.1:5432/engram"
 ```
 
 或手动修复：

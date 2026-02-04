@@ -819,6 +819,16 @@ export ENGRAM_S3_SECRET_KEY=***
 export ENGRAM_S3_BUCKET=artifacts
 ```
 
+Windows PowerShell：
+
+```powershell
+$env:ENGRAM_ARTIFACTS_BACKEND="object"
+$env:ENGRAM_S3_ENDPOINT="https://minio.example.com"
+$env:ENGRAM_S3_ACCESS_KEY="***"
+$env:ENGRAM_S3_SECRET_KEY="***"
+$env:ENGRAM_S3_BUCKET="artifacts"
+```
+
 #### 数据迁移
 
 ```bash
