@@ -196,17 +196,21 @@ sudo systemctl reload postgresql
 
 ### B.4 初始化数据库与角色
 ```bash
-# 选择 Python 环境（二选一）：
+# Python 环境建议（推荐选一种即可）：
 #
-# A) venv（示例）
+# ✅ 推荐：系统 Python + venv（或 pyenv 安装 Python 后再 venv）
 # python3 -m venv .venv
 # source .venv/bin/activate
 #
-# B) conda（示例）
+# ⚠️ 不推荐：conda（在 WSL2/Linux 下常见会遇到 sudo -u postgres 无法访问 conda 环境）
 # conda create -n engram python=3.11 -y
 # conda activate engram
 #
-# 不管用哪种方式，确保当前 shell 已激活环境后再安装：
+# 说明：我们建议“尽量避免让 postgres 用户去执行你的 conda/python 环境”，因此优先用 make 串起来：
+# - make 侧通过 DB_ADMIN_PREFIX 控制管理员操作（psql/createdb 走 postgres 用户）
+# - Python CLI（engram-*）仍在当前用户的 venv 中运行
+#
+# 安装（确保当前 shell 已激活环境后再安装）：
 pip install -e ".[full]"
 
 # 解析当前环境的 python 路径（venv / conda）
@@ -233,6 +237,13 @@ fi
 # 快速但更“粗”的修复（不推荐，可能过度放宽权限）：
 #   chmod o+rx "$HOME" && chmod -R o+rX "$CONDA_PREFIX"
 
+# 推荐：使用 make 一键初始化（原生）
+DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
+
+# 如需重置（危险操作：删除数据库与服务账号）
+DB_ADMIN_PREFIX="sudo -u postgres" FORCE=1 make reset-native
+
+# 以下为手动分步方式（等价）
 # 必须设置服务账号密码
 export LOGBOOK_MIGRATOR_PASSWORD=changeme1
 export LOGBOOK_SVC_PASSWORD=changeme2
@@ -293,6 +304,8 @@ export OM_VEC_DIM=1536          # vector 维度，需与 pgvector 列定义一�
 export OM_TIER=hybrid           # 可选: hybrid/fast/smart/deep
 
 # 修复 pgvector 列维度（PostgreSQL 18 必需）
+OM_VEC_DIM=1536 make openmemory-fix-vector-dim
+# 或手动执行：
 sudo -u postgres psql -d engram -c \
   "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);" 2>/dev/null || true
 
@@ -492,7 +505,16 @@ export OPENMEMORY_SVC_PASSWORD=xxx
 <details>
 <summary><b>OpenMemory 报错 "permission denied for schema openmemory"</b></summary>
 
-执行补充授权（Windows 原生用 `psql`，WSL2 用 `sudo -u postgres psql`）：
+优先使用 Makefile 兜底授权：
+```bash
+make openmemory-grant-svc-full
+# 或指定 schema
+OM_PG_SCHEMA=custom_openmemory make openmemory-grant-svc-full
+```
+
+执行后重启 OpenMemory 服务（例如重新运行 `opm serve`，或重启 systemd/nssm 服务）。
+
+或执行补充授权（Windows 原生用 `psql`，WSL2 用 `sudo -u postgres psql`）：
 ```sql
 GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;
@@ -507,6 +529,12 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemo
 
 pgvector HNSW 索引要求 vector 列必须指定维度：
 ```bash
+# 推荐：用 Makefile 修复（维度需与 embeddings 一致）
+OM_VEC_DIM=1536 make openmemory-fix-vector-dim
+```
+
+或手动修复：
+```bash
 psql -d engram -c "DROP INDEX IF EXISTS openmemory.openmemory_vectors_v_idx;"
 psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);"
 ```
@@ -520,6 +548,8 @@ psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE
 ```bash
 export OM_TIER=hybrid  # 可选: hybrid/fast/smart/deep
 ```
+
+如需持久化（systemd 场景），可写入 OpenMemory 的 env 文件（例如 `/etc/engram/openmemory.env`），再重启服务。
 </details>
 
 ---

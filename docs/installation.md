@@ -9,6 +9,65 @@
 - Node.js（需 >=18，建议最新 LTS）
 - OpenMemory 服务（Gateway 必需）
 
+## 0. 快速部署（建议从这里开始）
+
+如果你的目标是“尽快跑起来 Gateway + Logbook + OpenMemory”，推荐按下面二选一：
+
+### 方案 A（最省心，跨平台一致）：Docker Compose 统一栈
+
+适合：macOS / Linux / Windows(WSL2) 都想要**最一致**的部署体验，不想处理本机 Python/Node/pgvector 细节。
+
+```bash
+# 1) 复制环境变量模板并设置 4 个密码
+cp .env.example .env
+
+# 2) 启动统一栈（Postgres + OpenMemory + Gateway + Worker）
+docker compose -f docker-compose.unified.yml up -d --build
+
+# 3) 验证
+make verify-unified
+```
+
+### 方案 B（可控、贴近生产）：原生部署（推荐配合 make）
+
+适合：你要使用本机/WSL2 的 PostgreSQL（peer auth / systemd 托管等），并希望用 `make` 把步骤串起来。
+
+#### Python 环境（推荐做法：只选一种就好）
+
+> 推荐：**pyenv + venv** 或 **系统 Python + venv**。  
+> 不推荐：**conda**（在 WSL2/Linux 下常见会遇到 `sudo -u postgres` 无法访问 conda 环境的问题；如必须使用，请参考本文档的 WSL2 指南中的 ACL 修复段落）。
+
+```bash
+# 创建并激活 venv（示例）
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 安装（开发/部署都可用；如只需运行服务端可用 install-full）
+make install-full
+```
+
+#### 一键初始化数据库与权限
+
+```bash
+# 推荐：一键初始化（交互环境会询问是否重设密码；无 TTY 时按当前环境变量执行）
+make setup-db
+
+# Linux/WSL2 常见：使用 postgres 账号执行管理员操作（peer auth / unix socket）
+DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
+```
+
+#### 启动 Gateway（OpenMemory 需另行启动）
+
+```bash
+export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
+export OPENMEMORY_BASE_URL="http://localhost:8080"
+export PROJECT_KEY="default"
+
+make gateway
+```
+
+> WSL2 部署（含端口暴露到 Windows/局域网）请参考：`docs/gateway/01_openmemory_deploy_windows.md` 的 “方案 B：WSL2 + Debian 全栈”。 
+
 ## 1. 安装 PostgreSQL
 
 ### Windows
@@ -118,6 +177,15 @@ engram-migrate \
 # - 若未设置密码：会引导你选择 logbook-only 或输入 unified-stack 的 4 个密码
 # - 在无 TTY 的非交互环境（CI/脚本）中：不会询问，直接按当前环境变量执行（不完整会报错）
 make setup-db
+```
+
+脚本 / WSL2 场景可用（交互环境会询问是否重设密码）：
+```bash
+# 一键初始化（交互环境会询问是否重设密码；无 TTY 时按当前环境变量执行）
+make setup-db
+
+# Linux/WSL2 常见：使用 postgres 账号执行管理员操作（peer auth / unix socket）
+DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 ```
 
 ### 脚本选择指南
@@ -264,21 +332,89 @@ OpenMemory 是独立的语义记忆服务，Engram 通过 HTTP API 与其通信�
 
 ### 使用 Node.js 后端（推荐）
 
-1) 获取 OpenMemory 后端源码（按上游 README）  
-2) 配置环境变量（示例）：
+1) 安装/获取 OpenMemory（按上游 README）
+
+- 前置：Node.js >= 18
+- 获取源码并安装 `opm`（示例，按上游仓库结构为准）：
+
+```bash
+git clone https://github.com/caviraoss/openmemory.git ~/openmemory
+cd ~/openmemory/packages/openmemory-js
+npm install
+npm run build
+npm link   # 将 opm 添加到 PATH（仅对当前用户）
+```
+
+> 如果你的环境里 `opm` 仍不可用，请新开一个终端或确保 `npm` 的全局 bin 目录在 PATH 中。
+
+2) （推荐）在**新终端**加载 Engram 的本地环境变量文件，避免重复输入密码（环境变量不会自动跨终端）：
+
+```bash
+# 版本 A：新终端就在 engram 仓库目录下（最常见）
+set -a; [ -f .env ] && . ./.env; [ -f .env.local ] && . ./.env.local; set +a
+
+# 版本 B：新终端不在 engram 目录（例如你已 cd 到 ~/openmemory）
+# set -a; [ -f /path/to/engram/.env ] && . /path/to/engram/.env; [ -f /path/to/engram/.env.local ] && . /path/to/engram/.env.local; set +a
+```
+
+也可以用 Makefile 生成“加载片段”（不打印任何密钥/密码）：
+
+```bash
+# 在 engram 仓库根目录执行
+eval "$(make --no-print-directory env-shell)"
+
+# 或者：从任意目录执行（把 /path/to/engram 换成你的路径）
+eval "$(make -C /path/to/engram --no-print-directory env-shell)"
+```
+
+3) 是否还需要 `export OM_*`？
+
+- **如果你已经在 Engram 仓库里执行过 `make env-write-local`（或在 `make setup-db` 结束时选择写入 `.env.local`）**：  
+  `.env.local` 通常已经包含 `OM_PG_* / OM_PORT / OM_METADATA_BACKEND` 等配置，**不需要再重复 export**。你只需要确保 `OM_API_KEY` 有值，并建议设置 `OM_TIER`（避免启动 warning）即可：
+
+```bash
+# 方式 A：一次性把 OM_API_KEY / OM_TIER 写进 engram/.env.local（推荐）
+echo 'OM_API_KEY="change_me"' >> /path/to/engram/.env.local
+echo 'OM_TIER="hybrid"' >> /path/to/engram/.env.local  # 可选: hybrid/fast/smart/deep
+
+# 重新加载（当前终端生效）
+set -a; . /path/to/engram/.env.local; set +a
+```
+
+> 你也可以在 engram 仓库根目录执行 `OM_API_KEY=... make env-write-local` 将其写回 `.env.local`（不会自动写入当前 shell，需要重新加载）。
+
+- **如果你没有 `.env.local`（或你不想依赖它）**：按下面示例手动设置 OpenMemory 环境变量：
+
 ```bash
 export OM_METADATA_BACKEND=postgres
-export OM_PG_HOST=localhost
-export OM_PG_PORT=5432
-export OM_PG_DB=engram
+export OM_PG_HOST="${POSTGRES_HOST:-localhost}"
+export OM_PG_PORT="${POSTGRES_PORT:-5432}"
+export OM_PG_DB="${POSTGRES_DB:-engram}"
 export OM_PG_USER=openmemory_svc
-export OM_PG_PASSWORD=<your_openmemory_svc_password>
-export OM_PG_SCHEMA=openmemory
-export OM_API_KEY=<your_api_key>
-export OM_PORT=8080
+export OM_PG_PASSWORD="${OPENMEMORY_SVC_PASSWORD:-<your_openmemory_svc_password>}"
+export OM_PG_SCHEMA="${OM_PG_SCHEMA:-openmemory}"
+export OM_API_KEY="${OM_API_KEY:-<your_api_key>}"
+export OM_PORT="${OM_PORT:-8080}"
 ```
-3) 启动服务（以上游 README 为准）：
+
+4) 启动服务（以 `opm serve` 为主；或按上游 README 使用 `npm run dev`）
+
+> 如果首次启动出现 `permission denied for schema openmemory`，通常是因为 OpenMemory 会在启动时执行迁移/建表，而 `openmemory_svc` 默认没有目标 schema 的 CREATE 权限。  
+> 你可以在启动前先执行一次授权（幂等，可重复执行），然后重启 `opm serve`：
+>
+> ```bash
+> # 在 engram 仓库根目录执行
+> make openmemory-grant-svc-full
+>
+> # 或从任意目录执行（把 /path/to/engram 换成你的路径）
+> make -C /path/to/engram openmemory-grant-svc-full
+> ```
+
 ```bash
+# 方式 A：opm CLI（推荐）
+opm serve
+
+# 方式 B：开发模式
 npm install
 npm run dev
 ```
@@ -366,6 +502,17 @@ uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787
 curl http://localhost:8787/health
 ```
 
+### 测试 MCP（推荐）
+
+```bash
+# 仅验证 Gateway MCP 端点与协议契约（不依赖 OpenMemory）
+make mcp-doctor
+
+# 全栈验证：在 OpenMemory 正常时执行一次 memory_store 写入（要求返回 memory_id）
+# - 若 OpenMemory 未启动或不可达，可能会出现 deferred（写入 outbox），此检查会失败并提示原因
+make stack-doctor
+```
+
 ## 8. MCP 集成（Cursor IDE）
 
 在 Cursor 的 MCP 配置中添加 Gateway：
@@ -419,7 +566,13 @@ make help
 | `make verify` | 验证数据库权限配置 |
 | `make db-create` | 创建数据库 |
 | `make db-drop` | 删除数据库（危险操作） |
+| `make reset-native` | 重置数据库 + 4 个服务账号（危险操作） |
 | `make gateway` | 启动 Gateway 服务（带热重载） |
+| `make env-shell` | 输出加载 `.env`/`.env.local` 的 shell 片段（配合 `eval` 使用） |
+| `make openmemory-fix-vector-dim` | 修复 OpenMemory 向量维度（OM_VEC_DIM） |
+| `make openmemory-grant-svc-full` | 授权 `openmemory_svc`（用于 OpenMemory 启动时迁移/建表；若遇权限错误可执行） |
+| `make mcp-doctor` | MCP 诊断（health + CORS + tools/list；不依赖 OpenMemory） |
+| `make stack-doctor` | 全栈诊断（OpenMemory health + tools/call(memory_store) 写入验证） |
 | `make clean` | 清理临时文件 |
 
 ### 环境变量
@@ -556,7 +709,10 @@ opm serve
 cd /Users/a4399/Documents/ai/onlyfeng/engram
 source .venv/bin/activate
 export PROJECT_KEY=default
-export POSTGRES_DSN="postgresql://logbook_svc:$LOGBOOK_SVC_PASSWORD@localhost:5432/engram"
+# 推荐：如已写入 .env.local，可直接加载（make 无法自动写入当前 shell）
+set -a; [ -f .env.local ] && . ./.env.local; set +a
+# 或手动设置（把 <pwd> 换成你的密码）
+# export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
 export OPENMEMORY_BASE_URL="http://localhost:8080"
 export OM_API_KEY=change_me
 engram-gateway
@@ -565,7 +721,10 @@ engram-gateway
 cd /Users/a4399/Documents/ai/onlyfeng/engram
 source .venv/bin/activate
 export PROJECT_KEY=default
-export POSTGRES_DSN="postgresql://logbook_svc:$LOGBOOK_SVC_PASSWORD@localhost:5432/engram"
+# 推荐：如已写入 .env.local，可直接加载（make 无法自动写入当前 shell）
+set -a; [ -f .env.local ] && . ./.env.local; set +a
+# 或手动设置（把 <pwd> 换成你的密码）
+# export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
 export OPENMEMORY_BASE_URL="http://localhost:8080"
 export OM_API_KEY=change_me
 python -m engram.gateway.outbox_worker --loop
@@ -591,7 +750,16 @@ export OPENMEMORY_SVC_PASSWORD=xxx
 <details>
 <summary><b>OpenMemory 报错 "permission denied for schema openmemory"</b></summary>
 
-执行补充授权：
+优先使用 Makefile 兜底授权：
+```bash
+make openmemory-grant-svc-full
+# 或指定 schema
+OM_PG_SCHEMA=custom_openmemory make openmemory-grant-svc-full
+```
+
+执行后重启 `opm serve`。
+
+或执行补充授权：
 ```bash
 psql -d engram -c "
 GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
@@ -608,10 +776,31 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemo
 
 pgvector HNSW 索引要求 vector 列必须指定维度：
 ```bash
+# 推荐：用 Makefile 修复（维度需与 embeddings 一致）
+OM_VEC_DIM=1536 make openmemory-fix-vector-dim
+```
+
+或手动修复：
+```bash
 psql -d engram -c "DROP INDEX IF EXISTS openmemory.openmemory_vectors_v_idx;"
 psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);"
 ```
 然后重启 `opm serve`。
+</details>
+
+<details>
+<summary><b>OpenMemory 警告 "OM_TIER not set"</b></summary>
+
+设置环境变量：
+```bash
+export OM_TIER=hybrid  # 可选: hybrid/fast/smart/deep
+```
+
+推荐写入 `.env.local`（避免每次新终端重复设置）：
+```bash
+echo 'OM_TIER="hybrid"' >> .env.local
+eval "$(make --no-print-directory env-shell)"
+```
 </details>
 
 <details>

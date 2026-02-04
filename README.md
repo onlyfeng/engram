@@ -41,7 +41,11 @@ AI 友好的事实账本与记忆管理模块 - 为 AI Agent 提供可审计、�
 git clone https://github.com/onlyfeng/engram.git
 cd engram
 
-# 安装依赖
+# Python 环境（推荐：venv）
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 安装依赖（服务端部署建议 full）
 make install-full
 ```
 
@@ -49,26 +53,56 @@ make install-full
 
 ```bash
 # 初始化数据库（需要 PostgreSQL 18+ 已安装）
-# - 本地推荐：直接运行，按提示选择 logbook-only 或输入 unified-stack 的 4 个密码
-# - 非交互环境（CI/脚本）：请提前设置齐 4 个密码环境变量（unified-stack）或全部不设置（logbook-only）
+# - 交互终端：会检测 4 个服务账号密码环境变量，并询问是否重设/切换部署模式（logbook-only / unified-stack）
+# - 无 TTY（CI/脚本）：不会询问，按当前环境变量直接执行（不完整会报错）
 make setup-db
+
+# Linux/WSL2 常见：使用 postgres 账号执行管理员操作（peer auth / unix socket）
+DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
+
 ```
 
 > 详细安装（PostgreSQL、pgvector、多平台）请参考 [安装指南](docs/installation.md)
 
 #### 3. 启动服务
 
+> 注意：`make install-full` 只安装 Engram 依赖；`make gateway` **只启动 Gateway**，不会自动安装/拉起 OpenMemory。  
+> - **Docker Compose 统一栈**：OpenMemory 会随 `docker compose -f docker-compose.unified.yml up -d --build` 一起启动  
+> - **原生部署（非 Docker）**：请先在**另一个终端**启动 OpenMemory（`opm serve`），再启动 Gateway（详见 `docs/installation.md` / `docs/gateway/01_openmemory_deploy_windows.md`）
+
 ```bash
+# （原生部署）先启动 OpenMemory（新终端）
+# - 安装/编译 opm：见 docs/installation.md 的 “安装 OpenMemory”
+# - 若遇权限错误：先执行 make openmemory-grant-svc-full 再重启 opm serve
+# eval "$(make --no-print-directory env-shell)"
+# opm serve
+
 # 设置环境变量
-export POSTGRES_DSN="postgresql://logbook_svc:$LOGBOOK_SVC_PASSWORD@localhost:5432/engram"
+# 推荐：如果你在 setup-db 时选择写入 .env.local，可直接加载（不会自动写入当前 shell）
+set -a; [ -f .env.local ] && . ./.env.local; set +a
+# 或：不想手写 source 片段时可用（不打印任何密钥/密码）
+# eval "$(make --no-print-directory env-shell)"
+
+# 或手动设置（把 <pwd> 换成你的密码）
+export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
 export OPENMEMORY_BASE_URL="http://localhost:8080"
-export PROJECT_KEY="default"  # 项目标识
+export PROJECT_KEY="default"  # 项目标识（可自定义；建议与项目/数据库名一致）
 
 # 启动 Gateway
 make gateway
+
+# （新终端，可选）验证：
+# make mcp-doctor    # 仅验证 Gateway MCP（不依赖 OpenMemory）
+# make stack-doctor  # 全栈验证（OpenMemory health + memory_store 写入）
 ```
 
-服务默认监听 `http://0.0.0.0:8787`
+服务默认监听 `http://0.0.0.0:8787`（MCP: `/mcp`）。  
+**Cursor MCP 只需要连接 Gateway**，不会直连 OpenMemory；因此 OpenMemory **只要对 Gateway 可达即可**。  
+- **WSL2 场景**：如果你想在 Windows 浏览器打开 OpenMemory Dashboard/API，优先访问 `http://localhost:8080`；若不通，改用 `http://<wsl-ip>:8080`（在 WSL2 内 `hostname -I` 查看），或按 `docs/gateway/01_openmemory_deploy_windows.md` 的 “B.9” 做端口转发。
+
+> 常见提示：
+> - `opm serve` 报 `permission denied for schema openmemory`：先执行 `make openmemory-grant-svc-full` 再重启 OpenMemory
+> - `opm serve` 警告 `OM_TIER not set`：可在 `.env.local` 设置 `OM_TIER="hybrid"`（或 fast/smart/deep）
 
 ### 二、客户端配置
 
@@ -111,6 +145,24 @@ PROJECT_KEY=proj_a POSTGRES_DB=proj_a make gateway
 
 # 部署项目 B（另一个实例）
 PROJECT_KEY=proj_b POSTGRES_DB=proj_b GATEWAY_PORT=8788 make gateway
+```
+
+新增一个项目（推荐流程：每项目一库 + 独立实例）：
+
+```bash
+# 1) 初始化该项目的数据库/角色/权限（建议让 PROJECT_KEY 与 POSTGRES_DB 保持一致）
+PROJECT_KEY=proj_c POSTGRES_DB=proj_c make setup-db
+
+# 2) 为该项目写一份独立 env 文件（避免覆盖当前 .env.local）
+ENV_LOCAL_FILE=.env.local.proj_c PROJECT_KEY=proj_c POSTGRES_DB=proj_c make env-write-local
+
+# 3) 启动该项目的 OpenMemory（建议使用不同端口）
+set -a; . ./.env.local.proj_c; set +a
+OM_PORT=8081 opm serve
+
+# 4) 启动该项目的 Gateway（指向对应的 OpenMemory）
+set -a; . ./.env.local.proj_c; set +a
+GATEWAY_PORT=8788 OPENMEMORY_BASE_URL=http://localhost:8081 make gateway
 ```
 
 ### 用户隔离（Space 机制）
