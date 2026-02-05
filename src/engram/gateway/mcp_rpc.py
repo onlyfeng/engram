@@ -695,6 +695,225 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
             "required": ["content", "content_type"],
         },
     ),
+    ToolDefinition(
+        name="evidence_read",
+        description="读取 memory:// 证据内容或元数据（支持按需返回内容）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "description": "memory:// 证据 URI"},
+                "encoding": {"type": "string", "description": "返回文本时的编码（如 utf-8）"},
+                "max_bytes": {"type": "integer", "description": "最大允许返回内容大小"},
+                "include_content": {
+                    "type": "boolean",
+                    "description": "是否返回内容（false 仅返回元数据）",
+                },
+                "verify_sha256": {
+                    "type": "boolean",
+                    "description": "是否校验 SHA256（默认 true）",
+                },
+            },
+            "required": ["uri"],
+        },
+    ),
+    ToolDefinition(
+        name="artifacts_put",
+        description="写入制品到 ArtifactStore（支持文本或 base64）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "description": "制品 URI（或相对路径）"},
+                "path": {"type": "string", "description": "制品路径（与 uri 二选一）"},
+                "content": {"type": "string", "description": "文本内容"},
+                "content_base64": {"type": "string", "description": "base64 内容"},
+                "encoding": {"type": "string", "description": "文本编码（默认 utf-8）"},
+                "expected_sha256": {
+                    "type": "string",
+                    "description": "预期 SHA256（可选）",
+                },
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="artifacts_get",
+        description="读取制品内容（支持返回文本或 base64）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "description": "制品 URI（或相对路径）"},
+                "path": {"type": "string", "description": "制品路径（与 uri 二选一）"},
+                "encoding": {"type": "string", "description": "返回文本时的编码"},
+                "max_bytes": {"type": "integer", "description": "最大允许返回内容大小"},
+                "include_content": {
+                    "type": "boolean",
+                    "description": "是否返回内容（false 仅返回元数据）",
+                },
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="artifacts_exists",
+        description="检查制品是否存在",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "description": "制品 URI（或相对路径）"},
+                "path": {"type": "string", "description": "制品路径（与 uri 二选一）"},
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_create_item",
+        description="创建 logbook.items 条目",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "item_type": {"type": "string", "description": "条目类型"},
+                "title": {"type": "string", "description": "标题"},
+                "status": {"type": "string", "description": "状态（默认 open）"},
+                "owner_user_id": {"type": "string", "description": "所有者用户 ID"},
+                "scope_json": {"type": "object", "description": "范围元数据"},
+                "project_key": {"type": "string", "description": "项目标识"},
+            },
+            "required": ["item_type", "title"],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_add_event",
+        description="为 logbook.items 添加事件",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "integer", "description": "条目 ID"},
+                "event_type": {"type": "string", "description": "事件类型"},
+                "payload_json": {"type": "object", "description": "事件负载"},
+                "status_from": {"type": "string", "description": "变更前状态"},
+                "status_to": {"type": "string", "description": "变更后状态"},
+                "actor_user_id": {"type": "string", "description": "操作者用户 ID"},
+                "source": {"type": "string", "description": "事件来源（默认 tool）"},
+            },
+            "required": ["item_id", "event_type"],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_attach",
+        description="为 logbook.items 添加附件记录",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "integer", "description": "条目 ID"},
+                "kind": {"type": "string", "description": "附件类型"},
+                "uri": {"type": "string", "description": "附件 URI"},
+                "sha256": {"type": "string", "description": "SHA256 哈希"},
+                "size_bytes": {"type": "integer", "description": "大小（字节）"},
+                "meta_json": {"type": "object", "description": "附件元数据"},
+            },
+            "required": ["item_id", "kind", "uri", "sha256"],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_set_kv",
+        description="设置 logbook.kv（upsert）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string", "description": "命名空间"},
+                "key": {"type": "string", "description": "键名"},
+                "value_json": {
+                    "type": ["object", "array", "string", "number", "boolean"],
+                    "description": "值（JSON 可序列化，需非空）",
+                },
+            },
+            "required": ["namespace", "key", "value_json"],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_get_kv",
+        description="获取 logbook.kv",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string", "description": "命名空间"},
+                "key": {"type": "string", "description": "键名"},
+            },
+            "required": ["namespace", "key"],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_query_items",
+        description="查询 logbook.items（含最近事件）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "返回数量上限"},
+                "item_type": {"type": "string", "description": "按 item_type 过滤"},
+                "status": {"type": "string", "description": "按状态过滤"},
+                "owner_user_id": {"type": "string", "description": "按 owner 过滤"},
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_query_events",
+        description="查询 logbook.events",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "返回数量上限"},
+                "item_id": {"type": "integer", "description": "按 item_id 过滤"},
+                "event_type": {"type": "string", "description": "按事件类型过滤"},
+                "actor_user_id": {"type": "string", "description": "按操作者过滤"},
+                "since": {"type": "string", "description": "起始时间（ISO 8601）"},
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="logbook_list_attachments",
+        description="查询 logbook.attachments",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "返回数量上限"},
+                "item_id": {"type": "integer", "description": "按 item_id 过滤"},
+                "kind": {"type": "string", "description": "按 kind 过滤"},
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="scm_patch_blob_resolve",
+        description="解析 SCM patch_blob 元数据（evidence_uri/source_id/sha256）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "evidence_uri": {"type": "string", "description": "memory://patch_blobs/..."},
+                "source_type": {"type": "string", "description": "源类型（git/svn/gitlab）"},
+                "source_id": {"type": "string", "description": "源 ID"},
+                "sha256": {"type": "string", "description": "SHA256"},
+                "blob_id": {"type": "integer", "description": "patch_blob ID"},
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="scm_materialize_patch_blob",
+        description="触发 patch_blob 物化（受限能力，可能返回 NOT_IMPLEMENTED）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "blob_id": {"type": "integer", "description": "patch_blob ID"},
+                "evidence_uri": {"type": "string", "description": "memory://patch_blobs/..."},
+                "source_type": {"type": "string", "description": "源类型"},
+                "source_id": {"type": "string", "description": "源 ID"},
+                "sha256": {"type": "string", "description": "SHA256"},
+            },
+            "required": [],
+        },
+    ),
 ]
 
 

@@ -15,6 +15,8 @@
 | 5 | [05_failure_degradation.md](05_failure_degradation.md) | 失败降级：Outbox 机制、重试策略 |
 | 6 | [01_openmemory_deploy_windows.md](01_openmemory_deploy_windows.md) | Windows 部署指南（可选） |
 | 7 | [02_mcp_integration_cursor.md](02_mcp_integration_cursor.md) | Cursor MCP 集成指南 |
+| 8 | [07_capability_boundary.md](07_capability_boundary.md) | MCP 能力边界与工具契约 |
+| 9 | [08_workflow_orchestration_template.md](08_workflow_orchestration_template.md) | 项目工作流编排模板（MCP 原语组合） |
 
 ---
 

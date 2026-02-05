@@ -467,6 +467,19 @@ Gateway 的 `/mcp` 端点支持两种协议格式，实现双协议兼容。
 
 Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`](../../src/engram/gateway/mcp_rpc.py)。
 
+### 读写分层与鉴权约束
+
+为避免误用，MCP 工具按读写能力分层：
+
+| 分层 | 工具 | 说明 |
+|------|------|------|
+| **只读** | `memory_query`, `reliability_report`, `evidence_read`, `artifacts_get`, `artifacts_exists`, `logbook_get_kv`, `logbook_query_items`, `logbook_query_events`, `logbook_list_attachments`, `scm_patch_blob_resolve` | 无写入副作用 |
+| **写入** | `memory_store`, `governance_update`, `evidence_upload`, `artifacts_put`, `logbook_create_item`, `logbook_add_event`, `logbook_attach`, `logbook_set_kv`, `scm_materialize_patch_blob` | 可能写入 OpenMemory/Logbook/ArtifactStore |
+
+**鉴权约束**：
+- `governance_update` 必须通过 `admin_key` 或 `allowlist_users` 鉴权
+- 其余写入工具默认不内置鉴权，依赖部署侧的网络隔离与调用方身份控制
+
 ### `memory_store` - 存储记忆
 
 | 属性 | 值 |
@@ -611,7 +624,7 @@ Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`
 
 | 参数 | 类型 | 必需 | 说明 |
 |------|------|------|------|
-| `content` | string | **是** | 证据内容（base64 或文本） |
+| `content` | string | **是** | 证据内容（UTF-8 文本，最大 1MB） |
 | `content_type` | string | **是** | MIME 类型（如 text/plain, application/json） |
 | `title` | string | 否 | 证据标题/文件名 |
 | `actor_user_id` | string | 否 | 执行操作的用户标识 |
@@ -639,6 +652,353 @@ Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`
 | `EVIDENCE_CONTENT_TYPE_NOT_ALLOWED` | 不允许的 MIME 类型 | false |
 | `EVIDENCE_WRITE_ERROR` | 存储写入失败 | true |
 | `MISSING_REQUIRED_PARAMETER` | 缺少必需参数 | false |
+
+---
+
+### `evidence_read` - 读取证据
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 读取 `memory://` 证据内容或元数据 |
+| **必需参数** | `uri` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `uri` | string | **是** | `memory://` 证据 URI |
+| `encoding` | string | 否 | 返回文本时的编码（如 `utf-8`） |
+| `max_bytes` | integer | 否 | 最大允许返回内容大小 |
+| `include_content` | boolean | 否 | 是否返回内容（false 仅返回元数据） |
+| `verify_sha256` | boolean | 否 | 是否校验 SHA256（默认 true） |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 操作是否成功 |
+| `resource_type` | string | 资源类型（patch_blob/attachment 等） |
+| `resource_id` | string | 资源标识 |
+| `sha256` | string | 内容哈希 |
+| `size_bytes` | integer | 内容大小 |
+| `artifact_uri` | string | 对应制品 URI |
+| `uri` | string | 输入的 evidence URI |
+| `content_text` | string | 文本内容（encoding 指定时返回） |
+| `content_base64` | string | 二进制内容 base64（未指定 encoding 时返回） |
+
+**失败语义**（节选）：
+
+| error_code | 含义 | retryable |
+|------------|------|-----------|
+| `INVALID_URI` | 证据 URI 非法 | false |
+| `NOT_FOUND` | 证据不存在 | false |
+| `PAYLOAD_TOO_LARGE` | 内容超出最大大小 | false |
+| `CHECKSUM_MISMATCH` | 校验失败 | false |
+| `DEPENDENCY_MISSING` | logbook 依赖不可用 | false |
+
+---
+
+### `artifacts_put` - 写入制品
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 写入制品到 ArtifactStore（支持文本或 base64） |
+| **必需参数** | `uri`/`path` 与 `content`/`content_base64` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `uri` | string | 否 | 制品 URI（与 `path` 二选一） |
+| `path` | string | 否 | 制品路径（与 `uri` 二选一） |
+| `content` | string | 否 | 文本内容 |
+| `content_base64` | string | 否 | base64 内容 |
+| `encoding` | string | 否 | 文本编码（默认 `utf-8`） |
+| `expected_sha256` | string | 否 | 预期 SHA256（可选校验） |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 是否成功 |
+| `uri` | string | 制品 URI |
+| `sha256` | string | 内容哈希 |
+| `size_bytes` | integer | 内容大小 |
+
+**失败语义**（节选）：
+
+| error_code | 含义 | retryable |
+|------------|------|-----------|
+| `PATH_TRAVERSAL_ERROR` | 路径穿越检测失败 | false |
+| `ARTIFACT_WRITE_DISABLED` | 写入被禁用 | false |
+| `ARTIFACT_OVERWRITE_DENIED` | 覆盖被拒绝 | false |
+| `ARTIFACT_SIZE_LIMIT_EXCEEDED` | 超出大小限制 | false |
+| `OBJECT_STORE_NOT_CONFIGURED` | 对象存储未配置 | false |
+| `OBJECT_STORE_ERROR` | 对象存储错误 | true |
+| `ARTIFACT_WRITE_ERROR` | 写入失败 | true |
+
+---
+
+### `artifacts_get` - 读取制品
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 读取制品内容或元数据 |
+| **必需参数** | `uri`/`path` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `uri` | string | 否 | 制品 URI（与 `path` 二选一） |
+| `path` | string | 否 | 制品路径（与 `uri` 二选一） |
+| `encoding` | string | 否 | 返回文本时的编码 |
+| `max_bytes` | integer | 否 | 最大允许返回内容大小 |
+| `include_content` | boolean | 否 | 是否返回内容（false 仅元数据） |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 是否成功 |
+| `uri` | string | 制品 URI |
+| `sha256` | string | 内容哈希 |
+| `size_bytes` | integer | 内容大小 |
+| `content_text` | string | 文本内容（encoding 指定时返回） |
+| `content_base64` | string | base64 内容（未指定 encoding 时返回） |
+
+**失败语义**（节选）：
+
+| error_code | 含义 | retryable |
+|------------|------|-----------|
+| `ARTIFACT_NOT_FOUND` | 制品不存在 | false |
+| `PAYLOAD_TOO_LARGE` | 内容超出最大大小 | false |
+| `PATH_TRAVERSAL_ERROR` | 路径穿越检测失败 | false |
+| `ARTIFACT_READ_ERROR` | 读取失败 | true |
+
+---
+
+### `artifacts_exists` - 检查制品是否存在
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 检查制品是否存在 |
+| **必需参数** | `uri`/`path` |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 是否成功 |
+| `uri` | string | 制品 URI |
+| `exists` | boolean | 是否存在 |
+| `sha256` | string | 内容哈希（存在时可返回） |
+| `size_bytes` | integer | 内容大小（存在时可返回） |
+
+---
+
+### `logbook_create_item` - 创建条目
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 创建 `logbook.items` 条目 |
+| **必需参数** | `item_type`, `title` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `item_type` | string | **是** | 条目类型 |
+| `title` | string | **是** | 标题 |
+| `status` | string | 否 | 状态（默认 `open`） |
+| `owner_user_id` | string | 否 | 所有者 |
+| `scope_json` | object | 否 | 范围元数据 |
+| `project_key` | string | 否 | 项目标识 |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 是否成功 |
+| `item_id` | integer | 条目 ID |
+| `item_type` | string | 条目类型 |
+| `title` | string | 标题 |
+| `status` | string | 当前状态 |
+
+---
+
+### `logbook_add_event` - 追加事件
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 追加 `logbook.events` 事件 |
+| **必需参数** | `item_id`, `event_type` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `item_id` | integer | **是** | 条目 ID |
+| `event_type` | string | **是** | 事件类型 |
+| `payload_json` | object | 否 | 事件负载 |
+| `status_from` | string | 否 | 状态变更前 |
+| `status_to` | string | 否 | 状态变更后 |
+| `actor_user_id` | string | 否 | 操作者 |
+| `source` | string | 否 | 事件来源（默认 `tool`） |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 是否成功 |
+| `event_id` | integer | 事件 ID |
+| `item_id` | integer | 条目 ID |
+| `event_type` | string | 事件类型 |
+| `status_to` | string | 变更后状态 |
+
+---
+
+### `logbook_attach` - 添加附件记录
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 向 `logbook.attachments` 追加附件记录 |
+| **必需参数** | `item_id`, `kind`, `uri`, `sha256` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `item_id` | integer | **是** | 条目 ID |
+| `kind` | string | **是** | 附件类型 |
+| `uri` | string | **是** | 附件 URI |
+| `sha256` | string | **是** | 内容哈希 |
+| `size_bytes` | integer | 否 | 内容大小 |
+| `meta_json` | object | 否 | 附件元数据 |
+
+---
+
+### `logbook_set_kv` - 设置 KV
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 设置 `logbook.kv`（upsert） |
+| **必需参数** | `namespace`, `key`, `value_json` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `namespace` | string | **是** | 命名空间 |
+| `key` | string | **是** | 键名 |
+| `value_json` | json | **是** | JSON 可序列化值 |
+
+---
+
+### `logbook_get_kv` - 读取 KV
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 读取 `logbook.kv` |
+| **必需参数** | `namespace`, `key` |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 是否成功 |
+| `value_json` | json | KV 值 |
+| `found` | boolean | 是否存在 |
+
+---
+
+### `logbook_query_items` - 查询条目
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 查询 `logbook.items`（含最近事件） |
+| **必需参数** | 无 |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `limit` | integer | 否 | 返回数量上限（默认 50） |
+| `item_type` | string | 否 | 过滤条件 |
+| `status` | string | 否 | 过滤条件 |
+| `owner_user_id` | string | 否 | 过滤条件 |
+
+---
+
+### `logbook_query_events` - 查询事件
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 查询 `logbook.events` |
+| **必需参数** | 无 |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `limit` | integer | 否 | 返回数量上限（默认 100） |
+| `item_id` | integer | 否 | 过滤条件 |
+| `event_type` | string | 否 | 过滤条件 |
+| `actor_user_id` | string | 否 | 过滤条件 |
+| `since` | string | 否 | ISO 8601 起始时间 |
+
+---
+
+### `logbook_list_attachments` - 查询附件
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 查询 `logbook.attachments` |
+| **必需参数** | 无 |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `limit` | integer | 否 | 返回数量上限（默认 100） |
+| `item_id` | integer | 否 | 过滤条件 |
+| `kind` | string | 否 | 过滤条件 |
+
+---
+
+### `scm_patch_blob_resolve` - 解析 patch_blob
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 解析 patch_blob 元数据（`evidence_uri` / `source_id` / `sha256`） |
+| **必需参数** | `evidence_uri` / `blob_id` / `sha256`（至少一个） |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `evidence_uri` | string | 否 | `memory://patch_blobs/...` |
+| `blob_id` | integer | 否 | patch_blob ID |
+| `source_type` | string | 否 | 源类型 |
+| `source_id` | string | 否 | 源 ID |
+| `sha256` | string | 否 | 内容哈希 |
+
+---
+
+### `scm_materialize_patch_blob` - 触发物化
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 触发 patch_blob 物化（依赖 SCM 拉取实现） |
+| **必需参数** | `blob_id` / `evidence_uri` / `source_type+source_id+sha256` |
+
+**失败语义**（节选）：
+
+| error_code | 含义 | retryable |
+|------------|------|-----------|
+| `NOT_IMPLEMENTED` | SCM 拉取逻辑未实现 | false |
+| `NOT_FOUND` | patch_blob 不存在 | false |
+| `EXECUTION_FAILED` | 物化执行失败 | true |
 
 ---
 

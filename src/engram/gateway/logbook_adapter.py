@@ -81,16 +81,15 @@ _LOGBOOK_PKG_NAME = "engram_logbook"
 try:
     from engram.logbook import governance, outbox
     from engram.logbook.config import Config
-    from engram.logbook.db import (
-        KnowledgeCandidateRow,
-        get_connection,
-    )
-    from engram.logbook.db import (
-        create_item as _create_item,
-    )
-    from engram.logbook.db import (
-        query_knowledge_candidates as _query_knowledge_candidates,
-    )
+    from engram.logbook.db import KnowledgeCandidateRow, get_connection
+    from engram.logbook.db import add_event as _add_event
+    from engram.logbook.db import attach as _attach
+    from engram.logbook.db import create_item as _create_item
+    from engram.logbook.db import get_item_by_id as _get_item_by_id
+    from engram.logbook.db import get_items_with_latest_event as _get_items_with_latest_event
+    from engram.logbook.db import get_kv as _get_kv
+    from engram.logbook.db import query_knowledge_candidates as _query_knowledge_candidates
+    from engram.logbook.db import set_kv as _set_kv
     from engram.logbook.errors import DatabaseError
 except ImportError as e:
     raise ImportError(
@@ -627,6 +626,7 @@ class LogbookAdapter:
         scope_json: Optional[Dict] = None,
         status: str = "open",
         owner_user_id: Optional[str] = None,
+        project_key: Optional[str] = None,
     ) -> int:
         """
         在 logbook.items 中创建新条目
@@ -648,7 +648,273 @@ class LogbookAdapter:
             status=status,
             owner_user_id=owner_user_id,
             config=self._config,
+            project_key=project_key,
         )
+
+    def get_item(self, item_id: int) -> Optional[Dict[str, Any]]:
+        """
+        获取单个 item
+
+        Args:
+            item_id: 条目 ID
+
+        Returns:
+            item 字典，不存在返回 None
+        """
+        row = _get_item_by_id(item_id=item_id, config=self._config)
+        if row is None:
+            return None
+        return dict(row)
+
+    def add_event(
+        self,
+        item_id: int,
+        event_type: str,
+        payload_json: Optional[Dict[str, Any]] = None,
+        status_from: Optional[str] = None,
+        status_to: Optional[str] = None,
+        actor_user_id: Optional[str] = None,
+        source: str = "tool",
+    ) -> int:
+        """
+        为 item 添加事件
+
+        Args:
+            item_id: 条目 ID
+            event_type: 事件类型
+            payload_json: 事件负载
+            status_from: 变更前状态
+            status_to: 变更后状态（会更新 item）
+            actor_user_id: 操作者用户 ID
+            source: 事件来源（默认 tool）
+
+        Returns:
+            创建的 event_id
+        """
+        return _add_event(
+            item_id=item_id,
+            event_type=event_type,
+            payload_json=payload_json,
+            status_from=status_from,
+            status_to=status_to,
+            actor_user_id=actor_user_id,
+            source=source,
+            config=self._config,
+        )
+
+    def attach(
+        self,
+        item_id: int,
+        kind: str,
+        uri: str,
+        sha256: str,
+        size_bytes: Optional[int] = None,
+        meta_json: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """
+        为 item 添加附件记录
+
+        Args:
+            item_id: 条目 ID
+            kind: 附件类型
+            uri: 附件 URI（artifact key / physical URI）
+            sha256: SHA256 哈希
+            size_bytes: 附件大小（可选）
+            meta_json: 元数据（可选）
+
+        Returns:
+            创建的 attachment_id
+        """
+        return _attach(
+            item_id=item_id,
+            kind=kind,
+            uri=uri,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            meta_json=meta_json,
+            config=self._config,
+        )
+
+    def set_kv(self, namespace: str, key: str, value_json: Any) -> None:
+        """
+        设置 KV（upsert）
+
+        Args:
+            namespace: 命名空间
+            key: 键名
+            value_json: 值（结构化对象）
+        """
+        _set_kv(
+            namespace=namespace,
+            key=key,
+            value_json=value_json,
+            config=self._config,
+        )
+
+    def get_kv(self, namespace: str, key: str) -> Any:
+        """
+        获取 KV
+
+        Args:
+            namespace: 命名空间
+            key: 键名
+
+        Returns:
+            value_json（不存在返回 None）
+        """
+        return _get_kv(namespace=namespace, key=key, config=self._config)
+
+    def query_items(
+        self,
+        limit: int = 50,
+        item_type: Optional[str] = None,
+        status: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        查询 items（含最近事件信息）
+
+        Args:
+            limit: 返回条目数量上限
+            item_type: 按 item_type 过滤
+            status: 按状态过滤
+            owner_user_id: 按 owner 过滤（在结果中二次筛选）
+
+        Returns:
+            items 列表
+        """
+        items = _get_items_with_latest_event(
+            limit=limit,
+            item_type=item_type,
+            status=status,
+            config=self._config,
+        )
+        results = [dict(item) for item in items]
+        if owner_user_id:
+            results = [item for item in results if item.get("owner_user_id") == owner_user_id]
+        return results
+
+    def query_events(
+        self,
+        limit: int = 100,
+        item_id: Optional[int] = None,
+        event_type: Optional[str] = None,
+        actor_user_id: Optional[str] = None,
+        since: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        查询 events
+
+        Args:
+            limit: 返回条目数量上限
+            item_id: 按 item_id 过滤
+            event_type: 按事件类型过滤
+            actor_user_id: 按操作者过滤
+            since: 起始时间（ISO 8601）
+
+        Returns:
+            events 列表
+        """
+        conn = get_connection(config=self._config)
+        try:
+            with conn.cursor() as cur:
+                query = """
+                    SELECT event_id, item_id, event_type, status_from, status_to,
+                           payload_json, actor_user_id, source, created_at
+                    FROM events
+                    WHERE 1=1
+                """
+                params: List[Any] = []
+                if item_id is not None:
+                    query += " AND item_id = %s"
+                    params.append(item_id)
+                if event_type:
+                    query += " AND event_type = %s"
+                    params.append(event_type)
+                if actor_user_id:
+                    query += " AND actor_user_id = %s"
+                    params.append(actor_user_id)
+                if since:
+                    query += " AND created_at >= %s"
+                    params.append(since)
+                query += " ORDER BY created_at DESC LIMIT %s"
+                params.append(limit)
+
+                cur.execute(query, params)
+                rows = cur.fetchall()
+                results: List[Dict[str, Any]] = []
+                for row in rows:
+                    results.append(
+                        {
+                            "event_id": row[0],
+                            "item_id": row[1],
+                            "event_type": row[2],
+                            "status_from": row[3],
+                            "status_to": row[4],
+                            "payload_json": row[5],
+                            "actor_user_id": row[6],
+                            "source": row[7],
+                            "created_at": row[8],
+                        }
+                    )
+                return results
+        finally:
+            conn.close()
+
+    def list_attachments(
+        self,
+        limit: int = 100,
+        item_id: Optional[int] = None,
+        kind: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        查询 attachments
+
+        Args:
+            limit: 返回条目数量上限
+            item_id: 按 item_id 过滤
+            kind: 按 kind 过滤
+
+        Returns:
+            attachments 列表
+        """
+        conn = get_connection(config=self._config)
+        try:
+            with conn.cursor() as cur:
+                query = """
+                    SELECT attachment_id, item_id, kind, uri, sha256, size_bytes, meta_json, created_at
+                    FROM attachments
+                    WHERE 1=1
+                """
+                params: List[Any] = []
+                if item_id is not None:
+                    query += " AND item_id = %s"
+                    params.append(item_id)
+                if kind:
+                    query += " AND kind = %s"
+                    params.append(kind)
+                query += " ORDER BY created_at DESC LIMIT %s"
+                params.append(limit)
+
+                cur.execute(query, params)
+                rows = cur.fetchall()
+                results: List[Dict[str, Any]] = []
+                for row in rows:
+                    results.append(
+                        {
+                            "attachment_id": row[0],
+                            "item_id": row[1],
+                            "kind": row[2],
+                            "uri": row[3],
+                            "sha256": row[4],
+                            "size_bytes": row[5],
+                            "meta_json": row[6],
+                            "created_at": row[7],
+                        }
+                    )
+                return results
+        finally:
+            conn.close()
 
     # ======================== logbook.outbox_memory ========================
 

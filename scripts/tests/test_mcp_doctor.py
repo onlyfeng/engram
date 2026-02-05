@@ -33,52 +33,29 @@ def _default_request_headers() -> dict[str, str]:
 
 
 def _valid_tools_list_payload() -> dict:
-    tools = [
-        {
-            "name": "memory_store",
-            "description": "d",
-            "inputSchema": {
-                "type": "object",
-                "required": ["payload_md"],
-                "properties": {"payload_md": {"type": "string"}},
-            },
-        },
-        {
-            "name": "memory_query",
-            "description": "d",
-            "inputSchema": {
-                "type": "object",
-                "required": ["query"],
-                "properties": {"query": {"type": "string"}},
-            },
-        },
-        {
-            "name": "reliability_report",
-            "description": "d",
-            "inputSchema": {"type": "object", "required": [], "properties": {}},
-        },
-        {
-            "name": "governance_update",
-            "description": "d",
-            "inputSchema": {"type": "object", "required": [], "properties": {}},
-        },
-        {
-            "name": "evidence_upload",
-            "description": "d",
-            "inputSchema": {
-                "type": "object",
-                "required": ["content", "content_type"],
-                "properties": {
-                    "content": {"type": "string"},
-                    "content_type": {"type": "string"},
-                    "title": {"type": "string"},
-                    "actor_user_id": {"type": "string"},
-                    "project_key": {"type": "string"},
-                    "item_id": {"type": "string"},
+    tools = []
+    for name in sorted(mcp_doctor.EXPECTED_TOOL_NAMES):
+        required = mcp_doctor.EXPECTED_REQUIRED_FIELDS.get(name, [])
+        properties: dict[str, dict[str, str]] = {}
+        if name == "evidence_upload":
+            for key in sorted(mcp_doctor.EXPECTED_EVIDENCE_UPLOAD_PROPERTIES):
+                properties[key] = {"type": "string"}
+            properties["content"] = {"type": "string"}
+            properties["content_type"] = {"type": "string"}
+        else:
+            for key in required:
+                properties[key] = {"type": "string"}
+        tools.append(
+            {
+                "name": name,
+                "description": "d",
+                "inputSchema": {
+                    "type": "object",
+                    "required": required,
+                    "properties": properties,
                 },
-            },
-        },
-    ]
+            }
+        )
     return {"jsonrpc": "2.0", "id": 1, "result": {"tools": tools}}
 
 

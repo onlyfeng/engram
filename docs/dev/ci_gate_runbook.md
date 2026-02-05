@@ -591,8 +591,8 @@ pytest tests/gateway/test_mcp_jsonrpc_contract.py -q
 | CORS 预检响应 | `OPTIONS /mcp` + `Access-Control-Request-Headers` | 200/204；Allow-Origin/Methods/Headers 完整 | 来源：测试（`tests/gateway/test_mcp_cors_preflight.py`） |
 | JSON-RPC initialize | `POST /mcp` method=initialize | `result.protocolVersion`/`capabilities.tools`/`serverInfo` 字段齐全 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
 | JSON-RPC ping | `POST /mcp` method=ping | `result == {}` | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
-| tools/list 工具集合 | `POST /mcp` method=tools/list | tools 数量=5；名称集合匹配 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
-| tools/list 输入 Schema | tools.*.inputSchema.type=object；required 字段匹配 | required 对齐（`memory_store`/`memory_query`/`evidence_upload`） | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| tools/list 工具集合 | `POST /mcp` method=tools/list | tools 数量=19；名称集合匹配 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
+| tools/list 输入 Schema | tools.*.inputSchema.type=object；required 字段匹配 | required 对齐（`memory_store`/`memory_query`/`evidence_upload`/`evidence_read`/`logbook_*` 等） | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
 | evidence_upload Schema | `evidence_upload.inputSchema.properties` | keys 与 `content`/`content_type` 类型匹配 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
 | correlation_id 暴露 | tools/list 响应头 | `X-Correlation-ID` 格式 + Expose-Headers 含 `X-Correlation-ID` | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |
 | correlation_id 唯一性 | 连续 tools/list 多次 | `X-Correlation-ID` 不重复 | 来源：测试（`tests/gateway/test_mcp_jsonrpc_contract.py`） |

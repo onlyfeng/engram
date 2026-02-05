@@ -32,10 +32,27 @@ Gateway Handlers 模块
         ...
 """
 
+from .artifacts import (
+    execute_artifacts_exists,
+    execute_artifacts_get,
+    execute_artifacts_put,
+)
+from .evidence_read import execute_evidence_read
 from .evidence_upload import execute_evidence_upload
 from .governance_update import GovernanceSettingsUpdateResponse, governance_update_impl
+from .logbook_tools import (
+    execute_logbook_add_event,
+    execute_logbook_attach,
+    execute_logbook_create_item,
+    execute_logbook_get_kv,
+    execute_logbook_list_attachments,
+    execute_logbook_query_events,
+    execute_logbook_query_items,
+    execute_logbook_set_kv,
+)
 from .memory_query import MemoryQueryResponse, memory_query_impl
 from .memory_store import MemoryStoreResponse, memory_store_impl
+from .scm_tools import execute_scm_materialize_patch_blob, execute_scm_patch_blob_resolve
 
 __all__ = [
     # 核心 handler 实现
@@ -46,4 +63,18 @@ __all__ = [
     "governance_update_impl",
     "GovernanceSettingsUpdateResponse",
     "execute_evidence_upload",
+    "execute_evidence_read",
+    "execute_artifacts_put",
+    "execute_artifacts_get",
+    "execute_artifacts_exists",
+    "execute_logbook_create_item",
+    "execute_logbook_add_event",
+    "execute_logbook_attach",
+    "execute_logbook_set_kv",
+    "execute_logbook_get_kv",
+    "execute_logbook_query_items",
+    "execute_logbook_query_events",
+    "execute_logbook_list_attachments",
+    "execute_scm_patch_blob_resolve",
+    "execute_scm_materialize_patch_blob",
 ]

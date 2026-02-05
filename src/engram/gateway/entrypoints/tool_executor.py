@@ -92,7 +92,21 @@ async def execute_tool(
 
     # 延迟导入 handlers，保持 import-safe
     from ..handlers import (
+        execute_artifacts_exists,
+        execute_artifacts_get,
+        execute_artifacts_put,
+        execute_evidence_read,
         execute_evidence_upload,
+        execute_logbook_add_event,
+        execute_logbook_attach,
+        execute_logbook_create_item,
+        execute_logbook_get_kv,
+        execute_logbook_list_attachments,
+        execute_logbook_query_events,
+        execute_logbook_query_items,
+        execute_logbook_set_kv,
+        execute_scm_materialize_patch_blob,
+        execute_scm_patch_blob_resolve,
         governance_update_impl,
         memory_query_impl,
         memory_store_impl,
@@ -184,6 +198,126 @@ async def execute_tool(
             item_id=args.get("item_id"),
             deps=deps,
         )
+    elif tool == "evidence_read":
+        result_dict = await execute_evidence_read(
+            uri=args.get("uri"),
+            encoding=args.get("encoding"),
+            max_bytes=args.get("max_bytes"),
+            include_content=args.get("include_content", True),
+            verify_sha256=args.get("verify_sha256", True),
+            deps=deps,
+        )
+    elif tool == "artifacts_put":
+        result_dict = await execute_artifacts_put(
+            uri=args.get("uri"),
+            path=args.get("path"),
+            content=args.get("content"),
+            content_base64=args.get("content_base64"),
+            encoding=args.get("encoding", "utf-8"),
+            expected_sha256=args.get("expected_sha256"),
+            deps=deps,
+        )
+    elif tool == "artifacts_get":
+        result_dict = await execute_artifacts_get(
+            uri=args.get("uri"),
+            path=args.get("path"),
+            encoding=args.get("encoding"),
+            max_bytes=args.get("max_bytes"),
+            include_content=args.get("include_content", True),
+            deps=deps,
+        )
+    elif tool == "artifacts_exists":
+        result_dict = await execute_artifacts_exists(
+            uri=args.get("uri"),
+            path=args.get("path"),
+            deps=deps,
+        )
+    elif tool == "logbook_create_item":
+        result_dict = await execute_logbook_create_item(
+            item_type=args.get("item_type"),
+            title=args.get("title"),
+            status=args.get("status"),
+            owner_user_id=args.get("owner_user_id"),
+            scope_json=args.get("scope_json"),
+            project_key=args.get("project_key"),
+            deps=deps,
+        )
+    elif tool == "logbook_add_event":
+        result_dict = await execute_logbook_add_event(
+            item_id=args.get("item_id"),
+            event_type=args.get("event_type"),
+            payload_json=args.get("payload_json"),
+            status_from=args.get("status_from"),
+            status_to=args.get("status_to"),
+            actor_user_id=args.get("actor_user_id"),
+            source=args.get("source"),
+            deps=deps,
+        )
+    elif tool == "logbook_attach":
+        result_dict = await execute_logbook_attach(
+            item_id=args.get("item_id"),
+            kind=args.get("kind"),
+            uri=args.get("uri"),
+            sha256=args.get("sha256"),
+            size_bytes=args.get("size_bytes"),
+            meta_json=args.get("meta_json"),
+            deps=deps,
+        )
+    elif tool == "logbook_set_kv":
+        result_dict = await execute_logbook_set_kv(
+            namespace=args.get("namespace"),
+            key=args.get("key"),
+            value_json=args.get("value_json"),
+            deps=deps,
+        )
+    elif tool == "logbook_get_kv":
+        result_dict = await execute_logbook_get_kv(
+            namespace=args.get("namespace"),
+            key=args.get("key"),
+            deps=deps,
+        )
+    elif tool == "logbook_query_items":
+        result_dict = await execute_logbook_query_items(
+            limit=args.get("limit", 50),
+            item_type=args.get("item_type"),
+            status=args.get("status"),
+            owner_user_id=args.get("owner_user_id"),
+            deps=deps,
+        )
+    elif tool == "logbook_query_events":
+        result_dict = await execute_logbook_query_events(
+            limit=args.get("limit", 100),
+            item_id=args.get("item_id"),
+            event_type=args.get("event_type"),
+            actor_user_id=args.get("actor_user_id"),
+            since=args.get("since"),
+            deps=deps,
+        )
+    elif tool == "logbook_list_attachments":
+        result_dict = await execute_logbook_list_attachments(
+            limit=args.get("limit", 100),
+            item_id=args.get("item_id"),
+            kind=args.get("kind"),
+            deps=deps,
+        )
+    elif tool == "scm_patch_blob_resolve":
+        result_dict = await execute_scm_patch_blob_resolve(
+            evidence_uri=args.get("evidence_uri"),
+            source_type=args.get("source_type"),
+            source_id=args.get("source_id"),
+            sha256=args.get("sha256"),
+            blob_id=args.get("blob_id"),
+            deps=deps,
+        )
+    elif tool == "scm_materialize_patch_blob":
+        result_dict = await execute_scm_materialize_patch_blob(
+            blob_id=args.get("blob_id"),
+            evidence_uri=args.get("evidence_uri"),
+            source_type=args.get("source_type"),
+            source_id=args.get("source_id"),
+            sha256=args.get("sha256"),
+            deps=deps,
+        )
 
     else:
         raise ValueError(f"未知工具: {tool}")
@@ -242,11 +376,25 @@ class DefaultToolExecutor:
 
     # 可用工具名列表（在 call_tool 中动态获取）
     _available_tools: List[str] = [
+        "artifacts_exists",
+        "artifacts_get",
+        "artifacts_put",
+        "evidence_read",
         "memory_store",
         "memory_query",
         "reliability_report",
         "governance_update",
         "evidence_upload",
+        "logbook_add_event",
+        "logbook_attach",
+        "logbook_create_item",
+        "logbook_get_kv",
+        "logbook_list_attachments",
+        "logbook_query_events",
+        "logbook_query_items",
+        "logbook_set_kv",
+        "scm_materialize_patch_blob",
+        "scm_patch_blob_resolve",
     ]
 
     def list_tools(self) -> List[Dict[str, Any]]:
@@ -384,6 +532,12 @@ class DefaultToolExecutor:
             "evidence_upload": ["content", "content_type"],
             "governance_update": [],  # 无必需参数
             "reliability_report": [],  # 无必需参数
+            "evidence_read": ["uri"],
+            "logbook_create_item": ["item_type", "title"],
+            "logbook_add_event": ["item_id", "event_type"],
+            "logbook_attach": ["item_id", "kind", "uri", "sha256"],
+            "logbook_set_kv": ["namespace", "key", "value_json"],
+            "logbook_get_kv": ["namespace", "key"],
         }
 
         required = required_params.get(name, [])

@@ -5,7 +5,7 @@ MCP JSON-RPC 2.0 协议契约测试
 测试覆盖:
 1. JSON-RPC 无效请求 -> -32600 (INVALID_REQUEST)
 2. 未知 method -> -32601 (METHOD_NOT_FOUND)
-3. tools/list 输出包含五个工具（memory_store, memory_query, reliability_report, governance_update, evidence_upload）
+3. tools/list 输出包含最新工具集合（含 memory_/evidence_/artifacts_/logbook_/scm_）
 4. tools/call 返回 content[] 格式
 5. 旧 {tool, arguments} 格式仍返回原 MCPResponse 结构
 6. 每个工具的 inputSchema.required 与实际实现一致
@@ -30,6 +30,29 @@ CONFIG_MODULE = "engram.gateway.config"
 CLIENT_MODULE = "engram.gateway.openmemory_client"
 DB_MODULE = "engram.gateway.logbook_db"
 ADAPTER_MODULE = "engram.gateway.logbook_adapter"
+
+# tools/list 期望的工具集合
+EXPECTED_TOOL_NAMES = {
+    "memory_store",
+    "memory_query",
+    "reliability_report",
+    "governance_update",
+    "evidence_upload",
+    "evidence_read",
+    "artifacts_put",
+    "artifacts_get",
+    "artifacts_exists",
+    "logbook_create_item",
+    "logbook_add_event",
+    "logbook_attach",
+    "logbook_set_kv",
+    "logbook_get_kv",
+    "logbook_query_items",
+    "logbook_query_events",
+    "logbook_list_attachments",
+    "scm_patch_blob_resolve",
+    "scm_materialize_patch_blob",
+}
 
 # ===================== 契约断言辅助函数 =====================
 
@@ -391,10 +414,10 @@ class TestJsonRpcLifecycle:
 
 
 class TestToolsList:
-    """测试 tools/list 返回五个工具"""
+    """测试 tools/list 返回完整工具集"""
 
-    def test_tools_list_returns_five_tools(self, client):
-        """tools/list 应返回五个工具定义"""
+    def test_tools_list_returns_tools(self, client):
+        """tools/list 应返回全部工具定义"""
         response = client.post("/mcp", json={"jsonrpc": "2.0", "method": "tools/list", "id": 1})
         assert response.status_code == 200
         result = response.json()
@@ -405,20 +428,13 @@ class TestToolsList:
         assert result.get("error") is None
         assert result.get("result") is not None
 
-        # 验证包含五个工具
+        # 验证包含全部工具
         tools = result["result"]["tools"]
-        assert len(tools) == 5
+        assert len(tools) == len(EXPECTED_TOOL_NAMES)
 
         # 验证工具名称
         tool_names = {tool["name"] for tool in tools}
-        expected_names = {
-            "memory_store",
-            "memory_query",
-            "reliability_report",
-            "governance_update",
-            "evidence_upload",
-        }
-        assert tool_names == expected_names
+        assert tool_names == EXPECTED_TOOL_NAMES
 
     def test_tools_list_tool_structure(self, client):
         """验证工具定义的结构"""
@@ -439,7 +455,7 @@ class TestToolsList:
         response = client.post("/mcp", json={"jsonrpc": "2.0", "method": "tools/list", "id": 2})
         assert response.status_code == 200
         result = response.json()
-        assert len(result["result"]["tools"]) == 5
+        assert len(result["result"]["tools"]) == len(EXPECTED_TOOL_NAMES)
 
     def test_tools_list_input_schema_required_fields(self, client):
         """验证每个工具的 inputSchema.required 字段与实现一致"""
@@ -458,6 +474,20 @@ class TestToolsList:
             "reliability_report": [],
             "governance_update": [],
             "evidence_upload": ["content", "content_type"],  # content 和 content_type 是必需的
+            "evidence_read": ["uri"],
+            "artifacts_put": [],
+            "artifacts_get": [],
+            "artifacts_exists": [],
+            "logbook_create_item": ["item_type", "title"],
+            "logbook_add_event": ["item_id", "event_type"],
+            "logbook_attach": ["item_id", "kind", "uri", "sha256"],
+            "logbook_set_kv": ["namespace", "key", "value_json"],
+            "logbook_get_kv": ["namespace", "key"],
+            "logbook_query_items": [],
+            "logbook_query_events": [],
+            "logbook_list_attachments": [],
+            "scm_patch_blob_resolve": [],
+            "scm_materialize_patch_blob": [],
         }
 
         # 验证每个工具的 required 字段
