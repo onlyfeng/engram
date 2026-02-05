@@ -83,6 +83,8 @@ mcp-client --server engram tools/list
   }
 }
 ```
+
+> 说明：`Authorization: Bearer <your-api-key>` 需与服务端 `GATEWAY_AUTH_TOKEN` 或 `GATEWAY_AUTH_TOKENS_JSON` 配置匹配。
 <!-- END GENERATED -->
 
 **生产配置（带认证）**：
@@ -142,6 +144,8 @@ Gateway 服务端需要以下环境变量：
 | `GATEWAY_MODE` | `FULL` | 运行模式：`FULL` / `DEGRADED` |
 | `GATEWAY_SKIP_RECONCILE` | `0` | 跳过 Reconcile 能力（`1` 跳过） |
 | `GATEWAY_LOG_LEVEL` | `INFO` | 日志级别 |
+| `GATEWAY_AUTH_TOKEN` | *(空)* | 启用 MCP Bearer Token 鉴权（单 token） |
+| `GATEWAY_AUTH_TOKENS_JSON` | *(空)* | 启用 MCP Bearer Token 鉴权（JSON 数组） |
 
 **降级开关**（用于故障隔离）：
 

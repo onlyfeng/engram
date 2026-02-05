@@ -112,6 +112,18 @@ python -m uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
 # engram-gateway
 ```
 
+**验证（MCP 端到端）**：
+```powershell
+# MCP 诊断（不依赖 OpenMemory）
+python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787
+
+# 全栈诊断（依赖 OpenMemory）
+python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787
+
+# 全功能诊断（含 evidence/artifacts/logbook）
+python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787 --full
+```
+
 ### A.6 运行方式（前台/后台）
 
 **OpenMemory（示例）**：
@@ -380,6 +392,18 @@ export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
 export OPENMEMORY_BASE_URL="http://localhost:8080"
 export OM_API_KEY="<your_om_key>"
 engram-gateway
+```
+
+**验证（WSL2 内）**：
+```bash
+# MCP 诊断（不依赖 OpenMemory）
+python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787
+
+# 全栈诊断（依赖 OpenMemory）
+python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787
+
+# 全功能诊断（含 evidence/artifacts/logbook）
+python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787 --full
 ```
 
 ### B.7 systemd 服务托管（WSL2 内）

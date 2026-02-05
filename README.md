@@ -105,6 +105,7 @@ make gateway
 # （新终端，可选）验证：
 # make mcp-doctor    # 仅验证 Gateway MCP（不依赖 OpenMemory）
 # make stack-doctor  # 全栈验证（OpenMemory health + memory_store 写入）
+# STACK_DOCTOR_FULL=1 make stack-doctor  # 全功能验证（含 evidence/artifacts/logbook）
 ```
 
 **Windows PowerShell 无 make 时**：环境变量用 `$env:VAR="值"` 设置；若有 `.env.local` 可逐行执行其中的赋值，或先设再启动：
@@ -114,6 +115,7 @@ $env:OPENMEMORY_BASE_URL="http://localhost:8080"
 $env:PROJECT_KEY="default"
 uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
 # 验证（新终端）：python scripts/ops/mcp_doctor.py  或  python scripts/ops/stack_doctor.py
+# 全功能验证：python scripts/ops/stack_doctor.py --full
 ```
 
 服务默认监听 `http://0.0.0.0:8787`（MCP: `/mcp`）。  
@@ -197,6 +199,8 @@ GATEWAY_PORT=8788 OPENMEMORY_BASE_URL=http://localhost:8081 make gateway
 | 私有空间 | `private:<user_id>` | 用户个人数据 |
 
 MCP 调用时通过 `actor_user_id` 参数标识用户身份。
+
+> 注意：团队空间写入受治理开关控制（`team_write_enabled`），默认可能被降级到私有空间；需通过 `governance_update` 开启并满足证据链策略。身份映射与账号关联参见 [docs/logbook/08_identity_config.md](docs/logbook/08_identity_config.md)。
 
 > 详见 [记忆契约](docs/gateway/03_memory_contract.md) 和 [治理开关](docs/gateway/04_governance_switch.md)
 
@@ -394,6 +398,8 @@ engram-scm-sync admin locks list-expired         # 查看过期锁
 > **弃用说明**: 根目录的 `python scm_sync_*.py` 脚本已移除，请使用 `engram-scm-*` 命令。
 
 > 详细配置参见 [SCM Sync 运维指南](docs/logbook/07_scm_sync_ops_guide.md) 和 [环境变量参考](docs/reference/environment_variables.md#scm-同步服务)
+> 
+> 仅通过 MCP 的客户端可使用 `scm_patch_blob_resolve` / `scm_materialize_patch_blob` 获取 patch 证据，编排示例见 [docs/gateway/08_workflow_orchestration_template.md](docs/gateway/08_workflow_orchestration_template.md)。
 
 ---
 

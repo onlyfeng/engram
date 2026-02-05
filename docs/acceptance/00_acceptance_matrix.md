@@ -797,6 +797,23 @@ HTTP_ONLY_MODE=1 make test-gateway-integration
 | `SKIP_DEGRADATION_TEST=1` | 跳过降级测试 |
 | `OM_PG_SCHEMA` | OpenMemory 目标 schema（默认 `openmemory`） |
 
+### MCP 全功能验收（客户端仅连 MCP）
+
+| 功能域 | MCP 工具 | 覆盖测试 | 说明 |
+|--------|---------|----------|------|
+| 工具发现 | `tools/list` | `tests/acceptance/test_mcp_e2e_full_workflow.py` | 校验核心工具集存在 |
+| 治理开关 | `governance_update` | `tests/acceptance/test_mcp_e2e_full_workflow.py` | 启用 team 写入并记录审计 |
+| 记忆存取 | `memory_store`, `memory_query` | `tests/acceptance/test_mcp_e2e_full_workflow.py` | 覆盖 team/private 空间与查询 |
+| 证据管理 | `evidence_upload`, `evidence_read` | `tests/acceptance/test_mcp_e2e_full_workflow.py` | 上传并读取 evidence 内容 |
+| 制品管理 | `artifacts_put`, `artifacts_get`, `artifacts_exists` | `tests/acceptance/test_mcp_e2e_full_workflow.py` | 本地制品写入/读取/存在性 |
+| 事实账本 | `logbook_*` | `tests/acceptance/test_mcp_e2e_full_workflow.py` | item/event/kv/attachment 查询 |
+| SCM Patch | `scm_patch_blob_resolve`, `scm_materialize_patch_blob` | `tests/acceptance/test_mcp_e2e_full_workflow.py` | 通过 DB 夹具 + stub 走通 |
+
+**说明**:
+- 测试仅通过 `/mcp` JSON-RPC 调用，不直连 DB/OpenMemory
+- 依赖本地 PostgreSQL（通过 acceptance conftest 迁移）
+- OpenMemory 调用使用测试桩（避免依赖外部服务）
+
 ---
 
 **未覆盖范围**:

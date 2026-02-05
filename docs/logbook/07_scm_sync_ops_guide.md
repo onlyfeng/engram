@@ -40,15 +40,15 @@
 
 | 功能 | console_scripts（推荐） | python -m 模块调用 | docker compose |
 |------|------------------------|-------------------|----------------|
-| **Scheduler 单次** | `engram-scm-scheduler --once` | `python -m engram.logbook.cli.scm_sync scheduler --once` | `docker compose run --rm scm_scheduler engram-scm-scheduler --once` |
-| **Scheduler 循环** | `engram-scm-scheduler --loop` | `python -m engram.logbook.cli.scm_sync scheduler --loop` | `docker compose --profile scm_sync up -d scm_scheduler` |
-| **Worker 启动** | `engram-scm-worker --worker-id W1` | `python -m engram.logbook.cli.scm_sync worker --worker-id W1` | `docker compose --profile scm_sync up -d scm_worker` |
-| **Worker 单任务** | `engram-scm-worker --worker-id W1 --once` | `python -m engram.logbook.cli.scm_sync worker --worker-id W1 --once` | `docker compose run --rm scm_worker engram-scm-worker --worker-id W1 --once` |
-| **Reaper 单次** | `engram-scm-reaper --once` | `python -m engram.logbook.cli.scm_sync reaper --once` | `docker compose run --rm scm_reaper engram-scm-reaper --once` |
-| **Reaper 循环** | `engram-scm-reaper --loop` | `python -m engram.logbook.cli.scm_sync reaper --loop` | `docker compose --profile scm_sync up -d scm_reaper` |
-| **状态查看** | `engram-scm-status --json` | `python -m engram.logbook.cli.scm_sync status --json` | `docker compose run --rm scm_scheduler engram-scm-status --json` |
-| **手动同步** | `engram-scm-sync runner incremental --repo gitlab:123` | `python -m engram.logbook.cli.scm_sync runner incremental --repo gitlab:123` | `docker compose run --rm scm_worker engram-scm-sync runner incremental --repo gitlab:123` |
-| **Admin 操作** | `engram-scm-sync admin jobs list --status dead` | `python -m engram.logbook.cli.scm_sync admin jobs list --status dead` | `docker compose run --rm scm_scheduler engram-scm-sync admin jobs list --status dead` |
+| **Scheduler 单次** | `engram-scm-scheduler --once` | `python -m engram.logbook.cli.scm_sync scheduler --once` | `docker compose -f docker-compose.unified.yml run --rm scm_scheduler engram-scm-scheduler --once` |
+| **Scheduler 循环** | `engram-scm-scheduler --loop` | `python -m engram.logbook.cli.scm_sync scheduler --loop` | `docker compose -f docker-compose.unified.yml --profile scm_sync up -d scm_scheduler` |
+| **Worker 启动** | `engram-scm-worker --worker-id W1` | `python -m engram.logbook.cli.scm_sync worker --worker-id W1` | `docker compose -f docker-compose.unified.yml --profile scm_sync up -d scm_worker` |
+| **Worker 单任务** | `engram-scm-worker --worker-id W1 --once` | `python -m engram.logbook.cli.scm_sync worker --worker-id W1 --once` | `docker compose -f docker-compose.unified.yml run --rm scm_worker engram-scm-worker --worker-id W1 --once` |
+| **Reaper 单次** | `engram-scm-reaper --once` | `python -m engram.logbook.cli.scm_sync reaper --once` | `docker compose -f docker-compose.unified.yml run --rm scm_reaper engram-scm-reaper --once` |
+| **Reaper 循环** | `engram-scm-reaper --loop` | `python -m engram.logbook.cli.scm_sync reaper --loop` | `docker compose -f docker-compose.unified.yml --profile scm_sync up -d scm_reaper` |
+| **状态查看** | `engram-scm-status --json` | `python -m engram.logbook.cli.scm_sync status --json` | `docker compose -f docker-compose.unified.yml run --rm scm_scheduler engram-scm-status --json` |
+| **手动同步** | `engram-scm-sync runner incremental --repo gitlab:123` | `python -m engram.logbook.cli.scm_sync runner incremental --repo gitlab:123` | `docker compose -f docker-compose.unified.yml run --rm scm_worker engram-scm-sync runner incremental --repo gitlab:123` |
+| **Admin 操作** | `engram-scm-sync admin jobs list --status dead` | `python -m engram.logbook.cli.scm_sync admin jobs list --status dead` | `docker compose -f docker-compose.unified.yml run --rm scm_scheduler engram-scm-sync admin jobs list --status dead` |
 
 ### 最小闭环示例（本地开发）
 
@@ -87,16 +87,16 @@ GITLAB_TOKEN=your_token_here
 EOF
 
 # 2. 启动基础服务（PostgreSQL）
-docker compose up -d postgres
+docker compose -f docker-compose.unified.yml up -d postgres
 
 # 3. 执行一次调度
-docker compose run --rm scm_scheduler engram-scm-scheduler --once --dry-run
+docker compose -f docker-compose.unified.yml run --rm scm_scheduler engram-scm-scheduler --once --dry-run
 
 # 4. 查看状态
-docker compose run --rm scm_scheduler engram-scm-status --json
+docker compose -f docker-compose.unified.yml run --rm scm_scheduler engram-scm-status --json
 
 # 5. 启动完整 SCM Sync 服务
-docker compose --profile scm_sync up -d
+docker compose -f docker-compose.unified.yml --profile scm_sync up -d
 ```
 
 ---
@@ -273,17 +273,19 @@ SCM Sync 服务通过 `scm_sync` profile 提供，包含以下容器：
 | `scm_worker` | `engram-scm-worker` | Worker（支持多副本） |
 | `scm_reaper` | `engram-scm-reaper --loop` | 清理器（单实例） |
 
+> 客户端仅连 MCP 时，可通过 `scm_patch_blob_resolve` / `scm_materialize_patch_blob` 获取 patch 证据；契约与示例见 [docs/gateway/07_capability_boundary.md](../gateway/07_capability_boundary.md) 与 [docs/gateway/08_workflow_orchestration_template.md](../gateway/08_workflow_orchestration_template.md)。
+
 ### 启动服务
 
 ```bash
 # 统一栈部署
-docker compose --profile scm_sync up -d
+docker compose -f docker-compose.unified.yml --profile scm_sync up -d
 
 # Logbook-only 部署
 docker compose -f compose/logbook.yml --profile scm_sync up -d
 
 # 扩展 Worker 副本数
-docker compose --profile scm_sync up -d --scale scm_worker=3
+docker compose -f docker-compose.unified.yml --profile scm_sync up -d --scale scm_worker=3
 ```
 
 ### 必需的环境变量
@@ -1345,13 +1347,13 @@ engram-scm-status --json | jq '.circuit_breakers'
 1. **检查 Worker 健康**：
    ```bash
    # 查看 Worker 日志
-   docker logs scm_sync_worker --tail 100
+   docker compose -f docker-compose.unified.yml logs scm_worker --tail 100
    ```
 
 2. **增加 Worker 实例**：
    ```bash
    # 启动额外 Worker
-   docker compose up -d --scale scm_sync_worker=3
+   docker compose -f docker-compose.unified.yml --profile scm_sync up -d --scale scm_worker=3
    ```
 
 3. **调整并发限制**：

@@ -47,6 +47,9 @@ python scripts/ops/mcp_doctor.py --gateway-url http://127.0.0.1:8787
 # 全栈诊断（依赖 OpenMemory）
 python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787
 
+# 全功能诊断（含 evidence/artifacts/logbook）
+python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787 --full
+
 # 可选：检查 DB（容器内执行）
 docker compose -f docker-compose.unified.yml exec -T postgres psql -U postgres -d engram -c "SELECT 1 FROM logbook.facts LIMIT 0"
 ```
@@ -736,6 +739,9 @@ make mcp-doctor
 # 全栈验证：在 OpenMemory 正常时执行一次 memory_store 写入（要求返回 memory_id）
 # - 若 OpenMemory 未启动或不可达，可能会出现 deferred（写入 outbox），此检查会失败并提示原因
 make stack-doctor
+
+# 全功能验证：额外覆盖 evidence/artifacts/logbook（会写入少量测试数据）
+STACK_DOCTOR_FULL=1 make stack-doctor
 ```
 
 ## 8. MCP 集成（Cursor IDE）
@@ -797,7 +803,7 @@ make help
 | `make openmemory-fix-vector-dim` | 修复 OpenMemory 向量维度（OM_VEC_DIM） |
 | `make openmemory-grant-svc-full` | 授权 `openmemory_svc`（用于 OpenMemory 启动时迁移/建表；若遇权限错误可执行） |
 | `make mcp-doctor` | MCP 诊断（health + CORS + tools/list；不依赖 OpenMemory） |
-| `make stack-doctor` | 全栈诊断（OpenMemory health + tools/call(memory_store) 写入验证） |
+| `make stack-doctor` | 全栈诊断（OpenMemory health + tools/call(memory_store) 写入验证；`STACK_DOCTOR_FULL=1` 启用全功能诊断） |
 | `make clean` | 清理临时文件 |
 
 ### 环境变量
