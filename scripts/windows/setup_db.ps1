@@ -229,9 +229,11 @@ if ([string]::IsNullOrWhiteSpace($env:OM_API_KEY)) {
 Write-Host ""
 $write = _ReadChoice "Write/update $EnvPath so you can later dot-source . .\.env.ps1 ? Enter y to confirm [Y]" "Y"
 if ($write -eq "y" -or $write -eq "Y") {
-  $omUser = if ($mode -eq "unified-stack") { "openmemory_svc" } else { $pgSuperUser }
+  $omUser = if ($mode -eq "unified-stack") { "openmemory_migrator_login" } else { $pgSuperUser }
   $omPw = if (-not [string]::IsNullOrWhiteSpace($env:OM_PG_PASSWORD)) {
     $env:OM_PG_PASSWORD
+  } elseif ($mode -eq "unified-stack" -and -not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD)) {
+    $env:OPENMEMORY_MIGRATOR_PASSWORD
   } elseif ($mode -eq "unified-stack" -and -not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_SVC_PASSWORD)) {
     $env:OPENMEMORY_SVC_PASSWORD
   } else {

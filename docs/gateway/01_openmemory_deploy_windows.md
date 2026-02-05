@@ -122,8 +122,8 @@ $env:OM_METADATA_BACKEND="postgres"
 $env:OM_PG_HOST="127.0.0.1"
 $env:OM_PG_PORT="5432"
 $env:OM_PG_DB="engram"
-$env:OM_PG_USER="openmemory_svc"
-$env:OM_PG_PASSWORD="<pwd>"
+$env:OM_PG_USER="openmemory_migrator_login"
+$env:OM_PG_PASSWORD="<migrator_pwd>"
 $env:OM_PG_SCHEMA="openmemory"
 $env:OM_API_KEY="<your_om_key>"
 $env:OM_PORT="8080"
@@ -160,7 +160,7 @@ nssm start engram_outbox
 # OpenMemory（示例，按上游启动命令替换）
 nssm install openmemory "C:\Program Files\nodejs\node.exe" "C:\openmemory\backend\server.js"
 nssm set openmemory AppDirectory "C:\openmemory\backend"
-nssm set openmemory AppEnvironmentExtra "OM_METADATA_BACKEND=postgres`nOM_PG_HOST=127.0.0.1`nOM_PG_PORT=5432`nOM_PG_DB=engram`nOM_PG_USER=openmemory_svc`nOM_PG_PASSWORD=<pwd>`nOM_PG_SCHEMA=openmemory`nOM_API_KEY=<your_om_key>`nOM_PORT=8080"
+nssm set openmemory AppEnvironmentExtra "OM_METADATA_BACKEND=postgres`nOM_PG_HOST=127.0.0.1`nOM_PG_PORT=5432`nOM_PG_DB=engram`nOM_PG_USER=openmemory_migrator_login`nOM_PG_PASSWORD=<migrator_pwd>`nOM_PG_SCHEMA=openmemory`nOM_API_KEY=<your_om_key>`nOM_PORT=8080"
 nssm set openmemory Start SERVICE_AUTO_START
 nssm start openmemory
 ```
@@ -356,8 +356,8 @@ export OM_METADATA_BACKEND=postgres
 export OM_PG_HOST=localhost
 export OM_PG_PORT=5432
 export OM_PG_DB=engram
-export OM_PG_USER=openmemory_svc
-export OM_PG_PASSWORD=$OPENMEMORY_SVC_PASSWORD
+export OM_PG_USER=openmemory_migrator_login
+export OM_PG_PASSWORD=$OPENMEMORY_MIGRATOR_PASSWORD
 export OM_PG_SCHEMA=openmemory
 export OM_API_KEY=change_me
 export OM_PORT=8080
@@ -399,8 +399,8 @@ OM_METADATA_BACKEND=postgres
 OM_PG_HOST=localhost
 OM_PG_PORT=5432
 OM_PG_DB=engram
-OM_PG_USER=openmemory_svc
-OM_PG_PASSWORD=<pwd>
+OM_PG_USER=openmemory_migrator_login
+OM_PG_PASSWORD=<migrator_pwd>
 OM_PG_SCHEMA=openmemory
 OM_API_KEY=<your_om_key>
 OM_PORT=8080
@@ -583,8 +583,8 @@ if ([string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD) -and [string
   opm serve
 }
 
-# 首次建表完成后恢复（openmemory_svc）
-if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { $env:OM_PG_USER = "openmemory_svc"; $env:OM_PG_AUTO_DDL = "false" }
+# 如需切回最小权限（openmemory_svc），手动执行以下一行：
+# if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { $env:OM_PG_USER = "openmemory_svc"; $env:OM_PG_AUTO_DDL = "false" }
 ```
 
 优先使用 Makefile 兜底授权：

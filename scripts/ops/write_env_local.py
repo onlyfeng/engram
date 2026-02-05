@@ -167,8 +167,12 @@ def main() -> int:
     om_pg_host = _get("OM_PG_HOST") or host
     om_pg_port = _get("OM_PG_PORT") or port
     om_pg_db = _get("OM_PG_DB") or db
-    om_pg_user = _get("OM_PG_USER") or "openmemory_svc"
-    om_pg_password = _get("OM_PG_PASSWORD") or _get("OPENMEMORY_SVC_PASSWORD")
+    om_pg_user = _get("OM_PG_USER") or "openmemory_migrator_login"
+    if om_pg_user == "openmemory_migrator_login":
+        default_om_pw = _get("OPENMEMORY_MIGRATOR_PASSWORD") or _get("OPENMEMORY_SVC_PASSWORD")
+    else:
+        default_om_pw = _get("OPENMEMORY_SVC_PASSWORD") or _get("OPENMEMORY_MIGRATOR_PASSWORD")
+    om_pg_password = _get("OM_PG_PASSWORD") or default_om_pw
 
     def _existing_line_for(key: str) -> str | None:
         return existing_kv_lines.get(key)

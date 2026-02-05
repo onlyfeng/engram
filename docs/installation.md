@@ -515,8 +515,8 @@ if ([string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD) -and [string
   opm serve
 }
 
-# 首次建表完成后恢复（openmemory_svc）
-if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { $env:OM_PG_USER = "openmemory_svc"; $env:OM_PG_AUTO_DDL = "false" }
+# 如需切回最小权限（openmemory_svc），手动执行以下一行：
+# if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { $env:OM_PG_USER = "openmemory_svc"; $env:OM_PG_AUTO_DDL = "false" }
 ```
 
 - **如果你没有 `.env.local`（或你不想依赖它）**：按下面示例手动设置 OpenMemory 环境变量：
@@ -526,8 +526,8 @@ export OM_METADATA_BACKEND=postgres
 export OM_PG_HOST="${POSTGRES_HOST:-localhost}"
 export OM_PG_PORT="${POSTGRES_PORT:-5432}"
 export OM_PG_DB="${POSTGRES_DB:-engram}"
-export OM_PG_USER=openmemory_svc
-export OM_PG_PASSWORD="${OPENMEMORY_SVC_PASSWORD:-<your_openmemory_svc_password>}"
+export OM_PG_USER=openmemory_migrator_login
+export OM_PG_PASSWORD="${OPENMEMORY_MIGRATOR_PASSWORD:-<your_openmemory_migrator_password>}"
 export OM_PG_SCHEMA="${OM_PG_SCHEMA:-openmemory}"
 export OM_API_KEY="${OM_API_KEY:-<your_api_key>}"
 export OM_PORT="${OM_PORT:-8080}"
@@ -540,8 +540,8 @@ $env:OM_METADATA_BACKEND="postgres"
 $env:OM_PG_HOST="localhost"
 $env:OM_PG_PORT="5432"
 $env:OM_PG_DB="engram"
-$env:OM_PG_USER="openmemory_svc"
-$env:OM_PG_PASSWORD="<your_openmemory_svc_password>"
+$env:OM_PG_USER="openmemory_migrator_login"
+$env:OM_PG_PASSWORD="<your_openmemory_migrator_password>"
 $env:OM_PG_SCHEMA="openmemory"
 $env:OM_API_KEY="<your_api_key>"
 $env:OM_PORT="8080"
@@ -887,7 +887,7 @@ engram-migrate \
   --dsn "postgresql://$USER@localhost:5432/engram" \
   --verify
 
-# 补充授权（OpenMemory 运行时需要完整权限）
+# 可选：若坚持使用 openmemory_svc 运行，需补充授权
 psql -d engram -c "
 GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;
@@ -911,8 +911,8 @@ export OM_METADATA_BACKEND=postgres
 export OM_PG_HOST=localhost
 export OM_PG_PORT=5432
 export OM_PG_DB=engram
-export OM_PG_USER=openmemory_svc
-export OM_PG_PASSWORD=$OPENMEMORY_SVC_PASSWORD
+export OM_PG_USER=openmemory_migrator_login
+export OM_PG_PASSWORD=$OPENMEMORY_MIGRATOR_PASSWORD
 export OM_PG_SCHEMA=openmemory
 export OM_API_KEY=change_me
 export OM_PORT=8080
@@ -1260,7 +1260,7 @@ OM_METADATA_BACKEND=postgres
 OM_PG_HOST=localhost
 OM_PG_PORT=5432
 OM_PG_DB=engram
-OM_PG_USER=openmemory_svc
+OM_PG_USER=openmemory_migrator_login
 OM_PG_PASSWORD=***
 OM_PG_SCHEMA=openmemory
 OM_API_KEY=change_me
