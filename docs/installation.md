@@ -461,12 +461,21 @@ eval "$(make -C /path/to/engram --no-print-directory env-shell)"
   `.env.local` 通常已经包含 `OM_PG_* / OM_PORT / OM_METADATA_BACKEND` 等配置，**不需要再重复 export**。你只需要确保 `OM_API_KEY` 有值，并建议设置 `OM_TIER`（避免启动 warning）即可：
 
 ```bash
+# 快速加载 .env/.env.local（自动进入 engram 目录）
+source scripts/ops/load_env_local.sh
+
 # 方式 A：一次性把 OM_API_KEY / OM_TIER 写进 engram/.env.local（推荐）
 echo 'OM_API_KEY="change_me"' >> /path/to/engram/.env.local
 echo 'OM_TIER="hybrid"' >> /path/to/engram/.env.local  # 可选: hybrid/fast/smart/deep
 
 # 重新加载（当前终端生效）
 set -a; . /path/to/engram/.env.local; set +a
+```
+
+**Windows PowerShell**（自动进入 engram 目录；加载 .env/.env.local）：
+
+```powershell
+.\scripts\windows\load_env_local.ps1
 ```
 
 **Windows PowerShell 写入示例**（路径按实际替换；写完后用上面的 “PowerShell 等价加载” 片段重新加载即可）：
@@ -477,6 +486,38 @@ Add-Content -Path "C:\\path\\to\\engram\\.env.local" -Value 'OM_TIER="hybrid"'  
 ```
 
 > 你也可以在 engram 仓库根目录执行 `OM_API_KEY=... make env-write-local` 将其写回 `.env.local`（不会自动写入当前 shell，需要重新加载）。
+
+- **首次启动需要建表但不想落地 `.env`**：可用 Makefile 输出临时覆盖（仅当前 shell）：
+
+```bash
+# 临时切换到 migrator 登录（不写 .env）
+eval "$(make --no-print-directory env-openmemory-first-run)"
+opm serve
+
+# 首次建表完成后恢复正常加载（openmemory_svc）
+eval "$(make --no-print-directory env-shell)"
+```
+
+**Windows PowerShell 等价用法**（不落地 `.env`；优先使用 `.env.ps1`）：
+
+```powershell
+# 如果你有 .env.ps1（由 scripts/windows/setup_db.ps1 生成），先加载它
+if (Test-Path ".\.env.ps1") { . .\.env.ps1 }
+
+if ([string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD) -and [string]::IsNullOrWhiteSpace($env:OM_PG_PASSWORD)) {
+  Write-Error "需要 OPENMEMORY_MIGRATOR_PASSWORD 或 OM_PG_PASSWORD 才能首次启动 OpenMemory"
+} else {
+  $env:OM_PG_USER = "openmemory_migrator_login"
+  if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD)) {
+    $env:OM_PG_PASSWORD = $env:OPENMEMORY_MIGRATOR_PASSWORD
+  }
+  $env:OM_PG_AUTO_DDL = "true"
+  opm serve
+}
+
+# 首次建表完成后恢复（openmemory_svc）
+if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { $env:OM_PG_USER = "openmemory_svc"; $env:OM_PG_AUTO_DDL = "false" }
+```
 
 - **如果你没有 `.env.local`（或你不想依赖它）**：按下面示例手动设置 OpenMemory 环境变量：
 
@@ -509,7 +550,7 @@ $env:OM_PORT="8080"
 4) 启动服务（以 `opm serve` 为主；或按上游 README 使用 `npm run dev`）
 
 > 如果首次启动出现 `permission denied for schema openmemory`，通常是因为 OpenMemory 会在启动时执行迁移/建表，而 `openmemory_svc` 默认没有目标 schema 的 CREATE 权限。  
-> 你可以在启动前先执行一次授权（幂等，可重复执行），然后重启 `opm serve`：
+> 你可以选择**临时切到 migrator 登录**（见上文 `env-openmemory-first-run`），或在启动前先执行一次授权（幂等，可重复执行），然后重启 `opm serve`：
 >
 > ```bash
 > # 在 engram 仓库根目录执行

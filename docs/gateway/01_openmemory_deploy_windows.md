@@ -83,7 +83,8 @@ engram-migrate --dsn "postgresql://<admin_user>@localhost:5432/engram" --apply-r
 engram-migrate --dsn "postgresql://<admin_user>@localhost:5432/engram" --verify
 ```
 
-> 可选（venv 场景，不污染系统环境变量）：把上面 4 行 `$env:...` 保存到本地脚本（例如 `.\.env.ps1`，**不要提交到 git**），每次激活 venv 后执行：`. .\.env.ps1`。也可以直接运行 `scripts/windows/setup_db.ps1` 交互式生成/更新 `.\.env.ps1`。
+> 可选（venv 场景，不污染系统环境变量）：把上面 4 行 `$env:...` 保存到本地脚本（例如 `.\.env.ps1`，**不要提交到 git**），每次激活 venv 后执行：`. .\.env.ps1`。也可以直接运行 `scripts/windows/setup_db.ps1` 交互式生成/更新 `.\.env.ps1`。  
+> 若你已有 `.env` / `.env.local`，也可用 `.\scripts\windows\load_env_local.ps1` 读取（自动进入 engram 目录）。
 
 也可以使用 `scripts/windows/setup_db.ps1`（类似 `make setup-db`：可交互输入密码、生成/更新 `.\.env.ps1`，并调用 `scripts/windows/install_db.ps1`；读取 `scripts/windows/config.ps1`）一键执行上述步骤。
 
@@ -564,6 +565,27 @@ export OPENMEMORY_SVC_PASSWORD=xxx
 
 <details>
 <summary><b>OpenMemory 报错 "permission denied for schema openmemory"</b></summary>
+
+可先**临时切换到 migrator 登录**完成首次建表（不写 env 文件）：
+
+```powershell
+# 如果你有 .env.ps1（由 scripts/windows/setup_db.ps1 生成），先加载它
+if (Test-Path ".\.env.ps1") { . .\.env.ps1 }
+
+if ([string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD) -and [string]::IsNullOrWhiteSpace($env:OM_PG_PASSWORD)) {
+  Write-Error "需要 OPENMEMORY_MIGRATOR_PASSWORD 或 OM_PG_PASSWORD 才能首次启动 OpenMemory"
+} else {
+  $env:OM_PG_USER = "openmemory_migrator_login"
+  if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD)) {
+    $env:OM_PG_PASSWORD = $env:OPENMEMORY_MIGRATOR_PASSWORD
+  }
+  $env:OM_PG_AUTO_DDL = "true"
+  opm serve
+}
+
+# 首次建表完成后恢复（openmemory_svc）
+if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { $env:OM_PG_USER = "openmemory_svc"; $env:OM_PG_AUTO_DDL = "false" }
+```
 
 优先使用 Makefile 兜底授权：
 ```bash

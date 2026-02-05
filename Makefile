@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified mcp-doctor stack-doctor bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-core setup-db-logbook-only reset-native openmemory-fix-vector-dim openmemory-grant-svc-full env-write-local env-shell precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified mcp-doctor stack-doctor bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-core setup-db-logbook-only reset-native openmemory-fix-vector-dim openmemory-grant-svc-full env-write-local env-shell env-openmemory-first-run precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -322,6 +322,24 @@ env-shell:  ## 输出加载 .env/.env.local 的 shell 片段（用法：eval "$$
 		'[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"' \
 		'[ -f "$(CURDIR)/$(ENV_LOCAL_FILE)" ] && . "$(CURDIR)/$(ENV_LOCAL_FILE)"' \
 		'set +a'
+
+env-openmemory-first-run:  ## 输出 OpenMemory 首次启动的 env 覆盖（临时切换到 migrator）
+	@printf '%s\n' \
+		'set -a' \
+		'[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"' \
+		'[ -f "$(CURDIR)/$(ENV_LOCAL_FILE)" ] && . "$(CURDIR)/$(ENV_LOCAL_FILE)"' \
+		'set +a' \
+		'if [ -z "$$OPENMEMORY_MIGRATOR_PASSWORD" ] && [ -z "$$OM_PG_PASSWORD" ]; then' \
+		'  echo "[ERROR] 需要 OPENMEMORY_MIGRATOR_PASSWORD 或 OM_PG_PASSWORD 才能首次启动 OpenMemory" >&2' \
+		'else' \
+		'  export OM_PG_USER="openmemory_migrator_login"' \
+		'  if [ -n "$$OPENMEMORY_MIGRATOR_PASSWORD" ]; then' \
+		'    export OM_PG_PASSWORD="$$OPENMEMORY_MIGRATOR_PASSWORD"' \
+		'  elif [ -n "$$OM_PG_PASSWORD" ]; then' \
+		'    echo "[WARN] 未设置 OPENMEMORY_MIGRATOR_PASSWORD，确认 OM_PG_PASSWORD 为 migrator 密码" >&2' \
+		'  fi' \
+		'  export OM_PG_AUTO_DDL="true"' \
+		'fi'
 
 ## ==================== 安装 ====================
 

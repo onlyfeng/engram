@@ -78,6 +78,9 @@ DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 ```bash
 # （原生部署）先启动 OpenMemory（新终端）
 # - 安装/编译 opm：见 docs/installation.md 的 “安装 OpenMemory”
+# - 首次启动需要建表：可临时切换到 migrator 登录（不写 .env）
+#   eval "$(make --no-print-directory env-openmemory-first-run)"
+#   Windows PowerShell 见 docs/installation.md 的等价用法
 # - 若遇权限错误：先执行 make openmemory-grant-svc-full 再重启 opm serve
 # eval "$(make --no-print-directory env-shell)"
 # opm serve
@@ -87,6 +90,9 @@ DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 set -a; [ -f .env.local ] && . ./.env.local; set +a
 # 或：不想手写 source 片段时可用（不打印任何密钥/密码）
 # eval "$(make --no-print-directory env-shell)"
+# 或：一键加载 .env/.env.local（进入 engram 目录）
+# source scripts/ops/load_env_local.sh
+# Windows PowerShell: .\scripts\windows\load_env_local.ps1
 
 # 或手动设置（把 <pwd> 换成你的密码）
 export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
@@ -115,7 +121,7 @@ uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
 - **WSL2 场景**：如果你想在 Windows 浏览器打开 OpenMemory Dashboard/API，优先访问 `http://localhost:8080`；若不通，改用 `http://<wsl-ip>:8080`（在 WSL2 内 `hostname -I` 查看），或按 `docs/gateway/01_openmemory_deploy_windows.md` 的 “B.9” 做端口转发。
 
 > 常见提示：
-> - `opm serve` 报 `permission denied for schema openmemory`：先执行 `make openmemory-grant-svc-full` 再重启 OpenMemory（Windows 无 make 时见 [安装指南](docs/installation.md) / [Gateway Windows 部署](docs/gateway/01_openmemory_deploy_windows.md)）
+> - `opm serve` 报 `permission denied for schema openmemory`：可先用 `eval "$(make --no-print-directory env-openmemory-first-run)"` 临时切到 migrator 登录，或执行 `make openmemory-grant-svc-full` 再重启 OpenMemory（Windows PowerShell 等价用法见 [安装指南](docs/installation.md) / [Gateway Windows 部署](docs/gateway/01_openmemory_deploy_windows.md)）
 > - `opm serve` 警告 `OM_TIER not set`：可在 `.env.local` 设置 `OM_TIER="hybrid"`（或 fast/smart/deep）
 
 ### 二、客户端配置
