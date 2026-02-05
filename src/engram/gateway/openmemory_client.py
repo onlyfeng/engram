@@ -119,18 +119,24 @@ def get_api_key() -> Optional[str]:
     return os.getenv("OPENMEMORY_API_KEY") or os.getenv("OM_API_KEY")
 
 
+def _as_non_empty_str(value: object) -> Optional[str]:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 def _extract_memory_id(payload: Any) -> Optional[str]:
     """兼容新旧 OpenMemory 响应格式的 memory_id 提取。"""
     if not isinstance(payload, dict):
         return None
     data = payload.get("data")
     if isinstance(data, dict):
-        memory_id = data.get("id")
-        if isinstance(memory_id, str) and memory_id:
+        memory_id = _as_non_empty_str(data.get("id"))
+        if memory_id is not None:
             return memory_id
     for key in ("id", "memory_id"):
-        memory_id = payload.get(key)
-        if isinstance(memory_id, str) and memory_id:
+        memory_id = _as_non_empty_str(payload.get(key))
+        if memory_id is not None:
             return memory_id
     return None
 
