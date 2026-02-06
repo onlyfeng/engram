@@ -169,6 +169,10 @@ async def governance_update_impl(
         # 确保 settings/audit 操作使用统一的 adapter 实例
         adapter = deps.logbook_adapter
 
+        # 确保 actor_user_id 对应的用户存在（避免 settings.updated_by 外键约束违反）
+        if actor_user_id:
+            adapter.ensure_user(user_id=actor_user_id, display_name=actor_user_id)
+
         # 执行更新
         success = adapter.upsert_settings(
             project_key=config.project_key,
