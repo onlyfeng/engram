@@ -29,7 +29,6 @@ from engram.gateway.logbook_adapter import LogbookAdapter
 from engram.gateway.logbook_db import LogbookDatabase
 from tests.gateway.fakes import FakeOpenMemoryClient
 
-
 EXPECTED_TOOL_NAMES = {
     "memory_store",
     "memory_query",
@@ -64,7 +63,9 @@ def _mcp_tools_list(client: TestClient) -> list[Dict[str, Any]]:
     return payload.get("result", {}).get("tools", [])
 
 
-def _mcp_call(client: TestClient, name: str, arguments: Dict[str, Any], request_id: int = 1) -> Dict[str, Any]:
+def _mcp_call(
+    client: TestClient, name: str, arguments: Dict[str, Any], request_id: int = 1
+) -> Dict[str, Any]:
     response = client.post(
         "/mcp",
         json={
