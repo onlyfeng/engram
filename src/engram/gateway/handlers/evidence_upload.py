@@ -123,6 +123,10 @@ async def execute_evidence_upload(
         # 获取 logbook_adapter（统一通过 deps 获取，确保使用同一实例）
         adapter = deps.logbook_adapter
 
+        # 确保 actor_user_id 对应的用户存在（避免 items.owner_user_id 外键约束违反）
+        if actor_user_id:
+            adapter.ensure_user(user_id=actor_user_id, display_name=actor_user_id)
+
         # 若 item_id 缺失，自动创建 item
         if item_id is None:
             scope_json = {

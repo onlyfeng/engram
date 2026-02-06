@@ -60,6 +60,10 @@ async def execute_logbook_create_item(
             "message": "缺少必需参数: title",
         }
 
+    # 确保 owner_user_id 对应的用户存在（避免 items.owner_user_id 外键约束违反）
+    if owner_user_id:
+        deps.logbook_adapter.ensure_user(user_id=owner_user_id, display_name=owner_user_id)
+
     item_id = deps.logbook_adapter.create_item(
         item_type=item_type,
         title=title,
@@ -102,6 +106,10 @@ async def execute_logbook_add_event(
             "retryable": False,
             "message": "缺少必需参数: event_type",
         }
+
+    # 确保 actor_user_id 对应的用户存在（避免 events.actor_user_id 外键约束违反）
+    if actor_user_id:
+        deps.logbook_adapter.ensure_user(user_id=actor_user_id, display_name=actor_user_id)
 
     event_id = deps.logbook_adapter.add_event(
         item_id=item_id,
