@@ -186,7 +186,7 @@ async def execute_tool(
             correlation_id=correlation_id,
             deps=deps,
         )
-        result_dict = {"ok": gov_result.ok, **gov_result.model_dump()}
+        result_dict = {"ok": gov_result.ok, **gov_result.model_dump(mode="json")}
 
     elif tool == "evidence_upload":
         result_dict = await execute_evidence_upload(

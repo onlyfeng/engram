@@ -935,7 +935,9 @@ def format_tool_result(result: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         MCP 格式的 content 数组
     """
-    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+    return {
+        "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, default=str)}]
+    }
 
 
 def make_tool_error(
