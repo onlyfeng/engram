@@ -478,7 +478,7 @@ class SCMSyncConsistencyVerifier:
                                 actual_services.add(service_name)
         else:
             for compose_file in compose_files:
-                with open(compose_file) as f:
+                with open(compose_file, encoding="utf-8") as f:
                     try:
                         data = yaml.safe_load(f)
                         if data and "services" in data:
