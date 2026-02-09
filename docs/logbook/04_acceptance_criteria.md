@@ -654,13 +654,13 @@ engram-logbook create_item --item-type task --title "Test" --json-out result.jso
 |--------|------|----------|
 | `CAP_DOCKER_NOT_FOUND` | Docker CLI 不可用 | 安装 Docker |
 | `CAP_DOCKER_DAEMON_DOWN` | Docker daemon 未运行 | `sudo systemctl start docker` |
-| `CAP_COMPOSE_NOT_CONFIGURED` | docker-compose.yml 不存在 | 检查项目配置 |
+| `CAP_COMPOSE_NOT_CONFIGURED` | docker-compose 文件未配置 | 检查 docker-compose.unified.yml 或 ENGRAM_COMPOSE_FILE |
 | `CAP_CANNOT_STOP_OPENMEMORY` | 无法停止 OpenMemory 容器 | 检查 Docker 权限 |
 | `CAP_PSQL_NOT_FOUND` | psql CLI 不可用 | `brew install postgresql` 或 `apt install postgresql-client` |
 | `CAP_PSYCOPG_NOT_FOUND` | psycopg 库不可用 | `pip install psycopg2-binary` |
 | `CAP_NO_DB_ACCESS` | 无 DB 访问能力 | 安装 psql 或 psycopg |
 | `CAP_POSTGRES_DSN_MISSING` | POSTGRES_DSN 未设置 | `export POSTGRES_DSN="postgresql://..."` |
-| `CAP_OPENMEMORY_ENDPOINT_MISSING` | OPENMEMORY_ENDPOINT 未设置 | `export OPENMEMORY_ENDPOINT="http://..."` |
+| `CAP_OPENMEMORY_ENDPOINT_MISSING` | OpenMemory 端点未设置 | `export OPENMEMORY_BASE_URL="http://..."` 或 `export OPENMEMORY_ENDPOINT="http://..."` |
 
 #### Profile 校验错误码（PROF_*）
 
