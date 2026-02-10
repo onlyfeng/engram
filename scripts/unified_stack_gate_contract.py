@@ -13,12 +13,15 @@ Profile 定义:
 Capability 定义:
   - docker_available:           Docker CLI 可用
   - docker_daemon_ok:           Docker daemon 运行中
-  - compose_configured:         docker-compose.yml 存在且有效
+  - compose_configured:         docker-compose 文件存在且有效
+                               （优先 ENGRAM_COMPOSE_FILE 环境变量，
+                                其次按优先级检测 docker-compose.unified.yml 等）
   - can_stop_openmemory:        可以停止 openmemory 容器（用于 degradation 测试）
   - psql_available:             psql CLI 可用
   - psycopg_available:          psycopg2/psycopg 库可用
   - postgres_dsn_present:       POSTGRES_DSN 环境变量已设置
-  - openmemory_endpoint_present: OPENMEMORY_ENDPOINT 环境变量已设置
+  - openmemory_endpoint_present: OpenMemory 端点已设置
+                               （优先级：OPENMEMORY_BASE_URL > OPENMEMORY_ENDPOINT）
 
 使用方法:
   # Python 侧
@@ -257,9 +260,23 @@ def _check_docker_daemon() -> tuple[bool, str]:
 
 
 def _check_compose_configured() -> tuple[bool, str]:
-    """检查 docker-compose.yml 是否存在"""
-    # 常见位置
+    """检查 docker-compose.yml 是否存在
+
+    优先级:
+      1. ENGRAM_COMPOSE_FILE 环境变量显式指定
+      2. 按候选列表顺序查找存在的文件
+    """
+    # 优先使用环境变量显式指定
+    explicit_file = os.environ.get("ENGRAM_COMPOSE_FILE")
+    if explicit_file:
+        path = Path(explicit_file)
+        if path.exists():
+            return True, f"Found {path} (via ENGRAM_COMPOSE_FILE)"
+        return False, f"ENGRAM_COMPOSE_FILE={explicit_file} but file not found"
+
+    # 常见位置（按优先级排列）
     compose_paths = [
+        Path("docker-compose.unified.yml"),  # Engram 统一栈首选
         Path("docker-compose.yml"),
         Path("docker-compose.yaml"),
         Path("compose.yml"),
@@ -270,7 +287,7 @@ def _check_compose_configured() -> tuple[bool, str]:
         if path.exists():
             return True, f"Found {path}"
 
-    return False, "No docker-compose file found"
+    return False, "No docker-compose file found (set ENGRAM_COMPOSE_FILE to override)"
 
 
 def _check_can_stop_openmemory() -> tuple[bool, str]:
@@ -297,13 +314,13 @@ def _check_can_stop_openmemory() -> tuple[bool, str]:
 def _check_psycopg() -> tuple[bool, str]:
     """检查 psycopg2 或 psycopg 是否可用"""
     try:
-        import psycopg2
+        import psycopg2  # noqa: F401
         return True, "psycopg2 available"
     except ImportError:
         pass
 
     try:
-        import psycopg
+        import psycopg  # noqa: F401
         return True, "psycopg3 available"
     except ImportError:
         pass
@@ -408,12 +425,35 @@ def detect_capabilities() -> CapabilityReport:
     )
 
     # openmemory_endpoint_present
-    endpoint_present = bool(os.environ.get("OPENMEMORY_ENDPOINT"))
+    # 支持多个变量，按优先级：OPENMEMORY_BASE_URL > OPENMEMORY_ENDPOINT
+    endpoint_vars = [
+        ("OPENMEMORY_BASE_URL", os.environ.get("OPENMEMORY_BASE_URL")),
+        ("OPENMEMORY_ENDPOINT", os.environ.get("OPENMEMORY_ENDPOINT")),
+    ]
+    endpoint_present = False
+    endpoint_var_name: Optional[str] = None
+    endpoint_value: Optional[str] = None
+    for var_name, var_value in endpoint_vars:
+        if var_value:
+            endpoint_present = True
+            endpoint_var_name = var_name
+            endpoint_value = var_value
+            break
+
+    if endpoint_present:
+        endpoint_message = (
+            f"OpenMemory endpoint available via {endpoint_var_name}={endpoint_value}"
+        )
+    else:
+        endpoint_message = (
+            "OpenMemory endpoint not set (need OPENMEMORY_BASE_URL or OPENMEMORY_ENDPOINT)"
+        )
+
     capabilities["openmemory_endpoint_present"] = CapabilityStatus(
         name="openmemory_endpoint_present",
         available=endpoint_present,
         reason_code=ReasonCode.OK if endpoint_present else ReasonCode.CAP_OPENMEMORY_ENDPOINT_MISSING,
-        message="OPENMEMORY_ENDPOINT is set" if endpoint_present else "OPENMEMORY_ENDPOINT not set",
+        message=endpoint_message,
     )
 
     return CapabilityReport(

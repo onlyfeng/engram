@@ -1654,7 +1654,7 @@ python scripts/iteration/record_iteration_evidence.py <N> --dry-run
 | `psycopg_available` | `import psycopg2` 或 `import psycopg` | db_invariants |
 | `db_access_available` | psql 或 psycopg 之一可用 | db_invariants |
 | `postgres_dsn_present` | `POSTGRES_DSN` 环境变量已设置 | db_invariants |
-| `openmemory_endpoint_present` | `OPENMEMORY_ENDPOINT` 环境变量已设置 | 所有步骤 |
+| `openmemory_endpoint_present` | `OPENMEMORY_BASE_URL` 或 `OPENMEMORY_ENDPOINT` 环境变量已设置 | 所有步骤 |
 
 ### 验证 Profile 命令
 
