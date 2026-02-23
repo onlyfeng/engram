@@ -264,14 +264,19 @@ def _ensure_openmemory_recovered(
     container_name: str,
     health_url: str,
     *,
-    max_wait: int = 120,
+    max_wait: int = 180,
+    gateway_url: Optional[str] = None,
 ) -> bool:
     """
     尝试恢复 OpenMemory 容器并等待健康检查通过。
 
-    先执行 `docker start`，失败时回退到 `docker compose up -d openmemory`。
+    策略：
+    1. 先尝试 `docker start`。
+    2. 周期性执行 `docker compose up -d openmemory` 对齐目标状态。
+    3. OpenMemory health=200 后，如提供 gateway_url，再验证 Gateway->OpenMemory 链路可用。
     """
     started = docker_container_action(container_name, "start")
+    # start 失败时先立即做一次 compose 拉起；成功时在循环里仍会周期性 reconcile。
     if not started:
         subprocess.run(
             ["docker", "compose", "-f", "docker-compose.unified.yml", "up", "-d", "openmemory"],
@@ -280,7 +285,59 @@ def _ensure_openmemory_recovered(
             timeout=30,
             check=False,
         )
-    return wait_for_service(health_url, max_wait=max_wait, interval=2)
+
+    def _gateway_can_query_openmemory() -> bool:
+        if not gateway_url:
+            return True
+        try:
+            resp = requests.post(
+                f"{gateway_url}/mcp",
+                json={
+                    "tool": "memory_query",
+                    "arguments": {
+                        "query": "health_probe",
+                        "spaces": ["team:health_probe"],
+                        "top_k": 1,
+                    },
+                },
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                return False
+            payload = resp.json()
+            combined = (
+                f"{payload.get('error', '')} {payload.get('result', {}).get('message', '')}".lower()
+            )
+            network_error_markers = (
+                "connection_error",
+                "temporary failure in name resolution",
+                "无法连接到 openmemory",
+            )
+            if any(marker in combined for marker in network_error_markers):
+                return False
+            return payload.get("ok") is True or "result" in payload
+        except Exception:
+            return False
+
+    start_time = time.time()
+    last_compose_reconcile = 0.0
+    while time.time() - start_time < max_wait:
+        now = time.time()
+        if now - last_compose_reconcile >= 20:
+            subprocess.run(
+                ["docker", "compose", "-f", "docker-compose.unified.yml", "up", "-d", "openmemory"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            last_compose_reconcile = now
+
+        if wait_for_service(health_url, max_wait=4, interval=1) and _gateway_can_query_openmemory():
+            return True
+
+        time.sleep(2)
+    return False
 
 
 # ======================== pytest 标记与跳过条件 ========================
@@ -789,6 +846,7 @@ class TestDegradationFlow:
             recovered = _ensure_openmemory_recovered(
                 self.OPENMEMORY_CONTAINER,
                 integration_config["openmemory_health"],
+                gateway_url=integration_config["gateway_url"],
             )
             if not recovered:
                 pytest.fail("OpenMemory 服务恢复失败（degradation flow）")
@@ -810,14 +868,15 @@ class TestDegradationFlow:
             pytest.skip("前置降级测试未成功执行")
 
         # 1. 等待 OpenMemory 恢复
-        recovered = wait_for_service(
+        recovered = _ensure_openmemory_recovered(
+            self.OPENMEMORY_CONTAINER,
             integration_config["openmemory_health"],
-            max_wait=60,
-            interval=2,
+            max_wait=180,
+            gateway_url=integration_config["gateway_url"],
         )
 
         if not recovered:
-            pytest.fail("OpenMemory 服务未能在 60 秒内恢复")
+            pytest.fail("OpenMemory 服务未能在 180 秒内恢复")
 
         # 2. 运行 outbox_worker
         try:
@@ -1043,16 +1102,22 @@ class TestMockDegradationFlow:
 
         # 验证返回结果 - 使用统一响应契约
         assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
-        assert result.action == "deferred", f"应返回 action=deferred（已入队 outbox），实际: {result.action}"
+        assert result.action == "deferred", (
+            f"应返回 action=deferred（已入队 outbox），实际: {result.action}"
+        )
 
         # 契约要求：action=deferred 时必须返回 outbox_id
         assert result.outbox_id is not None, f"deferred 响应必须包含 outbox_id: {result}"
-        assert isinstance(result.outbox_id, int), f"outbox_id 必须为 int 类型: {type(result.outbox_id)}"
+        assert isinstance(result.outbox_id, int), (
+            f"outbox_id 必须为 int 类型: {type(result.outbox_id)}"
+        )
         outbox_id = result.outbox_id
 
         # 契约要求：所有响应必须返回 correlation_id
         assert result.correlation_id is not None, f"响应必须包含 correlation_id: {result}"
-        assert result.correlation_id.startswith("corr-"), f"correlation_id 格式不正确: {result.correlation_id}"
+        assert result.correlation_id.startswith("corr-"), (
+            f"correlation_id 格式不正确: {result.correlation_id}"
+        )
 
         # ============ 阶段 2: 验证 outbox 记录状态为 pending ============
 
@@ -1069,7 +1134,9 @@ class TestMockDegradationFlow:
 
             assert row is not None, f"outbox 记录不存在: outbox_id={outbox_id}"
             expected_spaces = {test_space, f"private:{test_actor}"}
-            assert row[1] in expected_spaces, f"target_space 不匹配: {row[1]} not in {expected_spaces}"
+            assert row[1] in expected_spaces, (
+                f"target_space 不匹配: {row[1]} not in {expected_spaces}"
+            )
             assert row[2] == "pending", f"outbox 状态应为 pending: {row[2]}"
             assert row[3] == test_payload_sha, f"payload_sha 不匹配: {row[3]} != {test_payload_sha}"
 
@@ -1533,13 +1600,16 @@ class TestMockQueryDegradation:
 
         with postgres_connection.cursor() as cur:
             # 首先创建 analysis.runs 记录（knowledge_candidates 需要 run_id）
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO analysis.runs (
                     source_type, source_id, owner_user_id, pipeline_version, status
                 )
                 VALUES ('workflow', %s, NULL, 'test_v1', 'completed')
                 RETURNING run_id
-            """, (f"test_run_{unique_id}",))
+            """,
+                (f"test_run_{unique_id}",),
+            )
             run_id = cur.fetchone()[0]
 
             # 创建 knowledge_candidate 记录
@@ -1682,7 +1752,9 @@ class TestMockQueryDegradation:
         mock_client = MagicMock(spec=OpenMemoryClient)
         mock_client.search.side_effect = mock_search_error
         mock_adapter = MagicMock()
-        mock_adapter.query_knowledge_candidates.side_effect = Exception("模拟 Logbook 数据库连接失败")
+        mock_adapter.query_knowledge_candidates.side_effect = Exception(
+            "模拟 Logbook 数据库连接失败"
+        )
         deps = _build_real_gateway_deps(
             openmemory_client_override=mock_client,
             logbook_adapter_override=mock_adapter,
@@ -1709,7 +1781,9 @@ class TestMockQueryDegradation:
         assert len(result.results) == 0, f"失败时应返回空结果: {result.results}"
 
         # 验证 message 包含两个错误信息
-        assert "OpenMemory" in (result.message or ""), f"message 应包含 OpenMemory 错误: {result.message}"
+        assert "OpenMemory" in (result.message or ""), (
+            f"message 应包含 OpenMemory 错误: {result.message}"
+        )
         assert "回退" in (result.message or ""), f"message 应包含回退错误: {result.message}"
 
 
@@ -2496,9 +2570,7 @@ class TestStartupVerificationErrors:
         finally:
             # 清理测试用户
             with postgres_connection.cursor() as cur:
-                cur.execute(
-                    sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(test_user))
-                )
+                cur.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(test_user)))
 
     def test_verify_startup_schema_not_exist_error(self, integration_config, postgres_connection):
         """
@@ -3210,6 +3282,7 @@ class TestMCPMemoryStoreE2E:
             recovered = _ensure_openmemory_recovered(
                 self.OPENMEMORY_CONTAINER,
                 integration_config["openmemory_health"],
+                gateway_url=integration_config["gateway_url"],
             )
             if not recovered:
                 pytest.fail("OpenMemory 服务恢复失败（mcp outbox test）")
@@ -3233,14 +3306,15 @@ class TestMCPMemoryStoreE2E:
             pytest.skip("前置 outbox 入队测试未成功执行")
 
         # 1. 等待 OpenMemory 恢复
-        recovered = wait_for_service(
+        recovered = _ensure_openmemory_recovered(
+            self.OPENMEMORY_CONTAINER,
             integration_config["openmemory_health"],
-            max_wait=60,
-            interval=2,
+            max_wait=180,
+            gateway_url=integration_config["gateway_url"],
         )
 
         if not recovered:
-            pytest.fail("OpenMemory 服务未能在 60 秒内恢复")
+            pytest.fail("OpenMemory 服务未能在 180 秒内恢复")
 
         # 等待服务完全就绪
         time.sleep(3)
@@ -4045,12 +4119,23 @@ class TestLegacyProtocol:
     验证旧协议的兼容性
     """
 
+    OPENMEMORY_CONTAINER = os.environ.get("OPENMEMORY_CONTAINER_NAME", "engram_openmemory")
+
     def test_legacy_memory_store(self, integration_config, all_services_healthy):
         """
         测试旧协议 memory_store
 
         使用 {tool, arguments} 格式调用
         """
+        recovered = _ensure_openmemory_recovered(
+            self.OPENMEMORY_CONTAINER,
+            integration_config["openmemory_health"],
+            max_wait=180,
+            gateway_url=integration_config["gateway_url"],
+        )
+        if not recovered:
+            pytest.fail("OpenMemory 在 legacy_memory_store 前未恢复")
+
         unique_id = uuid.uuid4().hex[:8]
         test_content = f"# 旧协议测试记忆 {unique_id}"
 
@@ -4078,6 +4163,15 @@ class TestLegacyProtocol:
 
         使用 {tool, arguments} 格式调用
         """
+        recovered = _ensure_openmemory_recovered(
+            self.OPENMEMORY_CONTAINER,
+            integration_config["openmemory_health"],
+            max_wait=180,
+            gateway_url=integration_config["gateway_url"],
+        )
+        if not recovered:
+            pytest.fail("OpenMemory 在 legacy_memory_query 前未恢复")
+
         response = call_mcp_tool(
             tool="memory_query",
             arguments={
