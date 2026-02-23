@@ -392,6 +392,50 @@ jobs:
           fi
 
       # ----------------------------------------------------------------
+      # make verify-unified 前服务状态对齐（防止前序降级验证留下脏状态）
+      # ----------------------------------------------------------------
+      - name: Reconcile services before make verify-unified
+        timeout-minutes: 5
+        run: |
+          echo "=== 对齐服务状态（make verify-unified 前）==="
+
+          # 确保核心服务已拉起
+          docker compose -f docker-compose.unified.yml up -d gateway openmemory
+
+          wait_health() {
+            local name=$1
+            local url=$2
+            local attempts=${3:-25}
+            for i in $(seq 1 "$attempts"); do
+              if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+                echo "  ✓ $name 健康 ($i/$attempts)"
+                return 0
+              fi
+              if [ "$i" -eq "$attempts" ]; then
+                echo "  ✗ $name 健康检查失败 ($attempts 次)"
+                return 1
+              fi
+              sleep 3
+            done
+          }
+
+          if ! wait_health "Gateway" "http://localhost:${{ env.GATEWAY_PORT }}/health" 25; then
+            echo "Gateway 日志:"
+            docker compose -f docker-compose.unified.yml logs gateway --tail=100 || true
+            exit 1
+          fi
+
+          if ! wait_health "OpenMemory" "http://localhost:${{ env.OM_PORT }}/health" 25; then
+            echo "OpenMemory 首次检查失败，尝试重建 openmemory..."
+            docker compose -f docker-compose.unified.yml up -d --force-recreate openmemory
+            if ! wait_health "OpenMemory(retry)" "http://localhost:${{ env.OM_PORT }}/health" 20; then
+              echo "OpenMemory 日志:"
+              docker compose -f docker-compose.unified.yml logs openmemory --tail=150 || true
+              exit 1
+            fi
+          fi
+
+      # ----------------------------------------------------------------
       # 运行 make verify-unified（完整模式）
       # ----------------------------------------------------------------
       - name: Run make verify-unified (full mode)
