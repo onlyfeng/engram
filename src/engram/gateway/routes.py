@@ -237,6 +237,8 @@ def register_routes(app: FastAPI) -> None:
             "ok": True,
             "status": "ok",
             "service": "memory-gateway",
+            # 兼容统一栈集成测试契约（seekdb 可选特性状态）
+            "seekdb": "disabled",
         }
 
     @app.options("/mcp")

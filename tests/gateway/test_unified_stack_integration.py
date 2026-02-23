@@ -224,6 +224,37 @@ def get_postgres_dsn() -> str:
     return os.environ.get("POSTGRES_DSN", "")
 
 
+def _new_correlation_id() -> str:
+    """生成测试用 correlation_id（符合 schema）。"""
+    return f"corr-{uuid.uuid4().hex[:16]}"
+
+
+def _build_real_gateway_deps(
+    openmemory_client_override=None,
+    logbook_adapter_override=None,
+):
+    """
+    构造连接真实 DB 的 GatewayDeps（用于集成测试内 direct handler 调用）。
+
+    仅替换指定依赖（例如 mock openmemory_client），其余依赖保持真实实现。
+    """
+    from engram.gateway.config import get_config
+    from engram.gateway.di import GatewayDeps
+    from engram.gateway.logbook_adapter import get_adapter
+    from engram.gateway.logbook_db import get_db
+
+    config = get_config()
+    db = get_db(dsn=config.postgres_dsn)
+    adapter = logbook_adapter_override or get_adapter(config.postgres_dsn)
+
+    return GatewayDeps.for_testing(
+        config=config,
+        db=db,
+        logbook_adapter=adapter,
+        openmemory_client=openmemory_client_override,
+    )
+
+
 # ======================== pytest 标记与跳过条件 ========================
 
 
@@ -936,63 +967,59 @@ class TestMockDegradationFlow:
             response=None,
         )
 
-        # Mock get_client 返回的客户端的 store 方法
-        with patch("engram.gateway.main.get_client") as mock_get_client:
-            mock_client = MagicMock(spec=OpenMemoryClient)
-            mock_client.store.side_effect = mock_store_error
-            mock_get_client.return_value = mock_client
+        mock_client = MagicMock(spec=OpenMemoryClient)
+        mock_client.store.side_effect = mock_store_error
+        deps = _build_real_gateway_deps(openmemory_client_override=mock_client)
 
-            # 调用 memory_store_impl（使用 asyncio.run 或兼容方式）
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
+        # 调用 memory_store_impl（使用 asyncio.run 或兼容方式）
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
 
-            if loop and loop.is_running():
-                # 如果已在事件循环中，创建新任务
-                import concurrent.futures
+        if loop and loop.is_running():
+            # 如果已在事件循环中，创建新任务
+            import concurrent.futures
 
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    result = pool.submit(
-                        asyncio.run,
-                        memory_store_impl(
-                            payload_md=test_content,
-                            target_space=test_space,
-                            actor_user_id=test_actor,
-                            kind="FACT",
-                            evidence_refs=[f"test_ref_{unique_id}"],
-                        ),
-                    ).result()
-            else:
-                # 直接使用 asyncio.run
-                result = asyncio.run(
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    asyncio.run,
                     memory_store_impl(
                         payload_md=test_content,
                         target_space=test_space,
                         actor_user_id=test_actor,
                         kind="FACT",
                         evidence_refs=[f"test_ref_{unique_id}"],
-                    )
+                        correlation_id=_new_correlation_id(),
+                        deps=deps,
+                    ),
+                ).result()
+        else:
+            # 直接使用 asyncio.run
+            result = asyncio.run(
+                memory_store_impl(
+                    payload_md=test_content,
+                    target_space=test_space,
+                    actor_user_id=test_actor,
+                    kind="FACT",
+                    evidence_refs=[f"test_ref_{unique_id}"],
+                    correlation_id=_new_correlation_id(),
+                    deps=deps,
                 )
-
-            # 验证返回结果 - 使用统一响应契约
-            assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
-            assert result.action == "deferred", (
-                f"应返回 action=deferred（已入队 outbox），实际: {result.action}"
             )
 
-            # 契约要求：action=deferred 时必须返回 outbox_id
-            assert result.outbox_id is not None, f"deferred 响应必须包含 outbox_id: {result}"
-            assert isinstance(result.outbox_id, int), (
-                f"outbox_id 必须为 int 类型: {type(result.outbox_id)}"
-            )
-            outbox_id = result.outbox_id
+        # 验证返回结果 - 使用统一响应契约
+        assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
+        assert result.action == "deferred", f"应返回 action=deferred（已入队 outbox），实际: {result.action}"
 
-            # 契约要求：所有响应必须返回 correlation_id
-            assert result.correlation_id is not None, f"响应必须包含 correlation_id: {result}"
-            assert result.correlation_id.startswith("corr-"), (
-                f"correlation_id 格式不正确: {result.correlation_id}"
-            )
+        # 契约要求：action=deferred 时必须返回 outbox_id
+        assert result.outbox_id is not None, f"deferred 响应必须包含 outbox_id: {result}"
+        assert isinstance(result.outbox_id, int), f"outbox_id 必须为 int 类型: {type(result.outbox_id)}"
+        outbox_id = result.outbox_id
+
+        # 契约要求：所有响应必须返回 correlation_id
+        assert result.correlation_id is not None, f"响应必须包含 correlation_id: {result}"
+        assert result.correlation_id.startswith("corr-"), f"correlation_id 格式不正确: {result.correlation_id}"
 
         # ============ 阶段 2: 验证 outbox 记录状态为 pending ============
 
@@ -1248,46 +1275,49 @@ class TestMockDegradationFlow:
             response=None,
         )
 
-        with patch("engram.gateway.main.get_client") as mock_get_client:
-            mock_client = MagicMock(spec=OpenMemoryClient)
-            mock_client.store.side_effect = mock_store_error
-            mock_get_client.return_value = mock_client
+        mock_client = MagicMock(spec=OpenMemoryClient)
+        mock_client.store.side_effect = mock_store_error
+        deps = _build_real_gateway_deps(openmemory_client_override=mock_client)
 
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
 
-            if loop and loop.is_running():
-                import concurrent.futures
+        if loop and loop.is_running():
+            import concurrent.futures
 
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    result = pool.submit(
-                        asyncio.run,
-                        memory_store_impl(
-                            payload_md=test_content,
-                            target_space=test_space,
-                            actor_user_id=test_actor,
-                            kind="FACT",
-                            evidence_refs=[f"test_ref_{unique_id}"],
-                        ),
-                    ).result()
-            else:
-                result = asyncio.run(
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    asyncio.run,
                     memory_store_impl(
                         payload_md=test_content,
                         target_space=test_space,
                         actor_user_id=test_actor,
                         kind="FACT",
                         evidence_refs=[f"test_ref_{unique_id}"],
-                    )
+                        correlation_id=_new_correlation_id(),
+                        deps=deps,
+                    ),
+                ).result()
+        else:
+            result = asyncio.run(
+                memory_store_impl(
+                    payload_md=test_content,
+                    target_space=test_space,
+                    actor_user_id=test_actor,
+                    kind="FACT",
+                    evidence_refs=[f"test_ref_{unique_id}"],
+                    correlation_id=_new_correlation_id(),
+                    deps=deps,
                 )
+            )
 
-            # 验证返回结果
-            assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
-            assert result.action == "deferred", f"应返回 action=deferred，实际: {result.action}"
-            assert result.outbox_id is not None, f"deferred 响应必须包含 outbox_id: {result}"
-            outbox_id = result.outbox_id
+        # 验证返回结果
+        assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
+        assert result.action == "deferred", f"应返回 action=deferred，实际: {result.action}"
+        assert result.outbox_id is not None, f"deferred 响应必须包含 outbox_id: {result}"
+        outbox_id = result.outbox_id
 
         # ============ 阶段 2: Mock OpenMemory 成功，运行 process_batch ============
 
@@ -1470,10 +1500,12 @@ class TestMockQueryDegradation:
         with postgres_connection.cursor() as cur:
             # 首先创建 analysis.runs 记录（knowledge_candidates 需要 run_id）
             cur.execute("""
-                INSERT INTO analysis.runs (item_id, pipeline_version, status)
-                VALUES (NULL, 'test_v1', 'completed')
+                INSERT INTO analysis.runs (
+                    source_type, source_id, owner_user_id, pipeline_version, status
+                )
+                VALUES ('workflow', %s, NULL, 'test_v1', 'completed')
                 RETURNING run_id
-            """)
+            """, (f"test_run_{unique_id}",))
             run_id = cur.fetchone()[0]
 
             # 创建 knowledge_candidate 记录
@@ -1525,9 +1557,9 @@ class TestMockQueryDegradation:
         3. results 包含正确的数据结构
         """
         import asyncio
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
-        from engram.gateway.main import memory_query_impl
+        from engram.gateway.handlers.memory_query import memory_query_impl
         from engram.gateway.openmemory_client import (
             OpenMemoryClient,
             OpenMemoryError,
@@ -1542,50 +1574,51 @@ class TestMockQueryDegradation:
             response=None,
         )
 
-        with patch("engram.gateway.main.get_client") as mock_get_client:
-            mock_client = MagicMock(spec=OpenMemoryClient)
-            mock_client.search.side_effect = mock_search_error
-            mock_get_client.return_value = mock_client
+        mock_client = MagicMock(spec=OpenMemoryClient)
+        mock_client.search.side_effect = mock_search_error
+        deps = _build_real_gateway_deps(openmemory_client_override=mock_client)
 
-            # 调用 memory_query_impl
-            result = asyncio.get_event_loop().run_until_complete(
-                memory_query_impl(
-                    query=unique_id,  # 使用 unique_id 作为查询关键词
-                    spaces=["team:test_degradation"],
-                    top_k=10,
-                )
+        # 调用 memory_query_impl
+        result = asyncio.get_event_loop().run_until_complete(
+            memory_query_impl(
+                query=unique_id,  # 使用 unique_id 作为查询关键词
+                spaces=["team:test_degradation"],
+                top_k=10,
+                correlation_id=_new_correlation_id(),
+                deps=deps,
             )
+        )
 
-            # 验证 degraded=True
-            assert result.degraded is True, f"应返回 degraded=True: {result}"
+        # 验证 degraded=True
+        assert result.degraded is True, f"应返回 degraded=True: {result}"
 
-            # 验证 ok=True（降级查询成功）
-            assert result.ok is True, f"降级查询应成功: {result}"
+        # 验证 ok=True（降级查询成功）
+        assert result.ok is True, f"降级查询应成功: {result}"
 
-            # 验证 message 包含降级信息
-            assert "降级查询" in (result.message or ""), f"message 应包含降级信息: {result.message}"
+        # 验证 message 包含降级信息
+        assert "降级查询" in (result.message or ""), f"message 应包含降级信息: {result.message}"
 
-            # 验证 results 来自 Logbook
-            assert len(result.results) > 0, f"应返回 Logbook 查询结果: {result.results}"
+        # 验证 results 来自 Logbook
+        assert len(result.results) > 0, f"应返回 Logbook 查询结果: {result.results}"
 
-            # 验证结果结构
-            first_result = result.results[0]
-            assert "id" in first_result, "结果应包含 id 字段"
-            assert first_result["id"].startswith("kc_"), "id 应以 kc_ 开头（knowledge_candidate）"
-            assert "content" in first_result, "结果应包含 content 字段"
-            assert "title" in first_result, "结果应包含 title 字段"
-            assert "source" in first_result, "结果应包含 source 字段"
-            assert first_result["source"] == "logbook_fallback", "source 应为 logbook_fallback"
+        # 验证结果结构
+        first_result = result.results[0]
+        assert "id" in first_result, "结果应包含 id 字段"
+        assert first_result["id"].startswith("kc_"), "id 应以 kc_ 开头（knowledge_candidate）"
+        assert "content" in first_result, "结果应包含 content 字段"
+        assert "title" in first_result, "结果应包含 title 字段"
+        assert "source" in first_result, "结果应包含 source 字段"
+        assert first_result["source"] == "logbook_fallback", "source 应为 logbook_fallback"
 
-            # 验证返回了正确的测试数据
-            found = False
-            for r in result.results:
-                if unique_id in r.get("content", ""):
-                    found = True
-                    assert r["title"] == sample_knowledge_candidate["title"]
-                    break
+        # 验证返回了正确的测试数据
+        found = False
+        for r in result.results:
+            if unique_id in r.get("content", ""):
+                found = True
+                assert r["title"] == sample_knowledge_candidate["title"]
+                break
 
-            assert found, f"应返回包含 unique_id 的测试记录: {result.results}"
+        assert found, f"应返回包含 unique_id 的测试记录: {result.results}"
 
     def test_query_degradation_with_fallback_failure(self, integration_config):
         """
@@ -1597,9 +1630,9 @@ class TestMockQueryDegradation:
         3. message 包含两个错误信息
         """
         import asyncio
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
-        from engram.gateway.main import memory_query_impl
+        from engram.gateway.handlers.memory_query import memory_query_impl
         from engram.gateway.openmemory_client import (
             OpenMemoryClient,
             OpenMemoryError,
@@ -1612,42 +1645,38 @@ class TestMockQueryDegradation:
             response=None,
         )
 
-        with (
-            patch("engram.gateway.main.get_client") as mock_get_client,
-            patch(
-                "engram.gateway.main.logbook_adapter.query_knowledge_candidates"
-            ) as mock_logbook_query,
-        ):
-            mock_client = MagicMock(spec=OpenMemoryClient)
-            mock_client.search.side_effect = mock_search_error
-            mock_get_client.return_value = mock_client
+        mock_client = MagicMock(spec=OpenMemoryClient)
+        mock_client.search.side_effect = mock_search_error
+        mock_adapter = MagicMock()
+        mock_adapter.query_knowledge_candidates.side_effect = Exception("模拟 Logbook 数据库连接失败")
+        deps = _build_real_gateway_deps(
+            openmemory_client_override=mock_client,
+            logbook_adapter_override=mock_adapter,
+        )
 
-            # Mock Logbook 回退也失败
-            mock_logbook_query.side_effect = Exception("模拟 Logbook 数据库连接失败")
-
-            # 调用 memory_query_impl
-            result = asyncio.get_event_loop().run_until_complete(
-                memory_query_impl(
-                    query="test_query",
-                    spaces=["team:test"],
-                    top_k=10,
-                )
+        # 调用 memory_query_impl
+        result = asyncio.get_event_loop().run_until_complete(
+            memory_query_impl(
+                query="test_query",
+                spaces=["team:test"],
+                top_k=10,
+                correlation_id=_new_correlation_id(),
+                deps=deps,
             )
+        )
 
-            # 验证 degraded=True
-            assert result.degraded is True, f"应返回 degraded=True: {result}"
+        # 验证 degraded=True
+        assert result.degraded is True, f"应返回 degraded=True: {result}"
 
-            # 验证 ok=False（两个查询都失败）
-            assert result.ok is False, f"两个查询都失败时应返回 ok=False: {result}"
+        # 验证 ok=False（两个查询都失败）
+        assert result.ok is False, f"两个查询都失败时应返回 ok=False: {result}"
 
-            # 验证 results 为空
-            assert len(result.results) == 0, f"失败时应返回空结果: {result.results}"
+        # 验证 results 为空
+        assert len(result.results) == 0, f"失败时应返回空结果: {result.results}"
 
-            # 验证 message 包含两个错误信息
-            assert "OpenMemory" in (result.message or ""), (
-                f"message 应包含 OpenMemory 错误: {result.message}"
-            )
-            assert "回退" in (result.message or ""), f"message 应包含回退错误: {result.message}"
+        # 验证 message 包含两个错误信息
+        assert "OpenMemory" in (result.message or ""), f"message 应包含 OpenMemory 错误: {result.message}"
+        assert "回退" in (result.message or ""), f"message 应包含回退错误: {result.message}"
 
 
 # ======================== 可靠性报告测试 ========================
@@ -1953,6 +1982,7 @@ class TestOpenMemoryDbRoles:
         使用 superuser 连接创建/更新测试用登录角色
         """
         import psycopg
+        from psycopg import sql
 
         dsn = integration_config["postgres_dsn"]
         if not dsn:
@@ -1967,40 +1997,48 @@ class TestOpenMemoryDbRoles:
             with conn.cursor() as cur:
                 # 创建/更新 openmemory_svc
                 cur.execute(
-                    """
+                    sql.SQL(
+                        """
                     DO $$
                     BEGIN
                         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_svc') THEN
-                            CREATE ROLE openmemory_svc LOGIN PASSWORD %s;
+                            CREATE ROLE openmemory_svc LOGIN PASSWORD {};
                         ELSE
-                            ALTER ROLE openmemory_svc WITH LOGIN PASSWORD %s;
+                            ALTER ROLE openmemory_svc WITH LOGIN PASSWORD {};
                         END IF;
 
                         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_app') THEN
                             GRANT openmemory_app TO openmemory_svc;
                         END IF;
                     END $$;
-                """,
-                    (self.TEST_PASSWORD, self.TEST_PASSWORD),
+                    """
+                    ).format(
+                        sql.Literal(self.TEST_PASSWORD),
+                        sql.Literal(self.TEST_PASSWORD),
+                    )
                 )
 
                 # 创建/更新 openmemory_migrator_login
                 cur.execute(
-                    """
+                    sql.SQL(
+                        """
                     DO $$
                     BEGIN
                         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_migrator_login') THEN
-                            CREATE ROLE openmemory_migrator_login LOGIN PASSWORD %s;
+                            CREATE ROLE openmemory_migrator_login LOGIN PASSWORD {};
                         ELSE
-                            ALTER ROLE openmemory_migrator_login WITH LOGIN PASSWORD %s;
+                            ALTER ROLE openmemory_migrator_login WITH LOGIN PASSWORD {};
                         END IF;
 
                         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openmemory_migrator') THEN
                             GRANT openmemory_migrator TO openmemory_migrator_login;
                         END IF;
                     END $$;
-                """,
-                    (self.TEST_PASSWORD, self.TEST_PASSWORD),
+                    """
+                    ).format(
+                        sql.Literal(self.TEST_PASSWORD),
+                        sql.Literal(self.TEST_PASSWORD),
+                    )
                 )
 
             # 解析连接参数
@@ -2376,6 +2414,7 @@ class TestStartupVerificationErrors:
         from urllib.parse import urlparse
 
         import psycopg
+        from psycopg import sql
 
         dsn = integration_config["postgres_dsn"]
         parsed = urlparse(dsn)
@@ -2385,7 +2424,12 @@ class TestStartupVerificationErrors:
         test_password = "test_password_12345"
 
         with postgres_connection.cursor() as cur:
-            cur.execute(f"CREATE ROLE {test_user} LOGIN PASSWORD %s", (test_password,))
+            cur.execute(
+                sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                    sql.Identifier(test_user),
+                    sql.Literal(test_password),
+                )
+            )
 
         try:
             # 用无权限用户连接
@@ -2418,7 +2462,9 @@ class TestStartupVerificationErrors:
         finally:
             # 清理测试用户
             with postgres_connection.cursor() as cur:
-                cur.execute(f"DROP ROLE IF EXISTS {test_user}")
+                cur.execute(
+                    sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(test_user))
+                )
 
     def test_verify_startup_schema_not_exist_error(self, integration_config, postgres_connection):
         """
@@ -2529,7 +2575,7 @@ class TestStartupVerificationErrors:
         注意：此测试不会真正停止 OpenMemory，只验证错误处理逻辑
         """
         import asyncio
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         # 导入 Gateway 模块
         try:
@@ -2548,36 +2594,36 @@ class TestStartupVerificationErrors:
             response=None,
         )
 
-        with patch("engram.gateway.main.get_client") as mock_get_client:
-            mock_client = MagicMock(spec=OpenMemoryClient)
-            mock_client.store.side_effect = mock_error
-            mock_get_client.return_value = mock_client
+        mock_client = MagicMock(spec=OpenMemoryClient)
+        mock_client.store.side_effect = mock_error
+        deps = _build_real_gateway_deps(openmemory_client_override=mock_client)
 
-            # 调用 memory_store_impl
-            try:
-                result = asyncio.get_event_loop().run_until_complete(
-                    memory_store_impl(
-                        payload_md="Test content for error handling",
-                        target_space="team:error_test",
-                        actor_user_id="error_tester",
-                    )
+        # 调用 memory_store_impl
+        try:
+            result = asyncio.get_event_loop().run_until_complete(
+                memory_store_impl(
+                    payload_md="Test content for error handling",
+                    target_space="team:error_test",
+                    actor_user_id="error_tester",
+                    correlation_id=_new_correlation_id(),
+                    deps=deps,
                 )
-            except Exception as e:
-                # 如果抛出异常，验证异常信息明确
-                error_msg = str(e).lower()
-                assert any(
-                    keyword in error_msg
-                    for keyword in ["connection", "refused", "openmemory", "unavailable", "failed"]
-                ), f"异常信息应明确指出 OpenMemory 连接问题: {e}"
-                return
+            )
+        except Exception as e:
+            # 如果抛出异常，验证异常信息明确
+            error_msg = str(e).lower()
+            assert any(
+                keyword in error_msg
+                for keyword in ["connection", "refused", "openmemory", "unavailable", "failed"]
+            ), f"异常信息应明确指出 OpenMemory 连接问题: {e}"
+            return
 
-            # 如果返回结果，验证错误信息明确
-            if not result.ok:
-                message = (result.message or "").lower()
-                assert any(
-                    keyword in message
-                    for keyword in ["outbox", "降级", "失败", "error", "connection"]
-                ), f"错误消息应明确指出问题: {result.message}"
+        # 如果返回结果，验证错误信息明确
+        if not result.ok:
+            message = (result.message or "").lower()
+            assert any(
+                keyword in message for keyword in ["outbox", "降级", "失败", "error", "connection"]
+            ), f"错误消息应明确指出问题: {result.message}"
 
     def test_database_verify_script_output_format(self, integration_config, postgres_connection):
         """
@@ -3347,53 +3393,54 @@ class TestMCPMemoryStoreWithMockDegradation:
 
         outbox_id = None
 
-        with patch("engram.gateway.main.get_client") as mock_get_client:
-            mock_client = MagicMock(spec=OpenMemoryClient)
-            mock_client.store.side_effect = mock_connection_error
-            mock_get_client.return_value = mock_client
+        mock_client = MagicMock(spec=OpenMemoryClient)
+        mock_client.store.side_effect = mock_connection_error
+        deps = _build_real_gateway_deps(openmemory_client_override=mock_client)
 
-            # 调用 memory_store_impl
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
+        # 调用 memory_store_impl
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
 
-            if loop and loop.is_running():
-                import concurrent.futures
+        if loop and loop.is_running():
+            import concurrent.futures
 
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    result = pool.submit(
-                        asyncio.run,
-                        memory_store_impl(
-                            payload_md=test_content,
-                            target_space=test_space,
-                            actor_user_id=test_actor,
-                            kind="FACT",
-                        ),
-                    ).result()
-            else:
-                result = asyncio.run(
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    asyncio.run,
                     memory_store_impl(
                         payload_md=test_content,
                         target_space=test_space,
                         actor_user_id=test_actor,
                         kind="FACT",
-                    )
+                        correlation_id=_new_correlation_id(),
+                        deps=deps,
+                    ),
+                ).result()
+        else:
+            result = asyncio.run(
+                memory_store_impl(
+                    payload_md=test_content,
+                    target_space=test_space,
+                    actor_user_id=test_actor,
+                    kind="FACT",
+                    correlation_id=_new_correlation_id(),
+                    deps=deps,
                 )
-
-            # 验证返回结果
-            assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
-            assert result.action == "deferred", f"应返回 action=deferred: {result.action}"
-            assert "outbox_id" in (result.message or ""), (
-                f"message 应包含 outbox_id: {result.message}"
             )
 
-            # 提取 outbox_id
-            import re
+        # 验证返回结果
+        assert result.ok is False, f"OpenMemory 失败时应返回 ok=False: {result}"
+        assert result.action == "deferred", f"应返回 action=deferred: {result.action}"
+        assert "outbox_id" in (result.message or ""), f"message 应包含 outbox_id: {result.message}"
 
-            match = re.search(r"outbox_id=(\d+)", result.message or "")
-            assert match, f"无法提取 outbox_id: {result.message}"
-            outbox_id = int(match.group(1))
+        # 提取 outbox_id
+        import re
+
+        match = re.search(r"outbox_id=(\d+)", result.message or "")
+        assert match, f"无法提取 outbox_id: {result.message}"
+        outbox_id = int(match.group(1))
 
         # 验证 outbox 状态
         with postgres_connection.cursor() as cur:
@@ -3912,7 +3959,7 @@ class TestJsonRpcProtocol:
         """
         测试 tools/call 调用不存在的工具
 
-        验证应返回 -32601 (METHOD_NOT_FOUND)
+        验证应返回 UNKNOWN_TOOL 对应的 JSON-RPC 错误码
         """
         response = self.call_jsonrpc(
             method="tools/call",
@@ -3927,7 +3974,7 @@ class TestJsonRpcProtocol:
         assert "error" in response, "应返回错误"
         error = response["error"]
         assert error is not None, "error 不应为空"
-        assert error.get("code") == -32601, f"错误码应为 -32601: {error}"
+        assert error.get("code") == -32602, f"错误码应为 -32602: {error}"
 
     def test_unknown_method(self, integration_config, all_services_healthy):
         """

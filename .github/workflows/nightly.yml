@@ -48,6 +48,7 @@ env:
   # Gateway 配置
   GATEWAY_PORT: 8787
   OM_PORT: 8080
+  UNKNOWN_ACTOR_POLICY: auto_create
 
 jobs:
   # ============================================================================

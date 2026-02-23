@@ -501,14 +501,47 @@ class OpenMemoryClient:
         Returns:
             SearchResult 结果对象
         """
-        url = f"{self.base_url}/memory/search"
         payload = {"query": query, "user_id": user_id, "limit": limit, "filters": filters or {}}
+        # 兼容不同版本 OpenMemory 路由：
+        # - 旧版本: /memory/search
+        # - 新版本 (v1.2.x): /memory/query
+        search_urls = [
+            f"{self.base_url}/memory/query",
+            f"{self.base_url}/memory/search",
+        ]
 
         try:
-            response = self._post_with_retry(url, payload)
-            data = response.json()
+            last_not_found: Optional[httpx.HTTPStatusError] = None
+            data: Optional[Dict[str, Any]] = None
 
-            return SearchResult(success=True, results=data.get("results", []))
+            for url in search_urls:
+                try:
+                    response = self._post_with_retry(url, payload)
+                    data = response.json()
+                    break
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
+                        last_not_found = e
+                        continue
+                    raise
+
+            if data is None:
+                # 两个候选路由都 404，抛出最后一个 404 便于上层定位
+                if last_not_found is not None:
+                    raise last_not_found
+                return SearchResult(success=False, error="no_search_endpoint_available")
+
+            # 兼容返回结构：
+            # - 旧版本: {"results": [...]}
+            # - 新版本: {"matches": [...]}
+            if isinstance(data.get("results"), list):
+                results = data["results"]
+            elif isinstance(data.get("matches"), list):
+                results = data["matches"]
+            else:
+                results = []
+
+            return SearchResult(success=True, results=results)
 
         except OpenMemoryConnectionError as e:
             logger.error(f"OpenMemory search connection error: {e}")
