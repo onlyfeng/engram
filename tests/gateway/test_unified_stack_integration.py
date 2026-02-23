@@ -31,6 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -289,6 +290,34 @@ def _ensure_openmemory_recovered(
     def _gateway_can_query_openmemory() -> bool:
         if not gateway_url:
             return True
+        openmemory_port = urlparse(health_url).port or 8080
+        gateway_probe_script = (
+            "import sys,urllib.request;"
+            f"url='http://openmemory:{openmemory_port}/health';"
+            "resp=urllib.request.urlopen(url, timeout=5);"
+            "sys.exit(0 if resp.status==200 else 1)"
+        )
+        gateway_probe = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                "docker-compose.unified.yml",
+                "exec",
+                "-T",
+                "gateway",
+                "python",
+                "-c",
+                gateway_probe_script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if gateway_probe.returncode == 0:
+            return True
+
         try:
             resp = requests.post(
                 f"{gateway_url}/mcp",
@@ -323,6 +352,7 @@ def _ensure_openmemory_recovered(
     start_time = time.time()
     last_compose_reconcile = 0.0
     last_gateway_reconcile = 0.0
+    hard_restarted = False
     while time.time() - start_time < max_wait:
         now = time.time()
         if now - last_compose_reconcile >= 20:
@@ -356,6 +386,24 @@ def _ensure_openmemory_recovered(
                     check=False,
                 )
                 last_gateway_reconcile = now
+            elapsed = now - start_time
+            if not hard_restarted and elapsed >= max_wait * 0.6:
+                subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        "-f",
+                        "docker-compose.unified.yml",
+                        "restart",
+                        "openmemory",
+                        "gateway",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+                hard_restarted = True
 
         time.sleep(2)
     return False
