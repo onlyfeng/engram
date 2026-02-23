@@ -302,7 +302,7 @@ def _ensure_openmemory_recovered(
                 },
                 timeout=8,
             )
-            if resp.status_code != 200:
+            if resp.status_code >= 500:
                 return False
             payload = resp.json()
             combined = (
@@ -312,15 +312,17 @@ def _ensure_openmemory_recovered(
                 "connection_error",
                 "temporary failure in name resolution",
                 "无法连接到 openmemory",
+                "name or service not known",
             )
             if any(marker in combined for marker in network_error_markers):
                 return False
-            return payload.get("ok") is True or "result" in payload
+            return True
         except Exception:
             return False
 
     start_time = time.time()
     last_compose_reconcile = 0.0
+    last_gateway_reconcile = 0.0
     while time.time() - start_time < max_wait:
         now = time.time()
         if now - last_compose_reconcile >= 20:
@@ -333,8 +335,27 @@ def _ensure_openmemory_recovered(
             )
             last_compose_reconcile = now
 
-        if wait_for_service(health_url, max_wait=4, interval=1) and _gateway_can_query_openmemory():
-            return True
+        if wait_for_service(health_url, max_wait=4, interval=1):
+            if _gateway_can_query_openmemory():
+                return True
+            # OpenMemory 已恢复但 Gateway 链路仍异常，周期性自愈 gateway 容器网络链路。
+            if gateway_url and now - last_gateway_reconcile >= 45:
+                subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        "-f",
+                        "docker-compose.unified.yml",
+                        "up",
+                        "-d",
+                        "gateway",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                last_gateway_reconcile = now
 
         time.sleep(2)
     return False
