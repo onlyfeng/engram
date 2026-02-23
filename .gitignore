@@ -157,12 +157,16 @@ artifacts/
 # ------------------------------------------------------------------------------
 # Local Tool Outputs (agent/AI tool outputs, not for version control)
 # ------------------------------------------------------------------------------
-.agentx/
+# Keep .agentx runtime artifacts ignored, but allow SSOT rule definitions.
+.agentx/*
+!.agentx/ssot/
+!.agentx/ssot/**
 
 # ------------------------------------------------------------------------------
 # Local Development Tools (IDE/Editor-specific, not for version control)
 # ------------------------------------------------------------------------------
-# Cursor IDE indexing configuration
+# Cursor IDE local config (rules, settings, indexing)
+.cursor/
 .cursorindexingignore
 
 # SpecStory conversation auto-save directory

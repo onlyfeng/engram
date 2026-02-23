@@ -1,0 +1,62 @@
+---
+description: 在涉及 CI 门禁、迭代文档调整、evidence 文件、make ci 失败排查等场景时，自动从 Engram 检索相关经验记忆；MCP 不可用时降级到本地兜底文档
+globs:
+  - docs/acceptance/**
+  - docs/dev/ci_gate_runbook.md
+  - docs/dev/ci_iteration_pitfalls.md
+  - docs/dev/iteration_runbook.md
+  - .iteration/**
+  - scripts/ci/**
+  - schemas/iteration_*
+  - Makefile
+  - .github/workflows/ci.yml
+alwaysApply: false
+---
+
+<!-- GENERATED: DO NOT EDIT DIRECTLY. Source: .agentx/ssot/engram_memory_recall.rule.json -->
+
+# Engram 记忆召回规则
+
+当你处理以下任务时，**必须先获取相关经验记忆**，再开始修改。
+
+## 触发场景
+
+1. **CI 门禁失败排查（make ci 报错、lint/typecheck/check-* 失败）**
+2. **迭代文档调整（新建/晋升/标记 SUPERSEDED 迭代、编辑 regression/plan 文档）**
+3. **证据文件操作（创建/编辑 docs/acceptance/evidence/*.json）**
+4. **Workflow 合约变更（修改 workflow_contract.v2.json 或相关脚本）**
+5. **跨文件一致性问题（修改一个文件导致关联检查失败）**
+
+## 操作步骤（优先 Engram → 降级到本地文档）
+
+### 步骤 1：先做 MCP 连通性探测
+
+python scripts/ops/mcp_doctor.py --json --pretty
+
+### 步骤 2：MCP 可用时优先检索记忆
+
+通过 Gateway MCP `tools/call(memory_query)` 检索历史经验（重点 PITFALL / PROCEDURE）
+
+### 步骤 3：MCP 不可用时降级到本地兜底文档
+
+阅读 docs/dev/ci_iteration_pitfalls.md
+
+### 步骤 4：执行最小变更并做对应门禁验证
+
+至少覆盖触发失败的检查项
+
+### 步骤 5：沉淀新经验
+
+先更新 docs/dev/ci_iteration_pitfalls.md；MCP 可用时再通过 tools/call(memory_store) 补录
+
+## 最低要求
+
+- 在完成经验检索前，不要直接批量改动 CI/迭代相关文件
+- 手动编辑 docs/acceptance/evidence/*.json 后，必须执行 make check-iteration-docs
+- 涉及迭代受控块/fixtures 的改动，必须执行 make check-iteration-fixtures-freshness
+
+## 关键经验索引（供查询参考）
+
+- CI门禁 + 迭代调整 -> 跨文件一致性根因、六大易错场景
+- CI门禁 + 迭代调整操作流程 -> 标准操作顺序、分步验证命令
+- 证据文件 + 数据矛盾 -> evidence JSON 手动编辑陷阱实例

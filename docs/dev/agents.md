@@ -79,10 +79,42 @@ make test-iteration-tools               # 迭代工具脚本测试（无需数�
 # 建议工具（辅助开发，不阻断 CI）
 python scripts/ci/suggest_workflow_contract_updates.py --json  # 生成合约更新建议（JSON）
 python scripts/ci/suggest_workflow_contract_updates.py --markdown  # 生成合约更新建议（Markdown）
+python scripts/docs/sync_agent_rules.py --check  # Agent 规则 SSOT 同步检查
+python scripts/docs/sync_agent_rules.py --install-local-cursor-rule  # 安装本地 Cursor 规则副本
 ```
 
 > **迭代回归 Runbook**：详细的最小门禁命令块（含预期输出关键字和通过标准）请参阅当前活跃迭代的回归记录：
 > - [Iteration 13 Regression Runbook](../acceptance/iteration_13_regression.md#最小门禁命令块)
+
+<!-- BEGIN GENERATED:AGENT_MEMORY_RECALL_RULE -->
+### Codex 对应规则：CI / 迭代记忆召回
+
+> 本节由 `scripts/docs/sync_agent_rules.py` 从 `.agentx/ssot/engram_memory_recall.rule.json` 生成；本地兜底文档：`docs/dev/ci_iteration_pitfalls.md`。
+
+触发场景：
+
+- CI 门禁失败排查（make ci 报错、lint/typecheck/check-* 失败）
+- 迭代文档调整（新建/晋升/标记 SUPERSEDED 迭代、编辑 regression/plan 文档）
+- 证据文件操作（创建/编辑 docs/acceptance/evidence/*.json）
+- Workflow 合约变更（修改 workflow_contract.v2.json 或相关脚本）
+- 跨文件一致性问题（修改一个文件导致关联检查失败）
+
+执行顺序：
+
+1. 先做 MCP 连通性探测：python scripts/ops/mcp_doctor.py --json --pretty
+2. MCP 可用时优先检索记忆：通过 Gateway MCP `tools/call(memory_query)` 检索历史经验（重点 PITFALL / PROCEDURE）
+3. MCP 不可用时降级到本地兜底文档：阅读 docs/dev/ci_iteration_pitfalls.md
+4. 执行最小变更并做对应门禁验证：至少覆盖触发失败的检查项
+5. 沉淀新经验：先更新 docs/dev/ci_iteration_pitfalls.md；MCP 可用时再通过 tools/call(memory_store) 补录
+
+最低要求：
+
+- 在完成经验检索前，不要直接批量改动 CI/迭代相关文件
+- 手动编辑 docs/acceptance/evidence/*.json 后，必须执行 make check-iteration-docs
+- 涉及迭代受控块/fixtures 的改动，必须执行 make check-iteration-fixtures-freshness
+
+> 如果需要调整规则，请修改 SSOT 后统一生成，不要直接改本段。
+<!-- END GENERATED:AGENT_MEMORY_RECALL_RULE -->
 
 ### 核心门禁脚本
 
@@ -694,6 +726,8 @@ python scripts/ci/check_mypy_gate.py --verbose  # 查看详细错误
 | Strict Island 配置 | `pyproject.toml [tool.engram.mypy]` |
 | 环境变量参考 | `docs/reference/environment_variables.md` |
 | CI 门禁 Runbook | `docs/dev/ci_gate_runbook.md` |
+| Agent 规则 SSOT（多 IDE/CLI） | `docs/dev/agent_rule_ssot.md` |
+| Cursor 规则生成产物 | `configs/agent_rules/engram-memory-recall.mdc` |
 | 迭代操作手册 | `docs/dev/iteration_runbook.md` |
 | 迭代本地草稿指南 | `docs/dev/iteration_local_drafts.md` |
 

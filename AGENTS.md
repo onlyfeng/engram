@@ -57,6 +57,8 @@ pytest tests/ci/ -q                     # CI 脚本测试
 # 建议工具（辅助开发，不阻断 CI）
 python scripts/ci/suggest_workflow_contract_updates.py --json  # 生成合约更新建议（JSON）
 python scripts/ci/suggest_workflow_contract_updates.py --markdown  # 生成合约更新建议（Markdown）
+python scripts/docs/sync_agent_rules.py --check  # Agent 规则 SSOT 同步检查
+python scripts/docs/sync_agent_rules.py --install-local-cursor-rule  # 安装本地 Cursor 规则副本
 ```
 
 > **迭代回归 Runbook**：详细的最小门禁命令块（含预期输出关键字和通过标准）请参阅：[Iteration 13 Regression Runbook](docs/acceptance/iteration_13_regression.md#最小门禁命令块)
@@ -107,6 +109,36 @@ ruff check --fix .   # 自动修复 lint 问题
 - **触发条件**：Cursor 已配置并可连通 `configs/mcp/.mcp.json.example` 指向的 Gateway `/mcp`（可按 `docs/gateway/02_mcp_integration_cursor.md` 做健康检查与 `tools/list` 验证）。
 - **后续记录策略**：当 Engram MCP 可用时，将迭代执行过程中的**进度更新/决策/回归笔记/证据引用**优先写入 Engram（MCP 工具如 `memory_store`、`evidence_upload`），作为可审计、可共享的记录面。
 - **迁移策略**：如本地存在 `.iteration/<N>/{plan,regression}.md`，可将其内容按“迭代编号/文档类型/来源路径”等元信息写入 Engram；迁移后可将 `.iteration/` 仅作为本地临时草稿区继续使用或逐步收敛到 Engram。
+
+<!-- BEGIN GENERATED:AGENT_MEMORY_RECALL_RULE -->
+### Codex 记忆召回规则（CI / 迭代 / Evidence）
+
+> 本节由 `scripts/docs/sync_agent_rules.py` 从 `.agentx/ssot/engram_memory_recall.rule.json` 生成；本地兜底文档：`docs/dev/ci_iteration_pitfalls.md`。
+
+触发场景：
+
+- CI 门禁失败排查（make ci 报错、lint/typecheck/check-* 失败）
+- 迭代文档调整（新建/晋升/标记 SUPERSEDED 迭代、编辑 regression/plan 文档）
+- 证据文件操作（创建/编辑 docs/acceptance/evidence/*.json）
+- Workflow 合约变更（修改 workflow_contract.v2.json 或相关脚本）
+- 跨文件一致性问题（修改一个文件导致关联检查失败）
+
+执行顺序：
+
+1. 先做 MCP 连通性探测：python scripts/ops/mcp_doctor.py --json --pretty
+2. MCP 可用时优先检索记忆：通过 Gateway MCP `tools/call(memory_query)` 检索历史经验（重点 PITFALL / PROCEDURE）
+3. MCP 不可用时降级到本地兜底文档：阅读 docs/dev/ci_iteration_pitfalls.md
+4. 执行最小变更并做对应门禁验证：至少覆盖触发失败的检查项
+5. 沉淀新经验：先更新 docs/dev/ci_iteration_pitfalls.md；MCP 可用时再通过 tools/call(memory_store) 补录
+
+最低要求：
+
+- 在完成经验检索前，不要直接批量改动 CI/迭代相关文件
+- 手动编辑 docs/acceptance/evidence/*.json 后，必须执行 make check-iteration-docs
+- 涉及迭代受控块/fixtures 的改动，必须执行 make check-iteration-fixtures-freshness
+
+> 多 IDE/CLI 场景都以本 SSOT 渲染结果为准，禁止在各端单独维护副本。
+<!-- END GENERATED:AGENT_MEMORY_RECALL_RULE -->
 
 ---
 
@@ -245,6 +277,7 @@ make test              # 可选：运行测试（需数据库）
 | 迭代操作手册 | [docs/dev/iteration_runbook.md](docs/dev/iteration_runbook.md) |
 | 迭代本地草稿指南 | [docs/dev/iteration_local_drafts.md](docs/dev/iteration_local_drafts.md) |
 | 迭代文档 SSOT | [docs/acceptance/00_acceptance_matrix.md](docs/acceptance/00_acceptance_matrix.md) |
+| Agent 规则 SSOT（多 IDE/CLI） | [docs/dev/agent_rule_ssot.md](docs/dev/agent_rule_ssot.md) |
 | CI 配置 | `.github/workflows/ci.yml` |
 | Makefile | `Makefile` |
 | mypy 配置 | `pyproject.toml [tool.mypy]` |
