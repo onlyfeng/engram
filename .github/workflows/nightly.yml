@@ -157,6 +157,11 @@ jobs:
 
           # 统一栈 compose 使用该变量解析 openmemory 镜像
           echo "OPENMEMORY_IMAGE=${OPENMEMORY_LOCAL_IMAGE}" >> "$GITHUB_ENV"
+          # Nightly 使用 migrator 身份运行 OpenMemory，避免上游镜像启动期 DDL 触发 owner 权限错误
+          echo "OM_PG_USER=openmemory_migrator_login" >> "$GITHUB_ENV"
+          echo "OM_PG_PASSWORD=${OPENMEMORY_MIGRATOR_PASSWORD}" >> "$GITHUB_ENV"
+          echo "OM_PG_SET_ROLE=openmemory_migrator" >> "$GITHUB_ENV"
+          echo "OM_PG_AUTO_DDL=true" >> "$GITHUB_ENV"
 
           BUILD_CONTEXT="${OPENMEMORY_UPSTREAM_REPO}#${OPENMEMORY_UPSTREAM_REF}:backend"
 

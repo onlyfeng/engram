@@ -37,8 +37,8 @@ x-openmemory-env: &openmemory_env
   OM_PG_HOST: postgres
   OM_PG_PORT: "5432"
   OM_PG_DB: ${POSTGRES_DB:-engram}
-  OM_PG_USER: openmemory_svc
-  OM_PG_PASSWORD: ${OPENMEMORY_SVC_PASSWORD:-change_me}
+  OM_PG_USER: ${OM_PG_USER:-openmemory_svc}
+  OM_PG_PASSWORD: ${OM_PG_PASSWORD:-${OPENMEMORY_SVC_PASSWORD:-change_me}}
   OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
   OM_PG_AUTO_DDL: ${OM_PG_AUTO_DDL:-false}
   OM_PG_SET_ROLE: ${OM_PG_SET_ROLE:-}
