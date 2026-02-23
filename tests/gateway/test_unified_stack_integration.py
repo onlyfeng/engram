@@ -238,12 +238,17 @@ def _build_real_gateway_deps(
 
     仅替换指定依赖（例如 mock openmemory_client），其余依赖保持真实实现。
     """
+    from dataclasses import replace
+
     from engram.gateway.config import get_config
     from engram.gateway.di import GatewayDeps
     from engram.gateway.logbook_adapter import get_adapter
     from engram.gateway.logbook_db import get_db
 
     config = get_config()
+    # 集成测试默认要求团队空间写入，避免 unknown actor 走 degrade 到 private:*。
+    if getattr(config, "unknown_actor_policy", None) != "auto_create":
+        config = replace(config, unknown_actor_policy="auto_create")
     db = get_db(dsn=config.postgres_dsn)
     adapter = logbook_adapter_override or get_adapter(config.postgres_dsn)
 
@@ -1579,7 +1584,7 @@ class TestMockQueryDegradation:
         deps = _build_real_gateway_deps(openmemory_client_override=mock_client)
 
         # 调用 memory_query_impl
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             memory_query_impl(
                 query=unique_id,  # 使用 unique_id 作为查询关键词
                 spaces=["team:test_degradation"],
@@ -1655,7 +1660,7 @@ class TestMockQueryDegradation:
         )
 
         # 调用 memory_query_impl
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             memory_query_impl(
                 query="test_query",
                 spaces=["team:test"],
@@ -2600,7 +2605,7 @@ class TestStartupVerificationErrors:
 
         # 调用 memory_store_impl
         try:
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 memory_store_impl(
                     payload_md="Test content for error handling",
                     target_space="team:error_test",

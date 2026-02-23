@@ -167,6 +167,7 @@ services:
       PROJECT_KEY: ${PROJECT_KEY:-default}
       GATEWAY_PORT: ${GATEWAY_PORT:-8787}
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
+      UNKNOWN_ACTOR_POLICY: ${UNKNOWN_ACTOR_POLICY:-auto_create}
     ports:
       - "${GATEWAY_PORT:-8787}:8787"
     command: ["engram-gateway"]
