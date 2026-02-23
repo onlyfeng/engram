@@ -4329,8 +4329,12 @@ class TestAuditFirstSemantics:
         # 创建 mock logbook_adapter
         mock_adapter = MagicMock()
         mock_adapter.check_dedup.return_value = None
+        mock_adapter.get_or_create_settings.return_value = {
+            "team_write_enabled": True,
+            "policy_json": {},
+        }
 
-        # 创建 mock db
+        # 创建 mock db（保留注入用于兼容旧调用链）
         mock_db = MagicMock()
         mock_db.get_or_create_settings.return_value = {
             "team_write_enabled": True,
@@ -4427,16 +4431,19 @@ class TestAuditFirstSemantics:
         audit_evidence_refs = []
 
         def mock_insert_audit(**kwargs):
-            call_order.append("audit")
+            call_order.append("pending_audit")
             audit_evidence_refs.append(kwargs.get("evidence_refs_json", {}))
-            return len(call_order)
+            return 1
 
-        def mock_enqueue_outbox(**kwargs):
-            call_order.append("outbox")
-            return 99999  # 返回固定的 outbox_id
+        def mock_atomic_outbox_and_finalize(**kwargs):
+            call_order.append("atomic_outbox_finalize")
+            patch = dict(kwargs.get("evidence_refs_json_patch", {}))
+            patch["outbox_id"] = 99999
+            audit_evidence_refs.append(patch)
+            return (99999, 1)
 
-        mock_db.insert_audit.side_effect = mock_insert_audit
-        mock_db.enqueue_outbox.side_effect = mock_enqueue_outbox
+        mock_adapter.insert_audit.side_effect = mock_insert_audit
+        mock_adapter.enqueue_outbox_and_finalize_audit.side_effect = mock_atomic_outbox_and_finalize
 
         # 模拟 OpenMemory 失败
         mock_client = MagicMock()
@@ -4470,16 +4477,18 @@ class TestAuditFirstSemantics:
                 deps=deps,
             )
 
-            # 验证：返回包含 outbox_id 的错误
+            # 验证：返回 deferred，包含 outbox_id
             assert result.ok is False
+            assert result.action == "deferred"
+            assert result.outbox_id == 99999
             assert "outbox_id=99999" in result.message
 
-            # 验证：调用顺序正确（outbox -> 失败审计）
-            assert call_order == ["outbox", "audit"]
+            # 验证：调用顺序正确（pending -> 原子补偿 finalize）
+            assert call_order == ["pending_audit", "atomic_outbox_finalize"]
 
-            # 验证：失败审计的 evidence_refs_json 顶层包含 outbox_id
+            # 验证：补偿 finalize patch 顶层包含 outbox_id
             assert audit_evidence_refs, "应有失败审计记录"
-            failure_evidence = audit_evidence_refs[0]
+            failure_evidence = audit_evidence_refs[-1]
             assert "outbox_id" in failure_evidence, (
                 "失败审计的 evidence_refs_json 顶层必须包含 outbox_id"
             )

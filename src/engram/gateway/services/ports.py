@@ -191,6 +191,7 @@ class WriteAuditPort(Protocol):
         correlation_id: str,
         status: str,
         reason_suffix: Optional[str] = None,
+        replace_reason: bool = False,
         evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
@@ -200,6 +201,7 @@ class WriteAuditPort(Protocol):
             correlation_id: 关联 ID
             status: 最终状态（success/failed/redirected）
             reason_suffix: 追加到原 reason 的后缀
+            replace_reason: 为 True 时覆盖 reason（不追加）
             evidence_refs_json_patch: 需要合并到 evidence_refs_json 的字段
 
         Returns:

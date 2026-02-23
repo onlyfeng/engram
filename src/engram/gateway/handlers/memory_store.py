@@ -841,8 +841,13 @@ def _handle_openmemory_failure(
         evidence=normalized_evidence, gateway_event=failure_gateway_event
     )
 
-    if hasattr(audit_store, "enqueue_outbox_and_finalize_audit"):
-        outbox_id, updated_count = audit_store.enqueue_outbox_and_finalize_audit(
+    outbox_id: int
+    updated_count: int
+    atomic_result: Any = None
+    atomic_finalize_done = False
+    atomic_finalize = getattr(audit_store, "enqueue_outbox_and_finalize_audit", None)
+    if callable(atomic_finalize):
+        atomic_result = atomic_finalize(
             correlation_id=correlation_id,
             payload_md=payload_md,
             target_space=final_space,
@@ -854,7 +859,21 @@ def _handle_openmemory_failure(
                 "intended_action": "deferred",
             },
         )
-    else:
+        if (
+            isinstance(atomic_result, tuple)
+            and len(atomic_result) == 2
+            and isinstance(atomic_result[0], int)
+        ):
+            outbox_id = int(atomic_result[0])
+            updated_count = int(atomic_result[1])
+            atomic_finalize_done = True
+        else:
+            logger.warning(
+                "enqueue_outbox_and_finalize_audit 返回值无效，回退到分步补偿: %r",
+                atomic_result,
+            )
+
+    if not atomic_finalize_done:
         outbox_id = audit_store.enqueue_outbox(
             payload_md=payload_md,
             target_space=final_space,
@@ -865,6 +884,7 @@ def _handle_openmemory_failure(
             correlation_id=correlation_id,
             status="redirected",
             reason_suffix=f"{error_reason}:outbox:{outbox_id}",
+            replace_reason=True,
             evidence_refs_json_patch={
                 "outbox_id": outbox_id,
                 "gateway_event": failure_gateway_event,

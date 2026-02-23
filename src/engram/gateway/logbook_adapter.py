@@ -595,6 +595,7 @@ class LogbookAdapter:
         correlation_id: str,
         status: str,
         reason_suffix: Optional[str] = None,
+        replace_reason: bool = False,
         evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
@@ -604,6 +605,7 @@ class LogbookAdapter:
             correlation_id: 关联追踪 ID
             status: 最终状态（success/failed/redirected）
             reason_suffix: 追加到原 reason 的后缀
+            replace_reason: 为 True 时覆盖 reason（不追加）
             evidence_refs_json_patch: 需要合并到 evidence_refs_json 的字段
 
         Returns:
@@ -613,6 +615,7 @@ class LogbookAdapter:
             correlation_id=correlation_id,
             status=status,
             reason_suffix=reason_suffix,
+            replace_reason=replace_reason,
             evidence_refs_json_patch=evidence_refs_json_patch,
             config=self._config,
         )
@@ -1958,6 +1961,7 @@ def update_write_audit(
     correlation_id: str,
     status: str,
     reason_suffix: Optional[str] = None,
+    replace_reason: bool = False,
     evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
 ) -> int:
     """更新审计记录的最终状态"""
@@ -1965,6 +1969,7 @@ def update_write_audit(
         correlation_id=correlation_id,
         status=status,
         reason_suffix=reason_suffix,
+        replace_reason=replace_reason,
         evidence_refs_json_patch=evidence_refs_json_patch,
     )
 

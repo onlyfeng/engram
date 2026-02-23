@@ -307,6 +307,7 @@ class LogbookDatabase:
         correlation_id: str,
         status: str,
         reason_suffix: Optional[str] = None,
+        replace_reason: bool = False,
         evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
@@ -316,6 +317,7 @@ class LogbookDatabase:
             correlation_id: 关联 ID
             status: 目标状态（success/failed/redirected）
             reason_suffix: 追加到 reason 的后缀
+            replace_reason: 为 True 时覆盖 reason（不追加）
             evidence_refs_json_patch: 合并到 evidence_refs_json 的补丁
 
         Returns:
@@ -326,6 +328,7 @@ class LogbookDatabase:
                 correlation_id=correlation_id,
                 status=status,
                 reason_suffix=reason_suffix,
+                replace_reason=replace_reason,
                 evidence_refs_json_patch=evidence_refs_json_patch,
             )
 
@@ -340,6 +343,7 @@ class LogbookDatabase:
                         updated_at = now(),
                         reason = CASE
                             WHEN %s IS NULL THEN reason
+                            WHEN %s THEN %s
                             WHEN reason IS NULL OR reason = '' THEN %s
                             ELSE reason || ' ' || %s
                         END,
@@ -349,6 +353,8 @@ class LogbookDatabase:
                     """,
                     (
                         status,
+                        reason_suffix,
+                        replace_reason,
                         reason_suffix,
                         reason_suffix,
                         reason_suffix,
@@ -482,16 +488,12 @@ class LogbookDatabase:
                     UPDATE governance.write_audit
                     SET status = 'redirected',
                         updated_at = now(),
-                        reason = CASE
-                            WHEN reason IS NULL OR reason = '' THEN %s
-                            ELSE reason || ' ' || %s
-                        END,
+                        reason = %s,
                         evidence_refs_json = COALESCE(evidence_refs_json, '{}'::jsonb) || %s::jsonb
                     WHERE correlation_id = %s
                       AND status = 'pending'
                     """,
                     (
-                        reason_suffix,
                         reason_suffix,
                         self._json.dumps(patch_payload),
                         correlation_id,

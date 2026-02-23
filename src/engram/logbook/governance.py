@@ -555,6 +555,7 @@ def update_write_audit(
     correlation_id: str,
     status: str,
     reason_suffix: Optional[str] = None,
+    replace_reason: bool = False,
     evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
     config: Optional[Config] = None,
 ) -> int:
@@ -565,6 +566,7 @@ def update_write_audit(
         correlation_id: 关联追踪 ID
         status: 最终状态（success/failed/redirected）
         reason_suffix: 追加到原 reason 的后缀
+        replace_reason: 为 True 时，直接覆盖 reason（不追加）
         evidence_refs_json_patch: 合并到 evidence_refs_json 顶层的字段
         config: 配置实例
 
@@ -589,10 +591,14 @@ def update_write_audit(
     params: List[Any] = [status]
 
     if reason_suffix is not None:
-        set_parts.append(
-            "reason = CASE WHEN reason IS NULL OR reason = '' THEN %s ELSE reason || ' ' || %s END"
-        )
-        params.extend([reason_suffix, reason_suffix])
+        if replace_reason:
+            set_parts.append("reason = %s")
+            params.append(reason_suffix)
+        else:
+            set_parts.append(
+                "reason = CASE WHEN reason IS NULL OR reason = '' THEN %s ELSE reason || ' ' || %s END"
+            )
+            params.extend([reason_suffix, reason_suffix])
 
     if evidence_refs_json_patch is not None:
         set_parts.append(
@@ -699,16 +705,12 @@ def enqueue_outbox_and_finalize_pending_audit(
                 UPDATE write_audit
                 SET status = 'redirected',
                     updated_at = now(),
-                    reason = CASE
-                        WHEN reason IS NULL OR reason = '' THEN %s
-                        ELSE reason || ' ' || %s
-                    END,
+                    reason = %s,
                     evidence_refs_json = COALESCE(evidence_refs_json, '{}'::jsonb) || %s::jsonb
                 WHERE correlation_id = %s
                   AND status = 'pending'
                 """,
                 (
-                    reason_suffix,
                     reason_suffix,
                     json.dumps(evidence_patch),
                     correlation_id,

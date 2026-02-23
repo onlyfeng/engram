@@ -478,6 +478,7 @@ class FakeLogbookDatabase:
         correlation_id: str,
         status: str,
         reason_suffix: Optional[str] = None,
+        replace_reason: bool = False,
         evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
     ) -> int:
         """更新审计日志（pending -> final）。"""
@@ -495,8 +496,11 @@ class FakeLogbookDatabase:
         record = self._audit_records[correlation_id]
         record["status"] = status
         if reason_suffix:
-            old_reason = record.get("reason", "") or ""
-            record["reason"] = (old_reason + " " + reason_suffix).strip()
+            if replace_reason:
+                record["reason"] = reason_suffix
+            else:
+                old_reason = record.get("reason", "") or ""
+                record["reason"] = (old_reason + " " + reason_suffix).strip()
         if evidence_refs_json_patch:
             merged = dict(record.get("evidence_refs_json") or {})
             merged.update(evidence_refs_json_patch)
@@ -552,6 +556,7 @@ class FakeLogbookDatabase:
             correlation_id=correlation_id,
             status="redirected",
             reason_suffix=f"{reason_suffix_prefix}:outbox:{outbox_id}",
+            replace_reason=True,
             evidence_refs_json_patch=patch,
         )
         return outbox_id, int(bool(updated))
@@ -839,6 +844,7 @@ class FakeLogbookAdapter:
         correlation_id: str,
         status: str,
         reason_suffix: Optional[str] = None,
+        replace_reason: bool = False,
         evidence_refs_json_patch: Optional[Dict] = None,
         **kwargs,
     ) -> int:
@@ -857,8 +863,13 @@ class FakeLogbookAdapter:
 
         self._audit_records[correlation_id]["status"] = status
         if reason_suffix:
-            old_reason = self._audit_records[correlation_id].get("reason", "") or ""
-            self._audit_records[correlation_id]["reason"] = f"{old_reason} {reason_suffix}".strip()
+            if replace_reason:
+                self._audit_records[correlation_id]["reason"] = reason_suffix
+            else:
+                old_reason = self._audit_records[correlation_id].get("reason", "") or ""
+                self._audit_records[correlation_id]["reason"] = (
+                    f"{old_reason} {reason_suffix}".strip()
+                )
         if evidence_refs_json_patch:
             old_refs = self._audit_records[correlation_id].get("evidence_refs_json", {})
             self._audit_records[correlation_id]["evidence_refs_json"] = {
@@ -917,6 +928,7 @@ class FakeLogbookAdapter:
             correlation_id=correlation_id,
             status="redirected",
             reason_suffix=f"{reason_suffix_prefix}:outbox:{outbox_id}",
+            replace_reason=True,
             evidence_refs_json_patch=patch,
         )
         return outbox_id, updated_count
