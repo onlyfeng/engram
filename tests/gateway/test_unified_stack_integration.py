@@ -260,6 +260,29 @@ def _build_real_gateway_deps(
     )
 
 
+def _ensure_openmemory_recovered(
+    container_name: str,
+    health_url: str,
+    *,
+    max_wait: int = 120,
+) -> bool:
+    """
+    尝试恢复 OpenMemory 容器并等待健康检查通过。
+
+    先执行 `docker start`，失败时回退到 `docker compose up -d openmemory`。
+    """
+    started = docker_container_action(container_name, "start")
+    if not started:
+        subprocess.run(
+            ["docker", "compose", "-f", "docker-compose.unified.yml", "up", "-d", "openmemory"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    return wait_for_service(health_url, max_wait=max_wait, interval=2)
+
+
 # ======================== pytest 标记与跳过条件 ========================
 
 
@@ -763,7 +786,12 @@ class TestDegradationFlow:
 
         finally:
             # 重启 OpenMemory 容器
-            docker_container_action(self.OPENMEMORY_CONTAINER, "start")
+            recovered = _ensure_openmemory_recovered(
+                self.OPENMEMORY_CONTAINER,
+                integration_config["openmemory_health"],
+            )
+            if not recovered:
+                pytest.fail("OpenMemory 服务恢复失败（degradation flow）")
 
     def test_degradation_recovery_flush(self, integration_config, postgres_connection):
         """
@@ -3179,7 +3207,12 @@ class TestMCPMemoryStoreE2E:
 
         finally:
             # 6. 重启 OpenMemory 容器
-            docker_container_action(self.OPENMEMORY_CONTAINER, "start")
+            recovered = _ensure_openmemory_recovered(
+                self.OPENMEMORY_CONTAINER,
+                integration_config["openmemory_health"],
+            )
+            if not recovered:
+                pytest.fail("OpenMemory 服务恢复失败（mcp outbox test）")
 
     def test_worker_flush_outbox_and_audit_completion(
         self, integration_config, postgres_connection
