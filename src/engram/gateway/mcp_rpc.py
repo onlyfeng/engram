@@ -625,6 +625,59 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
         },
     ),
     ToolDefinition(
+        name="memory_list",
+        description="列出 OpenMemory 记忆，支持 user/space 过滤与分页",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string", "description": "用户 ID（可选）"},
+                "space": {"type": "string", "description": "空间过滤（可选）"},
+                "limit": {"type": "integer", "description": "返回数量限制", "default": 100},
+                "offset": {"type": "integer", "description": "分页偏移", "default": 0},
+            },
+            "required": [],
+        },
+    ),
+    ToolDefinition(
+        name="memory_get",
+        description="按 memory_id 获取单条记忆详情",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "记忆 ID"},
+            },
+            "required": ["memory_id"],
+        },
+    ),
+    ToolDefinition(
+        name="memory_reinforce",
+        description="强化指定记忆强度（OpenMemory 1.3.0+）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "记忆 ID"},
+                "delta": {"type": "number", "description": "强化增量", "default": 1.0},
+                "reason": {"type": "string", "description": "强化原因（可选）"},
+            },
+            "required": ["memory_id"],
+        },
+    ),
+    ToolDefinition(
+        name="memory_wipe",
+        description="清空记忆数据（危险操作，必须 confirm=true）",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "confirm": {
+                    "type": "boolean",
+                    "description": "危险确认开关，必须传 true 才会执行",
+                },
+                "user_id": {"type": "string", "description": "仅清理该用户数据（可选）"},
+            },
+            "required": ["confirm"],
+        },
+    ),
+    ToolDefinition(
         name="reliability_report",
         description="获取可靠性统计报告（只读），包含 outbox 和 audit 统计",
         inputSchema={

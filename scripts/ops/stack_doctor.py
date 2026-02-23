@@ -25,7 +25,6 @@ import argparse
 import json
 import os
 import random
-import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -41,6 +40,10 @@ DEFAULT_FULL_MODE = ("1", "true", "yes", "on")
 EXPECTED_TOOL_NAMES = {
     "memory_store",
     "memory_query",
+    "memory_list",
+    "memory_get",
+    "memory_reinforce",
+    "memory_wipe",
     "reliability_report",
     "governance_update",
     "evidence_upload",
@@ -133,7 +136,11 @@ def _get_gateway_url(explicit: Optional[str]) -> str:
 
 
 def _get_openmemory_url() -> str:
-    url = os.environ.get("OPENMEMORY_URL") or os.environ.get("OPENMEMORY_BASE_URL") or DEFAULT_OPENMEMORY_URL
+    url = (
+        os.environ.get("OPENMEMORY_URL")
+        or os.environ.get("OPENMEMORY_BASE_URL")
+        or DEFAULT_OPENMEMORY_URL
+    )
     return url.strip().rstrip("/")
 
 
@@ -204,7 +211,9 @@ def _check_openmemory_health(openmemory_url: str, timeout: float) -> CheckResult
     status, body, _, err = _request("GET", f"{openmemory_url}/health", timeout=timeout)
     preview = _preview_body(body)
     if err:
-        return CheckResult("OpenMemory GET /health", False, "请求失败", status_code=status, details=err)
+        return CheckResult(
+            "OpenMemory GET /health", False, "请求失败", status_code=status, details=err
+        )
     if status != 200:
         return CheckResult(
             "OpenMemory GET /health",
@@ -235,7 +244,9 @@ def _check_gateway_health(gateway_url: str, timeout: float) -> CheckResult:
     status, body, _, err = _request("GET", f"{gateway_url}/health", timeout=timeout)
     preview = _preview_body(body)
     if err:
-        return CheckResult("Gateway GET /health", False, "请求失败", status_code=status, details=err)
+        return CheckResult(
+            "Gateway GET /health", False, "请求失败", status_code=status, details=err
+        )
     if status != 200:
         return CheckResult(
             "Gateway GET /health",
@@ -273,7 +284,9 @@ def _check_mcp_memory_store(gateway_url: str, timeout: float) -> CheckResult:
     )
     preview = _preview_body(raw)
     if err:
-        return CheckResult("MCP tools/call(memory_store)", False, "请求失败", status_code=status, details=err)
+        return CheckResult(
+            "MCP tools/call(memory_store)", False, "请求失败", status_code=status, details=err
+        )
     if status != 200:
         hint = "（鉴权失败）" if status in (401, 403) else ""
         return CheckResult(
@@ -300,7 +313,9 @@ def _check_mcp_memory_store(gateway_url: str, timeout: float) -> CheckResult:
             False,
             "JSON-RPC 返回 error",
             status_code=status,
-            details=_preview_body(json.dumps(parsed.get("error"), ensure_ascii=False).encode("utf-8")),
+            details=_preview_body(
+                json.dumps(parsed.get("error"), ensure_ascii=False).encode("utf-8")
+            ),
         )
 
     result = parsed.get("result") or {}
@@ -378,7 +393,12 @@ def _check_mcp_tools_list(gateway_url: str, timeout: float) -> CheckResult:
         return CheckResult("MCP tools/list", False, "请求失败", details=err)
     tools = (parsed.get("result") or {}).get("tools") or []
     if not isinstance(tools, list):
-        return CheckResult("MCP tools/list", False, "tools 结构非法", details=_preview_body(json.dumps(parsed).encode()))
+        return CheckResult(
+            "MCP tools/list",
+            False,
+            "tools 结构非法",
+            details=_preview_body(json.dumps(parsed).encode()),
+        )
     tool_names = {tool.get("name") for tool in tools if isinstance(tool, dict)}
     missing = sorted(name for name in EXPECTED_TOOL_NAMES if name not in tool_names)
     if missing:
@@ -423,7 +443,9 @@ def _check_mcp_evidence_flow(gateway_url: str, timeout: float) -> CheckResult:
         },
     )
     if err or not result or not result.get("ok"):
-        return CheckResult("MCP evidence_upload/read", False, "evidence_upload 失败", details=err or str(result))
+        return CheckResult(
+            "MCP evidence_upload/read", False, "evidence_upload 失败", details=err or str(result)
+        )
     evidence = result.get("evidence") or {}
     uri = evidence.get("uri")
     read_result, read_err = _call_tool(
@@ -433,7 +455,12 @@ def _check_mcp_evidence_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"uri": uri, "encoding": "utf-8"},
     )
     if read_err or not read_result or not read_result.get("ok"):
-        return CheckResult("MCP evidence_upload/read", False, "evidence_read 失败", details=read_err or str(read_result))
+        return CheckResult(
+            "MCP evidence_upload/read",
+            False,
+            "evidence_read 失败",
+            details=read_err or str(read_result),
+        )
     return CheckResult("MCP evidence_upload/read", True, "OK")
 
 
@@ -444,10 +471,19 @@ def _check_mcp_artifacts_flow(gateway_url: str, timeout: float) -> CheckResult:
         gateway_url,
         timeout=timeout,
         name="artifacts_put",
-        arguments={"uri": f"diagnostics/stack-doctor/{token}.txt", "content": content, "encoding": "utf-8"},
+        arguments={
+            "uri": f"diagnostics/stack-doctor/{token}.txt",
+            "content": content,
+            "encoding": "utf-8",
+        },
     )
     if put_err or not put_result or not put_result.get("ok"):
-        return CheckResult("MCP artifacts_put/get/exists", False, "artifacts_put 失败", details=put_err or str(put_result))
+        return CheckResult(
+            "MCP artifacts_put/get/exists",
+            False,
+            "artifacts_put 失败",
+            details=put_err or str(put_result),
+        )
     uri = put_result.get("uri")
     exists_result, exists_err = _call_tool(
         gateway_url,
@@ -455,7 +491,12 @@ def _check_mcp_artifacts_flow(gateway_url: str, timeout: float) -> CheckResult:
         name="artifacts_exists",
         arguments={"uri": uri},
     )
-    if exists_err or not exists_result or not exists_result.get("ok") or not exists_result.get("exists"):
+    if (
+        exists_err
+        or not exists_result
+        or not exists_result.get("ok")
+        or not exists_result.get("exists")
+    ):
         return CheckResult(
             "MCP artifacts_put/get/exists",
             False,
@@ -469,9 +510,16 @@ def _check_mcp_artifacts_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"uri": uri, "encoding": "utf-8"},
     )
     if get_err or not get_result or not get_result.get("ok"):
-        return CheckResult("MCP artifacts_put/get/exists", False, "artifacts_get 失败", details=get_err or str(get_result))
+        return CheckResult(
+            "MCP artifacts_put/get/exists",
+            False,
+            "artifacts_get 失败",
+            details=get_err or str(get_result),
+        )
     if get_result.get("content_text") != content:
-        return CheckResult("MCP artifacts_put/get/exists", False, "制品内容不一致", details=str(get_result))
+        return CheckResult(
+            "MCP artifacts_put/get/exists", False, "制品内容不一致", details=str(get_result)
+        )
     return CheckResult("MCP artifacts_put/get/exists", True, "OK")
 
 
@@ -484,7 +532,9 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"item_type": "task", "title": f"stack-doctor {token}"},
     )
     if item_err or not item_result or not item_result.get("ok"):
-        return CheckResult("MCP logbook_*", False, "logbook_create_item 失败", details=item_err or str(item_result))
+        return CheckResult(
+            "MCP logbook_*", False, "logbook_create_item 失败", details=item_err or str(item_result)
+        )
     item_id = item_result.get("item_id")
 
     event_result, event_err = _call_tool(
@@ -494,7 +544,9 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"item_id": item_id, "event_type": "status", "status_to": "done"},
     )
     if event_err or not event_result or not event_result.get("ok"):
-        return CheckResult("MCP logbook_*", False, "logbook_add_event 失败", details=event_err or str(event_result))
+        return CheckResult(
+            "MCP logbook_*", False, "logbook_add_event 失败", details=event_err or str(event_result)
+        )
 
     attach_content = f"logbook-attach:{token}"
     artifact_result, artifact_err = _call_tool(
@@ -508,7 +560,12 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         },
     )
     if artifact_err or not artifact_result or not artifact_result.get("ok"):
-        return CheckResult("MCP logbook_*", False, "artifacts_put 失败", details=artifact_err or str(artifact_result))
+        return CheckResult(
+            "MCP logbook_*",
+            False,
+            "artifacts_put 失败",
+            details=artifact_err or str(artifact_result),
+        )
 
     attach_result, attach_err = _call_tool(
         gateway_url,
@@ -523,7 +580,9 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         },
     )
     if attach_err or not attach_result or not attach_result.get("ok"):
-        return CheckResult("MCP logbook_*", False, "logbook_attach 失败", details=attach_err or str(attach_result))
+        return CheckResult(
+            "MCP logbook_*", False, "logbook_attach 失败", details=attach_err or str(attach_result)
+        )
 
     kv_set, kv_err = _call_tool(
         gateway_url,
@@ -532,7 +591,9 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"namespace": "stack-doctor", "key": token, "value_json": {"item_id": item_id}},
     )
     if kv_err or not kv_set or not kv_set.get("ok"):
-        return CheckResult("MCP logbook_*", False, "logbook_set_kv 失败", details=kv_err or str(kv_set))
+        return CheckResult(
+            "MCP logbook_*", False, "logbook_set_kv 失败", details=kv_err or str(kv_set)
+        )
 
     kv_get, kv_get_err = _call_tool(
         gateway_url,
@@ -541,7 +602,9 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"namespace": "stack-doctor", "key": token},
     )
     if kv_get_err or not kv_get or not kv_get.get("ok") or not kv_get.get("found"):
-        return CheckResult("MCP logbook_*", False, "logbook_get_kv 失败", details=kv_get_err or str(kv_get))
+        return CheckResult(
+            "MCP logbook_*", False, "logbook_get_kv 失败", details=kv_get_err or str(kv_get)
+        )
 
     query_items, query_items_err = _call_tool(
         gateway_url,
@@ -550,7 +613,12 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"item_type": "task", "limit": 5},
     )
     if query_items_err or not query_items or not query_items.get("ok"):
-        return CheckResult("MCP logbook_*", False, "logbook_query_items 失败", details=query_items_err or str(query_items))
+        return CheckResult(
+            "MCP logbook_*",
+            False,
+            "logbook_query_items 失败",
+            details=query_items_err or str(query_items),
+        )
 
     query_events, query_events_err = _call_tool(
         gateway_url,
@@ -559,7 +627,12 @@ def _check_mcp_logbook_flow(gateway_url: str, timeout: float) -> CheckResult:
         arguments={"item_id": item_id, "limit": 5},
     )
     if query_events_err or not query_events or not query_events.get("ok"):
-        return CheckResult("MCP logbook_*", False, "logbook_query_events 失败", details=query_events_err or str(query_events))
+        return CheckResult(
+            "MCP logbook_*",
+            False,
+            "logbook_query_events 失败",
+            details=query_events_err or str(query_events),
+        )
 
     list_attachments, list_err = _call_tool(
         gateway_url,
@@ -595,7 +668,9 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="输出 JSON 结果（适合自动化）")
     parser.add_argument("--pretty", action="store_true", help="JSON 输出缩进格式")
     parser.add_argument("--gateway-url", help="覆盖 GATEWAY_URL（例如 http://127.0.0.1:8787）")
-    parser.add_argument("--full", action="store_true", help="执行 MCP 全功能诊断（会写入少量测试数据）")
+    parser.add_argument(
+        "--full", action="store_true", help="执行 MCP 全功能诊断（会写入少量测试数据）"
+    )
     args = parser.parse_args()
 
     timeout = _get_timeout()
@@ -640,4 +715,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

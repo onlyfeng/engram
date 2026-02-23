@@ -144,6 +144,60 @@ async def execute_tool(
         )
         result_dict = {"ok": query_result.ok, **query_result.model_dump()}
 
+    elif tool == "memory_list":
+        list_result = deps.openmemory_client.list_memories(
+            user_id=args.get("user_id"),
+            space=args.get("space"),
+            limit=args.get("limit", 100),
+            offset=args.get("offset", 0),
+        )
+        result_dict = {
+            "ok": list_result.success,
+            "memories": list_result.memories or [],
+            "total": list_result.total,
+        }
+        if list_result.error:
+            result_dict["error"] = list_result.error
+            result_dict["message"] = list_result.error
+
+    elif tool == "memory_get":
+        get_result = deps.openmemory_client.get_memory(memory_id=args.get("memory_id", ""))
+        result_dict = {
+            "ok": get_result.success,
+            "memory": get_result.memory,
+        }
+        if get_result.error:
+            result_dict["error"] = get_result.error
+            result_dict["message"] = get_result.error
+
+    elif tool == "memory_reinforce":
+        reinforce_result = deps.openmemory_client.reinforce(
+            memory_id=args.get("memory_id", ""),
+            delta=args.get("delta", 1.0),
+            reason=args.get("reason"),
+        )
+        result_dict = {
+            "ok": reinforce_result.success,
+            "memory_id": reinforce_result.memory_id,
+            "new_strength": reinforce_result.new_strength,
+        }
+        if reinforce_result.error:
+            result_dict["error"] = reinforce_result.error
+            result_dict["message"] = reinforce_result.error
+
+    elif tool == "memory_wipe":
+        wipe_result = deps.openmemory_client.wipe(
+            confirm=args.get("confirm", False),
+            user_id=args.get("user_id"),
+        )
+        result_dict = {
+            "ok": wipe_result.success,
+            "deleted_count": wipe_result.deleted_count,
+        }
+        if wipe_result.error:
+            result_dict["error"] = wipe_result.error
+            result_dict["message"] = wipe_result.error
+
     elif tool == "reliability_report":
         # 函数内导入：仅在 reliability_report 工具被调用时才导入依赖
         # 这支持依赖缺失时的优雅降级（返回 ok=false + error_code）
@@ -380,8 +434,12 @@ class DefaultToolExecutor:
         "artifacts_get",
         "artifacts_put",
         "evidence_read",
+        "memory_get",
+        "memory_list",
+        "memory_reinforce",
         "memory_store",
         "memory_query",
+        "memory_wipe",
         "reliability_report",
         "governance_update",
         "evidence_upload",
@@ -529,6 +587,10 @@ class DefaultToolExecutor:
         required_params: Dict[str, List[str]] = {
             "memory_store": ["payload_md"],
             "memory_query": ["query"],
+            "memory_list": [],
+            "memory_get": ["memory_id"],
+            "memory_reinforce": ["memory_id"],
+            "memory_wipe": ["confirm"],
             "evidence_upload": ["content", "content_type"],
             "governance_update": [],  # 无必需参数
             "reliability_report": [],  # 无必需参数
@@ -549,6 +611,14 @@ class DefaultToolExecutor:
                     error_message=f"缺少必需参数: {param}",
                     retryable=False,
                 )
+
+        if name == "memory_wipe" and arguments.get("confirm") is not True:
+            return ToolCallResult(
+                ok=False,
+                error_code="INVALID_PARAM_VALUE",
+                error_message="参数 confirm 必须为 true",
+                retryable=False,
+            )
 
         return None
 

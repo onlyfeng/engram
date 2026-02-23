@@ -35,6 +35,10 @@ ADAPTER_MODULE = "engram.gateway.logbook_adapter"
 EXPECTED_TOOL_NAMES = {
     "memory_store",
     "memory_query",
+    "memory_list",
+    "memory_get",
+    "memory_reinforce",
+    "memory_wipe",
     "reliability_report",
     "governance_update",
     "evidence_upload",
@@ -471,6 +475,10 @@ class TestToolsList:
         expected_required = {
             "memory_store": ["payload_md"],
             "memory_query": ["query"],
+            "memory_list": [],
+            "memory_get": ["memory_id"],
+            "memory_reinforce": ["memory_id"],
+            "memory_wipe": ["confirm"],
             "reliability_report": [],
             "governance_update": [],
             "evidence_upload": ["content", "content_type"],  # content 和 content_type 是必需的
@@ -680,6 +688,106 @@ class TestToolsCall:
         content = result["result"]["content"]
         assert isinstance(content, list)
         assert content[0]["type"] == "text"
+
+    def test_tools_call_memory_list(self, client, mock_dependencies):
+        """调用 memory_list 工具"""
+        mock_client = mock_dependencies["client"]
+        mock_client.list_memories.return_value = MagicMock(
+            success=True,
+            memories=[{"id": "m-1", "content": "hello"}],
+            total=1,
+            error=None,
+        )
+
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": "memory_list", "arguments": {"limit": 10, "offset": 0}},
+                "id": 2,
+            },
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["ok"] is True
+        assert payload["total"] == 1
+        assert len(payload["memories"]) == 1
+
+    def test_tools_call_memory_get(self, client, mock_dependencies):
+        """调用 memory_get 工具"""
+        mock_client = mock_dependencies["client"]
+        mock_client.get_memory.return_value = MagicMock(
+            success=True,
+            memory={"id": "m-1", "content": "hello"},
+            error=None,
+        )
+
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": "memory_get", "arguments": {"memory_id": "m-1"}},
+                "id": 3,
+            },
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["ok"] is True
+        assert payload["memory"]["id"] == "m-1"
+
+    def test_tools_call_memory_reinforce(self, client, mock_dependencies):
+        """调用 memory_reinforce 工具"""
+        mock_client = mock_dependencies["client"]
+        mock_client.reinforce.return_value = MagicMock(
+            success=True,
+            memory_id="m-1",
+            new_strength=2.0,
+            error=None,
+        )
+
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_reinforce",
+                    "arguments": {"memory_id": "m-1", "delta": 1.0, "reason": "useful"},
+                },
+                "id": 4,
+            },
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["ok"] is True
+        assert payload["memory_id"] == "m-1"
+        assert payload["new_strength"] == 2.0
+
+    def test_tools_call_memory_wipe_requires_confirm_true(self, client):
+        """调用 memory_wipe 且 confirm!=true 时应返回业务失败"""
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": "memory_wipe", "arguments": {"confirm": False}},
+                "id": 5,
+            },
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["ok"] is False
+        assert payload["error_code"] == "INVALID_PARAM_VALUE"
 
 
 class TestLegacyProtocol:

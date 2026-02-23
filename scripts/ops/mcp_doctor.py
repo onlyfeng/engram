@@ -44,8 +44,12 @@ EXPECTED_TOOL_NAMES = {
     "artifacts_get",
     "artifacts_put",
     "evidence_read",
+    "memory_get",
+    "memory_list",
+    "memory_reinforce",
     "memory_store",
     "memory_query",
+    "memory_wipe",
     "reliability_report",
     "governance_update",
     "evidence_upload",
@@ -64,8 +68,12 @@ EXPECTED_REQUIRED_FIELDS = {
     "artifacts_exists": [],
     "artifacts_get": [],
     "artifacts_put": [],
+    "memory_get": ["memory_id"],
+    "memory_list": [],
+    "memory_reinforce": ["memory_id"],
     "memory_store": ["payload_md"],
     "memory_query": ["query"],
+    "memory_wipe": ["confirm"],
     "reliability_report": [],
     "governance_update": [],
     "evidence_upload": ["content", "content_type"],
@@ -591,9 +599,7 @@ def _check_tools_list(
             response_preview=preview,
         )
 
-    correlation_error = _validate_correlation_id(
-        _get_header(response_headers, "X-Correlation-ID")
-    )
+    correlation_error = _validate_correlation_id(_get_header(response_headers, "X-Correlation-ID"))
     if correlation_error:
         return CheckResult(
             "POST /mcp (tools/list)",
@@ -825,8 +831,10 @@ def _check_initialize(
             response_preview=preview,
         )
     server_info = result.get("serverInfo")
-    if not isinstance(server_info, dict) or not server_info.get("name") or not server_info.get(
-        "version"
+    if (
+        not isinstance(server_info, dict)
+        or not server_info.get("name")
+        or not server_info.get("version")
     ):
         return CheckResult(
             "POST /mcp (initialize)",
@@ -946,9 +954,7 @@ def _check_unknown_method_error(
             status_code=status,
             response_preview=preview,
         )
-    correlation_error = _validate_correlation_id(
-        _get_header(response_headers, "X-Correlation-ID")
-    )
+    correlation_error = _validate_correlation_id(_get_header(response_headers, "X-Correlation-ID"))
     if correlation_error:
         return CheckResult(
             "POST /mcp (unknown method)",
@@ -1018,6 +1024,7 @@ def _check_correlation_id_uniqueness(
         True,
         f"OK ({attempts} unique)",
     )
+
 
 def _print_result(result: CheckResult) -> None:
     if result.passed:
@@ -1256,9 +1263,7 @@ def main() -> int:
     if gateway_url is not None:
         mcp_url = explicit_mcp_url or _build_mcp_url(gateway_url)
 
-    request_headers = _prepare_request_headers(
-        custom_headers, config_headers=config_headers
-    )
+    request_headers = _prepare_request_headers(custom_headers, config_headers=config_headers)
 
     tools_url = mcp_url or gateway_url
     if tools_url is None:
@@ -1299,12 +1304,8 @@ def main() -> int:
         _check_initialize(tools_url, timeout, request_headers=request_headers),
         _check_ping(tools_url, timeout, request_headers=request_headers),
         _check_tools_list(tools_url, timeout, request_headers=request_headers),
-        _check_correlation_id_uniqueness(
-            tools_url, timeout, request_headers=request_headers
-        ),
-        _check_unknown_method_error(
-            tools_url, timeout, request_headers=request_headers
-        ),
+        _check_correlation_id_uniqueness(tools_url, timeout, request_headers=request_headers),
+        _check_unknown_method_error(tools_url, timeout, request_headers=request_headers),
     ]
 
     if args.json:

@@ -32,6 +32,10 @@ from tests.gateway.fakes import FakeOpenMemoryClient
 EXPECTED_TOOL_NAMES = {
     "memory_store",
     "memory_query",
+    "memory_list",
+    "memory_get",
+    "memory_reinforce",
+    "memory_wipe",
     "reliability_report",
     "governance_update",
     "evidence_upload",
