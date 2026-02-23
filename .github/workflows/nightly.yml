@@ -152,13 +152,13 @@ jobs:
           OPENMEMORY_LOCAL_IMAGE: engram/openmemory:nightly
         run: |
           echo "=== 准备 OpenMemory 镜像 ==="
-          echo "来源: ${OPENMEMORY_UPSTREAM_REPO}#${OPENMEMORY_UPSTREAM_REF}:packages/openmemory-js"
+          echo "来源: ${OPENMEMORY_UPSTREAM_REPO}#${OPENMEMORY_UPSTREAM_REF}:backend"
           echo "本地标签: ${OPENMEMORY_LOCAL_IMAGE}"
 
           # 统一栈 compose 使用该变量解析 openmemory 镜像
           echo "OPENMEMORY_IMAGE=${OPENMEMORY_LOCAL_IMAGE}" >> "$GITHUB_ENV"
 
-          BUILD_CONTEXT="${OPENMEMORY_UPSTREAM_REPO}#${OPENMEMORY_UPSTREAM_REF}:packages/openmemory-js"
+          BUILD_CONTEXT="${OPENMEMORY_UPSTREAM_REPO}#${OPENMEMORY_UPSTREAM_REF}:backend"
 
           for attempt in 1 2 3; do
             echo "构建尝试 $attempt/3..."
