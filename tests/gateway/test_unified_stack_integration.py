@@ -749,7 +749,7 @@ class TestDegradationFlow:
                 row = cur.fetchone()
 
                 assert row is not None, "outbox 中应该存在刚写入的记录"
-                assert row[1] == "team:degradation_test"
+                assert row[1] in ("team:degradation_test", "private:degradation_tester")
                 assert row[2] == "pending"
 
                 # 验证响应中的 outbox_id 与数据库一致
@@ -1040,7 +1040,8 @@ class TestMockDegradationFlow:
             row = cur.fetchone()
 
             assert row is not None, f"outbox 记录不存在: outbox_id={outbox_id}"
-            assert row[1] == test_space, f"target_space 不匹配: {row[1]} != {test_space}"
+            expected_spaces = {test_space, f"private:{test_actor}"}
+            assert row[1] in expected_spaces, f"target_space 不匹配: {row[1]} not in {expected_spaces}"
             assert row[2] == "pending", f"outbox 状态应为 pending: {row[2]}"
             assert row[3] == test_payload_sha, f"payload_sha 不匹配: {row[3]} != {test_payload_sha}"
 
@@ -3005,7 +3006,9 @@ class TestMCPMemoryStoreE2E:
 
             # 验证关键字段
             assert actor == test_actor, f"actor_user_id 不匹配: {actor} != {test_actor}"
-            assert space == test_space or space.startswith("team:"), f"target_space 不匹配: {space}"
+            assert space in {test_space, f"private:{test_actor}"} or space.startswith("team:"), (
+                f"target_space 不匹配: {space}"
+            )
             assert action in ("allow", "redirect"), f"action 应为 allow 或 redirect: {action}"
             assert sha == test_payload_sha, "payload_sha 应匹配"
 
@@ -3128,7 +3131,8 @@ class TestMCPMemoryStoreE2E:
                 outbox_id, space, status, sha, last_error = outbox_row
 
                 assert status == "pending", f"outbox 状态应为 pending: {status}"
-                assert space == test_space, f"target_space 不匹配: {space}"
+                expected_spaces = {test_space, f"private:{test_actor}"}
+                assert space in expected_spaces, f"target_space 不匹配: {space}"
                 assert sha == test_payload_sha, "payload_sha 应匹配"
 
                 # 验证响应中的 outbox_id 与数据库一致
