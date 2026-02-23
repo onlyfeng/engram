@@ -11,17 +11,13 @@ init_local_iteration.py --next 参数单元测试
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from init_local_iteration import (
+from scripts.iteration.init_local_iteration import (
     get_next_available_number,
     main,
 )

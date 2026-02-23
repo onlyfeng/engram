@@ -43,7 +43,13 @@ from tests.ci.helpers.subprocess_env import get_minimal_subprocess_env, get_subp
 
 def create_temp_file(content: str, suffix: str = ".py") -> Path:
     """创建临时 Python 文件并返回路径"""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=suffix,
+        delete=False,
+        encoding="utf-8",
+        newline="\n",
+    ) as f:
         f.write(content)
         return Path(f.name)
 

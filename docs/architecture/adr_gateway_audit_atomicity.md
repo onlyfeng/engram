@@ -1,7 +1,8 @@
 # ADR: Gateway 审计原子性方案选型
 
-> 状态: **待定**  
+> 状态: **已采纳（Phase 1 已实现）**  
 > 创建日期: 2026-01-30  
+> 决策日期: 2026-02-23  
 > 决策者: Engram Core Team
 
 ---
@@ -529,3 +530,28 @@ SELECT correlation_id FROM write_audit
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
 | 2026-01-30 | v1.0 | 初始版本，推荐方案 A |
+| 2026-02-23 | v1.1 | 状态更新为“已采纳”；Phase 1（pending + finalize + 原子 outbox 补偿）已落地 |
+
+---
+
+## 11. 实施状态（2026-02-23）
+
+### 11.1 已落地（Phase 1）
+
+- [x] Gateway `memory_store` 主链路采用两阶段审计：
+  - `allow/deferred` 路径先写 `pending`
+  - OpenMemory 成功后 finalize 为 `success`
+  - OpenMemory 失败后 finalize 为 `redirected`
+- [x] Logbook 侧提供“同事务 outbox 入队 + finalize”能力：
+  - `enqueue_outbox_and_finalize_pending_audit(...)`
+  - 在补偿路径中返回 `outbox_id` 并写回审计 `reason/evidence`
+- [x] 适配层与网关数据库包装层已接线：
+  - `src/engram/gateway/logbook_adapter.py`
+  - `src/engram/gateway/logbook_db.py`
+- [x] 相关测试契约已同步（adapter-first 两阶段审计、CI 隔离回归）
+
+### 11.2 后续（Phase 2，独立迭代）
+
+- [ ] `psycopg_pool` 连接池接入（含生命周期关闭）
+- [ ] Gateway `/metrics` 与基础 tracing 埋点
+- [ ] 文档与环境变量说明同步

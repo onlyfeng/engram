@@ -345,8 +345,10 @@ class FakeLogbookDatabase:
 
         # 存储调用记录
         self.audit_calls: List[Dict[str, Any]] = []
+        self.update_audit_calls: List[Dict[str, Any]] = []
         self.outbox_calls: List[Dict[str, Any]] = []
         self.settings_calls: List[Dict[str, Any]] = []
+        self._audit_records: Dict[str, Dict[str, Any]] = {}
 
         # 配置的响应
         self._settings: Dict[str, Any] = {
@@ -463,7 +465,43 @@ class FakeLogbookDatabase:
 
         audit_id = self._next_audit_id
         self._next_audit_id += 1
+        if correlation_id:
+            self._audit_records[correlation_id] = {
+                **call_record,
+                "audit_id": audit_id,
+                "evidence_refs_json": evidence_refs_json or {},
+            }
         return audit_id
+
+    def update_write_audit(
+        self,
+        correlation_id: str,
+        status: str,
+        reason_suffix: Optional[str] = None,
+        evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """更新审计日志（pending -> final）。"""
+        call_record = {
+            "correlation_id": correlation_id,
+            "status": status,
+            "reason_suffix": reason_suffix,
+            "evidence_refs_json_patch": evidence_refs_json_patch,
+        }
+        self.update_audit_calls.append(call_record)
+
+        if correlation_id not in self._audit_records:
+            return 0
+
+        record = self._audit_records[correlation_id]
+        record["status"] = status
+        if reason_suffix:
+            old_reason = record.get("reason", "") or ""
+            record["reason"] = (old_reason + " " + reason_suffix).strip()
+        if evidence_refs_json_patch:
+            merged = dict(record.get("evidence_refs_json") or {})
+            merged.update(evidence_refs_json_patch)
+            record["evidence_refs_json"] = merged
+        return 1
 
     def enqueue_outbox(
         self,
@@ -488,6 +526,35 @@ class FakeLogbookDatabase:
         outbox_id = self._next_outbox_id
         self._next_outbox_id += 1
         return outbox_id
+
+    def enqueue_outbox_and_finalize_audit(
+        self,
+        *,
+        correlation_id: str,
+        payload_md: str,
+        target_space: str,
+        item_id: Optional[int] = None,
+        last_error: Optional[str] = None,
+        reason_suffix_prefix: str = "outbox_flush",
+        evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> tuple[int, int]:
+        """模拟同事务 outbox 入队 + finalize。"""
+        outbox_id = self.enqueue_outbox(
+            payload_md=payload_md,
+            target_space=target_space,
+            item_id=item_id,
+            last_error=last_error,
+        )
+        patch = dict(evidence_refs_json_patch or {})
+        patch.setdefault("outbox_id", outbox_id)
+        updated = self.update_write_audit(
+            correlation_id=correlation_id,
+            status="redirected",
+            reason_suffix=f"{reason_suffix_prefix}:outbox:{outbox_id}",
+            evidence_refs_json_patch=patch,
+        )
+        return outbox_id, int(bool(updated))
 
     def get_pending_outbox(self, limit: int = 100) -> List[Dict[str, Any]]:
         """获取待处理的 outbox 记录"""
@@ -521,6 +588,7 @@ class FakeLogbookDatabase:
     def reset_calls(self):
         """重置调用记录"""
         self.audit_calls.clear()
+        self.update_audit_calls.clear()
         self.outbox_calls.clear()
         self.settings_calls.clear()
 
@@ -535,6 +603,10 @@ class FakeLogbookDatabase:
     def get_outbox_calls(self) -> List[Dict[str, Any]]:
         """获取所有 outbox 调用记录"""
         return self.outbox_calls.copy()
+
+    def get_update_audit_calls(self) -> List[Dict[str, Any]]:
+        """获取所有 update_write_audit 调用记录。"""
+        return self.update_audit_calls.copy()
 
     def get_last_outbox_call(self) -> Optional[Dict[str, Any]]:
         """获取最后一次 outbox 调用"""
@@ -701,6 +773,42 @@ class FakeLogbookAdapter:
 
     # ============== 两阶段审计支持 ==============
 
+    def insert_audit(
+        self,
+        actor_user_id: Optional[str],
+        target_space: str,
+        action: str,
+        reason: Optional[str] = None,
+        payload_sha: Optional[str] = None,
+        evidence_refs_json: Optional[Dict] = None,
+        validate_refs: bool = False,
+        correlation_id: Optional[str] = None,
+        status: str = "pending",
+        **kwargs,
+    ) -> int:
+        """写入审计日志（与真实 adapter.insert_audit 契约对齐）。"""
+        cid = correlation_id or f"fake-corr-{self._next_audit_id}"
+        call_record = {
+            "correlation_id": cid,
+            "actor_user_id": actor_user_id,
+            "target_space": target_space,
+            "action": action,
+            "reason": reason,
+            "payload_sha": payload_sha,
+            "evidence_refs_json": evidence_refs_json or {},
+            "validate_refs": validate_refs,
+            "status": status,
+        }
+        self._audit_calls.append(call_record)
+
+        audit_id = self._next_audit_id
+        self._next_audit_id += 1
+        self._audit_records[cid] = {
+            "audit_id": audit_id,
+            **call_record,
+        }
+        return audit_id
+
     def write_audit(
         self,
         correlation_id: str,
@@ -713,27 +821,18 @@ class FakeLogbookAdapter:
         status: str = "pending",
         **kwargs,
     ) -> int:
-        """写入审计日志（两阶段审计 phase-1）"""
-        call_record = {
-            "correlation_id": correlation_id,
-            "actor_user_id": actor_user_id,
-            "target_space": target_space,
-            "action": action,
-            "reason": reason,
-            "payload_sha": payload_sha,
-            "evidence_refs_json": evidence_refs_json or {},
-            "status": status,
-        }
-        self._audit_calls.append(call_record)
-
-        # 存储审计记录
-        audit_id = self._next_audit_id
-        self._next_audit_id += 1
-        self._audit_records[correlation_id] = {
-            "audit_id": audit_id,
-            **call_record,
-        }
-        return audit_id
+        """兼容旧测试调用，转发到 insert_audit。"""
+        return self.insert_audit(
+            actor_user_id=actor_user_id,
+            target_space=target_space or "",
+            action=action,
+            reason=reason,
+            payload_sha=payload_sha,
+            evidence_refs_json=evidence_refs_json,
+            validate_refs=False,
+            correlation_id=correlation_id,
+            status=status,
+        )
 
     def update_write_audit(
         self,
@@ -742,7 +841,7 @@ class FakeLogbookAdapter:
         reason_suffix: Optional[str] = None,
         evidence_refs_json_patch: Optional[Dict] = None,
         **kwargs,
-    ) -> bool:
+    ) -> int:
         """更新审计日志（两阶段审计 phase-2 finalize）"""
         call_record = {
             "correlation_id": correlation_id,
@@ -753,20 +852,20 @@ class FakeLogbookAdapter:
         self._update_audit_calls.append(call_record)
 
         # 更新审计记录
-        if correlation_id in self._audit_records:
-            self._audit_records[correlation_id]["status"] = status
-            if reason_suffix:
-                old_reason = self._audit_records[correlation_id].get("reason", "") or ""
-                self._audit_records[correlation_id]["reason"] = (
-                    f"{old_reason} {reason_suffix}".strip()
-                )
-            if evidence_refs_json_patch:
-                old_refs = self._audit_records[correlation_id].get("evidence_refs_json", {})
-                self._audit_records[correlation_id]["evidence_refs_json"] = {
-                    **old_refs,
-                    **evidence_refs_json_patch,
-                }
-        return True
+        if correlation_id not in self._audit_records:
+            return 0
+
+        self._audit_records[correlation_id]["status"] = status
+        if reason_suffix:
+            old_reason = self._audit_records[correlation_id].get("reason", "") or ""
+            self._audit_records[correlation_id]["reason"] = f"{old_reason} {reason_suffix}".strip()
+        if evidence_refs_json_patch:
+            old_refs = self._audit_records[correlation_id].get("evidence_refs_json", {})
+            self._audit_records[correlation_id]["evidence_refs_json"] = {
+                **old_refs,
+                **evidence_refs_json_patch,
+            }
+        return 1
 
     def enqueue_outbox(
         self,
@@ -791,6 +890,36 @@ class FakeLogbookAdapter:
         outbox_id = self._next_outbox_id
         self._next_outbox_id += 1
         return outbox_id
+
+    def enqueue_outbox_and_finalize_audit(
+        self,
+        *,
+        correlation_id: str,
+        payload_md: str,
+        target_space: str,
+        item_id: Optional[int] = None,
+        last_error: Optional[str] = None,
+        reason_suffix_prefix: str = "outbox_flush",
+        evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> tuple[int, int]:
+        """模拟同事务 outbox 入队 + finalize。"""
+        outbox_id = self.enqueue_outbox(
+            payload_md=payload_md,
+            target_space=target_space,
+            correlation_id=correlation_id,
+            item_id=item_id,
+            last_error=last_error,
+        )
+        patch = dict(evidence_refs_json_patch or {})
+        patch.setdefault("outbox_id", outbox_id)
+        updated_count = self.update_write_audit(
+            correlation_id=correlation_id,
+            status="redirected",
+            reason_suffix=f"{reason_suffix_prefix}:outbox:{outbox_id}",
+            evidence_refs_json_patch=patch,
+        )
+        return outbox_id, updated_count
 
     def get_audit_calls(self) -> List[Dict[str, Any]]:
         """获取所有 write_audit 调用记录"""

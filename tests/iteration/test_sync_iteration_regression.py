@@ -13,15 +13,11 @@ sync_iteration_regression.py 单元测试
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-import generated_blocks as blocks  # noqa: E402
-from generated_blocks import (  # noqa: E402
+from scripts.iteration import generated_blocks as blocks
+from scripts.iteration.generated_blocks import (
     find_evidence_block,
     find_evidence_insert_position,
     find_min_gate_block,
@@ -31,12 +27,12 @@ from generated_blocks import (  # noqa: E402
     generate_min_gate_block_with_markers,
     render_evidence_snippet,
 )
-from iteration_evidence_schema import CURRENT_SCHEMA_REF  # noqa: E402
-from sync_iteration_regression import (  # noqa: E402
+from scripts.iteration.iteration_evidence_schema import CURRENT_SCHEMA_REF
+from scripts.iteration.sync_iteration_regression import (
     sync_evidence_block,
     sync_min_gate_block,
 )
-from sync_iteration_regression import (  # noqa: E402
+from scripts.iteration.sync_iteration_regression import (
     sync_iteration_regression as sync_func,
 )
 

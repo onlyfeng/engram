@@ -14,10 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Add scripts directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from render_iteration_evidence_snippet import (  # noqa: E402
+from scripts.iteration.render_iteration_evidence_snippet import (
     parse_evidence_data,
     render_evidence_snippet,
 )

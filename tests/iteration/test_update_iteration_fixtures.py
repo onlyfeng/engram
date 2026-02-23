@@ -14,11 +14,8 @@ import json
 import sys
 from pathlib import Path
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from render_min_gate_block import SUPPORTED_PROFILES  # noqa: E402
-from update_iteration_fixtures import (  # noqa: E402
+from scripts.iteration.render_min_gate_block import SUPPORTED_PROFILES
+from scripts.iteration.update_iteration_fixtures import (
     DEFAULT_EVIDENCE_SNAPSHOT_ITERATION,
     main,
 )

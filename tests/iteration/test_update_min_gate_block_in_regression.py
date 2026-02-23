@@ -11,14 +11,10 @@ update_min_gate_block_in_regression.py 单元测试
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from render_min_gate_block import render_min_gate_block  # noqa: E402
-from update_min_gate_block_in_regression import (  # noqa: E402
+from scripts.iteration.render_min_gate_block import render_min_gate_block
+from scripts.iteration.update_min_gate_block_in_regression import (
     BEGIN_MARKER_PATTERN,
     END_MARKER_PATTERN,
     find_generated_block,

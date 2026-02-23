@@ -197,10 +197,7 @@ async def memory_store_impl(
                 current_target_space = actor_check_result.degraded_space
                 logger.info(f"Actor 降级: {actor_user_id} -> space={current_target_space}")
 
-        # 获取 DB 实例（统一通过 deps 获取，支持依赖注入）
-        db = deps.db
-
-        # 获取 logbook_adapter（统一通过 deps 获取，确保 settings/audit/outbox/dedup 使用同一实例）
+        # 统一使用 logbook_adapter，避免 db/adapter 双路径语义漂移
         adapter = deps.logbook_adapter
 
         # 1. Dedupe Check：检查是否已成功写入过
@@ -219,11 +216,11 @@ async def memory_store_impl(
                 normalized_evidence=normalized_evidence,
                 evidence_source=evidence_source,
                 correlation_id=correlation_id,
-                db=db,  # 通过 deps.db 传入
+                audit_store=adapter,
             )
 
         # 2. 读取治理设置并进行策略决策
-        settings = db.get_or_create_settings(config.project_key)
+        settings = adapter.get_or_create_settings(config.project_key)
         logger.info(
             f"获取治理设置: project={config.project_key}, team_write_enabled={settings.get('team_write_enabled')}"
         )
@@ -271,7 +268,7 @@ async def memory_store_impl(
                     validate_refs_effective=validate_refs_effective,
                     validate_refs_reason=validate_refs_reason,
                     correlation_id=correlation_id,
-                    db=db,
+                    audit_store=adapter,
                 )
 
         # 3. 策略决策
@@ -307,15 +304,59 @@ async def memory_store_impl(
                 validate_refs_effective=validate_refs_effective,
                 validate_refs_reason=validate_refs_reason,
                 correlation_id=correlation_id,
-                db=db,
+                audit_store=adapter,
                 policy_mode=evidence_mode,
             )
 
         # 确定最终写入空间
         final_space = decision.final_space
         action = decision.action.value
+        policy_reason = ErrorCode.policy_reason(decision.reason)
 
-        # 4. 调用 OpenMemory
+        # 4.1 先写 pending 审计，后续 success/redirected 走 finalize 更新
+        pending_gateway_event = build_gateway_audit_event(
+            operation="memory_store",
+            correlation_id=correlation_id,
+            actor_user_id=actor_user_id,
+            requested_space=current_target_space,
+            final_space=final_space,
+            action=action,
+            reason=policy_reason,
+            payload_sha=payload_sha,
+            payload_len=len(payload_md),
+            evidence=normalized_evidence,
+            extra={
+                "evidence_source": evidence_source,
+                "phase": "pending",
+            },
+            policy_mode=evidence_mode,
+            policy_mode_reason="from_settings" if evidence_mode else None,
+            policy_version="v1",
+            policy_is_pointerized=False,
+            policy_source="settings",
+            validate_refs_effective=validate_refs_effective,
+            validate_refs_reason=validate_refs_reason,
+            evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
+            intended_action=action,
+        )
+        pending_evidence_refs_json = build_evidence_refs_json(
+            evidence=normalized_evidence,
+            gateway_event=pending_gateway_event,
+        )
+        write_audit_or_raise(
+            db=adapter,
+            actor_user_id=actor_user_id,
+            target_space=final_space,
+            action=action,
+            reason=policy_reason,
+            payload_sha=payload_sha,
+            evidence_refs_json=pending_evidence_refs_json,
+            validate_refs=validate_refs_effective,
+            correlation_id=correlation_id,
+            status="pending",
+        )
+
+        # 4.2 调用 OpenMemory
         # 获取 OpenMemory client（统一从 deps 获取）
         try:
             client = deps.openmemory_client
@@ -358,7 +399,7 @@ async def memory_store_impl(
                 validate_refs_effective=validate_refs_effective,
                 validate_refs_reason=validate_refs_reason,
                 correlation_id=correlation_id,
-                db=db,
+                audit_store=adapter,
                 policy_mode=evidence_mode,
             )
 
@@ -380,7 +421,7 @@ async def memory_store_impl(
                 validate_refs_reason=validate_refs_reason,
                 correlation_id=correlation_id,
                 item_id=item_id,
-                db=db,
+                audit_store=adapter,
                 policy_mode=evidence_mode,
             )
 
@@ -420,7 +461,7 @@ def _handle_dedup_hit(
     normalized_evidence: List[Dict[str, Any]],
     evidence_source: str,
     correlation_id: str,
-    db: Any,  # LogbookDatabase 或 LogbookAdapter 实例，通过 deps 传入
+    audit_store: Any,
 ) -> MemoryStoreResponse:
     """处理 dedupe hit 场景"""
     logger.info(f"Dedupe hit: target_space={target_space}, payload_sha={payload_sha[:16]}...")
@@ -468,8 +509,8 @@ def _handle_dedup_hit(
     if original_outbox_id is not None:
         evidence_refs_json["original_outbox_id"] = original_outbox_id
 
-    # 写入审计（db 实例从 deps 参数传入）
-    db.insert_audit(
+    # 写入审计
+    audit_store.insert_audit(
         actor_user_id=actor_user_id,
         target_space=target_space,
         action="allow",
@@ -504,7 +545,7 @@ def _handle_evidence_validation_failure(
     validate_refs_effective: bool,
     validate_refs_reason: str,
     correlation_id: str,
-    db: Any,
+    audit_store: Any,
 ) -> MemoryStoreResponse:
     """
     处理 strict 模式下 evidence 校验失败场景
@@ -554,7 +595,7 @@ def _handle_evidence_validation_failure(
     )
 
     write_audit_or_raise(
-        db=db,
+        db=audit_store,
         actor_user_id=actor_user_id,
         target_space=target_space,
         action="reject",
@@ -594,7 +635,7 @@ def _handle_policy_reject(
     validate_refs_effective: bool,
     validate_refs_reason: str,
     correlation_id: str,
-    db: Any,
+    audit_store: Any,
     policy_mode: Optional[str] = None,
 ) -> MemoryStoreResponse:
     """处理策略拒绝场景"""
@@ -629,7 +670,7 @@ def _handle_policy_reject(
     )
 
     write_audit_or_raise(
-        db=db,
+        db=audit_store,
         actor_user_id=actor_user_id,
         target_space=target_space,
         action="reject",
@@ -669,7 +710,7 @@ def _handle_success(
     validate_refs_effective: bool,
     validate_refs_reason: str,
     correlation_id: str,
-    db: Any,
+    audit_store: Any,
     policy_mode: Optional[str] = None,
 ) -> MemoryStoreResponse:
     """处理 OpenMemory 写入成功场景"""
@@ -697,22 +738,25 @@ def _handle_success(
         validate_refs_reason=validate_refs_reason,
         evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
     )
-    post_audit_evidence_refs_json = build_evidence_refs_json(
-        evidence=normalized_evidence, gateway_event=post_audit_gateway_event
-    )
-
-    write_audit_or_raise(
-        db=db,
-        actor_user_id=actor_user_id,
-        target_space=final_space,
-        action=action,
-        reason=ErrorCode.policy_reason(decision.reason),
-        payload_sha=payload_sha,
-        evidence_refs_json=post_audit_evidence_refs_json,
-        validate_refs=validate_refs_effective,
+    updated_count = audit_store.update_write_audit(
         correlation_id=correlation_id,
         status="success",
+        reason_suffix=None,
+        evidence_refs_json_patch={
+            "memory_id": memory_id,
+            "gateway_event": post_audit_gateway_event,
+        },
     )
+    if updated_count != 1:
+        raise AuditWriteError(
+            "pending 审计 finalize 为 success 失败",
+            audit_data={
+                "correlation_id": correlation_id,
+                "updated_count": updated_count,
+                "final_space": final_space,
+                "action": action,
+            },
+        )
 
     return MemoryStoreResponse(
         ok=True,
@@ -742,21 +786,12 @@ def _handle_openmemory_failure(
     validate_refs_reason: str,
     correlation_id: str,
     item_id: Optional[int],
-    db: Any,
+    audit_store: Any,
     policy_mode: Optional[str] = None,
 ) -> MemoryStoreResponse:
     """处理 OpenMemory 写入失败场景"""
     error_msg = str(error.message if hasattr(error, "message") else error)
     logger.error(f"OpenMemory 写入失败: {error_msg}")
-
-    # 先写入 outbox
-    outbox_id = db.enqueue_outbox(
-        payload_md=payload_md,
-        target_space=final_space,
-        item_id=item_id,
-        last_error=error_msg,
-    )
-    logger.info(f"已入队 outbox: outbox_id={outbox_id}")
 
     # 提取错误码
     if isinstance(error, OpenMemoryConnectionError):
@@ -773,8 +808,7 @@ def _handle_openmemory_failure(
         error_reason = ErrorCode.OPENMEMORY_WRITE_FAILED_UNKNOWN
         error_code = "unknown"
 
-    # 构建失败审计
-    reason_with_outbox = f"{error_reason}:outbox:{outbox_id}"
+    # 构建 finalize 补丁数据（outbox_id 由原子事务写回）
     failure_gateway_event = build_gateway_audit_event(
         operation="memory_store",
         correlation_id=correlation_id,
@@ -782,11 +816,10 @@ def _handle_openmemory_failure(
         requested_space=target_space,
         final_space=final_space,
         action="redirect",
-        reason=reason_with_outbox,
+        reason=error_reason,
         payload_sha=payload_sha,
         payload_len=len(payload_md),
         evidence=normalized_evidence,
-        outbox_id=outbox_id,
         extra={
             "last_error": error_msg[:500],
             "error_code": error_code,
@@ -808,23 +841,48 @@ def _handle_openmemory_failure(
         evidence=normalized_evidence, gateway_event=failure_gateway_event
     )
 
-    try:
-        db.insert_audit(
-            actor_user_id=actor_user_id,
+    if hasattr(audit_store, "enqueue_outbox_and_finalize_audit"):
+        outbox_id, updated_count = audit_store.enqueue_outbox_and_finalize_audit(
+            correlation_id=correlation_id,
+            payload_md=payload_md,
             target_space=final_space,
-            action="redirect",
-            reason=reason_with_outbox,
-            payload_sha=payload_sha,
-            evidence_refs_json=failure_evidence_refs_json,
-            validate_refs=validate_refs_effective,
+            item_id=item_id,
+            last_error=error_msg,
+            reason_suffix_prefix=error_reason,
+            evidence_refs_json_patch={
+                "gateway_event": failure_gateway_event,
+                "intended_action": "deferred",
+            },
+        )
+    else:
+        outbox_id = audit_store.enqueue_outbox(
+            payload_md=payload_md,
+            target_space=final_space,
+            item_id=item_id,
+            last_error=error_msg,
+        )
+        updated_count = audit_store.update_write_audit(
             correlation_id=correlation_id,
             status="redirected",
+            reason_suffix=f"{error_reason}:outbox:{outbox_id}",
+            evidence_refs_json_patch={
+                "outbox_id": outbox_id,
+                "gateway_event": failure_gateway_event,
+                "intended_action": "deferred",
+            },
         )
-    except Exception as failure_audit_err:
-        logger.error(
-            f"失败审计写入失败: {failure_audit_err}, "
-            f"correlation_id={correlation_id}, outbox_id={outbox_id}"
+
+    if updated_count != 1:
+        raise AuditWriteError(
+            "pending 审计 finalize 为 redirected 失败",
+            audit_data={
+                "correlation_id": correlation_id,
+                "updated_count": updated_count,
+                "target_space": final_space,
+            },
         )
+    failure_evidence_refs_json["outbox_id"] = outbox_id
+    logger.info(f"已入队 outbox 并 finalize 审计: outbox_id={outbox_id}")
 
     return MemoryStoreResponse(
         ok=False,

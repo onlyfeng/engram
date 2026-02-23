@@ -617,6 +617,34 @@ class LogbookAdapter:
             config=self._config,
         )
 
+    def enqueue_outbox_and_finalize_audit(
+        self,
+        *,
+        correlation_id: str,
+        payload_md: str,
+        target_space: str,
+        item_id: Optional[int] = None,
+        last_error: Optional[str] = None,
+        reason_suffix_prefix: str = "outbox_flush",
+        evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+    ) -> tuple[int, int]:
+        """
+        同事务执行 outbox 入队 + pending 审计 finalize（redirected）。
+
+        Returns:
+            (outbox_id, updated_count)
+        """
+        return governance.enqueue_outbox_and_finalize_pending_audit(
+            correlation_id=correlation_id,
+            payload_md=payload_md,
+            target_space=target_space,
+            item_id=item_id,
+            last_error=last_error,
+            reason_suffix_prefix=reason_suffix_prefix,
+            evidence_refs_json_patch=evidence_refs_json_patch,
+            config=self._config,
+        )
+
     # ======================== logbook.items ========================
 
     def create_item(
@@ -1937,6 +1965,28 @@ def update_write_audit(
         correlation_id=correlation_id,
         status=status,
         reason_suffix=reason_suffix,
+        evidence_refs_json_patch=evidence_refs_json_patch,
+    )
+
+
+def enqueue_outbox_and_finalize_audit(
+    *,
+    correlation_id: str,
+    payload_md: str,
+    target_space: str,
+    item_id: Optional[int] = None,
+    last_error: Optional[str] = None,
+    reason_suffix_prefix: str = "outbox_flush",
+    evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+) -> tuple[int, int]:
+    """同事务执行 outbox 入队 + pending 审计 finalize（redirected）。"""
+    return get_adapter().enqueue_outbox_and_finalize_audit(
+        correlation_id=correlation_id,
+        payload_md=payload_md,
+        target_space=target_space,
+        item_id=item_id,
+        last_error=last_error,
+        reason_suffix_prefix=reason_suffix_prefix,
         evidence_refs_json_patch=evidence_refs_json_patch,
     )
 

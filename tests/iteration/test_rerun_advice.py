@@ -12,13 +12,9 @@ Coverage:
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
-# Add scripts directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from iteration_cycle import REPO_ROOT, collect_rerun_advice  # noqa: E402
+from scripts.iteration.iteration_cycle import REPO_ROOT, collect_rerun_advice
 
 
 def _write_drift_map(path: Path) -> None:

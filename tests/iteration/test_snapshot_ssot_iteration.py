@@ -14,16 +14,12 @@ Fixtures 使用临时目录构造 docs/acceptance/ 结构。
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from snapshot_ssot_iteration import (
+from scripts.iteration.snapshot_ssot_iteration import (
     FileConflictError,
     SourceNotFoundError,
     files_are_identical,

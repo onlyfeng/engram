@@ -302,6 +302,69 @@ class LogbookDatabase:
         finally:
             conn.close()
 
+    def update_write_audit(
+        self,
+        correlation_id: str,
+        status: str,
+        reason_suffix: Optional[str] = None,
+        evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """
+        更新审计记录的最终状态
+
+        Args:
+            correlation_id: 关联 ID
+            status: 目标状态（success/failed/redirected）
+            reason_suffix: 追加到 reason 的后缀
+            evidence_refs_json_patch: 合并到 evidence_refs_json 的补丁
+
+        Returns:
+            更新记录数
+        """
+        if self._adapter:
+            return self._adapter.update_write_audit(
+                correlation_id=correlation_id,
+                status=status,
+                reason_suffix=reason_suffix,
+                evidence_refs_json_patch=evidence_refs_json_patch,
+            )
+
+        patch_json = self._json.dumps(evidence_refs_json_patch or {})
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE governance.write_audit
+                    SET status = %s,
+                        updated_at = now(),
+                        reason = CASE
+                            WHEN %s IS NULL THEN reason
+                            WHEN reason IS NULL OR reason = '' THEN %s
+                            ELSE reason || ' ' || %s
+                        END,
+                        evidence_refs_json = COALESCE(evidence_refs_json, '{}'::jsonb) || %s::jsonb
+                    WHERE correlation_id = %s
+                      AND status = 'pending'
+                    """,
+                    (
+                        status,
+                        reason_suffix,
+                        reason_suffix,
+                        reason_suffix,
+                        patch_json,
+                        correlation_id,
+                    ),
+                )
+                updated = int(cur.rowcount)
+                conn.commit()
+                return updated
+        except self._psycopg.Error as e:
+            conn.rollback()
+            raise RuntimeError(f"更新审计日志失败: {e}")
+        finally:
+            conn.close()
+
     # ======================== logbook.outbox_memory ========================
 
     def enqueue_outbox(
@@ -360,6 +423,91 @@ class LogbookDatabase:
         except self._psycopg.Error as e:
             conn.rollback()
             raise RuntimeError(f"入队 outbox_memory 失败: {e}")
+        finally:
+            conn.close()
+
+    def enqueue_outbox_and_finalize_audit(
+        self,
+        *,
+        correlation_id: str,
+        payload_md: str,
+        target_space: str,
+        item_id: Optional[int] = None,
+        last_error: Optional[str] = None,
+        reason_suffix_prefix: str = "outbox_flush",
+        evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+    ) -> tuple[int, int]:
+        """
+        同事务执行 outbox 入队 + pending 审计 finalize（redirected）。
+
+        Returns:
+            (outbox_id, updated_count)
+        """
+        if self._adapter:
+            return self._adapter.enqueue_outbox_and_finalize_audit(
+                correlation_id=correlation_id,
+                payload_md=payload_md,
+                target_space=target_space,
+                item_id=item_id,
+                last_error=last_error,
+                reason_suffix_prefix=reason_suffix_prefix,
+                evidence_refs_json_patch=evidence_refs_json_patch,
+            )
+
+        payload_sha = self._hashlib.sha256(payload_md.encode("utf-8")).hexdigest()
+        patch_payload = dict(evidence_refs_json_patch or {})
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO logbook.outbox_memory
+                        (item_id, target_space, payload_md, payload_sha, status,
+                         retry_count, last_error, next_attempt_at)
+                    VALUES (%s, %s, %s, %s, 'pending', 0, %s, now())
+                    RETURNING outbox_id
+                    """,
+                    (item_id, target_space, payload_md, payload_sha, last_error),
+                )
+                result = cur.fetchone()
+                if result is None:
+                    raise RuntimeError("INSERT RETURNING 失败，未获取到 outbox_id")
+                outbox_id = int(result[0])
+
+                patch_payload.setdefault("outbox_id", outbox_id)
+                reason_suffix = f"{reason_suffix_prefix}:outbox:{outbox_id}"
+                cur.execute(
+                    """
+                    UPDATE governance.write_audit
+                    SET status = 'redirected',
+                        updated_at = now(),
+                        reason = CASE
+                            WHEN reason IS NULL OR reason = '' THEN %s
+                            ELSE reason || ' ' || %s
+                        END,
+                        evidence_refs_json = COALESCE(evidence_refs_json, '{}'::jsonb) || %s::jsonb
+                    WHERE correlation_id = %s
+                      AND status = 'pending'
+                    """,
+                    (
+                        reason_suffix,
+                        reason_suffix,
+                        self._json.dumps(patch_payload),
+                        correlation_id,
+                    ),
+                )
+                updated = int(cur.rowcount)
+                if updated != 1:
+                    raise RuntimeError("pending 审计 finalize 失败: 目标记录不存在或已完成")
+                conn.commit()
+                return outbox_id, updated
+        except self._psycopg.Error as e:
+            conn.rollback()
+            raise RuntimeError(f"同事务 outbox+finalize 失败: {e}")
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

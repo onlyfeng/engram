@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,12 +32,9 @@ import pytest
 # 项目根目录
 REPO_ROOT = Path(__file__).parent.parent.parent
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "iteration"))
-sys.path.insert(0, str(REPO_ROOT))
-
-from iteration_evidence_schema import CURRENT_SCHEMA_REF
-from record_iteration_evidence import (
+from scripts.ci.check_iteration_evidence_contract import scan_evidence_files
+from scripts.iteration.iteration_evidence_schema import CURRENT_SCHEMA_REF
+from scripts.iteration.record_iteration_evidence import (
     REDACTED_PLACEHOLDER,
     CommandEntry,
     RunnerInfo,
@@ -53,8 +49,6 @@ from record_iteration_evidence import (
     record_evidence,
     redact_sensitive_data,
 )
-
-from scripts.ci.check_iteration_evidence_contract import scan_evidence_files
 
 # Schema 文件路径
 SCHEMA_PATH = REPO_ROOT / "schemas" / "iteration_evidence_v2.schema.json"

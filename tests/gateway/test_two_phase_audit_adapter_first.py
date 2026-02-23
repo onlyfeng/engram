@@ -33,10 +33,6 @@ from engram.gateway.handlers.memory_store import memory_store_impl
 # ============================================================================
 
 
-@pytest.mark.skip(
-    reason="测试设计与实现不符：memory_store_impl 使用 db.insert_audit() 而非 adapter.write_audit()，"
-    "需重构测试使用 FakeLogbookDatabase.get_audit_calls() 代替 FakeLogbookAdapter.get_audit_calls()"
-)
 class TestAdapterFirstTwoPhaseAuditSuccessBranch:
     """
     测试 Adapter-first 路径下两阶段审计 success 分支
@@ -240,7 +236,6 @@ class TestAdapterFirstTwoPhaseAuditSuccessBranch:
         )
 
 
-@pytest.mark.skip(reason="测试设计与实现不符：需重构测试使用 FakeLogbookDatabase")
 class TestAdapterFirstTwoPhaseAuditRedirectedBranch:
     """
     测试 Adapter-first 路径下两阶段审计 redirected 分支
@@ -340,8 +335,11 @@ class TestAdapterFirstTwoPhaseAuditRedirectedBranch:
         assert update_call["status"] == "redirected", (
             f"finalize 的 status 应为 redirected，实际: {update_call['status']}"
         )
-        assert update_call["reason_suffix"] == ":outbox:42", (
-            f"reason_suffix 应为 ':outbox:42'，实际: {update_call['reason_suffix']}"
+        assert "openmemory_write_failed:connection_error:outbox:42" in (
+            update_call["reason_suffix"] or ""
+        ), (
+            "reason_suffix 应包含 openmemory_write_failed:connection_error:outbox:42，"
+            f"实际: {update_call['reason_suffix']}"
         )
 
         # 验证 evidence_refs_json_patch 包含 outbox_id 和 intended_action
@@ -349,8 +347,8 @@ class TestAdapterFirstTwoPhaseAuditRedirectedBranch:
         assert evidence_patch.get("outbox_id") == 42, (
             f"evidence_refs_json_patch.outbox_id 应为 42，实际: {evidence_patch.get('outbox_id')}"
         )
-        assert evidence_patch.get("intended_action") == "allow", (
-            f"evidence_refs_json_patch.intended_action 应为 'allow'，"
+        assert evidence_patch.get("intended_action") == "deferred", (
+            f"evidence_refs_json_patch.intended_action 应为 'deferred'，"
             f"实际: {evidence_patch.get('intended_action')}"
         )
 
@@ -442,30 +440,27 @@ class TestAdapterFirstTwoPhaseAuditRedirectedBranch:
         )
 
 
-@pytest.mark.skip(reason="测试设计与实现不符：需重构测试使用 FakeLogbookDatabase")
 class TestAdapterFirstTwoPhaseAuditClientErrorBranch:
     """
-    测试 Adapter-first 路径下两阶段审计 4xx 客户端错误分支
+    测试 Adapter-first 路径下两阶段审计 API 错误分支
 
     验证（仅注入 logbook_adapter/openmemory_client/config）：
-    1. OpenMemory 返回 4xx 错误时不入队 outbox
-    2. 审计状态从 pending→failed
-    3. 响应 action 为 error
-    4. evidence_refs_json 包含错误诊断信息
-
-    参见 ADR: docs/architecture/adr_gateway_audit_atomicity.md#116-openmemory-错误分类规则
+    1. OpenMemory API 错误走 deferred + outbox（与主契约一致）
+    2. 审计状态从 pending→redirected
+    3. reason_suffix 包含错误码与 outbox_id
+    4. evidence_refs_json.gateway_event.extra 包含诊断信息
     """
 
     @pytest.mark.asyncio
-    async def test_4xx_error_returns_error_not_deferred(self):
+    async def test_4xx_error_triggers_deferred_and_outbox(self):
         """
-        验证 4xx 错误返回 error action，不入队 outbox
+        验证 4xx 错误返回 deferred，并入队 outbox
 
         场景：
         1. OpenMemory 返回 400 Bad Request
-        2. 应该返回 action=error，而非 action=deferred
-        3. 不应该入队 outbox
-        4. 审计状态应为 failed
+        2. 返回 action=deferred
+        3. 入队 outbox
+        4. 审计状态为 redirected
         """
         from tests.gateway.fakes import (
             FakeGatewayConfig,
@@ -503,36 +498,35 @@ class TestAdapterFirstTwoPhaseAuditClientErrorBranch:
             deps=deps,
         )
 
-        # 验证返回 error 而非 deferred
+        # 验证返回 deferred
         assert result.ok is False, "4xx 错误时 ok 应为 False"
-        assert result.action == "error", f"4xx 错误应返回 action=error，实际: {result.action}"
-        assert result.outbox_id is None, (
-            f"4xx 错误不应入队 outbox，实际 outbox_id: {result.outbox_id}"
-        )
+        assert result.action == "deferred", f"4xx 错误应返回 action=deferred，实际: {result.action}"
+        assert result.outbox_id == 100, f"4xx 错误应入队 outbox，实际 outbox_id: {result.outbox_id}"
         assert result.correlation_id == correlation_id
 
-        # 验证没有入队 outbox
+        # 验证已入队 outbox
         outbox_calls = fake_adapter.get_outbox_calls()
-        assert len(outbox_calls) == 0, f"4xx 错误不应入队 outbox，实际: {outbox_calls}"
+        assert len(outbox_calls) == 1, f"4xx 错误应入队 outbox，实际: {outbox_calls}"
 
-        # 验证审计状态为 failed
+        # 验证审计状态为 redirected
         update_calls = fake_adapter.get_update_audit_calls()
         assert len(update_calls) == 1, f"应有一次 finalize 调用，实际: {update_calls}"
 
         update_call = update_calls[0]
-        assert update_call["status"] == "failed", (
-            f"4xx 错误审计状态应为 failed，实际: {update_call['status']}"
+        assert update_call["status"] == "redirected", (
+            f"4xx 错误审计状态应为 redirected，实际: {update_call['status']}"
         )
-        assert ":client_error:" in (update_call.get("reason_suffix") or ""), (
-            f"reason_suffix 应包含 :client_error:，实际: {update_call.get('reason_suffix')}"
+        assert "openmemory_write_failed:api_error_400:outbox:100" in (
+            update_call.get("reason_suffix") or ""
+        ), (
+            "reason_suffix 应包含 openmemory_write_failed:api_error_400:outbox:100，"
+            f"实际: {update_call.get('reason_suffix')}"
         )
 
     @pytest.mark.asyncio
-    async def test_422_error_returns_error_not_deferred(self):
+    async def test_422_error_returns_deferred(self):
         """
-        验证 422 Unprocessable Entity 错误返回 error action
-
-        契约：422 是客户端错误，不应重试
+        验证 422 Unprocessable Entity 错误返回 deferred
         """
         from tests.gateway.fakes import (
             FakeGatewayConfig,
@@ -570,14 +564,14 @@ class TestAdapterFirstTwoPhaseAuditClientErrorBranch:
         )
 
         assert result.ok is False
-        assert result.action == "error", f"422 错误应返回 action=error，实际: {result.action}"
-        assert result.outbox_id is None, "422 错误不应入队 outbox"
+        assert result.action == "deferred", f"422 错误应返回 action=deferred，实际: {result.action}"
+        assert result.outbox_id == 1, "422 错误应入队 outbox"
 
         # 验证审计状态
         final_record = fake_adapter.get_audit_record_by_correlation_id(correlation_id)
         assert final_record is not None
-        assert final_record["status"] == "failed", (
-            f"422 错误审计状态应为 failed，实际: {final_record['status']}"
+        assert final_record["status"] == "redirected", (
+            f"422 错误审计状态应为 redirected，实际: {final_record['status']}"
         )
 
     @pytest.mark.asyncio
@@ -637,12 +631,12 @@ class TestAdapterFirstTwoPhaseAuditClientErrorBranch:
     @pytest.mark.asyncio
     async def test_client_error_evidence_refs_contains_diagnostics(self):
         """
-        验证 4xx 错误时 evidence_refs_json 包含诊断信息
+        验证 4xx 错误时 evidence_refs_json.gateway_event.extra 包含诊断信息
 
         契约：
-        - evidence_refs_json.error_type = 'client_error'
-        - evidence_refs_json.status_code = HTTP 状态码
-        - evidence_refs_json.error_message = 错误信息
+        - gateway_event.reason 包含 API 错误码
+        - gateway_event.extra.error_code 包含 api_error_<status_code>
+        - gateway_event.extra.last_error 包含错误信息
         """
         from tests.gateway.fakes import (
             FakeGatewayConfig,
@@ -683,18 +677,21 @@ class TestAdapterFirstTwoPhaseAuditClientErrorBranch:
         assert len(update_calls) == 1
 
         evidence_patch = update_calls[0].get("evidence_refs_json_patch", {})
-        assert evidence_patch.get("error_type") == "client_error", (
-            f"error_type 应为 'client_error'，实际: {evidence_patch.get('error_type')}"
+        gateway_event = evidence_patch.get("gateway_event", {})
+        decision = gateway_event.get("decision", {})
+        assert decision.get("reason") == "openmemory_write_failed:api_error_413", (
+            "decision.reason 应为 openmemory_write_failed:api_error_413，"
+            f"实际: {decision.get('reason')}"
         )
-        assert evidence_patch.get("status_code") == 413, (
-            f"status_code 应为 413，实际: {evidence_patch.get('status_code')}"
+        extra = gateway_event.get("extra", {})
+        assert extra.get("error_code") == "api_error_413", (
+            f"error_code 应为 api_error_413，实际: {extra.get('error_code')}"
         )
-        assert "too large" in (evidence_patch.get("error_message") or "").lower(), (
-            f"error_message 应包含错误信息，实际: {evidence_patch.get('error_message')}"
+        assert "too large" in (extra.get("last_error") or "").lower(), (
+            f"last_error 应包含错误信息，实际: {extra.get('last_error')}"
         )
 
 
-@pytest.mark.skip(reason="测试设计与实现不符：需重构测试使用 FakeLogbookDatabase")
 class TestAdapterFirstCorrelationIdConsistency:
     """
     测试 Adapter-first 路径下 correlation_id 的一致性
@@ -797,7 +794,6 @@ class TestAdapterFirstCorrelationIdConsistency:
         assert "correlation_id" in str(exc_info.value).lower()
 
 
-@pytest.mark.skip(reason="测试设计与实现不符：需重构测试使用 FakeLogbookDatabase")
 class TestAdapterFirstSQLQueryContract:
     """
     测试 Adapter-first 路径下 SQL 查询契约
@@ -973,7 +969,6 @@ class TestFakeOpenMemoryExceptionInheritance:
         )
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="测试设计与实现不符：需重构测试使用 FakeLogbookDatabase")
     async def test_connection_error_triggers_outbox_enqueue(self):
         """
         回归测试：验证 FakeOpenMemoryConnectionError 被捕获并触发 outbox 入队

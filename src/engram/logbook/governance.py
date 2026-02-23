@@ -30,6 +30,7 @@ from typing_extensions import NotRequired, TypedDict
 from .config import Config
 from .db import get_connection
 from .errors import DatabaseError, ValidationError
+from .hashing import sha256
 from .uri import (
     EvidenceRefsJson as UriEvidenceRefsJson,
 )
@@ -621,6 +622,120 @@ def update_write_audit(
             f"更新 write_audit 失败: {e}",
             {"correlation_id": correlation_id, "error": str(e)},
         )
+    finally:
+        conn.close()
+
+
+def enqueue_outbox_and_finalize_pending_audit(
+    correlation_id: str,
+    payload_md: str,
+    target_space: str,
+    *,
+    item_id: Optional[int] = None,
+    last_error: Optional[str] = None,
+    reason_suffix_prefix: str = "outbox_flush",
+    evidence_refs_json_patch: Optional[Dict[str, Any]] = None,
+    config: Optional[Config] = None,
+) -> tuple[int, int]:
+    """
+    同事务执行 outbox 入队 + pending 审计 finalize（redirected）。
+
+    该函数用于 OpenMemory 写入失败场景，避免出现：
+    - outbox 入队成功但审计仍 pending
+    - 审计 finalize 成功但 outbox 未入队
+
+    Args:
+        correlation_id: pending 审计对应的 correlation_id
+        payload_md: 入队 payload
+        target_space: 目标空间
+        item_id: 可选 item_id
+        last_error: OpenMemory 失败信息
+        reason_suffix_prefix: reason 后缀前缀（最终会拼接 :outbox:<id>）
+        evidence_refs_json_patch: 需要并入 evidence_refs_json 的字段
+        config: 配置实例
+
+    Returns:
+        (outbox_id, updated_count)
+    """
+    if not correlation_id:
+        raise ValidationError("correlation_id 不能为空", {"correlation_id": correlation_id})
+    if not payload_md:
+        raise ValidationError("payload_md 不能为空", {"payload_md": payload_md})
+    if not target_space:
+        raise ValidationError("target_space 不能为空", {"target_space": target_space})
+    if evidence_refs_json_patch is not None and not isinstance(evidence_refs_json_patch, dict):
+        raise ValidationError(
+            "evidence_refs_json_patch 必须是 dict 类型",
+            {"actual_type": type(evidence_refs_json_patch).__name__},
+        )
+
+    payload_sha = sha256(payload_md)
+    conn = get_connection(config=config)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO outbox_memory
+                    (item_id, target_space, payload_md, payload_sha, status, retry_count, last_error)
+                VALUES (%s, %s, %s, %s, 'pending', 0, %s)
+                RETURNING outbox_id
+                """,
+                (item_id, target_space, payload_md, payload_sha, last_error),
+            )
+            outbox_row = cur.fetchone()
+            if outbox_row is None:
+                raise DatabaseError(
+                    "入队 outbox_memory 失败: 未返回 outbox_id",
+                    {"target_space": target_space},
+                )
+            outbox_id = int(outbox_row[0])
+
+            reason_suffix = f"{reason_suffix_prefix}:outbox:{outbox_id}"
+            evidence_patch = dict(evidence_refs_json_patch or {})
+            evidence_patch.setdefault("outbox_id", outbox_id)
+
+            cur.execute(
+                """
+                UPDATE write_audit
+                SET status = 'redirected',
+                    updated_at = now(),
+                    reason = CASE
+                        WHEN reason IS NULL OR reason = '' THEN %s
+                        ELSE reason || ' ' || %s
+                    END,
+                    evidence_refs_json = COALESCE(evidence_refs_json, '{}'::jsonb) || %s::jsonb
+                WHERE correlation_id = %s
+                  AND status = 'pending'
+                """,
+                (
+                    reason_suffix,
+                    reason_suffix,
+                    json.dumps(evidence_patch),
+                    correlation_id,
+                ),
+            )
+            updated = int(cur.rowcount)
+            if updated != 1:
+                raise DatabaseError(
+                    "pending 审计 finalize 失败: 目标记录不存在或已完成",
+                    {
+                        "correlation_id": correlation_id,
+                        "updated_count": updated,
+                        "outbox_id": outbox_id,
+                    },
+                )
+
+            conn.commit()
+            return outbox_id, updated
+    except psycopg.Error as e:
+        conn.rollback()
+        raise DatabaseError(
+            f"同事务 outbox+finalize 失败: {e}",
+            {"correlation_id": correlation_id, "error": str(e)},
+        )
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

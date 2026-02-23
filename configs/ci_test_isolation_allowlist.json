@@ -119,15 +119,6 @@
       "owner": "@engram-team",
       "expires_on": "2026-06-30",
       "created_at": "2026-02-02"
-    },
-    {
-      "id": "iteration-tests-legacy-sys-path",
-      "file_glob": "tests/iteration/*.py",
-      "violation_type": "sys_path_insert",
-      "reason": "迭代工具测试历史遗留代码，需要导入 scripts/iteration 目录。计划重构为使用命名空间导入。",
-      "owner": "@engram-team",
-      "expires_on": "2026-06-30",
-      "created_at": "2026-02-02"
     }
   ]
 }

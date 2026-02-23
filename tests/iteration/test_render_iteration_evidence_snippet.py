@@ -13,16 +13,12 @@ render_iteration_evidence_snippet.py 单元测试
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from render_iteration_evidence_snippet import (  # noqa: E402
+from scripts.iteration.render_iteration_evidence_snippet import (
     AUTO_GENERATED_MARKER,
     BLOCK_END_MARKER,
     BLOCK_START_MARKER,

@@ -10,16 +10,12 @@ init_local_iteration.py 文件状态（created vs overwritten）单元测试
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from init_local_iteration import init_iteration
+from scripts.iteration.init_local_iteration import init_iteration
 
 # ============================================================================
 # Fixtures

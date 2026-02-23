@@ -12,13 +12,7 @@ render_min_gate_block.py 单元测试
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from render_min_gate_block import (  # noqa: E402
+from scripts.iteration.render_min_gate_block import (
     AUTO_GENERATED_MARKER,
     CI_GATE_COMMANDS,
     DOCS_GATE_COMMANDS,

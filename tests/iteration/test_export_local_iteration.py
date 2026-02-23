@@ -15,17 +15,13 @@ Fixtures 使用临时目录构造 .iteration/<N>/ 结构。
 from __future__ import annotations
 
 import re
-import sys
 import tempfile
 import zipfile
 from pathlib import Path
 
 import pytest
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "iteration"))
-
-from export_local_iteration import (
+from scripts.iteration.export_local_iteration import (
     IterationLinkWarning,
     SourceNotFoundError,
     detect_iteration_links,
