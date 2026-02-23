@@ -53,7 +53,7 @@ try:
         ProfileType,
         ReasonCode,  # noqa: F401
         StepName,
-        detect_capabilities,
+        detect_capabilities_runtime,
         get_profile_from_env,
         validate_profile,  # noqa: F401
     )
@@ -135,13 +135,17 @@ def check_capability_for_step(step_name: str) -> Tuple[bool, str]:
             return True, "POSTGRES_DSN 已设置"
         return True, "能力检查跳过"
 
-    # 使用 gate_contract 检查
-    capabilities = detect_capabilities()
+    # 使用 gate_contract 检查（运行时模式，docker 已启动）
+    # 注意：测试在 docker 启动后运行，使用运行时检测验证 daemon 状态
+    capabilities = detect_capabilities_runtime()
 
     if step_name == "degradation":
         if not capabilities.is_available("can_stop_openmemory"):
             status = capabilities.capabilities.get("can_stop_openmemory")
             return False, status.message if status else "无法停止 OpenMemory 容器"
+        if not capabilities.is_available("docker_daemon_ok"):
+            status = capabilities.capabilities.get("docker_daemon_ok")
+            return False, status.message if status else "Docker daemon 未运行"
         return True, "降级测试能力可用"
 
     elif step_name == "db_invariants":
