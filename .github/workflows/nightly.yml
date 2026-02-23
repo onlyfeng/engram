@@ -294,20 +294,8 @@ jobs:
             if echo "$om_logs" | grep -q "pg_type_typname_nsp_index"; then
               echo "检测到 pg_type 冲突，清理 openmemory.openmemory_users 后重试..."
               docker compose -f docker-compose.unified.yml exec -T postgres \
-                psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 <<'SQL'
-              DO $$
-              BEGIN
-                IF EXISTS (
-                  SELECT 1
-                  FROM pg_type t
-                  JOIN pg_namespace n ON n.oid = t.typnamespace
-                  WHERE n.nspname = 'openmemory'
-                    AND t.typname = 'openmemory_users'
-                ) THEN
-                  EXECUTE 'DROP TYPE openmemory.openmemory_users CASCADE';
-                END IF;
-              END $$;
-              SQL
+                psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 \
+                -c "DO \$\$ BEGIN IF EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'openmemory' AND t.typname = 'openmemory_users') THEN EXECUTE 'DROP TYPE openmemory.openmemory_users CASCADE'; END IF; END \$\$;"
             fi
 
             docker compose -f docker-compose.unified.yml up -d --force-recreate openmemory
