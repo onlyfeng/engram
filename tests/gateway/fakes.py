@@ -651,6 +651,30 @@ class FakeLogbookAdapter:
         self._audit_records: Dict[str, Dict[str, Any]] = {}  # correlation_id -> record
         self._next_audit_id: int = 1
         self._next_outbox_id: int = 1
+        self._bound_db: Optional[FakeLogbookDatabase] = None
+        self._settings_overridden: bool = False
+        self._outbox_start_overridden: bool = False
+
+    def bind_database(self, db: FakeLogbookDatabase) -> None:
+        """
+        绑定底层 FakeLogbookDatabase。
+
+        目的：
+        - 兼容旧测试通过 fake_db.audit_calls / outbox_calls 断言行为；
+        - 保持新实现优先通过 adapter 路径访问数据库。
+        """
+        self._bound_db = db
+        # 同步已显式配置过的 adapter 状态到 db，避免绑定后行为漂移。
+        if self._settings_overridden:
+            db.upsert_settings(
+                project_key="test_project",
+                team_write_enabled=self._settings.get("team_write_enabled"),
+                policy_json=self._settings.get("policy_json"),
+            )
+        else:
+            self._settings = db.get_or_create_settings("test_project")
+        if self._outbox_start_overridden:
+            db.configure_outbox_success(start_id=self._next_outbox_id)
 
     def configure_dedup_hit(
         self,
@@ -684,6 +708,9 @@ class FakeLogbookAdapter:
     def configure_outbox_success(self, start_id: int = 1):
         """配置 outbox 入队成功，设置起始 ID"""
         self._next_outbox_id = start_id
+        self._outbox_start_overridden = True
+        if self._bound_db is not None:
+            self._bound_db.configure_outbox_success(start_id=start_id)
 
     def configure_settings(
         self,
@@ -697,6 +724,14 @@ class FakeLogbookAdapter:
             "policy_json": policy_json or {},
             **extra_settings,
         }
+        self._settings_overridden = True
+        if self._bound_db is not None:
+            self._bound_db.upsert_settings(
+                project_key="test_project",
+                team_write_enabled=team_write_enabled,
+                policy_json=policy_json or {},
+                updated_by=None,
+            )
 
     def check_user_exists(self, user_id: str) -> bool:
         """检查用户是否存在"""
@@ -765,15 +800,26 @@ class FakeLogbookAdapter:
         Returns:
             bool: 成功返回 True
         """
+        if self._bound_db is not None:
+            self._bound_db.upsert_settings(
+                project_key=project_key,
+                team_write_enabled=team_write_enabled,
+                policy_json=policy_json,
+                updated_by=updated_by,
+            )
         # 此方法为 governance_update_impl 所需
         return True
 
     def get_settings(self, project_key: str) -> Optional[Dict[str, Any]]:
         """读取治理设置"""
+        if self._bound_db is not None:
+            return self._bound_db.get_settings(project_key)
         return self._settings.copy()
 
     def get_or_create_settings(self, project_key: str) -> Dict[str, Any]:
         """获取或创建治理设置"""
+        if self._bound_db is not None:
+            return self._bound_db.get_or_create_settings(project_key)
         return self._settings.copy()
 
     # ============== 两阶段审计支持 ==============
@@ -806,8 +852,22 @@ class FakeLogbookAdapter:
         }
         self._audit_calls.append(call_record)
 
-        audit_id = self._next_audit_id
-        self._next_audit_id += 1
+        if self._bound_db is not None:
+            audit_id = self._bound_db.insert_audit(
+                actor_user_id=actor_user_id,
+                target_space=target_space,
+                action=action,
+                reason=reason,
+                payload_sha=payload_sha,
+                evidence_refs_json=evidence_refs_json,
+                validate_refs=validate_refs,
+                correlation_id=correlation_id,
+                status=status,
+            )
+            self._next_audit_id = max(self._next_audit_id, audit_id + 1)
+        else:
+            audit_id = self._next_audit_id
+            self._next_audit_id += 1
         self._audit_records[cid] = {
             "audit_id": audit_id,
             **call_record,
@@ -857,9 +917,19 @@ class FakeLogbookAdapter:
         }
         self._update_audit_calls.append(call_record)
 
+        bound_updated: Optional[int] = None
+        if self._bound_db is not None:
+            bound_updated = self._bound_db.update_write_audit(
+                correlation_id=correlation_id,
+                status=status,
+                reason_suffix=reason_suffix,
+                replace_reason=replace_reason,
+                evidence_refs_json_patch=evidence_refs_json_patch,
+            )
+
         # 更新审计记录
         if correlation_id not in self._audit_records:
-            return 0
+            return int(bound_updated or 0)
 
         self._audit_records[correlation_id]["status"] = status
         if reason_suffix:
@@ -876,6 +946,8 @@ class FakeLogbookAdapter:
                 **old_refs,
                 **evidence_refs_json_patch,
             }
+        if bound_updated is not None:
+            return int(bound_updated)
         return 1
 
     def enqueue_outbox(
@@ -898,8 +970,18 @@ class FakeLogbookAdapter:
         }
         self._outbox_calls.append(call_record)
 
-        outbox_id = self._next_outbox_id
-        self._next_outbox_id += 1
+        if self._bound_db is not None:
+            outbox_id = self._bound_db.enqueue_outbox(
+                payload_md=payload_md,
+                target_space=target_space,
+                item_id=item_id,
+                last_error=last_error,
+                next_attempt_at=next_attempt_at,
+            )
+            self._next_outbox_id = max(self._next_outbox_id, outbox_id + 1)
+        else:
+            outbox_id = self._next_outbox_id
+            self._next_outbox_id += 1
         return outbox_id
 
     def enqueue_outbox_and_finalize_audit(
@@ -1023,6 +1105,7 @@ def create_test_dependencies(
 
     # 创建 fake adapter
     adapter = FakeLogbookAdapter()
+    adapter.bind_database(db)
     if dedup_hit:
         adapter.configure_dedup_hit()
     else:

@@ -37,6 +37,9 @@ SSOT_DIR = REPO_ROOT / "docs" / "acceptance"
 # 本地迭代目录
 ITERATION_DIR = REPO_ROOT / ".iteration"
 
+# 兼容历史测试/脚本通过扁平模块名 monkeypatch（如 "init_local_iteration.SSOT_DIR"）。
+sys.modules.setdefault("init_local_iteration", sys.modules[__name__])
+
 # README 内容
 README_CONTENT = """\
 # .iteration/ 本地迭代草稿目录

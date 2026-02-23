@@ -75,7 +75,7 @@ class TestCanonicalEvidencePath:
     def test_path_string_format(self) -> None:
         """路径字符串格式正确。"""
         result = canonical_evidence_path(13)
-        assert str(result).endswith("docs/acceptance/evidence/iteration_13_evidence.json")
+        assert result.as_posix().endswith("docs/acceptance/evidence/iteration_13_evidence.json")
 
 
 class TestSnapshotEvidenceFilename:

@@ -44,6 +44,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 # 本地迭代目录
 ITERATION_DIR = REPO_ROOT / ".iteration"
 
+# 兼容历史测试/脚本通过扁平模块名 monkeypatch（如 "export_local_iteration.ITERATION_DIR"）。
+sys.modules.setdefault("export_local_iteration", sys.modules[__name__])
+
 
 # ============================================================================
 # 数据结构

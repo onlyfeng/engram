@@ -427,13 +427,20 @@ class GatewayDeps:
         Returns:
             GatewayDeps 实例
         """
-        return cls(
+        deps = cls(
             _config=config,
             _db=db,
             _logbook_adapter=logbook_adapter,
             _openmemory_client=openmemory_client,
             _tool_executor=tool_executor,
         )
+        # 测试路径兼容：若同时注入 fake db + fake adapter，自动桥接两者。
+        # 这样新代码走 adapter 路径时，旧断言仍可通过 db 的调用记录观测行为。
+        if db is not None and logbook_adapter is not None:
+            bind_database = getattr(logbook_adapter, "bind_database", None)
+            if callable(bind_database):
+                bind_database(db)
+        return deps
 
     @property
     def config(self) -> "GatewayConfig":

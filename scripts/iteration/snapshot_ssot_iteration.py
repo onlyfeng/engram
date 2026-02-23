@@ -44,6 +44,9 @@ SSOT_DIR = REPO_ROOT / "docs" / "acceptance"
 # 默认快照输出目录
 DEFAULT_EXPORT_DIR = REPO_ROOT / ".iteration" / "_export"
 
+# 兼容历史测试/脚本通过扁平模块名 monkeypatch（如 "snapshot_ssot_iteration.SSOT_DIR"）。
+sys.modules.setdefault("snapshot_ssot_iteration", sys.modules[__name__])
+
 
 # ============================================================================
 # 数据结构
@@ -342,10 +345,10 @@ def main() -> int:
     if args.list:
         available = get_ssot_iteration_numbers()
         if not available:
-            print("❌ SSOT 中没有任何迭代文档", file=sys.stderr)
+            print("ERROR: SSOT 中没有任何迭代文档", file=sys.stderr)
             return 1
 
-        print("📋 SSOT 中可用的迭代编号（降序）:")
+        print("SSOT 中可用的迭代编号（降序）:")
         print()
         for n in available:
             plan_exists = (SSOT_DIR / f"iteration_{n}_plan.md").exists()
@@ -357,7 +360,7 @@ def main() -> int:
                 files.append("regression")
             print(f"  - Iteration {n} ({', '.join(files)})")
         print()
-        print("💡 使用 `python scripts/iteration/snapshot_ssot_iteration.py <N>` 快照指定迭代")
+        print("提示: 使用 `python scripts/iteration/snapshot_ssot_iteration.py <N>` 快照指定迭代")
         return 0
 
     # 快照操作
@@ -369,18 +372,18 @@ def main() -> int:
             force=args.force,
         )
 
-        print(f"✅ Iteration {args.iteration_number} 快照完成")
+        print(f"OK: Iteration {args.iteration_number} 快照完成")
         print()
 
         if result.files_copied:
             print("复制的文件:")
             for f in result.files_copied:
-                print(f"  📄 {f}")
+                print(f"  - {f}")
 
         if result.files_skipped:
             print("\n跳过的文件（内容相同）:")
             for f in result.files_skipped:
-                print(f"  ✓ {f}")
+                print(f"  - {f}")
 
         if result.readme_created:
             output_path = (
@@ -389,17 +392,17 @@ def main() -> int:
                 else DEFAULT_EXPORT_DIR / str(args.iteration_number)
             )
             readme_path = output_path / "README.md"
-            print(f"\n📝 README 已创建: {readme_path.relative_to(REPO_ROOT)}")
+            print(f"\nREADME 已创建: {readme_path.relative_to(REPO_ROOT)}")
 
         print()
-        print("⚠️  重要提醒:")
+        print("重要提醒:")
         print("    此快照仅供本地阅读和实验，不可用于 promote 覆盖旧编号。")
         print("    SSOT 编号一旦使用即为永久占用。")
 
         return 0
 
     except SourceNotFoundError as e:
-        print(f"❌ 错误: {e}", file=sys.stderr)
+        print(f"ERROR: {e}", file=sys.stderr)
         print(file=sys.stderr)
         if e.available:
             print("SSOT 中可用的迭代编号:", file=sys.stderr)
@@ -412,7 +415,7 @@ def main() -> int:
         return 1
 
     except FileConflictError as e:
-        print(f"❌ 错误: {e}", file=sys.stderr)
+        print(f"ERROR: {e}", file=sys.stderr)
         return 1
 
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: I001
 """迭代回归文档受控块的生成与解析逻辑。"""
 
 from __future__ import annotations
@@ -11,17 +12,36 @@ from pathlib import Path
 from typing import List, Literal, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 SRC_DIR = REPO_ROOT / "src"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from engram.common.redaction import redact_sensitive_text
-from render_min_gate_block import (  # noqa: E402
-    GateProfile,
-    SUPPORTED_PROFILES,
-    render_min_gate_block,
-)
-from iteration_evidence_schema import resolve_schema_name  # noqa: E402
+from engram.common.redaction import redact_sensitive_text  # noqa: E402
+try:
+    from scripts.iteration.render_min_gate_block import (  # noqa: E402
+        GateProfile,
+        SUPPORTED_PROFILES as _SUPPORTED_PROFILES,
+        render_min_gate_block,
+    )
+    from scripts.iteration.iteration_evidence_schema import resolve_schema_name  # noqa: E402
+except ImportError:
+    from render_min_gate_block import (  # noqa: E402
+        GateProfile,
+        SUPPORTED_PROFILES as _SUPPORTED_PROFILES,
+        render_min_gate_block,
+    )
+    from iteration_evidence_schema import resolve_schema_name  # noqa: E402
+
+SUPPORTED_PROFILES = _SUPPORTED_PROFILES
+
+# 兼容扁平导入与包导入共存，避免出现两个 generated_blocks 模块实例。
+sys.modules.setdefault("generated_blocks", sys.modules[__name__])
+sys.modules.setdefault("scripts.iteration.generated_blocks", sys.modules[__name__])
 
 # ============================================================================
 # 路径配置
@@ -354,4 +374,3 @@ def find_evidence_insert_position(content: str) -> int:
 
     # 默认在文件末尾
     return len(content)
-

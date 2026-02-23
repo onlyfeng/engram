@@ -41,15 +41,24 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 SRC_DIR = REPO_ROOT / "src"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-# 添加脚本目录到 path
-sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from scripts.iteration import generated_blocks as blocks  # noqa: E402
+    from scripts.iteration.generated_blocks import GateProfile  # noqa: E402
+except ImportError:
+    import generated_blocks as blocks  # noqa: E402
+    from generated_blocks import GateProfile  # noqa: E402
 
-import generated_blocks as blocks  # noqa: E402
-from generated_blocks import GateProfile  # noqa: E402
+# 兼容历史路径引用（如部分测试/脚本使用 "sync_iteration_regression.*"）。
+sys.modules.setdefault("sync_iteration_regression", sys.modules[__name__])
 
 # ============================================================================
 # 数据结构
