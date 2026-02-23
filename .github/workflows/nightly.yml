@@ -339,7 +339,6 @@ jobs:
           
           # 运行 unified stack 集成测试
           pytest tests/gateway/test_unified_stack_integration.py -v \
-            --gate-profile "$GATE_PROFILE" \
             --junitxml=test-unified-stack-results.xml
 
       # ----------------------------------------------------------------
