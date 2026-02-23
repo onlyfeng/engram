@@ -15,6 +15,7 @@ from engram.unified_stack.gate_contract import (
     ReasonCode,
     StepName,
     detect_capabilities,
+    detect_capabilities_runtime,
     dump_rules_table,
     get_profile_from_env,
     get_required_steps_for_profile,
@@ -35,6 +36,7 @@ __all__ = [
     "PROFILE_CONFIGS",
     # Functions
     "detect_capabilities",
+    "detect_capabilities_runtime",
     "validate_profile",
     "dump_rules_table",
     "get_required_steps_for_profile",

@@ -103,8 +103,9 @@ jobs:
           echo ""
           echo "校验策略："
           echo "  - FULL 模式下，必需能力缺失会导致 CI fail"
-          echo "  - 包括：docker_available, docker_daemon_ok, can_stop_openmemory"
+          echo "  - 包括：docker_available, can_stop_openmemory (配置检查)"
           echo "  - 包括：db_access_available, postgres_dsn_present"
+          echo "  - 注意：docker_daemon_ok 在运行时验证（启动 docker 后）"
           echo ""
           
           # 确定 profile

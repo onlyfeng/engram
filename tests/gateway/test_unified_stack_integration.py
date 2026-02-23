@@ -27,11 +27,9 @@ Unified Stack 集成测试
 
 import os
 import subprocess
-import sys
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, Tuple
 
 import pytest
@@ -39,16 +37,8 @@ import requests
 
 # ======================== Gate Contract 集成 ========================
 
-# 动态添加 scripts 目录到 path 以便导入 gate_contract
-_WORKSPACE_ROOT = (
-    Path(__file__).resolve().parents[4]
-)  # gateway/tests -> gateway -> openmemory_gateway -> apps -> workspace
-_SCRIPTS_DIR = _WORKSPACE_ROOT / "scripts"
-if _SCRIPTS_DIR.exists() and str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-
 try:
-    from unified_stack_gate_contract import (
+    from engram.unified_stack.gate_contract import (
         PROFILE_CONFIGS,
         ProfileType,
         ReasonCode,  # noqa: F401
