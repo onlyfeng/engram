@@ -550,6 +550,25 @@ def docker_container_action(container_name: str, action: str) -> bool:
     Returns:
         True 表示成功
     """
+    openmemory_container = os.environ.get("OPENMEMORY_CONTAINER_NAME", "engram_openmemory")
+    if container_name == openmemory_container and action in {"stop", "start"}:
+        compose_cmd = (
+            ["docker", "compose", "-f", "docker-compose.unified.yml", "stop", "openmemory"]
+            if action == "stop"
+            else ["docker", "compose", "-f", "docker-compose.unified.yml", "up", "-d", "openmemory"]
+        )
+        try:
+            result = subprocess.run(
+                compose_cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     try:
         result = subprocess.run(
             ["docker", action, container_name],
