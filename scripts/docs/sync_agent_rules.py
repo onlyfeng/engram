@@ -116,8 +116,11 @@ def _sync_file(path: Path, expected: str, *, check: bool) -> tuple[bool, str]:
     if not path.exists():
         if check:
             return False, f"[FAIL] 缺少文件: {path.as_posix()}"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(expected, encoding="utf-8", newline="\n")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(expected, encoding="utf-8", newline="\n")
+        except OSError as exc:
+            return False, f"[ERROR] 创建失败: {path.as_posix()}: {exc}"
         return True, f"[CREATED] 已创建: {path.as_posix()}"
 
     current = path.read_text(encoding="utf-8")
@@ -125,7 +128,10 @@ def _sync_file(path: Path, expected: str, *, check: bool) -> tuple[bool, str]:
         return True, f"[OK] 已同步: {path.as_posix()}"
     if check:
         return False, f"[FAIL] 未同步: {path.as_posix()}"
-    path.write_text(expected, encoding="utf-8", newline="\n")
+    try:
+        path.write_text(expected, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        return False, f"[ERROR] 写入失败: {path.as_posix()}: {exc}"
     return True, f"[FIXED] 已更新: {path.as_posix()}"
 
 
@@ -195,11 +201,12 @@ def main() -> int:
     for message in messages:
         print(message)
 
-    if not ok and args.check:
-        print(
-            "[HINT] 运行 `python scripts/docs/sync_agent_rules.py` 进行自动修复。",
-            file=sys.stderr,
-        )
+    if not ok:
+        if args.check:
+            print(
+                "[HINT] 运行 `python scripts/docs/sync_agent_rules.py` 进行自动修复。",
+                file=sys.stderr,
+            )
         return 1
     return 0
 
