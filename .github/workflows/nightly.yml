@@ -286,9 +286,36 @@ jobs:
 
           # 等待 OpenMemory
           if ! check_health "OpenMemory" "http://localhost:${{ env.OM_PORT }}/health" 30 3; then
-            echo "OpenMemory 日志:"
-            docker compose -f docker-compose.unified.yml logs openmemory --tail=50 || true
-            exit 1
+            echo "OpenMemory 首次健康检查失败，开始自愈..."
+            om_logs="$(docker compose -f docker-compose.unified.yml logs openmemory --tail=200 || true)"
+            echo "$om_logs"
+
+            # 处理上游 OpenMemory 启动期偶发 DDL 竞态（pg_type duplicate key）
+            if echo "$om_logs" | grep -q "pg_type_typname_nsp_index"; then
+              echo "检测到 pg_type 冲突，清理 openmemory.openmemory_users 后重试..."
+              docker compose -f docker-compose.unified.yml exec -T postgres \
+                psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 <<'SQL'
+              DO $$
+              BEGIN
+                IF EXISTS (
+                  SELECT 1
+                  FROM pg_type t
+                  JOIN pg_namespace n ON n.oid = t.typnamespace
+                  WHERE n.nspname = 'openmemory'
+                    AND t.typname = 'openmemory_users'
+                ) THEN
+                  EXECUTE 'DROP TYPE openmemory.openmemory_users CASCADE';
+                END IF;
+              END $$;
+              SQL
+            fi
+
+            docker compose -f docker-compose.unified.yml up -d --force-recreate openmemory
+            if ! check_health "OpenMemory(retry)" "http://localhost:${{ env.OM_PORT }}/health" 25 4; then
+              echo "OpenMemory 日志(重试后):"
+              docker compose -f docker-compose.unified.yml logs openmemory --tail=100 || true
+              exit 1
+            fi
           fi
 
           echo ""
