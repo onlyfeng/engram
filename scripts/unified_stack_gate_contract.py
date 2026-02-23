@@ -608,8 +608,9 @@ def validate_profile(
                     ReasonCode.PROF_DEGRADATION_BLOCKED,
                     "Cannot run degradation test: can_stop_openmemory not available",
                 ))
-            # 运行时模式：额外检查 docker daemon 状态
-            elif runtime_mode and not capabilities.is_available("docker_daemon_ok"):
+            # 运行时模式：额外独立检查 docker daemon 状态
+            # 使用独立 if 确保即使 can_stop_openmemory 失败，daemon 问题也能被报告
+            if runtime_mode and not capabilities.is_available("docker_daemon_ok"):
                 blocked_steps.append((
                     StepName.DEGRADATION,
                     ReasonCode.PROF_DEGRADATION_BLOCKED,
