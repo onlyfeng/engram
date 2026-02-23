@@ -96,7 +96,7 @@ services:
       OM_METADATA_BACKEND: ${OM_METADATA_BACKEND:-postgres}
       OM_PG_SCHEMA: ${OM_PG_SCHEMA:-openmemory}
     command: >
-      sh -c 'engram-migrate --dsn "$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
+      sh -c 'engram-migrate --dsn "$$POSTGRES_DSN" --apply-roles --apply-openmemory-grants'
     networks: [engram_net]
 
   permissions_verify:
@@ -111,7 +111,7 @@ services:
     environment:
       <<: *postgres_admin_env
     command: >
-      sh -c 'engram-migrate --dsn "$POSTGRES_DSN" --verify'
+      sh -c 'engram-migrate --dsn "$$POSTGRES_DSN" --verify'
     networks: [engram_net]
 
   openmemory_migrate:
@@ -215,9 +215,9 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-engram}
     entrypoint: >
       sh -c '
-        until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 2; done;
-        mc mb --ignore-existing local/"$MINIO_BUCKET";
-        echo "[OK] MinIO bucket ready: $MINIO_BUCKET";
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done;
+        mc mb --ignore-existing local/"$$MINIO_BUCKET";
+        echo "[OK] MinIO bucket ready: $$MINIO_BUCKET";
       '
     networks: [engram_net]
 
