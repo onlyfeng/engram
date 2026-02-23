@@ -144,6 +144,40 @@ jobs:
       # ----------------------------------------------------------------
       # 启动 Docker Compose 统一栈
       # ----------------------------------------------------------------
+      - name: Build OpenMemory base image (nightly)
+        timeout-minutes: 12
+        env:
+          OPENMEMORY_UPSTREAM_REPO: https://github.com/CaviraOSS/OpenMemory.git
+          OPENMEMORY_UPSTREAM_REF: v1.2.3
+          OPENMEMORY_LOCAL_IMAGE: engram/openmemory:nightly
+        run: |
+          echo "=== 准备 OpenMemory 镜像 ==="
+          echo "来源: ${OPENMEMORY_UPSTREAM_REPO}#${OPENMEMORY_UPSTREAM_REF}:packages/openmemory-js"
+          echo "本地标签: ${OPENMEMORY_LOCAL_IMAGE}"
+
+          # 统一栈 compose 使用该变量解析 openmemory 镜像
+          echo "OPENMEMORY_IMAGE=${OPENMEMORY_LOCAL_IMAGE}" >> "$GITHUB_ENV"
+
+          BUILD_CONTEXT="${OPENMEMORY_UPSTREAM_REPO}#${OPENMEMORY_UPSTREAM_REF}:packages/openmemory-js"
+
+          for attempt in 1 2 3; do
+            echo "构建尝试 $attempt/3..."
+            if docker build --pull -t "${OPENMEMORY_LOCAL_IMAGE}" "${BUILD_CONTEXT}"; then
+              echo "✓ OpenMemory 镜像构建成功"
+              break
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "[FAIL] OpenMemory 镜像构建失败"
+              exit 1
+            fi
+
+            echo "等待 10 秒后重试..."
+            sleep 10
+          done
+
+          docker image inspect "${OPENMEMORY_LOCAL_IMAGE}" --format 'IMAGE={{.RepoTags}}'
+
       - name: Start unified stack with Docker Compose
         timeout-minutes: 10
         run: |
@@ -151,13 +185,18 @@ jobs:
           echo ""
           echo "使用 docker-compose.unified.yml 配置"
           echo "服务账号密码已通过环境变量设置"
+          echo "OPENMEMORY_IMAGE=${OPENMEMORY_IMAGE:-<unset>}"
           echo ""
 
           # 预拉取镜像（带重试）
           echo "预拉取 Docker 镜像..."
           for attempt in 1 2 3; do
             echo "  尝试 $attempt/3..."
-            if docker compose -f docker-compose.unified.yml pull --quiet 2>&1 | head -20; then
+            pull_output="$(docker compose -f docker-compose.unified.yml pull --ignore-buildable --quiet 2>&1)"
+            pull_status=$?
+            echo "$pull_output" | head -20
+
+            if [ "$pull_status" -eq 0 ]; then
               echo "  ✓ 镜像拉取完成"
               break
             fi
