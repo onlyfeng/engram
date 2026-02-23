@@ -291,24 +291,38 @@ def _check_compose_configured() -> tuple[bool, str]:
     return False, "No docker-compose file found (set ENGRAM_COMPOSE_FILE to override)"
 
 
-def _check_can_stop_openmemory() -> tuple[bool, str]:
+def _check_can_stop_openmemory(runtime_check: bool = False) -> tuple[bool, str]:
     """检查是否可以停止 openmemory 容器（基于 docker + compose 可用性）
 
-    注意：此检查仅验证配置层面的前置条件（docker 命令存在 + compose 文件配置）。
-    Docker daemon 的运行状态是运行时检查，不在配置阶段验证。
-    这是为了避免 CI 中的死锁：validate-profile 步骤需要在启动 docker 之前执行，
-    但不应因为 docker 尚未启动而失败。
+    Args:
+        runtime_check: 如果为 True，则进行运行时检查（包括 daemon 状态）；
+                      如果为 False，仅进行配置层面检查。
+
+    配置检查（runtime_check=False）：
+      - 验证 docker 命令存在 + compose 文件配置
+      - 用于 CI 启动 docker 前的验证（避免死锁）
+
+    运行时检查（runtime_check=True）：
+      - 额外验证 Docker daemon 正在运行
+      - 用于启动 docker 后的验证（确保 degradation 可执行）
     """
     # 检查 docker 命令是否存在
     if not _check_command_exists("docker"):
         return False, "Docker not available"
 
-    # 检查 compose 文件是否配置（不检查 daemon 状态）
+    # 运行时检查：验证 daemon 状态
+    if runtime_check:
+        daemon_ok, daemon_msg = _check_docker_daemon()
+        if not daemon_ok:
+            return False, f"Docker daemon not running: {daemon_msg}"
+
+    # 检查 compose 文件是否配置
     compose_ok, msg = _check_compose_configured()
     if not compose_ok:
         return False, msg
 
-    # 配置层面检查通过
+    if runtime_check:
+        return True, "Can stop openmemory container (docker daemon running, compose configured)"
     return True, "Can stop openmemory container (docker available, compose configured)"
 
 
@@ -503,11 +517,44 @@ class ProfileValidationResult:
         }
 
 
+def detect_capabilities_runtime() -> CapabilityReport:
+    """
+    运行时能力检测（在 docker 启动后调用）
+
+    与 detect_capabilities() 的区别：
+      - 检查 docker_daemon_ok（daemon 必须正在运行）
+      - 检查 can_stop_openmemory 时验证 daemon 状态
+    """
+    # 先获取配置层面的能力
+    report = detect_capabilities()
+
+    # 运行时检查：验证 docker daemon 正在运行
+    daemon_ok, daemon_msg = _check_docker_daemon()
+    report.capabilities["docker_daemon_ok"] = CapabilityStatus(
+        name="docker_daemon_ok",
+        available=daemon_ok,
+        reason_code=ReasonCode.OK if daemon_ok else ReasonCode.CAP_DOCKER_DAEMON_DOWN,
+        message=daemon_msg,
+    )
+
+    # 运行时检查：验证 can_stop_openmemory（包括 daemon 状态）
+    stop_ok, stop_msg = _check_can_stop_openmemory(runtime_check=True)
+    report.capabilities["can_stop_openmemory"] = CapabilityStatus(
+        name="can_stop_openmemory",
+        available=stop_ok,
+        reason_code=ReasonCode.OK if stop_ok else ReasonCode.CAP_CANNOT_STOP_OPENMEMORY,
+        message=stop_msg,
+    )
+
+    return report
+
+
 def validate_profile(
     profile: ProfileType,
     capabilities: Optional[CapabilityReport] = None,
     skip_degradation: bool = False,
     http_only_mode: bool = False,
+    runtime_mode: bool = False,
 ) -> ProfileValidationResult:
     """
     校验指定 profile 是否可以执行
@@ -517,12 +564,16 @@ def validate_profile(
         capabilities: 已检测的 capabilities（如果为 None 则自动检测）
         skip_degradation: 是否跳过 degradation 测试（SKIP_DEGRADATION_TEST=1）
         http_only_mode: 是否为 HTTP_ONLY_MODE（HTTP_ONLY_MODE=1）
+        runtime_mode: 如果为 True，使用运行时能力检测（验证 daemon 等运行时依赖）
 
     Returns:
         ProfileValidationResult 包含校验结果
     """
     if capabilities is None:
-        capabilities = detect_capabilities()
+        if runtime_mode:
+            capabilities = detect_capabilities_runtime()
+        else:
+            capabilities = detect_capabilities()
 
     config = PROFILE_CONFIGS.get(profile)
     if config is None:
@@ -556,6 +607,13 @@ def validate_profile(
                     StepName.DEGRADATION,
                     ReasonCode.PROF_DEGRADATION_BLOCKED,
                     "Cannot run degradation test: can_stop_openmemory not available",
+                ))
+            # 运行时模式：额外检查 docker daemon 状态
+            elif runtime_mode and not capabilities.is_available("docker_daemon_ok"):
+                blocked_steps.append((
+                    StepName.DEGRADATION,
+                    ReasonCode.PROF_DEGRADATION_BLOCKED,
+                    "Cannot run degradation test: docker daemon not running (runtime check)",
                 ))
 
         elif step == StepName.DB_INVARIANTS:
@@ -710,6 +768,11 @@ def main():
         action="store_true",
         help="JSON 格式输出",
     )
+    validate_parser.add_argument(
+        "--runtime",
+        action="store_true",
+        help="运行时模式（验证 docker daemon 等运行时依赖，在启动 docker 后使用）",
+    )
 
     # dump-rules
     subparsers.add_parser(
@@ -753,11 +816,13 @@ def main():
         profile = ProfileType(args.profile)
         skip_degradation = os.environ.get("SKIP_DEGRADATION_TEST") == "1"
         http_only_mode = os.environ.get("HTTP_ONLY_MODE") == "1"
+        runtime_mode = args.runtime
 
         result = validate_profile(
             profile=profile,
             skip_degradation=skip_degradation,
             http_only_mode=http_only_mode,
+            runtime_mode=runtime_mode,
         )
 
         if args.json:
