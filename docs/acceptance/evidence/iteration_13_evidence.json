@@ -7,7 +7,7 @@
     "os": "windows-11",
     "python": "3.13.6",
     "arch": "x86_64",
-    "runner_label": "ubuntu-latest"
+    "runner_label": "windows-latest"
   },
   "source": {
     "source_path": "docs/acceptance/iteration_13_regression.md"
