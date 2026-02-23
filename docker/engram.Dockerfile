@@ -12,7 +12,6 @@ COPY pyproject.toml requirements.txt README.md ./
 COPY src ./src
 COPY sql ./sql
 COPY logbook_postgres ./logbook_postgres
-COPY engram_logbook ./engram_logbook
 COPY scripts ./scripts
 
 RUN pip install -e ".[full]"
