@@ -205,6 +205,7 @@ Drift Report 使用 `|| true` 的原因：
 | `ci-test-isolation` | CI Test Isolation Check | CI 测试隔离检查（tests/ci/ 测试文件禁止被外部导入） |
 | `iteration-tools-test` | Iteration Tools Test | 迭代工具脚本测试（无数据库依赖） |
 | `workflow-contract` | Workflow Contract Validation | Workflow 合约校验（strict 模式）、文档同步、版本策略和内部一致性检查 |
+| `cross-platform-smoke` | Cross Platform Smoke (${{ matrix.os }}) | 多平台轻量 smoke：验证无 make CI 入口和 Unix make 关键目标可执行 |
 <!-- END:CI_JOB_TABLE -->
 
 ### 2.2 Nightly Workflow (`nightly.yml`)
@@ -2141,6 +2142,7 @@ class ErrorTypes:
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.27.0 | 2026-02-23 | 新增 cross-platform-smoke job：多平台轻量 smoke（ci_no_make dry-run + Windows ci.ps1 dry-run + Unix make migration sanity） |
 | v2.26.0 | 2026-02-03 | chore: migrate workflow contract file/schema to v2 naming and drop v1 assets |
 | v2.25.1 | 2026-02-04 | fix: version policy checker handles shallow history conservatively |
 | v2.25.0 | 2026-02-03 | Phase 2: add release workflow |

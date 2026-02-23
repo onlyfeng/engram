@@ -14,11 +14,15 @@
 .DEFAULT_GOAL := help
 
 # 变量
-PYTHON := python3
+PYTHON := python3 -X utf8
 PIP := pip
 PYTEST := pytest
 UVICORN := uvicorn
-UNAME_S := $(shell uname -s)
+ifeq ($(OS),Windows_NT)
+UNAME_S := Windows
+else
+UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
+endif
 PYTHON_BIN := $(shell $(PYTHON) -c 'import sys; print(sys.executable)')
 
 # PostgreSQL 配置（可通过环境变量覆盖）
@@ -412,7 +416,7 @@ mypy-baseline-update:  ## 更新 mypy baseline 文件
 
 mypy-metrics:  ## 生成 mypy 指标报告（聚合 baseline 错误统计）
 	@echo "生成 mypy 指标报告..."
-	@mkdir -p artifacts
+	@$(PYTHON) -c "from pathlib import Path; Path('artifacts').mkdir(parents=True, exist_ok=True)"
 	$(PYTHON) -m scripts.ci.mypy_metrics --output artifacts/mypy_metrics.json --verbose
 	@echo "mypy 指标报告已生成: artifacts/mypy_metrics.json"
 
@@ -440,20 +444,7 @@ check-schemas:  ## 校验 JSON Schema 和 fixtures
 
 check-migration-sanity:  ## 检查 SQL 迁移文件存在性
 	@echo "检查 SQL 迁移文件..."
-	@required_files="sql/01_logbook_schema.sql sql/02_scm_migration.sql sql/04_roles_and_grants.sql sql/05_openmemory_roles_and_grants.sql sql/06_scm_sync_runs.sql sql/07_scm_sync_locks.sql sql/08_scm_sync_jobs.sql sql/11_sync_jobs_dimension_columns.sql"; \
-	missing=0; \
-	for f in $$required_files; do \
-		if [ ! -f "$$f" ]; then \
-			echo "[ERROR] 缺失: $$f"; \
-			missing=$$((missing + 1)); \
-		else \
-			echo "[OK] 存在: $$f"; \
-		fi; \
-	done; \
-	if [ "$$missing" -gt 0 ]; then \
-		echo "缺失 $$missing 个必需的迁移文件"; \
-		exit 1; \
-	fi
+	$(PYTHON) -m scripts.ci.check_migration_sanity --verbose
 	@echo "SQL 迁移文件检查通过"
 
 check-scm-sync-consistency:  ## 检查 SCM Sync 一致性（文档/代码/配置对齐）
@@ -614,20 +605,20 @@ workflow-contract-drift-report:  ## Workflow 合约 drift 报告（JSON 输出�
 	$(PYTHON) -m scripts.ci.workflow_contract_drift_report
 
 workflow-contract-drift-report-json:  ## Workflow 合约 drift 报告（JSON 输出到文件）
-	@mkdir -p artifacts
+	@$(PYTHON) -c "from pathlib import Path; Path('artifacts').mkdir(parents=True, exist_ok=True)"
 	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --output artifacts/workflow_contract_drift.json
 
 workflow-contract-drift-report-markdown:  ## Workflow 合约 drift 报告（Markdown 输出）
 	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --markdown
 
 workflow-contract-drift-report-all:  ## Workflow 合约 drift 报告（JSON + Markdown 输出到 artifacts/）
-	@mkdir -p artifacts
+	@$(PYTHON) -c "from pathlib import Path; Path('artifacts').mkdir(parents=True, exist_ok=True)"
 	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --output artifacts/workflow_contract_drift.json || true
 	$(PYTHON) -m scripts.ci.workflow_contract_drift_report --markdown --output artifacts/workflow_contract_drift.md || true
 	@echo "Drift reports 已生成到 artifacts/ 目录"
 
 workflow-contract-suggest:  ## Workflow 合约更新建议（JSON + Markdown 输出到 artifacts/）
-	@mkdir -p artifacts
+	@$(PYTHON) -c "from pathlib import Path; Path('artifacts').mkdir(parents=True, exist_ok=True)"
 	$(PYTHON) -m scripts.ci.suggest_workflow_contract_updates --json --output artifacts/workflow_contract_suggestions.json || true
 	$(PYTHON) -m scripts.ci.suggest_workflow_contract_updates --markdown --output artifacts/workflow_contract_suggestions.md || true
 	@echo "Suggestions 已生成到 artifacts/ 目录"

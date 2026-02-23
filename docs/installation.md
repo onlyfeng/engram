@@ -74,6 +74,19 @@ make install-full
 # Windows 无 make：pip install -e ".[full]"
 ```
 
+#### Windows 原生 GNU Make（推荐）
+
+```powershell
+# 推荐：Scoop
+scoop install make
+
+# 验证
+make --version
+```
+
+> 若当前终端找不到 `make`，请重开 PowerShell 后再执行 `make --version`。
+> 未安装 `make` 时，CI 等价入口可用 `.\scripts\windows\ci.ps1`（或 `python scripts/ops/ci_no_make.py`）。
+
 #### 一键初始化数据库与权限
 
 ```bash
@@ -788,6 +801,7 @@ make help
 | `make test-logbook` | 仅运行 Logbook 测试 |
 | `make test-gateway` | 仅运行 Gateway 测试 |
 | `make test-cov` | 运行测试并生成覆盖率报告 |
+| `make ci` | 运行全部 CI 门禁（本地聚合） |
 | `make lint` | 代码检查 (ruff) |
 | `make format` | 代码格式化 (ruff) |
 | `make typecheck` | 类型检查 (mypy) |
@@ -805,6 +819,24 @@ make help
 | `make mcp-doctor` | MCP 诊断（health + CORS + tools/list；不依赖 OpenMemory） |
 | `make stack-doctor` | 全栈诊断（OpenMemory health + tools/call(memory_store) 写入验证；`STACK_DOCTOR_FULL=1` 启用全功能诊断） |
 | `make clean` | 清理临时文件 |
+
+**Windows 无 make（CI 等价入口）**
+
+```powershell
+# Windows PowerShell
+.\scripts\windows\ci.ps1
+
+# 仅预览将执行的命令
+.\scripts\windows\ci.ps1 -DryRun
+
+# 只跑单个 target（示例）
+.\scripts\windows\ci.ps1 -Only check-migration-sanity
+```
+
+```bash
+# 跨平台通用入口（无 make）
+python scripts/ops/ci_no_make.py --dry-run
+```
 
 ### 环境变量
 

@@ -53,6 +53,18 @@ make install-full
 # pip install -e ".[full]"
 ```
 
+**Windows 原生安装 GNU Make（推荐）**
+
+```powershell
+# 推荐（Scoop）
+scoop install make
+
+# 验证
+make --version
+```
+
+> 若终端提示找不到 `make`，请关闭并重新打开 PowerShell 再试。
+
 #### 2. 一键初始化数据库
 
 ```bash
@@ -164,6 +176,7 @@ docker compose -f docker-compose.unified.yml down -v
 | Linux/macOS/WSL | 加载环境变量 | `source scripts/ops/load_env_local.sh` |
 | Windows PowerShell | 加载环境变量 | `.\scripts\windows\load_env_local.ps1` |
 | Windows PowerShell | 一键初始化数据库 | `.\scripts\windows\setup_db.ps1` |
+| Windows PowerShell | 无 make 运行 CI 门禁 | `.\scripts\windows\ci.ps1` |
 | Windows PowerShell | 全栈诊断 | `.\scripts\windows\stack_doctor.ps1` |
 | Windows PowerShell | 注册 Windows 服务（NSSM） | `.\scripts\windows\install_services.ps1` |
 
@@ -328,6 +341,7 @@ make check-iteration-docs  # 迭代文档规范检查
 | `make install-dev` | `pip install -e ".[full,dev]"` |
 | `make setup-db` | 建议使用 WSL 或参考 [安装指南](docs/installation.md) 分步执行 |
 | `make gateway` | `uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload` |
+| `make ci` | `.\scripts\windows\ci.ps1`（或 `python scripts/ops/ci_no_make.py`） |
 | `make mcp-doctor` | `python scripts/ops/mcp_doctor.py` |
 | `make stack-doctor` | `python scripts/ops/stack_doctor.py` |
 | `make test` | `pytest` |

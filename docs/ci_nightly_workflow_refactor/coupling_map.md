@@ -33,6 +33,7 @@
 | `ci-test-isolation` | CI Test Isolation Check |
 | `iteration-tools-test` | Iteration Tools Test |
 | `workflow-contract` | Workflow Contract Validation |
+| `cross-platform-smoke` | Cross Platform Smoke (${{ matrix.os }}) |
 <!-- END:CI_JOBS_LIST -->
 
 ### Nightly Workflow Jobs 清单

@@ -1,8 +1,9 @@
 {
   "$schema": "workflow_contract.v2.schema.json",
-  "version": "2.26.0",
+  "version": "2.27.0",
   "description": "Engram CI/CD workflow contract - defines required jobs, steps, outputs, labels, and frozen step text",
-  "last_updated": "2026-02-03",
+  "last_updated": "2026-02-23",
+  "_changelog_v2.27.0": "新增 cross-platform-smoke job：多平台轻量 smoke（ci_no_make dry-run + Windows ci.ps1 dry-run + Unix make migration sanity）",
   "_changelog_v2.26.0": "chore: migrate workflow contract file/schema to v2 naming and drop v1 assets",
   "_changelog_v2.25.1": "fix: version policy checker handles shallow history conservatively",
   "_changelog_v2.25.0": "Phase 2: add release workflow",
@@ -62,7 +63,8 @@
       "iteration-docs-check",
       "ci-test-isolation",
       "iteration-tools-test",
-      "workflow-contract"
+      "workflow-contract",
+      "cross-platform-smoke"
     ],
     "job_names": [
       "Test (Python ${{ matrix.python-version }})",
@@ -83,7 +85,8 @@
       "Iteration Docs Check",
       "CI Test Isolation Check",
       "Iteration Tools Test",
-      "Workflow Contract Validation"
+      "Workflow Contract Validation",
+      "Cross Platform Smoke (${{ matrix.os }})"
     ],
     "required_jobs": [
       {
@@ -314,6 +317,19 @@
           "Upload validation report",
           "Upload docs sync report",
           "Upload drift report"
+        ]
+      },
+      {
+        "id": "cross-platform-smoke",
+        "name": "Cross Platform Smoke (${{ matrix.os }})",
+        "_comment": "多平台轻量 smoke：验证无 make CI 入口和 Unix make 关键目标可执行",
+        "required_steps": [
+          "Checkout repository",
+          "Set up Python",
+          "Install dependencies",
+          "Run ci_no_make dry-run",
+          "Run Windows ci.ps1 dry-run",
+          "Run Unix make migration sanity"
         ]
       }
     ],
