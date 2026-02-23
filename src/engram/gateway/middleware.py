@@ -25,6 +25,7 @@ import contextvars
 import json
 import logging
 import os
+import time
 from typing import Optional
 
 from fastapi import FastAPI, Request
@@ -34,6 +35,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from .error_redaction import DEFAULT_PUBLIC_ERROR_MESSAGE, sanitize_error_message
+from .observability import observe_http_request, start_span
 
 logger = logging.getLogger("gateway.middleware")
 
@@ -116,18 +118,31 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
         # 2. 存储到 contextvars（供后续代码使用）
         token = set_request_correlation_id(correlation_id)
+        started = time.perf_counter()
+        status_code = 500
 
         try:
-            # 3. 执行请求处理
-            response = await call_next(request)
+            with start_span(
+                "gateway.http.request",
+                correlation_id=correlation_id,
+                attributes={
+                    "http.method": request.method,
+                    "http.path": request.url.path,
+                },
+            ):
+                # 3. 执行请求处理
+                response = await call_next(request)
+                status_code = response.status_code
 
-            # 4. 确保响应头中有 X-Correlation-ID
-            # 如果已经设置了（如 mcp_endpoint 中），则不覆盖
-            if "X-Correlation-ID" not in response.headers:
-                response.headers["X-Correlation-ID"] = correlation_id
+                # 4. 确保响应头中有 X-Correlation-ID
+                # 如果已经设置了（如 mcp_endpoint 中），则不覆盖
+                if "X-Correlation-ID" not in response.headers:
+                    response.headers["X-Correlation-ID"] = correlation_id
 
-            return response
+                return response
         finally:
+            duration = max(time.perf_counter() - started, 0.0)
+            observe_http_request(request.method, request.url.path, status_code, duration)
             # 恢复 contextvars
             _request_correlation_id.reset(token)
 

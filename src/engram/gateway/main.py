@@ -246,6 +246,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.warning(f"Container 重置异常: {e}")
 
+    # 关闭 Logbook 连接池（如果启用）
+    try:
+        from engram.logbook.db import close_connection_pools
+
+        close_connection_pools()
+        logger.info("Logbook 连接池已关闭")
+    except Exception as e:
+        logger.warning(f"Logbook 连接池关闭异常: {e}")
+
     logger.info("Gateway lifespan: 关闭完成")
 
 

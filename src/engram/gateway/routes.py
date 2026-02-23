@@ -49,6 +49,7 @@ from .error_redaction import (
     sanitize_error_message,
     sanitize_header_list,
 )
+from .observability import render_metrics_payload
 
 # 向后兼容导出：确保从 routes 导入模型的代码继续工作
 __all__ = [
@@ -240,6 +241,12 @@ def register_routes(app: FastAPI) -> None:
             # 兼容统一栈集成测试契约（seekdb 可选特性状态）
             "seekdb": "disabled",
         }
+
+    @app.get("/metrics")
+    async def metrics_endpoint():
+        """Prometheus 指标端点。"""
+        payload, content_type = render_metrics_payload()
+        return Response(content=payload, media_type=content_type)
 
     @app.options("/mcp")
     async def mcp_options(request: Request):

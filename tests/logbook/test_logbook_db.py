@@ -160,6 +160,99 @@ class TestGetConnectionSearchPathPriority:
         assert "tuple_schema2" in call_str
 
 
+class TestGetConnectionPool:
+    """测试 get_connection 连接池路径。"""
+
+    class _FakePoolContext:
+        def __init__(self, conn: MagicMock) -> None:
+            self.conn = conn
+            self.exited = False
+
+        def __enter__(self) -> MagicMock:
+            return self.conn
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: Any,
+        ) -> None:
+            self.exited = True
+
+    class _FakePool:
+        instances: list["TestGetConnectionPool._FakePool"] = []
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            self.closed = False
+            self.connection_calls = 0
+            self.last_ctx: TestGetConnectionPool._FakePoolContext | None = None
+            self.conn = MagicMock()
+            self.cursor = MagicMock()
+            self.conn.cursor.return_value.__enter__ = MagicMock(return_value=self.cursor)
+            self.conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+            self.__class__.instances.append(self)
+
+        def connection(
+            self, timeout: float | None = None
+        ) -> "TestGetConnectionPool._FakePoolContext":
+            _ = timeout
+            self.connection_calls += 1
+            ctx = TestGetConnectionPool._FakePoolContext(self.conn)
+            self.last_ctx = ctx
+            return ctx
+
+        def close(self) -> None:
+            self.closed = True
+
+    def test_get_connection_uses_pool_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """use_pool=True 时应走连接池并在 close 时归还连接。"""
+        from engram.logbook import db as db_module
+
+        db_module.close_connection_pools()
+        self._FakePool.instances.clear()
+
+        monkeypatch.setattr(db_module, "ConnectionPool", self._FakePool)
+        monkeypatch.setenv("POSTGRES_DSN", "postgresql://test@localhost/db")
+
+        with patch("engram.logbook.db.psycopg.connect") as mock_connect:
+            conn = db_module.get_connection(
+                search_path=["logbook"],
+                use_pool=True,
+            )
+            mock_connect.assert_not_called()
+
+        assert len(self._FakePool.instances) == 1
+        pool = self._FakePool.instances[0]
+        assert pool.connection_calls == 1
+        assert pool.last_ctx is not None
+        assert pool.last_ctx.exited is False
+
+        conn.close()
+        assert pool.last_ctx.exited is True
+
+        db_module.close_connection_pools()
+
+    def test_close_connection_pools_closes_all_instances(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """close_connection_pools 应关闭所有池实例。"""
+        from engram.logbook import db as db_module
+
+        db_module.close_connection_pools()
+        self._FakePool.instances.clear()
+
+        monkeypatch.setattr(db_module, "ConnectionPool", self._FakePool)
+        monkeypatch.setenv("POSTGRES_DSN", "postgresql://test@localhost/db")
+
+        conn = db_module.get_connection(search_path=["logbook"], use_pool=True)
+        conn.close()
+        db_module.close_connection_pools()
+
+        assert self._FakePool.instances
+        assert all(pool.closed for pool in self._FakePool.instances)
+
+
 class TestRewriteSqlForSchema:
     """测试 rewrite_sql_for_schema 的重写行为"""
 

@@ -25,16 +25,26 @@ JSON 边界约定:
 from __future__ import annotations
 
 import json
+import logging
+import os
+import threading
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, TypeVar, cast
 
 import psycopg
 
 from .config import Config, get_config
 from .errors import DatabaseError, DbConnectionError
 from .schema_context import SchemaContext, get_schema_context
+
+try:
+    from psycopg_pool import ConnectionPool  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - 依赖可选，运行时兜底
+    ConnectionPool = None
+
+logger = logging.getLogger(__name__)
 
 # ============ TypedDict 定义：数据库返回结构 ============
 
@@ -115,6 +125,179 @@ class KnowledgeCandidateRow(TypedDict):
 JsonValue = str | int | float | bool | None | dict[str, Any] | list[Any]
 JsonObject = dict[str, Any]
 JsonArray = list[Any]
+
+_ConnT = TypeVar("_ConnT")
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    """解析布尔环境变量。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_int_env(name: str, default: int, *, minimum: int | None = None) -> int:
+    """解析整数环境变量，非法值回退到默认值。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        logger.warning("忽略非法整数环境变量 %s=%r，回退默认值 %d", name, raw, default)
+        return default
+    if minimum is not None and value < minimum:
+        logger.warning(
+            "环境变量 %s=%d 小于最小值 %d，回退默认值 %d",
+            name,
+            value,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
+def _parse_float_env(name: str, default: float, *, minimum: float | None = None) -> float:
+    """解析浮点环境变量，非法值回退到默认值。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        logger.warning("忽略非法浮点环境变量 %s=%r，回退默认值 %.2f", name, raw, default)
+        return default
+    if minimum is not None and value < minimum:
+        logger.warning(
+            "环境变量 %s=%.3f 小于最小值 %.3f，回退默认值 %.2f",
+            name,
+            value,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
+class _PooledConnectionLease:
+    """
+    连接池借还包装器。
+
+    `psycopg_pool.ConnectionPool.connection()` 返回上下文管理器。
+    本类将其转换为常规连接对象语义：调用 `close()` 时归还到连接池。
+    """
+
+    def __init__(self, context_manager: Any, conn: psycopg.Connection[Any]):
+        self._context_manager = context_manager
+        self._conn = conn
+        self._closed = False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._context_manager.__exit__(None, None, None)
+
+    def __enter__(self) -> _PooledConnectionLease:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        if not self._closed:
+            self._closed = True
+            self._context_manager.__exit__(exc_type, exc_val, exc_tb)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
+_pool_lock = threading.Lock()
+_connection_pools: dict[tuple[str, bool], Any] = {}
+
+
+def _is_pool_enabled() -> bool:
+    """
+    是否启用连接池。
+
+    默认关闭，设置 ENGRAM_PG_USE_POOL=1 后启用。
+    """
+    return _parse_bool_env("ENGRAM_PG_USE_POOL", False)
+
+
+def _pool_timeout_seconds() -> float:
+    """获取连接池借用超时时间（秒）。"""
+    return _parse_float_env("ENGRAM_PG_POOL_TIMEOUT_SEC", 10.0, minimum=0.1)
+
+
+def close_connection_pools() -> None:
+    """关闭并清理所有 psycopg_pool 连接池。"""
+    with _pool_lock:
+        pools = list(_connection_pools.values())
+        _connection_pools.clear()
+
+    for pool in pools:
+        try:
+            pool.close()
+        except Exception as exc:  # pragma: no cover - 仅日志兜底
+            logger.warning("关闭连接池失败: %s", exc)
+
+
+def _get_or_create_pool(dsn: str, *, autocommit: bool) -> Any:
+    """获取或创建连接池实例。"""
+    if ConnectionPool is None:
+        raise DbConnectionError(
+            "连接池已启用但缺少 psycopg_pool 依赖",
+            {"hint": '请安装依赖: pip install "psycopg-pool>=3.2.0"'},
+        )
+
+    key = (dsn, autocommit)
+    with _pool_lock:
+        pool = _connection_pools.get(key)
+        if pool is not None:
+            return pool
+
+        min_size = _parse_int_env("ENGRAM_PG_POOL_MIN_SIZE", 1, minimum=1)
+        max_size = _parse_int_env("ENGRAM_PG_POOL_MAX_SIZE", 10, minimum=min_size)
+        timeout_sec = _pool_timeout_seconds()
+
+        pool = ConnectionPool(
+            conninfo=dsn,
+            min_size=min_size,
+            max_size=max_size,
+            timeout=timeout_sec,
+            kwargs={"autocommit": autocommit},
+            open=True,
+        )
+        _connection_pools[key] = pool
+        logger.info(
+            "创建 Postgres 连接池: autocommit=%s, min_size=%d, max_size=%d",
+            autocommit,
+            min_size,
+            max_size,
+        )
+        return pool
+
+
+def _acquire_connection(
+    dsn: str,
+    *,
+    autocommit: bool,
+    use_pool: bool,
+) -> psycopg.Connection[Any]:
+    """获取连接（优先连接池，失败时可回退直连）。"""
+    if use_pool:
+        pool = _get_or_create_pool(dsn, autocommit=autocommit)
+        ctx = pool.connection(timeout=_pool_timeout_seconds())
+        conn = cast(psycopg.Connection[Any], ctx.__enter__())
+        return cast(psycopg.Connection[Any], _PooledConnectionLease(ctx, conn))
+
+    return psycopg.connect(dsn, autocommit=autocommit)
 
 
 class Database:
@@ -290,6 +473,7 @@ def reset_database() -> None:
     if _global_database is not None:
         _global_database.disconnect()
         _global_database = None
+    close_connection_pools()
 
 
 # ---------- 迁移相关功能 ----------
@@ -430,6 +614,7 @@ def get_connection(
     schema_context: SchemaContext | None = None,
     search_path: Sequence[str] | str | None = None,
     statement_timeout_ms: int | None = None,
+    use_pool: bool | None = None,
 ) -> psycopg.Connection[Any]:
     """
     获取数据库连接。
@@ -447,6 +632,11 @@ def get_connection(
     1. 显式传入的 statement_timeout_ms 参数
     2. 环境变量 ENGRAM_PG_STATEMENT_TIMEOUT_MS
 
+    连接获取策略（可选）:
+    - use_pool=True: 使用 psycopg_pool 连接池
+    - use_pool=False: 直连 psycopg.connect
+    - use_pool=None: 读取 ENGRAM_PG_USE_POOL（默认 false）
+
     Args:
         dsn: 数据库连接字符串，为 None 时从配置读取
         config: Config 实例，仅当 dsn 为 None 时使用
@@ -454,6 +644,7 @@ def get_connection(
         schema_context: SchemaContext 实例，用于多租户隔离
         search_path: 显式指定的 search_path（Sequence[str] 或逗号分隔字符串）
         statement_timeout_ms: 可选的语句超时时间（毫秒），设置后单条 SQL 超过该时间将被取消
+        use_pool: 是否使用连接池，None 时读取环境变量 ENGRAM_PG_USE_POOL
 
     Returns:
         psycopg.Connection 对象
@@ -461,20 +652,20 @@ def get_connection(
     Raises:
         DbConnectionError: 连接失败时抛出
     """
-    import os
-
     if config is None:
         config = get_config()
 
     if dsn is None:
         dsn = get_dsn(config)
 
+    effective_use_pool = _is_pool_enabled() if use_pool is None else use_pool
+
     try:
-        conn = psycopg.connect(dsn, autocommit=autocommit)
+        conn = _acquire_connection(dsn, autocommit=autocommit, use_pool=effective_use_pool)
     except Exception as e:
         raise DbConnectionError(
             f"数据库连接失败: {e}",
-            {"error": str(e)},
+            {"error": str(e), "use_pool": effective_use_pool},
         )
 
     # 确定 search_path，按优先级选择

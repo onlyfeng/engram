@@ -45,6 +45,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import httpx
 
+from engram.gateway.observability import observe_openmemory_call, start_span
+
 logger = logging.getLogger(__name__)
 
 
@@ -256,6 +258,15 @@ class OpenMemoryClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _operation_from_url(self, url: str, method: str = "POST") -> str:
+        """根据 URL 生成稳定的 OpenMemory 操作名。"""
+        path = url
+        if url.startswith(self.base_url):
+            path = url[len(self.base_url) :]
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return f"{method.upper()} {path}"
+
     def _is_retryable_error(self, exc: Exception) -> bool:
         """判断异常是否应该重试"""
         # 网络错误：超时、连接失败
@@ -290,65 +301,83 @@ class OpenMemoryClient:
             OpenMemoryAPIError: API 返回错误
         """
         config = retry_config or self.retry_config
+        operation = self._operation_from_url(url, method="POST")
+        started = time.perf_counter()
+        status = "error"
         last_exception: Optional[Exception] = None
 
-        for attempt in range(config.max_retries + 1):
+        with start_span(
+            "gateway.openmemory.http.post",
+            attributes={
+                "openmemory.operation": operation,
+                "openmemory.retries.max": config.max_retries,
+            },
+        ):
             try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    response = client.post(url, json=payload, headers=self._get_headers())
-                    response.raise_for_status()
-                    return response
+                for attempt in range(config.max_retries + 1):
+                    try:
+                        with httpx.Client(timeout=self.timeout) as client:
+                            response = client.post(url, json=payload, headers=self._get_headers())
+                            response.raise_for_status()
+                            status = "ok"
+                            return response
 
-            except Exception as e:
-                last_exception = e
+                    except Exception as e:
+                        last_exception = e
 
-                # 判断是否应该重试
-                if not self._is_retryable_error(e):
-                    # 不可重试的错误，直接抛出
-                    raise
+                        # 判断是否应该重试
+                        if not self._is_retryable_error(e):
+                            # 不可重试的错误，直接抛出
+                            raise
 
-                # 是否还有重试次数
-                if attempt < config.max_retries:
-                    delay = config.calculate_delay(attempt)
-                    logger.warning(
-                        f"OpenMemory 请求失败 (尝试 {attempt + 1}/{config.max_retries + 1}), "
-                        f"{delay:.2f}s 后重试: {e}"
+                        # 是否还有重试次数
+                        if attempt < config.max_retries:
+                            delay = config.calculate_delay(attempt)
+                            logger.warning(
+                                f"OpenMemory 请求失败 (尝试 {attempt + 1}/{config.max_retries + 1}), "
+                                f"{delay:.2f}s 后重试: {e}"
+                            )
+                            time.sleep(delay)
+                        else:
+                            logger.error(
+                                f"OpenMemory 请求失败，已达最大重试次数 ({config.max_retries + 1}): {e}"
+                            )
+
+                # 超过最大重试次数，抛出最后的异常
+                if isinstance(last_exception, (httpx.TimeoutException,)):
+                    raise OpenMemoryConnectionError(
+                        message=f"OpenMemory 请求超时（已重试 {config.max_retries} 次）: {last_exception}",
+                        status_code=None,
+                        response=None,
                     )
-                    time.sleep(delay)
+                elif isinstance(last_exception, (httpx.ConnectError, httpx.RemoteProtocolError)):
+                    raise OpenMemoryConnectionError(
+                        message=f"无法连接到 OpenMemory 服务（已重试 {config.max_retries} 次）: {last_exception}",
+                        status_code=None,
+                        response=None,
+                    )
+                elif isinstance(last_exception, httpx.HTTPStatusError):
+                    try:
+                        error_body = last_exception.response.json()
+                    except Exception:
+                        error_body = {"detail": last_exception.response.text}
+                    raise OpenMemoryAPIError(
+                        message=(
+                            "OpenMemory API 错误（已重试 "
+                            f"{config.max_retries} 次）: {last_exception.response.status_code}"
+                        ),
+                        status_code=last_exception.response.status_code,
+                        response=error_body,
+                    )
                 else:
-                    logger.error(
-                        f"OpenMemory 请求失败，已达最大重试次数 ({config.max_retries + 1}): {e}"
+                    raise OpenMemoryError(
+                        message=f"OpenMemory 请求失败（已重试 {config.max_retries} 次）: {last_exception}",
+                        status_code=None,
+                        response=None,
                     )
-
-        # 超过最大重试次数，抛出最后的异常
-        if isinstance(last_exception, (httpx.TimeoutException,)):
-            raise OpenMemoryConnectionError(
-                message=f"OpenMemory 请求超时（已重试 {config.max_retries} 次）: {last_exception}",
-                status_code=None,
-                response=None,
-            )
-        elif isinstance(last_exception, (httpx.ConnectError, httpx.RemoteProtocolError)):
-            raise OpenMemoryConnectionError(
-                message=f"无法连接到 OpenMemory 服务（已重试 {config.max_retries} 次）: {last_exception}",
-                status_code=None,
-                response=None,
-            )
-        elif isinstance(last_exception, httpx.HTTPStatusError):
-            try:
-                error_body = last_exception.response.json()
-            except Exception:
-                error_body = {"detail": last_exception.response.text}
-            raise OpenMemoryAPIError(
-                message=f"OpenMemory API 错误（已重试 {config.max_retries} 次）: {last_exception.response.status_code}",
-                status_code=last_exception.response.status_code,
-                response=error_body,
-            )
-        else:
-            raise OpenMemoryError(
-                message=f"OpenMemory 请求失败（已重试 {config.max_retries} 次）: {last_exception}",
-                status_code=None,
-                response=None,
-            )
+            finally:
+                duration = max(time.perf_counter() - started, 0.0)
+                observe_openmemory_call(operation, status, duration)
 
     def add_memory(
         self,
@@ -605,18 +634,28 @@ class OpenMemoryClient:
             True 如果服务正常，否则 False
         """
         url = f"{self.base_url}/health"
+        operation = self._operation_from_url(url, method="GET")
+        started = time.perf_counter()
+        status = "error"
 
-        try:
-            with httpx.Client(timeout=5.0) as client:
-                response = client.get(url, headers=self._get_headers())
-                response.raise_for_status()
-                data = response.json()
-                status: str = data.get("status", "")
-                return status == "ok"
+        with start_span(
+            "gateway.openmemory.health_check",
+            attributes={"openmemory.operation": operation},
+        ):
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.get(url, headers=self._get_headers())
+                    response.raise_for_status()
+                    data = response.json()
+                    health_status: str = data.get("status", "")
+                    status = "ok" if health_status == "ok" else "error"
+                    return health_status == "ok"
 
-        except Exception as e:
-            logger.warning(f"OpenMemory health check failed: {e}")
-            return False
+            except Exception as e:
+                logger.warning(f"OpenMemory health check failed: {e}")
+                return False
+            finally:
+                observe_openmemory_call(operation, status, max(time.perf_counter() - started, 0.0))
 
     # ========== OpenMemory 1.3.0+ 新增方法 ==========
 
@@ -642,6 +681,9 @@ class OpenMemoryClient:
             ListResult 结果对象
         """
         url = f"{self.base_url}/memory/all"
+        operation = self._operation_from_url(url, method="GET")
+        started = time.perf_counter()
+        status = "error"
 
         # 构建查询参数
         params: dict[str, Any] = {"limit": limit, "offset": offset}
@@ -650,32 +692,39 @@ class OpenMemoryClient:
         if space:
             params["space"] = space
 
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(url, params=params, headers=self._get_headers())
-                response.raise_for_status()
-                data = response.json()
+        with start_span(
+            "gateway.openmemory.list_memories",
+            attributes={"openmemory.operation": operation},
+        ):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    response = client.get(url, params=params, headers=self._get_headers())
+                    response.raise_for_status()
+                    data = response.json()
 
-                # 兼容返回结构
-                memories = data.get("memories") or data.get("results") or []
-                total = data.get("total") or len(memories)
+                    # 兼容返回结构
+                    memories = data.get("memories") or data.get("results") or []
+                    total = data.get("total") or len(memories)
+                    status = "ok"
 
+                    return ListResult(
+                        success=True,
+                        memories=memories,
+                        total=total,
+                    )
+
+            except httpx.HTTPStatusError as e:
+                logger.error(f"OpenMemory list_memories HTTP error: {e.response.status_code}")
                 return ListResult(
-                    success=True,
-                    memories=memories,
-                    total=total,
+                    success=False,
+                    error=f"http_error: {e.response.status_code}",
                 )
 
-        except httpx.HTTPStatusError as e:
-            logger.error(f"OpenMemory list_memories HTTP error: {e.response.status_code}")
-            return ListResult(
-                success=False,
-                error=f"http_error: {e.response.status_code}",
-            )
-
-        except Exception as e:
-            logger.error(f"OpenMemory list_memories error: {e}")
-            return ListResult(success=False, error=str(e))
+            except Exception as e:
+                logger.error(f"OpenMemory list_memories error: {e}")
+                return ListResult(success=False, error=str(e))
+            finally:
+                observe_openmemory_call(operation, status, max(time.perf_counter() - started, 0.0))
 
     def get_memory(self, memory_id: str) -> GetResult:
         """
@@ -690,27 +739,37 @@ class OpenMemoryClient:
             GetResult 结果对象
         """
         url = f"{self.base_url}/memory/{memory_id}"
+        operation = self._operation_from_url(url, method="GET")
+        started = time.perf_counter()
+        status = "error"
 
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(url, headers=self._get_headers())
-                response.raise_for_status()
-                data = response.json()
+        with start_span(
+            "gateway.openmemory.get_memory",
+            attributes={"openmemory.operation": operation},
+        ):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    response = client.get(url, headers=self._get_headers())
+                    response.raise_for_status()
+                    data = response.json()
 
-                # 兼容返回结构
-                memory = data.get("memory") or data.get("data") or data
+                    # 兼容返回结构
+                    memory = data.get("memory") or data.get("data") or data
+                    status = "ok"
 
-                return GetResult(success=True, memory=memory)
+                    return GetResult(success=True, memory=memory)
 
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return GetResult(success=False, error="memory_not_found")
-            logger.error(f"OpenMemory get_memory HTTP error: {e.response.status_code}")
-            return GetResult(success=False, error=f"http_error: {e.response.status_code}")
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    return GetResult(success=False, error="memory_not_found")
+                logger.error(f"OpenMemory get_memory HTTP error: {e.response.status_code}")
+                return GetResult(success=False, error=f"http_error: {e.response.status_code}")
 
-        except Exception as e:
-            logger.error(f"OpenMemory get_memory error: {e}")
-            return GetResult(success=False, error=str(e))
+            except Exception as e:
+                logger.error(f"OpenMemory get_memory error: {e}")
+                return GetResult(success=False, error=str(e))
+            finally:
+                observe_openmemory_call(operation, status, max(time.perf_counter() - started, 0.0))
 
     def reinforce(
         self,
@@ -798,56 +857,70 @@ class OpenMemoryClient:
         ]
 
         last_error: Optional[str] = None
+        started = time.perf_counter()
+        status = "error"
 
-        for url in possible_urls:
+        with start_span("gateway.openmemory.wipe", attributes={"openmemory.operation": "wipe"}):
             try:
-                payload: dict[str, Any] = {"confirm": True}
-                if user_id:
-                    payload["user_id"] = user_id
-
-                with httpx.Client(timeout=30.0) as client:
-                    # 尝试 POST
+                for url in possible_urls:
                     try:
-                        response = client.post(
-                            url, json=payload, headers=self._get_headers(), timeout=30.0
-                        )
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as e_post:
-                        # 如果 POST 405，尝试 DELETE
-                        if e_post.response.status_code == 405 and "all" in url:
-                            response = client.delete(
-                                url, params=payload, headers=self._get_headers(), timeout=30.0
+                        payload: dict[str, Any] = {"confirm": True}
+                        if user_id:
+                            payload["user_id"] = user_id
+
+                        with httpx.Client(timeout=30.0) as client:
+                            # 尝试 POST
+                            try:
+                                response = client.post(
+                                    url, json=payload, headers=self._get_headers(), timeout=30.0
+                                )
+                                response.raise_for_status()
+                            except httpx.HTTPStatusError as e_post:
+                                # 如果 POST 405，尝试 DELETE
+                                if e_post.response.status_code == 405 and "all" in url:
+                                    response = client.delete(
+                                        url,
+                                        params=payload,
+                                        headers=self._get_headers(),
+                                        timeout=30.0,
+                                    )
+                                    response.raise_for_status()
+                                else:
+                                    raise
+
+                            data = response.json()
+                            status = "ok"
+
+                            return WipeResult(
+                                success=data.get("success", True),
+                                deleted_count=data.get("deleted_count") or data.get("count", 0),
                             )
-                            response.raise_for_status()
-                        else:
-                            raise
 
-                    data = response.json()
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 404:
+                            last_error = f"endpoint not found: {url}"
+                            continue
+                        last_error = f"http_error: {e.response.status_code}"
+                        if e.response.status_code in (401, 403):
+                            return WipeResult(
+                                success=False,
+                                error=f"unauthorized: {e.response.status_code}",
+                            )
+                        continue
 
-                    return WipeResult(
-                        success=data.get("success", True),
-                        deleted_count=data.get("deleted_count") or data.get("count", 0),
-                    )
+                    except Exception as e:
+                        last_error = str(e)
+                        continue
 
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404:
-                    last_error = f"endpoint not found: {url}"
-                    continue
-                last_error = f"http_error: {e.response.status_code}"
-                if e.response.status_code in (401, 403):
-                    return WipeResult(
-                        success=False,
-                        error=f"unauthorized: {e.response.status_code}",
-                    )
-                continue
-
-            except Exception as e:
-                last_error = str(e)
-                continue
-
-        # 所有端点都失败
-        logger.error(f"OpenMemory wipe failed on all endpoints: {last_error}")
-        return WipeResult(success=False, error=last_error or "all endpoints failed")
+                # 所有端点都失败
+                logger.error(f"OpenMemory wipe failed on all endpoints: {last_error}")
+                return WipeResult(success=False, error=last_error or "all endpoints failed")
+            finally:
+                observe_openmemory_call(
+                    "POST /admin/wipe",
+                    status,
+                    max(time.perf_counter() - started, 0.0),
+                )
 
 
 # ---------- 便捷函数 ----------

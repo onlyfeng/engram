@@ -246,6 +246,19 @@ MCP 网关组件。模块路径: `src/engram/gateway/`
 | `VALIDATE_EVIDENCE_REFS` | 是否校验 evidence refs 结构 | `false` | |
 | `STRICT_MODE_ENFORCE_VALIDATE_REFS` | strict 模式下是否强制启用校验 | `true` | |
 
+### 连接池与可观测性
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `ENGRAM_PG_USE_POOL` | 启用 `psycopg_pool` 连接池（`1/0`） | `0` | |
+| `ENGRAM_PG_POOL_MIN_SIZE` | 连接池最小连接数 | `1` | |
+| `ENGRAM_PG_POOL_MAX_SIZE` | 连接池最大连接数 | `10` | |
+| `ENGRAM_PG_POOL_TIMEOUT_SEC` | 连接池借还超时（秒） | `10` | |
+| `GATEWAY_METRICS_ENABLED` | 是否启用 Gateway `/metrics`（`1/0`） | `1` | |
+| `GATEWAY_OTEL_ENABLED` | 是否启用基础 tracing（`1/0`） | `0` | |
+| `GATEWAY_OTEL_EXPORTER` | tracing 导出器（`console`/`none`） | `console` | |
+| `GATEWAY_OTEL_SERVICE_NAME` | OTel service.name | `engram-gateway` | |
+
 ### Worker 配置
 
 Outbox Worker 从 Logbook 消费事件并推送到 OpenMemory。

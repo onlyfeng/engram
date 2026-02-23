@@ -136,6 +136,8 @@ make gateway
 make mcp-doctor
 make stack-doctor
 # STACK_DOCTOR_FULL=1 make stack-doctor
+# 观测性（Prometheus 指标）
+curl -fsS http://127.0.0.1:8787/metrics | head
 ```
 
 Windows PowerShell（两个终端）：
@@ -155,6 +157,8 @@ uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
 python scripts/ops/mcp_doctor.py
 python scripts/ops/stack_doctor.py
 # python scripts/ops/stack_doctor.py --full
+# 观测性（Prometheus 指标）
+Invoke-WebRequest http://127.0.0.1:8787/metrics | Select-Object -ExpandProperty Content
 ```
 
 ##### 3.3 Docker Compose 统一栈启动
@@ -399,6 +403,14 @@ engram/
 | `PROJECT_KEY` | 项目标识（多项目隔离） | `default` |
 | `OPENMEMORY_BASE_URL` | OpenMemory 服务地址 | - |
 | `GATEWAY_PORT` | Gateway 端口 | `8787` |
+| `ENGRAM_PG_USE_POOL` | 启用 `psycopg_pool` 连接池（`1/0`） | `0` |
+| `ENGRAM_PG_POOL_MIN_SIZE` | 连接池最小连接数 | `1` |
+| `ENGRAM_PG_POOL_MAX_SIZE` | 连接池最大连接数 | `10` |
+| `ENGRAM_PG_POOL_TIMEOUT_SEC` | 连接池借还超时（秒） | `10` |
+| `GATEWAY_METRICS_ENABLED` | 是否启用 `/metrics` 指标输出（`1/0`） | `1` |
+| `GATEWAY_OTEL_ENABLED` | 是否启用基础 tracing（`1/0`） | `0` |
+| `GATEWAY_OTEL_EXPORTER` | tracing 导出器（`console/none`） | `console` |
+| `GATEWAY_OTEL_SERVICE_NAME` | OTel service.name | `engram-gateway` |
 
 > 完整变量列表见 [环境变量参考](docs/reference/environment_variables.md)
 

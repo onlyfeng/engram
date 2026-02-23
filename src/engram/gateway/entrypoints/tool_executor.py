@@ -37,8 +37,10 @@ MCP 工具执行入口模块
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
+from ..observability import observe_mcp_tool_call, start_span
 from ..result_error_codes import ToolResultErrorCode
 
 if TYPE_CHECKING:
@@ -89,297 +91,311 @@ async def execute_tool(
         ValueError: 未知工具名称
     """
     logger.debug(f"执行工具: tool={tool}, correlation_id={correlation_id}")
+    started = time.perf_counter()
+    tool_status = "exception"
 
-    # 延迟导入 handlers，保持 import-safe
-    from ..handlers import (
-        execute_artifacts_exists,
-        execute_artifacts_get,
-        execute_artifacts_put,
-        execute_evidence_read,
-        execute_evidence_upload,
-        execute_logbook_add_event,
-        execute_logbook_attach,
-        execute_logbook_create_item,
-        execute_logbook_get_kv,
-        execute_logbook_list_attachments,
-        execute_logbook_query_events,
-        execute_logbook_query_items,
-        execute_logbook_set_kv,
-        execute_scm_materialize_patch_blob,
-        execute_scm_patch_blob_resolve,
-        governance_update_impl,
-        memory_query_impl,
-        memory_store_impl,
-    )
-
-    # 延迟获取 deps（lifespan 中已预热，此处仅获取引用）
-    deps = get_deps()
-
-    result_dict: Dict[str, Any]
-
-    if tool == "memory_store":
-        store_result = await memory_store_impl(
-            payload_md=args.get("payload_md", ""),
-            target_space=args.get("target_space"),
-            meta_json=args.get("meta_json"),
-            kind=args.get("kind"),
-            evidence_refs=args.get("evidence_refs"),
-            evidence=args.get("evidence"),
-            is_bulk=args.get("is_bulk", False),
-            item_id=args.get("item_id"),
-            actor_user_id=args.get("actor_user_id"),
-            correlation_id=correlation_id,
-            deps=deps,
-        )
-        result_dict = {"ok": store_result.ok, **store_result.model_dump()}
-
-    elif tool == "memory_query":
-        query_result = await memory_query_impl(
-            query=args.get("query", ""),
-            spaces=args.get("spaces"),
-            filters=args.get("filters"),
-            top_k=args.get("top_k", 10),
-            correlation_id=correlation_id,
-            deps=deps,
-        )
-        result_dict = {"ok": query_result.ok, **query_result.model_dump()}
-
-    elif tool == "memory_list":
-        list_result = deps.openmemory_client.list_memories(
-            user_id=args.get("user_id"),
-            space=args.get("space"),
-            limit=args.get("limit", 100),
-            offset=args.get("offset", 0),
-        )
-        result_dict = {
-            "ok": list_result.success,
-            "memories": list_result.memories or [],
-            "total": list_result.total,
-        }
-        if list_result.error:
-            result_dict["error"] = list_result.error
-            result_dict["message"] = list_result.error
-
-    elif tool == "memory_get":
-        get_result = deps.openmemory_client.get_memory(memory_id=args.get("memory_id", ""))
-        result_dict = {
-            "ok": get_result.success,
-            "memory": get_result.memory,
-        }
-        if get_result.error:
-            result_dict["error"] = get_result.error
-            result_dict["message"] = get_result.error
-
-    elif tool == "memory_reinforce":
-        reinforce_result = deps.openmemory_client.reinforce(
-            memory_id=args.get("memory_id", ""),
-            delta=args.get("delta", 1.0),
-            reason=args.get("reason"),
-        )
-        result_dict = {
-            "ok": reinforce_result.success,
-            "memory_id": reinforce_result.memory_id,
-            "new_strength": reinforce_result.new_strength,
-        }
-        if reinforce_result.error:
-            result_dict["error"] = reinforce_result.error
-            result_dict["message"] = reinforce_result.error
-
-    elif tool == "memory_wipe":
-        wipe_result = deps.openmemory_client.wipe(
-            confirm=args.get("confirm", False),
-            user_id=args.get("user_id"),
-        )
-        result_dict = {
-            "ok": wipe_result.success,
-            "deleted_count": wipe_result.deleted_count,
-        }
-        if wipe_result.error:
-            result_dict["error"] = wipe_result.error
-            result_dict["message"] = wipe_result.error
-
-    elif tool == "reliability_report":
-        # 函数内导入：仅在 reliability_report 工具被调用时才导入依赖
-        # 这支持依赖缺失时的优雅降级（返回 ok=false + error_code）
+    with start_span(
+        "gateway.mcp.tool.execute",
+        correlation_id=correlation_id,
+        attributes={"mcp.tool.name": tool},
+    ):
         try:
-            from ..logbook_adapter import get_reliability_report
+            # 延迟导入 handlers，保持 import-safe
+            from ..handlers import (
+                execute_artifacts_exists,
+                execute_artifacts_get,
+                execute_artifacts_put,
+                execute_evidence_read,
+                execute_evidence_upload,
+                execute_logbook_add_event,
+                execute_logbook_attach,
+                execute_logbook_create_item,
+                execute_logbook_get_kv,
+                execute_logbook_list_attachments,
+                execute_logbook_query_events,
+                execute_logbook_query_items,
+                execute_logbook_set_kv,
+                execute_scm_materialize_patch_blob,
+                execute_scm_patch_blob_resolve,
+                governance_update_impl,
+                memory_query_impl,
+                memory_store_impl,
+            )
 
-            report = get_reliability_report()
-            result_dict = {"ok": True, **report}
-        except ImportError as e:
-            logger.warning(f"reliability_report 依赖导入失败: {e}")
-            result_dict = {
-                "ok": False,
-                "message": f"reliability_report 依赖不可用: {e}",
-                "error_code": ReliabilityReportErrorCode.IMPORT_FAILED,
-                "outbox_stats": {},
-                "audit_stats": {},
-                "v2_evidence_stats": {},
-                "content_intercept_stats": {},
-                "generated_at": "",
-            }
-        except Exception as e:
-            logger.exception(f"reliability_report 执行失败: {e}")
-            result_dict = {
-                "ok": False,
-                "message": f"报告生成失败: {e}",
-                "error_code": ReliabilityReportErrorCode.EXECUTION_FAILED,
-                "outbox_stats": {},
-                "audit_stats": {},
-                "v2_evidence_stats": {},
-                "content_intercept_stats": {},
-                "generated_at": "",
-            }
+            # 延迟获取 deps（lifespan 中已预热，此处仅获取引用）
+            deps = get_deps()
 
-    elif tool == "governance_update":
-        gov_result = await governance_update_impl(
-            team_write_enabled=args.get("team_write_enabled"),
-            policy_json=args.get("policy_json"),
-            admin_key=args.get("admin_key"),
-            actor_user_id=args.get("actor_user_id"),
-            correlation_id=correlation_id,
-            deps=deps,
-        )
-        result_dict = {"ok": gov_result.ok, **gov_result.model_dump(mode="json")}
+            result_dict: Dict[str, Any]
 
-    elif tool == "evidence_upload":
-        result_dict = await execute_evidence_upload(
-            content=args.get("content"),
-            content_type=args.get("content_type"),
-            title=args.get("title"),
-            actor_user_id=args.get("actor_user_id"),
-            project_key=args.get("project_key"),
-            item_id=args.get("item_id"),
-            deps=deps,
-        )
-    elif tool == "evidence_read":
-        result_dict = await execute_evidence_read(
-            uri=args.get("uri"),
-            encoding=args.get("encoding"),
-            max_bytes=args.get("max_bytes"),
-            include_content=args.get("include_content", True),
-            verify_sha256=args.get("verify_sha256", True),
-            deps=deps,
-        )
-    elif tool == "artifacts_put":
-        result_dict = await execute_artifacts_put(
-            uri=args.get("uri"),
-            path=args.get("path"),
-            content=args.get("content"),
-            content_base64=args.get("content_base64"),
-            encoding=args.get("encoding", "utf-8"),
-            expected_sha256=args.get("expected_sha256"),
-            deps=deps,
-        )
-    elif tool == "artifacts_get":
-        result_dict = await execute_artifacts_get(
-            uri=args.get("uri"),
-            path=args.get("path"),
-            encoding=args.get("encoding"),
-            max_bytes=args.get("max_bytes"),
-            include_content=args.get("include_content", True),
-            deps=deps,
-        )
-    elif tool == "artifacts_exists":
-        result_dict = await execute_artifacts_exists(
-            uri=args.get("uri"),
-            path=args.get("path"),
-            deps=deps,
-        )
-    elif tool == "logbook_create_item":
-        result_dict = await execute_logbook_create_item(
-            item_type=args.get("item_type"),
-            title=args.get("title"),
-            status=args.get("status"),
-            owner_user_id=args.get("owner_user_id"),
-            scope_json=args.get("scope_json"),
-            project_key=args.get("project_key"),
-            deps=deps,
-        )
-    elif tool == "logbook_add_event":
-        result_dict = await execute_logbook_add_event(
-            item_id=args.get("item_id"),
-            event_type=args.get("event_type"),
-            payload_json=args.get("payload_json"),
-            status_from=args.get("status_from"),
-            status_to=args.get("status_to"),
-            actor_user_id=args.get("actor_user_id"),
-            source=args.get("source"),
-            deps=deps,
-        )
-    elif tool == "logbook_attach":
-        result_dict = await execute_logbook_attach(
-            item_id=args.get("item_id"),
-            kind=args.get("kind"),
-            uri=args.get("uri"),
-            sha256=args.get("sha256"),
-            size_bytes=args.get("size_bytes"),
-            meta_json=args.get("meta_json"),
-            deps=deps,
-        )
-    elif tool == "logbook_set_kv":
-        result_dict = await execute_logbook_set_kv(
-            namespace=args.get("namespace"),
-            key=args.get("key"),
-            value_json=args.get("value_json"),
-            deps=deps,
-        )
-    elif tool == "logbook_get_kv":
-        result_dict = await execute_logbook_get_kv(
-            namespace=args.get("namespace"),
-            key=args.get("key"),
-            deps=deps,
-        )
-    elif tool == "logbook_query_items":
-        result_dict = await execute_logbook_query_items(
-            limit=args.get("limit", 50),
-            item_type=args.get("item_type"),
-            status=args.get("status"),
-            owner_user_id=args.get("owner_user_id"),
-            deps=deps,
-        )
-    elif tool == "logbook_query_events":
-        result_dict = await execute_logbook_query_events(
-            limit=args.get("limit", 100),
-            item_id=args.get("item_id"),
-            event_type=args.get("event_type"),
-            actor_user_id=args.get("actor_user_id"),
-            since=args.get("since"),
-            deps=deps,
-        )
-    elif tool == "logbook_list_attachments":
-        result_dict = await execute_logbook_list_attachments(
-            limit=args.get("limit", 100),
-            item_id=args.get("item_id"),
-            kind=args.get("kind"),
-            deps=deps,
-        )
-    elif tool == "scm_patch_blob_resolve":
-        result_dict = await execute_scm_patch_blob_resolve(
-            evidence_uri=args.get("evidence_uri"),
-            source_type=args.get("source_type"),
-            source_id=args.get("source_id"),
-            sha256=args.get("sha256"),
-            blob_id=args.get("blob_id"),
-            deps=deps,
-        )
-    elif tool == "scm_materialize_patch_blob":
-        result_dict = await execute_scm_materialize_patch_blob(
-            blob_id=args.get("blob_id"),
-            evidence_uri=args.get("evidence_uri"),
-            source_type=args.get("source_type"),
-            source_id=args.get("source_id"),
-            sha256=args.get("sha256"),
-            deps=deps,
-        )
+            if tool == "memory_store":
+                store_result = await memory_store_impl(
+                    payload_md=args.get("payload_md", ""),
+                    target_space=args.get("target_space"),
+                    meta_json=args.get("meta_json"),
+                    kind=args.get("kind"),
+                    evidence_refs=args.get("evidence_refs"),
+                    evidence=args.get("evidence"),
+                    is_bulk=args.get("is_bulk", False),
+                    item_id=args.get("item_id"),
+                    actor_user_id=args.get("actor_user_id"),
+                    correlation_id=correlation_id,
+                    deps=deps,
+                )
+                result_dict = {"ok": store_result.ok, **store_result.model_dump()}
 
-    else:
-        raise ValueError(f"未知工具: {tool}")
+            elif tool == "memory_query":
+                query_result = await memory_query_impl(
+                    query=args.get("query", ""),
+                    spaces=args.get("spaces"),
+                    filters=args.get("filters"),
+                    top_k=args.get("top_k", 10),
+                    correlation_id=correlation_id,
+                    deps=deps,
+                )
+                result_dict = {"ok": query_result.ok, **query_result.model_dump()}
 
-    # 契约：确保所有工具结果都包含 correlation_id
-    # 即使响应模型已包含 correlation_id，此处也确保使用入口层生成的值
-    result_dict["correlation_id"] = correlation_id
-    return result_dict
+            elif tool == "memory_list":
+                list_result = deps.openmemory_client.list_memories(
+                    user_id=args.get("user_id"),
+                    space=args.get("space"),
+                    limit=args.get("limit", 100),
+                    offset=args.get("offset", 0),
+                )
+                result_dict = {
+                    "ok": list_result.success,
+                    "memories": list_result.memories or [],
+                    "total": list_result.total,
+                }
+                if list_result.error:
+                    result_dict["error"] = list_result.error
+                    result_dict["message"] = list_result.error
+
+            elif tool == "memory_get":
+                get_result = deps.openmemory_client.get_memory(memory_id=args.get("memory_id", ""))
+                result_dict = {
+                    "ok": get_result.success,
+                    "memory": get_result.memory,
+                }
+                if get_result.error:
+                    result_dict["error"] = get_result.error
+                    result_dict["message"] = get_result.error
+
+            elif tool == "memory_reinforce":
+                reinforce_result = deps.openmemory_client.reinforce(
+                    memory_id=args.get("memory_id", ""),
+                    delta=args.get("delta", 1.0),
+                    reason=args.get("reason"),
+                )
+                result_dict = {
+                    "ok": reinforce_result.success,
+                    "memory_id": reinforce_result.memory_id,
+                    "new_strength": reinforce_result.new_strength,
+                }
+                if reinforce_result.error:
+                    result_dict["error"] = reinforce_result.error
+                    result_dict["message"] = reinforce_result.error
+
+            elif tool == "memory_wipe":
+                wipe_result = deps.openmemory_client.wipe(
+                    confirm=args.get("confirm", False),
+                    user_id=args.get("user_id"),
+                )
+                result_dict = {
+                    "ok": wipe_result.success,
+                    "deleted_count": wipe_result.deleted_count,
+                }
+                if wipe_result.error:
+                    result_dict["error"] = wipe_result.error
+                    result_dict["message"] = wipe_result.error
+
+            elif tool == "reliability_report":
+                # 函数内导入：仅在 reliability_report 工具被调用时才导入依赖
+                # 这支持依赖缺失时的优雅降级（返回 ok=false + error_code）
+                try:
+                    from ..logbook_adapter import get_reliability_report
+
+                    report = get_reliability_report()
+                    result_dict = {"ok": True, **report}
+                except ImportError as e:
+                    logger.warning(f"reliability_report 依赖导入失败: {e}")
+                    result_dict = {
+                        "ok": False,
+                        "message": f"reliability_report 依赖不可用: {e}",
+                        "error_code": ReliabilityReportErrorCode.IMPORT_FAILED,
+                        "outbox_stats": {},
+                        "audit_stats": {},
+                        "v2_evidence_stats": {},
+                        "content_intercept_stats": {},
+                        "generated_at": "",
+                    }
+                except Exception as e:
+                    logger.exception(f"reliability_report 执行失败: {e}")
+                    result_dict = {
+                        "ok": False,
+                        "message": f"报告生成失败: {e}",
+                        "error_code": ReliabilityReportErrorCode.EXECUTION_FAILED,
+                        "outbox_stats": {},
+                        "audit_stats": {},
+                        "v2_evidence_stats": {},
+                        "content_intercept_stats": {},
+                        "generated_at": "",
+                    }
+
+            elif tool == "governance_update":
+                gov_result = await governance_update_impl(
+                    team_write_enabled=args.get("team_write_enabled"),
+                    policy_json=args.get("policy_json"),
+                    admin_key=args.get("admin_key"),
+                    actor_user_id=args.get("actor_user_id"),
+                    correlation_id=correlation_id,
+                    deps=deps,
+                )
+                result_dict = {"ok": gov_result.ok, **gov_result.model_dump(mode="json")}
+
+            elif tool == "evidence_upload":
+                result_dict = await execute_evidence_upload(
+                    content=args.get("content"),
+                    content_type=args.get("content_type"),
+                    title=args.get("title"),
+                    actor_user_id=args.get("actor_user_id"),
+                    project_key=args.get("project_key"),
+                    item_id=args.get("item_id"),
+                    deps=deps,
+                )
+            elif tool == "evidence_read":
+                result_dict = await execute_evidence_read(
+                    uri=args.get("uri"),
+                    encoding=args.get("encoding"),
+                    max_bytes=args.get("max_bytes"),
+                    include_content=args.get("include_content", True),
+                    verify_sha256=args.get("verify_sha256", True),
+                    deps=deps,
+                )
+            elif tool == "artifacts_put":
+                result_dict = await execute_artifacts_put(
+                    uri=args.get("uri"),
+                    path=args.get("path"),
+                    content=args.get("content"),
+                    content_base64=args.get("content_base64"),
+                    encoding=args.get("encoding", "utf-8"),
+                    expected_sha256=args.get("expected_sha256"),
+                    deps=deps,
+                )
+            elif tool == "artifacts_get":
+                result_dict = await execute_artifacts_get(
+                    uri=args.get("uri"),
+                    path=args.get("path"),
+                    encoding=args.get("encoding"),
+                    max_bytes=args.get("max_bytes"),
+                    include_content=args.get("include_content", True),
+                    deps=deps,
+                )
+            elif tool == "artifacts_exists":
+                result_dict = await execute_artifacts_exists(
+                    uri=args.get("uri"),
+                    path=args.get("path"),
+                    deps=deps,
+                )
+            elif tool == "logbook_create_item":
+                result_dict = await execute_logbook_create_item(
+                    item_type=args.get("item_type"),
+                    title=args.get("title"),
+                    status=args.get("status"),
+                    owner_user_id=args.get("owner_user_id"),
+                    scope_json=args.get("scope_json"),
+                    project_key=args.get("project_key"),
+                    deps=deps,
+                )
+            elif tool == "logbook_add_event":
+                result_dict = await execute_logbook_add_event(
+                    item_id=args.get("item_id"),
+                    event_type=args.get("event_type"),
+                    payload_json=args.get("payload_json"),
+                    status_from=args.get("status_from"),
+                    status_to=args.get("status_to"),
+                    actor_user_id=args.get("actor_user_id"),
+                    source=args.get("source"),
+                    deps=deps,
+                )
+            elif tool == "logbook_attach":
+                result_dict = await execute_logbook_attach(
+                    item_id=args.get("item_id"),
+                    kind=args.get("kind"),
+                    uri=args.get("uri"),
+                    sha256=args.get("sha256"),
+                    size_bytes=args.get("size_bytes"),
+                    meta_json=args.get("meta_json"),
+                    deps=deps,
+                )
+            elif tool == "logbook_set_kv":
+                result_dict = await execute_logbook_set_kv(
+                    namespace=args.get("namespace"),
+                    key=args.get("key"),
+                    value_json=args.get("value_json"),
+                    deps=deps,
+                )
+            elif tool == "logbook_get_kv":
+                result_dict = await execute_logbook_get_kv(
+                    namespace=args.get("namespace"),
+                    key=args.get("key"),
+                    deps=deps,
+                )
+            elif tool == "logbook_query_items":
+                result_dict = await execute_logbook_query_items(
+                    limit=args.get("limit", 50),
+                    item_type=args.get("item_type"),
+                    status=args.get("status"),
+                    owner_user_id=args.get("owner_user_id"),
+                    deps=deps,
+                )
+            elif tool == "logbook_query_events":
+                result_dict = await execute_logbook_query_events(
+                    limit=args.get("limit", 100),
+                    item_id=args.get("item_id"),
+                    event_type=args.get("event_type"),
+                    actor_user_id=args.get("actor_user_id"),
+                    since=args.get("since"),
+                    deps=deps,
+                )
+            elif tool == "logbook_list_attachments":
+                result_dict = await execute_logbook_list_attachments(
+                    limit=args.get("limit", 100),
+                    item_id=args.get("item_id"),
+                    kind=args.get("kind"),
+                    deps=deps,
+                )
+            elif tool == "scm_patch_blob_resolve":
+                result_dict = await execute_scm_patch_blob_resolve(
+                    evidence_uri=args.get("evidence_uri"),
+                    source_type=args.get("source_type"),
+                    source_id=args.get("source_id"),
+                    sha256=args.get("sha256"),
+                    blob_id=args.get("blob_id"),
+                    deps=deps,
+                )
+            elif tool == "scm_materialize_patch_blob":
+                result_dict = await execute_scm_materialize_patch_blob(
+                    blob_id=args.get("blob_id"),
+                    evidence_uri=args.get("evidence_uri"),
+                    source_type=args.get("source_type"),
+                    source_id=args.get("source_id"),
+                    sha256=args.get("sha256"),
+                    deps=deps,
+                )
+
+            else:
+                raise ValueError(f"未知工具: {tool}")
+
+            # 契约：确保所有工具结果都包含 correlation_id
+            # 即使响应模型已包含 correlation_id，此处也确保使用入口层生成的值
+            result_dict["correlation_id"] = correlation_id
+            tool_status = "ok" if result_dict.get("ok", True) else "error"
+            return result_dict
+        except Exception:
+            tool_status = "exception"
+            raise
+        finally:
+            observe_mcp_tool_call(tool, tool_status, max(time.perf_counter() - started, 0.0))
 
 
 def list_tools() -> list:

@@ -119,6 +119,28 @@ $env:PROJECT_KEY="default"
 python -m uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
+#### 可观测性（Phase 2）
+
+Gateway 默认暴露 Prometheus 指标端点：
+
+```bash
+curl -fsS http://127.0.0.1:8787/metrics | head
+```
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8787/metrics | Select-Object -ExpandProperty Content
+```
+
+常用开关（可写入 `.env.local` / `.env.ps1`）：
+
+- `ENGRAM_PG_USE_POOL=1`：启用 `psycopg_pool` 连接池
+- `ENGRAM_PG_POOL_MIN_SIZE=1` / `ENGRAM_PG_POOL_MAX_SIZE=10`
+- `ENGRAM_PG_POOL_TIMEOUT_SEC=10`
+- `GATEWAY_METRICS_ENABLED=1`：启用 `/metrics`
+- `GATEWAY_OTEL_ENABLED=1`：启用基础 tracing（缺少 OTel 依赖时自动降级为日志 span）
+- `GATEWAY_OTEL_EXPORTER=console`：将 span 输出到日志/控制台
+- `GATEWAY_OTEL_SERVICE_NAME=engram-gateway`
+
 > WSL2 部署（含端口暴露到 Windows/局域网）请参考：`docs/gateway/01_openmemory_deploy_windows.md` 的 “方案 B：WSL2 + Debian 全栈”。 
 
 ## 1. 安装 PostgreSQL

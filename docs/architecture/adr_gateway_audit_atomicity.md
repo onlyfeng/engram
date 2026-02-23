@@ -552,6 +552,6 @@ SELECT correlation_id FROM write_audit
 
 ### 11.2 后续（Phase 2，独立迭代）
 
-- [ ] `psycopg_pool` 连接池接入（含生命周期关闭）
-- [ ] Gateway `/metrics` 与基础 tracing 埋点
-- [ ] 文档与环境变量说明同步
+- [x] `psycopg_pool` 连接池接入（含生命周期关闭）
+- [x] Gateway `/metrics` 与基础 tracing 埋点
+- [x] 文档与环境变量说明同步
