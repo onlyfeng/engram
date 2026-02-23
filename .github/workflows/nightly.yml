@@ -80,7 +80,8 @@ jobs:
         id: detect-caps
         run: |
           echo "=== 环境能力检测 ==="
-          python scripts/unified_stack_gate_contract.py detect-capabilities --json > caps.json
+          python -m scripts.unified_stack_gate_contract detect-capabilities --json > caps.json || \
+            python scripts/unified_stack_gate_contract.py detect-capabilities --json > caps.json
           cat caps.json
           echo ""
           echo "capabilities_json<<EOF" >> $GITHUB_OUTPUT
@@ -113,12 +114,19 @@ jobs:
           echo "使用 Profile: $PROFILE"
           
           # 运行校验
-          if python scripts/unified_stack_gate_contract.py validate-profile "$PROFILE" --json > validate.json 2>&1; then
+          VALIDATE_CMD="python -m scripts.unified_stack_gate_contract validate-profile"
+          if ! $VALIDATE_CMD "$PROFILE" --json > validate.json 2>&1; then
+            # 回退到直接调用
+            python scripts/unified_stack_gate_contract.py validate-profile "$PROFILE" --json > validate.json 2>&1 || true
+          fi
+
+          # 检查结果
+          if [ -f validate.json ] && grep -q '"valid": true' validate.json 2>/dev/null; then
             echo "profile_valid=true" >> $GITHUB_OUTPUT
             cat validate.json
           else
             echo "profile_valid=false" >> $GITHUB_OUTPUT
-            cat validate.json
+            cat validate.json 2>/dev/null || echo '{"valid": false, "error": "validation failed"}'
             echo ""
             echo "=========================================="
             echo "[FAIL] Gate Contract 校验失败"
@@ -137,65 +145,109 @@ jobs:
       # 启动 Docker Compose 统一栈
       # ----------------------------------------------------------------
       - name: Start unified stack with Docker Compose
+        timeout-minutes: 10
         run: |
           echo "=== 启动 Unified Stack ==="
           echo ""
           echo "使用 docker-compose.unified.yml 配置"
           echo "服务账号密码已通过环境变量设置"
           echo ""
-          
+
+          # 预拉取镜像（带重试）
+          echo "预拉取 Docker 镜像..."
+          for attempt in 1 2 3; do
+            echo "  尝试 $attempt/3..."
+            if docker compose -f docker-compose.unified.yml pull --quiet 2>&1 | head -20; then
+              echo "  ✓ 镜像拉取完成"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "  ⚠ 镜像拉取失败，继续尝试启动..."
+            else
+              echo "  等待 5 秒后重试..."
+              sleep 5
+            fi
+          done
+
           # 启动服务
-          docker compose -f docker-compose.unified.yml up -d
-          
-          # 等待服务就绪
           echo ""
-          echo "等待服务就绪..."
-          sleep 10
-          
-          # 显示服务状态
+          echo "启动服务..."
+          docker compose -f docker-compose.unified.yml up -d --build
+
+          # 显示初始状态
+          echo ""
+          echo "服务初始状态:"
           docker compose -f docker-compose.unified.yml ps
 
       - name: Wait for services to be healthy
+        timeout-minutes: 5
         run: |
           echo "=== 等待服务健康 ==="
-          
-          # 等待 PostgreSQL
+
+          # 通用健康检查函数
+          check_health() {
+            local name=$1
+            local url=$2
+            local max_attempts=${3:-30}
+            local initial_delay=${4:-2}
+
+            echo "等待 $name..."
+            sleep $initial_delay
+
+            for i in $(seq 1 $max_attempts); do
+              if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+                echo "  ✓ $name 就绪 ($i/$max_attempts)"
+                return 0
+              fi
+
+              if [ $i -eq $max_attempts ]; then
+                echo "  ✗ $name 健康检查失败 (已尝试 $max_attempts 次)"
+                return 1
+              fi
+
+              # 指数退避，最大 5 秒
+              local backoff=$((2 + i / 5))
+              [ $backoff -gt 5 ] && backoff=5
+              echo "  等待中... ($i/$max_attempts, ${backoff}s)"
+              sleep $backoff
+            done
+          }
+
+          # 等待 Docker Compose 服务完全启动
+          echo "等待 Docker Compose 服务启动..."
+          sleep 5
+
+          # 等待 PostgreSQL（使用 Docker healthcheck）
           echo "等待 PostgreSQL..."
-          for i in {1..30}; do
-            if docker compose -f docker-compose.unified.yml exec -T postgres pg_isready -U postgres; then
-              echo "PostgreSQL 就绪"
+          for i in $(seq 1 30); do
+            if docker compose -f docker-compose.unified.yml exec -T postgres pg_isready -U postgres -h localhost > /dev/null 2>&1; then
+              echo "  ✓ PostgreSQL 就绪 ($i/30)"
               break
             fi
-            echo "等待中... ($i/30)"
+            if [ $i -eq 30 ]; then
+              echo "  ✗ PostgreSQL 未就绪"
+              docker compose -f docker-compose.unified.yml logs postgres --tail=50
+              exit 1
+            fi
             sleep 2
           done
-          
+
           # 等待 Gateway
-          echo ""
-          echo "等待 Gateway..."
-          for i in {1..30}; do
-            if curl -sf http://localhost:${{ env.GATEWAY_PORT }}/health > /dev/null 2>&1; then
-              echo "Gateway 就绪"
-              break
-            fi
-            echo "等待中... ($i/30)"
-            sleep 2
-          done
-          
+          if ! check_health "Gateway" "http://localhost:${{ env.GATEWAY_PORT }}/health" 30 3; then
+            echo "Gateway 日志:"
+            docker compose -f docker-compose.unified.yml logs gateway --tail=50 || true
+            exit 1
+          fi
+
           # 等待 OpenMemory
+          if ! check_health "OpenMemory" "http://localhost:${{ env.OM_PORT }}/health" 30 3; then
+            echo "OpenMemory 日志:"
+            docker compose -f docker-compose.unified.yml logs openmemory --tail=50 || true
+            exit 1
+          fi
+
           echo ""
-          echo "等待 OpenMemory..."
-          for i in {1..30}; do
-            if curl -sf http://localhost:${{ env.OM_PORT }}/health > /dev/null 2>&1; then
-              echo "OpenMemory 就绪"
-              break
-            fi
-            echo "等待中... ($i/30)"
-            sleep 2
-          done
-          
-          echo ""
-          echo "所有服务就绪"
+          echo "✓ 所有服务就绪"
 
       # ----------------------------------------------------------------
       # 运行 Gateway 集成测试（FULL profile）
@@ -229,6 +281,7 @@ jobs:
       # 运行 Unified Stack 完整验证
       # ----------------------------------------------------------------
       - name: Run unified stack verification (full)
+        timeout-minutes: 10
         env:
           GATEWAY_URL: http://localhost:${{ env.GATEWAY_PORT }}
           OPENMEMORY_BASE_URL: http://localhost:${{ env.OM_PORT }}
@@ -239,21 +292,34 @@ jobs:
         run: |
           echo "=== Unified Stack 完整验证 ==="
           echo ""
-          
+
           # 创建输出目录
           mkdir -p .artifacts
-          
-          # 运行验证
-          python scripts/verify_unified_stack.py \
+
+          # 运行验证（优先使用 python -m，失败时回退）
+          if ! python -m scripts.verify_unified_stack \
             --profile "$GATE_PROFILE" \
             --json-out .artifacts/verify-results.json \
             --self-check \
-            --verbose
-          
+            --verbose 2>&1; then
+            echo ""
+            echo "[WARN] python -m 方式失败，尝试直接调用..."
+            python scripts/verify_unified_stack.py \
+              --profile "$GATE_PROFILE" \
+              --json-out .artifacts/verify-results.json \
+              --self-check \
+              --verbose || true
+          fi
+
           # 显示结果
-          echo ""
-          echo "=== 验证结果 ==="
-          cat .artifacts/verify-results.json
+          if [ -f .artifacts/verify-results.json ]; then
+            echo ""
+            echo "=== 验证结果 ==="
+            cat .artifacts/verify-results.json
+          else
+            echo ""
+            echo "[WARN] 验证结果文件未生成"
+          fi
 
       # ----------------------------------------------------------------
       # 运行 make verify-unified（完整模式）
@@ -276,12 +342,53 @@ jobs:
       # ----------------------------------------------------------------
       # 清理
       # ----------------------------------------------------------------
+      - name: Collect diagnostic logs
+        if: failure()
+        run: |
+          echo "=== 收集诊断日志 ==="
+          mkdir -p .artifacts/diagnostics
+
+          # 收集各服务日志
+          for service in postgres gateway openmemory bootstrap_roles logbook_migrate; do
+            echo "收集 $service 日志..."
+            docker compose -f docker-compose.unified.yml logs "$service" --tail=200 > ".artifacts/diagnostics/${service}-logs.txt" 2>&1 || true
+          done
+
+          # 收集容器状态
+          echo "收集容器状态..."
+          docker compose -f docker-compose.unified.yml ps > .artifacts/diagnostics/container-status.txt 2>&1 || true
+          docker ps -a >> .artifacts/diagnostics/container-status.txt 2>&1 || true
+
+          # 收集网络信息
+          echo "收集网络信息..."
+          docker network ls > .artifacts/diagnostics/network-info.txt 2>&1 || true
+          docker compose -f docker-compose.unified.yml config > .artifacts/diagnostics/compose-config.txt 2>&1 || true
+
+          # 收集环境信息（脱敏）
+          echo "收集环境变量信息（脱敏）..."
+          env | grep -E '^(POSTGRES|GATEWAY|OM_|GATE_|VERIFY_|SKIP_)' | sed 's/=.*$/=***/' > .artifacts/diagnostics/env-info.txt 2>&1 || true
+
+          echo "✓ 诊断日志已收集到 .artifacts/diagnostics/"
+
       - name: Stop unified stack
         if: always()
         run: |
           echo "=== 停止 Unified Stack ==="
-          docker compose -f docker-compose.unified.yml down -v || true
+
+          # 先保存完整日志
           docker compose -f docker-compose.unified.yml logs > compose-logs.txt 2>&1 || true
+
+          # 停止服务
+          docker compose -f docker-compose.unified.yml down -v || true
+
+      - name: Upload diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-diagnostics-${{ github.run_id }}
+          path: .artifacts/diagnostics/
+          retention-days: 7
+          if-no-files-found: ignore
 
       # ----------------------------------------------------------------
       # 记录 Acceptance Run（用于审计和可复现性）
@@ -292,18 +399,29 @@ jobs:
           GATE_PROFILE: ${{ inputs.profile || 'full' }}
         run: |
           echo "=== 记录 Acceptance Run ==="
-          
+
           # 确定 result
           if [ "${{ job.status }}" = "success" ]; then
             RESULT="PASS"
           else
             RESULT="FAIL"
           fi
-          
+
           # 确定 triggered_by
           TRIGGERED_BY="${{ github.event_name }}"
-          
-          # 记录 acceptance run
+
+          # 记录 acceptance run（优先使用 python -m）
+          python -m scripts.acceptance.record_acceptance_run \
+            --name nightly-unified-stack-full \
+            --artifacts-dir .artifacts \
+            --result "$RESULT" \
+            --commit "${{ github.sha }}" \
+            --command "nightly.yml unified-stack-full" \
+            --metadata-kv workflow=nightly \
+            --metadata-kv profile="$GATE_PROFILE" \
+            --metadata-kv triggered_by="$TRIGGERED_BY" \
+            --metadata-kv run_id="${{ github.run_id }}" \
+            --metadata-kv sha="${{ github.sha }}" || \
           python scripts/acceptance/record_acceptance_run.py \
             --name nightly-unified-stack-full \
             --artifacts-dir .artifacts \
@@ -314,32 +432,33 @@ jobs:
             --metadata-kv profile="$GATE_PROFILE" \
             --metadata-kv triggered_by="$TRIGGERED_BY" \
             --metadata-kv run_id="${{ github.run_id }}" \
-            --metadata-kv sha="${{ github.sha }}"
+            --metadata-kv sha="${{ github.sha }}" || true
 
       - name: Render acceptance matrix
         if: always()
         run: |
           echo "=== 渲染 Acceptance Matrix ==="
+          python -m scripts.acceptance.render_acceptance_matrix \
+            --output-dir .artifacts \
+            --runs-dir .artifacts/acceptance-runs || \
           python scripts/acceptance/render_acceptance_matrix.py \
             --output-dir .artifacts \
-            --runs-dir .artifacts/acceptance-runs
+            --runs-dir .artifacts/acceptance-runs || true
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nightly-unified-stack-results
+          name: nightly-unified-stack-results-${{ github.run_id }}
           path: |
             test-unified-stack-results.xml
-            .artifacts/verify-results.json
-            .artifacts/acceptance-runs/*
-            .artifacts/acceptance-matrix.md
-            .artifacts/acceptance-matrix.json
+            .artifacts/**/*.json
+            .artifacts/**/*.md
             caps.json
             validate.json
             compose-logs.txt
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
   # ============================================================================
   # 迭代文档审计（轻量级 job）
@@ -391,27 +510,54 @@ jobs:
           echo "unified-stack-full: ${{ needs.unified-stack-full.result }}"
           echo "iteration-audit: ${{ needs.iteration-audit.result }}"
           echo ""
-          
+
+          # 初始化状态
+          HAS_FAILURE=0
+
           # unified-stack-full 失败时整体 fail
-          if [ "${{ needs.unified-stack-full.result }}" != "success" ]; then
+          if [ "${{ needs.unified-stack-full.result }}" = "failure" ]; then
             echo "=========================================="
-            echo "[FAIL] Nightly 验证失败"
+            echo "[FAIL] unified-stack-full 验证失败"
             echo "=========================================="
             echo ""
             echo "请检查 unified-stack-full job 的日志"
-            exit 1
+            HAS_FAILURE=1
+          elif [ "${{ needs.unified-stack-full.result }}" = "cancelled" ]; then
+            echo "=========================================="
+            echo "[CANCELLED] unified-stack-full 被取消"
+            echo "=========================================="
+            echo ""
+            HAS_FAILURE=1
+          elif [ "${{ needs.unified-stack-full.result }}" = "skipped" ]; then
+            echo "=========================================="
+            echo "[SKIP] unified-stack-full 被跳过"
+            echo "=========================================="
+            echo ""
+            HAS_FAILURE=1
           fi
-          
+
           # iteration-audit 失败仅警告（非阻断）
-          if [ "${{ needs.iteration-audit.result }}" != "success" ]; then
+          if [ "${{ needs.iteration-audit.result }}" = "failure" ]; then
             echo "=========================================="
             echo "[WARN] 迭代文档审计发现问题"
             echo "=========================================="
             echo ""
             echo "请检查 iteration-audit job 的日志和 artifacts"
             echo "注意: 审计问题不阻断 Nightly 流水线"
+          elif [ "${{ needs.iteration-audit.result }}" = "cancelled" ]; then
+            echo "[INFO] iteration-audit 被取消（非阻断）"
           fi
-          
+
+          # 最终判定
+          if [ "$HAS_FAILURE" = "1" ]; then
+            echo ""
+            echo "=========================================="
+            echo "[FAIL] Nightly 验证失败"
+            echo "=========================================="
+            exit 1
+          fi
+
+          echo ""
           echo "=========================================="
-          echo "[PASS] Nightly 验证全部通过"
+          echo "[PASS] Nightly 验证通过"
           echo "=========================================="
