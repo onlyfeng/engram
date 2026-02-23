@@ -71,60 +71,140 @@ DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 
 #### 3. 启动服务
 
-> 注意：`make install-full` 只安装 Engram 依赖；`make gateway` **只启动 Gateway**，不会自动安装/拉起 OpenMemory。  
-> - **Docker Compose 统一栈**：OpenMemory 会随 `docker compose -f docker-compose.unified.yml up -d --build` 一起启动  
-> - **原生部署（非 Docker）**：请先在**另一个终端**启动 OpenMemory（`opm serve`），再启动 Gateway（详见 `docs/installation.md` / `docs/gateway/01_openmemory_deploy_windows.md`）
+`make install-full` 只安装 Engram 依赖；`make gateway` **只启动 Gateway**，不会自动拉起 OpenMemory。  
+推荐先明确部署方式，再执行对应步骤：
+
+- **方式 A（原生部署）**：手动启动 OpenMemory，再启动 Gateway
+- **方式 B（Docker Compose 统一栈）**：一条命令拉起 OpenMemory + Gateway + PostgreSQL
+
+##### 3.1 初始化环境变量（跨平台）
+
+推荐优先使用仓库内脚本加载 `.env` / `.env.local`：
 
 ```bash
-# （原生部署）先启动 OpenMemory（新终端）
-# - 安装/编译 opm：见 docs/installation.md 的 “安装 OpenMemory”
-# - 首次启动需要建表：可临时切换到 migrator 登录（不写 .env）
-#   eval "$(make --no-print-directory env-openmemory-first-run)"
-#   Windows PowerShell 见 docs/installation.md 的等价用法
-# - 若遇权限错误：先执行 make openmemory-grant-svc-full 再重启 opm serve
-# eval "$(make --no-print-directory env-shell)"
-# opm serve
-
-# 设置环境变量
-# 推荐：如果你在 setup-db 时选择写入 .env.local，可直接加载（不会自动写入当前 shell）
-set -a; [ -f .env.local ] && . ./.env.local; set +a
-# 或：不想手写 source 片段时可用（不打印任何密钥/密码）
-# eval "$(make --no-print-directory env-shell)"
-# 或：一键加载 .env/.env.local（进入 engram 目录）
-# source scripts/ops/load_env_local.sh
-# Windows PowerShell: .\scripts\windows\load_env_local.ps1
-
-# 或手动设置（把 <pwd> 换成你的密码）
-export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
-export OPENMEMORY_BASE_URL="http://localhost:8080"
-export PROJECT_KEY="default"  # 项目标识（可自定义；建议与项目/数据库名一致）
-
-# 启动 Gateway
-make gateway
-
-# （新终端，可选）验证：
-# make mcp-doctor    # 仅验证 Gateway MCP（不依赖 OpenMemory）
-# make stack-doctor  # 全栈验证（OpenMemory health + memory_store 写入）
-# STACK_DOCTOR_FULL=1 make stack-doctor  # 全功能验证（含 evidence/artifacts/logbook）
+# Linux / macOS / WSL
+source scripts/ops/load_env_local.sh
 ```
 
-**Windows PowerShell 无 make 时**：环境变量用 `$env:VAR="值"` 设置；若有 `.env.local` 可逐行执行其中的赋值，或先设再启动：
+```powershell
+# Windows PowerShell
+.\scripts\windows\load_env_local.ps1
+```
+
+若你不使用脚本，最少需要以下变量：
+
+```bash
+export POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
+export OPENMEMORY_BASE_URL="http://localhost:8080"
+export PROJECT_KEY="default"
+```
+
 ```powershell
 $env:POSTGRES_DSN="postgresql://logbook_svc:<pwd>@localhost:5432/engram"
 $env:OPENMEMORY_BASE_URL="http://localhost:8080"
 $env:PROJECT_KEY="default"
-uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
-# 验证（新终端）：python scripts/ops/mcp_doctor.py  或  python scripts/ops/stack_doctor.py
-# 全功能验证：python scripts/ops/stack_doctor.py --full
 ```
 
+##### 3.2 原生部署启动（OpenMemory + Gateway）
+
+Linux/macOS/WSL（两个终端）：
+
+```bash
+# 终端 A：启动 OpenMemory
+# 首次建表可先临时切 migrator 身份（不写入 .env）
+# eval "$(make --no-print-directory env-openmemory-first-run)"
+opm serve
+```
+
+```bash
+# 终端 B：启动 Gateway
+make gateway
+
+# 可选验证
+make mcp-doctor
+make stack-doctor
+# STACK_DOCTOR_FULL=1 make stack-doctor
+```
+
+Windows PowerShell（两个终端）：
+
+```powershell
+# 终端 A：OpenMemory
+.\scripts\windows\load_env_local.ps1
+opm serve
+```
+
+```powershell
+# 终端 B：Gateway
+.\scripts\windows\load_env_local.ps1
+uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
+
+# 可选验证
+python scripts/ops/mcp_doctor.py
+python scripts/ops/stack_doctor.py
+# python scripts/ops/stack_doctor.py --full
+```
+
+##### 3.3 Docker Compose 统一栈启动
+
+```bash
+docker compose -f docker-compose.unified.yml up -d --build
+
+# 可选：查看状态
+docker compose -f docker-compose.unified.yml ps
+
+# 可选：停止
+docker compose -f docker-compose.unified.yml down -v
+```
+
+##### 3.4 各平台便携脚本与服务注册
+
+| 平台 | 场景 | 脚本 / 方式 |
+|------|------|-------------|
+| Linux/macOS/WSL | 加载环境变量 | `source scripts/ops/load_env_local.sh` |
+| Windows PowerShell | 加载环境变量 | `.\scripts\windows\load_env_local.ps1` |
+| Windows PowerShell | 一键初始化数据库 | `.\scripts\windows\setup_db.ps1` |
+| Windows PowerShell | 全栈诊断 | `.\scripts\windows\stack_doctor.ps1` |
+| Windows PowerShell | 注册 Windows 服务（NSSM） | `.\scripts\windows\install_services.ps1` |
+
+**Windows 服务注册（NSSM）**
+
+1. 以管理员 PowerShell 运行  
+2. 准备 `scripts/windows/tools/nssm/nssm.exe`  
+3. 复制并编辑本地配置：
+   - `scripts/windows/config.ps1.example` → `scripts/windows/config.ps1`
+4. 执行：
+
+```powershell
+.\scripts\windows\install_services.ps1
+```
+
+更详细参数说明见：
+- `scripts/windows/00_prereqs.md`
+- `docs/gateway/01_openmemory_deploy_windows.md`
+
+**WSL2 / Linux systemd 托管（可选）**
+
+建议按文档示例创建 `/etc/engram/*.env` 和 `openmemory.service / engram-gateway.service / engram-outbox.service` 后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now openmemory engram-gateway engram-outbox
+```
+
+完整示例见 `docs/gateway/01_openmemory_deploy_windows.md`（B.7）。
+
+**macOS launchd 托管（可选）**
+
+README 下方已提供 `LaunchAgents` 示例，或直接参考 `docs/installation.md` 的 launchd 章节。
+
 服务默认监听 `http://0.0.0.0:8787`（MCP: `/mcp`）。  
-**Cursor MCP 只需要连接 Gateway**，不会直连 OpenMemory；因此 OpenMemory **只要对 Gateway 可达即可**。  
-- **WSL2 场景**：如果你想在 Windows 浏览器打开 OpenMemory Dashboard/API，优先访问 `http://localhost:8080`；若不通，改用 `http://<wsl-ip>:8080`（在 WSL2 内 `hostname -I` 查看），或按 `docs/gateway/01_openmemory_deploy_windows.md` 的 “B.9” 做端口转发。
+Cursor MCP 只连接 Gateway，不直连 OpenMemory；因此 OpenMemory 只需对 Gateway 可达。
 
 > 常见提示：
-> - `opm serve` 报 `permission denied for schema openmemory`：可先用 `eval "$(make --no-print-directory env-openmemory-first-run)"` 临时切到 migrator 登录，或执行 `make openmemory-grant-svc-full` 再重启 OpenMemory（Windows PowerShell 等价用法见 [安装指南](docs/installation.md) / [Gateway Windows 部署](docs/gateway/01_openmemory_deploy_windows.md)）
-> - `opm serve` 警告 `OM_TIER not set`：可在 `.env.local` 设置 `OM_TIER="hybrid"`（或 fast/smart/deep）
+> - `opm serve` 报 `permission denied for schema openmemory`：可先用 `eval "$(make --no-print-directory env-openmemory-first-run)"` 临时切到 migrator 登录，或执行 `make openmemory-grant-svc-full` 后重启
+> - `opm serve` 警告 `OM_TIER not set`：在 `.env.local` 设置 `OM_TIER="hybrid"`（或 fast/smart/deep）
+> - WSL2 下若 Windows 访问 `localhost:8080` 不通，可用 `hostname -I` 获取 WSL IP 并改用 `http://<wsl-ip>:8080`
 
 ### 二、客户端配置
 
