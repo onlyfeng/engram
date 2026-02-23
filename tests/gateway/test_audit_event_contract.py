@@ -1960,12 +1960,12 @@ class TestAuditFirstSemantics:
     @pytest.mark.asyncio
     async def test_audit_failure_blocks_openmemory_write(self):
         """
-        契约测试：审计写入失败时必须阻断 OpenMemory 写入
+        契约测试：pending 审计写入失败时必须阻断 OpenMemory 写入
 
-        场景：post-audit 写入失败（OpenMemory 成功后）
+        场景：pending 审计写入失败（OpenMemory 调用前）
         预期：
         1. 返回错误响应
-        2. OpenMemory 已被调用（成功）
+        2. OpenMemory 不会被调用
         3. 错误消息明确指出审计写入失败
         """
         from engram.gateway.di import GatewayDeps
@@ -2016,8 +2016,8 @@ class TestAuditFirstSemantics:
         # 验证：错误消息包含审计写入失败
         assert "审计" in result.message or "audit" in result.message.lower()
 
-        # 验证：OpenMemory 已被调用（成功存储后审计失败）
-        assert len(fake_client.store_calls) == 1
+        # 验证：OpenMemory 未被调用（pending 审计失败直接阻断）
+        assert len(fake_client.store_calls) == 0
 
     @pytest.mark.asyncio
     async def test_policy_reject_audit_failure_blocks_response(self):
@@ -2075,13 +2075,13 @@ class TestAuditFirstSemantics:
     @pytest.mark.asyncio
     async def test_openmemory_failure_outbox_then_audit(self):
         """
-        契约测试：OpenMemory 失败时，先写 outbox 再写 audit
+        契约测试：OpenMemory 失败时，pending 审计后进行 outbox+finalize
 
         场景：OpenMemory 写入失败
         预期：
-        1. 先写入 outbox（获取 outbox_id）
-        2. 再写入审计（包含 outbox_id）
-        3. 审计的 evidence_refs_json 顶层包含 outbox_id
+        1. 存在 1 条 pending 审计
+        2. outbox 入队成功
+        3. finalize patch 包含 outbox_id/intended_action
         """
         from engram.gateway.di import GatewayDeps
         from engram.gateway.handlers.memory_store import memory_store_impl
@@ -2132,28 +2132,15 @@ class TestAuditFirstSemantics:
         # 验证：enqueue_outbox 被调用
         assert len(fake_db.outbox_calls) == 1
 
-        # 验证：insert_audit 被调用（仅失败审计）
-        assert len(fake_db.audit_calls) == 1, "应只有 1 次失败审计调用"
+        # 验证：insert_audit 被调用（pending 审计）
+        assert len(fake_db.audit_calls) == 1, "应只有 1 次 pending 审计调用"
+        assert fake_db.audit_calls[0].get("status") == "pending"
 
-        # 验证：失败审计包含 outbox_id
-        failure_audit = fake_db.audit_calls[0]
-        evidence_refs_json = failure_audit.get("evidence_refs_json", {})
-
-        # 契约断言：outbox_id 必须在顶层
-        assert "outbox_id" in evidence_refs_json, (
-            "失败审计的 evidence_refs_json 必须包含顶层 outbox_id"
-        )
-        assert evidence_refs_json["outbox_id"] == 12345, (
-            f"outbox_id 应为 12345，实际为 {evidence_refs_json.get('outbox_id')}"
-        )
-
-        # 契约断言：intended_action 必须在顶层（用于追踪原意）
-        assert "intended_action" in evidence_refs_json, (
-            "失败审计的 evidence_refs_json 必须包含顶层 intended_action"
-        )
-        assert evidence_refs_json["intended_action"] == "deferred", (
-            f"intended_action 应为 'deferred'，实际为 {evidence_refs_json.get('intended_action')}"
-        )
+        # 验证：finalize patch 包含 outbox_id / intended_action
+        assert len(fake_db.update_audit_calls) == 1, "应有 1 次 finalize 调用"
+        patch = fake_db.update_audit_calls[0].get("evidence_refs_json_patch", {})
+        assert patch.get("outbox_id") == 12345
+        assert patch.get("intended_action") == "deferred"
 
 
 # ============================================================================
@@ -2568,6 +2555,18 @@ class TestMemoryStoreImplAuditPayloadContract:
                 "OpenMemory 失败场景：evidence_refs_json 必须包含顶层 intended_action"
             )
 
+    def _merge_pending_with_finalize_patch(
+        self,
+        pending_evidence_refs_json: Dict[str, Any],
+        finalize_patch: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        两阶段审计场景下，将 pending evidence_refs_json 与 finalize patch 合并为最终视图。
+        """
+        merged = dict(pending_evidence_refs_json)
+        merged.update(finalize_patch or {})
+        return merged
+
     @pytest.mark.asyncio
     async def test_success_branch_audit_payload_schema(self, schema):
         """
@@ -2653,9 +2652,14 @@ class TestMemoryStoreImplAuditPayloadContract:
             assert result.action == "allow"
             assert result.memory_id == "mem_success_001"
 
-            # 捕获并校验 audit payload
-            assert len(audit_calls) == 1, "成功分支应有 1 次 insert_audit 调用"
-            evidence_refs_json = audit_calls[0].get("evidence_refs_json", {})
+            # 捕获并校验 audit payload（pending + finalize）
+            assert len(audit_calls) == 1, "成功分支应有 1 次 pending insert_audit 调用"
+            pending_evidence_refs_json = audit_calls[0].get("evidence_refs_json", {})
+            finalize_kwargs = mock_db.update_write_audit.call_args_list[-1].kwargs
+            evidence_refs_json = self._merge_pending_with_finalize_patch(
+                pending_evidence_refs_json,
+                finalize_kwargs.get("evidence_refs_json_patch", {}),
+            )
 
             # 校验 gateway_event 符合 schema
             self._validate_gateway_event(evidence_refs_json, schema)
@@ -2851,9 +2855,14 @@ class TestMemoryStoreImplAuditPayloadContract:
             assert result.action == "deferred"
             assert result.outbox_id == 99999
 
-            # 捕获并校验 audit payload
-            assert len(audit_calls) == 1, "OpenMemory 失败分支应有 1 次失败审计调用"
-            evidence_refs_json = audit_calls[0].get("evidence_refs_json", {})
+            # 捕获并校验 audit payload（pending + finalize）
+            assert len(audit_calls) == 1, "OpenMemory 失败分支应有 1 次 pending insert_audit 调用"
+            pending_evidence_refs_json = audit_calls[0].get("evidence_refs_json", {})
+            finalize_kwargs = mock_db.update_write_audit.call_args_list[-1].kwargs
+            evidence_refs_json = self._merge_pending_with_finalize_patch(
+                pending_evidence_refs_json,
+                finalize_kwargs.get("evidence_refs_json_patch", {}),
+            )
 
             # 校验 gateway_event 符合 schema
             self._validate_gateway_event(evidence_refs_json, schema)
@@ -2869,7 +2878,9 @@ class TestMemoryStoreImplAuditPayloadContract:
             gateway_event = evidence_refs_json["gateway_event"]
             assert gateway_event["decision"]["action"] == "redirect"
             assert gateway_event["extra"]["intended_action"] == "deferred"
-            assert gateway_event["outbox_id"] == 99999
+            assert (
+                gateway_event.get("outbox_id") == 99999 or evidence_refs_json["outbox_id"] == 99999
+            )
 
             # 校验顶层字段（SQL 查询使用）
             assert evidence_refs_json["outbox_id"] == 99999

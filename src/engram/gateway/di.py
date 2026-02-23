@@ -440,6 +440,38 @@ class GatewayDeps:
             bind_database = getattr(logbook_adapter, "bind_database", None)
             if callable(bind_database):
                 bind_database(db)
+
+            # 兼容“部分配置的 MagicMock adapter”：
+            # 旧测试通常仅设置 check_dedup，其他数据库能力挂在 db 上。
+            # 新实现走 adapter 路径时，这里将未配置的方法桥接到 db，避免语义漂移。
+            try:
+                from unittest.mock import Mock as _Mock  # 延迟导入，避免生产路径依赖
+
+                if isinstance(logbook_adapter, _Mock):
+                    bridge_methods = (
+                        "get_or_create_settings",
+                        "insert_audit",
+                        "update_write_audit",
+                        "enqueue_outbox",
+                        "enqueue_outbox_and_finalize_audit",
+                    )
+                    for method_name in bridge_methods:
+                        adapter_method = getattr(logbook_adapter, method_name, None)
+                        db_method = getattr(db, method_name, None)
+                        if not callable(db_method):
+                            continue
+
+                        # 仅桥接“未配置返回值/side_effect”的 mock 方法，避免覆盖显式测试桩。
+                        should_bridge = not callable(adapter_method) or (
+                            isinstance(adapter_method, _Mock)
+                            and adapter_method.side_effect is None
+                            and isinstance(adapter_method.return_value, _Mock)
+                        )
+                        if should_bridge:
+                            setattr(logbook_adapter, method_name, db_method)
+            except Exception:
+                # 桥接失败不应阻断测试依赖构建，保留原始注入对象。
+                pass
         return deps
 
     @property

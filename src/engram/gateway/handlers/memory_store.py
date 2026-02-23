@@ -106,6 +106,14 @@ class MemoryStoreResponse(BaseModel):
     message: Optional[str] = None
 
 
+def _to_updated_count(value: Any) -> int:
+    """将 update_write_audit 返回值收敛为 int，兼容测试中的 mock 返回类型。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 async def memory_store_impl(
     payload_md: str,
     target_space: Optional[str] = None,
@@ -738,14 +746,16 @@ def _handle_success(
         validate_refs_reason=validate_refs_reason,
         evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
     )
-    updated_count = audit_store.update_write_audit(
-        correlation_id=correlation_id,
-        status="success",
-        reason_suffix=None,
-        evidence_refs_json_patch={
-            "memory_id": memory_id,
-            "gateway_event": post_audit_gateway_event,
-        },
+    updated_count = _to_updated_count(
+        audit_store.update_write_audit(
+            correlation_id=correlation_id,
+            status="success",
+            reason_suffix=None,
+            evidence_refs_json_patch={
+                "memory_id": memory_id,
+                "gateway_event": post_audit_gateway_event,
+            },
+        )
     )
     if updated_count != 1:
         raise AuditWriteError(
@@ -865,7 +875,7 @@ def _handle_openmemory_failure(
             and isinstance(atomic_result[0], int)
         ):
             outbox_id = int(atomic_result[0])
-            updated_count = int(atomic_result[1])
+            updated_count = _to_updated_count(atomic_result[1])
             atomic_finalize_done = True
         else:
             logger.warning(
@@ -880,16 +890,18 @@ def _handle_openmemory_failure(
             item_id=item_id,
             last_error=error_msg,
         )
-        updated_count = audit_store.update_write_audit(
-            correlation_id=correlation_id,
-            status="redirected",
-            reason_suffix=f"{error_reason}:outbox:{outbox_id}",
-            replace_reason=True,
-            evidence_refs_json_patch={
-                "outbox_id": outbox_id,
-                "gateway_event": failure_gateway_event,
-                "intended_action": "deferred",
-            },
+        updated_count = _to_updated_count(
+            audit_store.update_write_audit(
+                correlation_id=correlation_id,
+                status="redirected",
+                reason_suffix=f"{error_reason}:outbox:{outbox_id}",
+                replace_reason=True,
+                evidence_refs_json_patch={
+                    "outbox_id": outbox_id,
+                    "gateway_event": failure_gateway_event,
+                    "intended_action": "deferred",
+                },
+            )
         )
 
     if updated_count != 1:

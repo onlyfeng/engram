@@ -28,12 +28,17 @@
 from __future__ import annotations
 
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 # 项目根目录
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# 兼容扁平导入与包导入共存，避免出现两个模块实例导致路径 patch 漂移。
+sys.modules.setdefault("iteration_evidence_naming", sys.modules[__name__])
+sys.modules.setdefault("scripts.iteration.iteration_evidence_naming", sys.modules[__name__])
 
 # 证据输出目录
 EVIDENCE_DIR = REPO_ROOT / "docs" / "acceptance" / "evidence"

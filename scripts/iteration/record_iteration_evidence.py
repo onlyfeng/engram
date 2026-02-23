@@ -59,6 +59,10 @@ from scripts.iteration.iteration_evidence_schema import CURRENT_SCHEMA_REF
 # 项目根目录
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# 兼容扁平导入与包导入共存，避免出现两个模块实例导致 monkeypatch 失效。
+sys.modules.setdefault("record_iteration_evidence", sys.modules[__name__])
+sys.modules.setdefault("scripts.iteration.record_iteration_evidence", sys.modules[__name__])
+
 # 敏感键模式（不区分大小写）
 SENSITIVE_KEY_PATTERNS = [
     re.compile(r".*password.*", re.IGNORECASE),

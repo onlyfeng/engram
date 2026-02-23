@@ -4382,8 +4382,8 @@ class TestAuditFirstSemantics:
             assert result.ok is False
             assert result.action == "error"
 
-            # 验证：OpenMemory 已被调用（审计失败在后置阶段）
-            mock_client.store.assert_called_once()
+            # 两阶段语义：pending 审计失败会在 OpenMemory 调用前阻断
+            mock_client.store.assert_not_called()
 
             # 验证：错误消息明确
             assert "审计" in result.message or "audit" in result.message.lower()

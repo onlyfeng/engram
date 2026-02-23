@@ -22,6 +22,12 @@ from engram.logbook.errors import ErrorCode
 HANDLER_MODULE = "engram.gateway.handlers.memory_store"
 
 
+def _get_last_finalize_call_kwargs(mock_db: MagicMock) -> dict:
+    """获取最后一次 update_write_audit 的 kwargs（两阶段审计 finalize）。"""
+    assert mock_db.update_write_audit.call_count >= 1, "应至少调用 1 次 update_write_audit"
+    return mock_db.update_write_audit.call_args_list[-1].kwargs
+
+
 # ======================== 测试配置辅助函数 ========================
 #
 # 注意: 推荐使用 conftest.py 中的 gateway_deps fixture 进行依赖注入。
@@ -228,36 +234,21 @@ class TestGatewayErrorCodes:
                 f"correlation_id 必须以 'corr-' 开头，实际: {result.correlation_id}"
             )
 
-            # 关键断言：验证审计 reason 以 openmemory_write_failed:connection_error 开头
-            assert len(captured_audits) >= 1
-            # 找到失败审计（reason 包含 openmemory_write_failed）
-            failure_audit = None
-            for audit in captured_audits:
-                if "openmemory_write_failed" in str(audit.get("reason", "")):
-                    failure_audit = audit
-                    break
-            assert failure_audit is not None, (
-                f"应存在 openmemory_write_failed 审计记录，实际审计: {captured_audits}"
+            # 关键断言：两阶段 finalize 的 reason/patch 正确
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            reason_suffix = str(finalize_kwargs.get("reason_suffix", ""))
+            assert reason_suffix.startswith(ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION), (
+                "OpenMemory 连接失败时 finalize reason_suffix 必须以 "
+                f"{ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION} 开头，实际: {reason_suffix}"
             )
-            assert str(failure_audit["reason"]).startswith(
-                ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION
-            ), (
-                "OpenMemory 连接失败时 reason 必须以 "
-                f"{ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION} 开头，实际: {failure_audit['reason']}"
+            assert finalize_kwargs.get("status") == "redirected"
+            evidence_patch = finalize_kwargs.get("evidence_refs_json_patch", {})
+            assert evidence_patch.get("intended_action") == "deferred", (
+                "失败 finalize patch 必须包含 intended_action=deferred"
             )
-
-            # 关键断言：审计内部 action 为 "redirect"（表示重定向到 outbox）
-            assert failure_audit["action"] == "redirect", (
-                f"OpenMemory 失败时审计 action 必须为 'redirect'，实际: {failure_audit['action']}"
-            )
-
-            # 关键断言：验证 evidence_refs_json 中包含 intended_action
-            evidence_refs_json = failure_audit.get("evidence_refs_json", {})
-            assert "intended_action" in evidence_refs_json, (
-                "失败审计的 evidence_refs_json 必须包含 intended_action"
-            )
-            assert evidence_refs_json["intended_action"] == "deferred", (
-                f"intended_action 应为 'deferred'，实际为 {evidence_refs_json.get('intended_action')}"
+            gateway_event = evidence_patch.get("gateway_event", {})
+            assert gateway_event.get("decision", {}).get("action") == "redirect", (
+                "OpenMemory 失败时内部审计 action 必须为 redirect"
             )
 
     @pytest.mark.asyncio
@@ -608,13 +599,10 @@ class TestOpenMemoryAPIErrorWithStatus:
             )
 
             assert result.ok is False
-            assert len(captured_audits) == 1
-            audit = captured_audits[0]
-
-            # 关键断言: reason 必须以 openmemory_write_failed:api_error_404 开头
             expected_reason = ErrorCode.openmemory_api_error(404)
-            assert str(audit["reason"]).startswith(expected_reason), (
-                f"OpenMemory API 404 错误时 reason 必须以 {expected_reason} 开头，实际: {audit['reason']}"
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            assert str(finalize_kwargs.get("reason_suffix", "")).startswith(expected_reason), (
+                f"OpenMemory API 404 错误时 finalize reason_suffix 必须以 {expected_reason} 开头"
             )
 
     @pytest.mark.asyncio
@@ -668,13 +656,10 @@ class TestOpenMemoryAPIErrorWithStatus:
             )
 
             assert result.ok is False
-            assert len(captured_audits) == 1
-            audit = captured_audits[0]
-
-            # 关键断言: reason 必须以 openmemory_write_failed:api_error_500 开头
             expected_reason = ErrorCode.openmemory_api_error(500)
-            assert str(audit["reason"]).startswith(expected_reason), (
-                f"OpenMemory API 500 错误时 reason 必须以 {expected_reason} 开头，实际: {audit['reason']}"
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            assert str(finalize_kwargs.get("reason_suffix", "")).startswith(expected_reason), (
+                f"OpenMemory API 500 错误时 finalize reason_suffix 必须以 {expected_reason} 开头"
             )
 
 
@@ -740,12 +725,11 @@ class TestUnknownExceptionErrorCodes:
             )
 
             assert result.ok is False
-            assert len(captured_audits) == 1
-            audit = captured_audits[0]
-
-            # 关键断言
-            assert str(audit["reason"]).startswith(ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC), (
-                f"OpenMemory 通用错误时 reason 必须以 {ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC} 开头，实际: {audit['reason']}"
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            assert str(finalize_kwargs.get("reason_suffix", "")).startswith(
+                ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC
+            ), (
+                f"OpenMemory 通用错误时 finalize reason_suffix 必须以 {ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC} 开头"
             )
 
 
@@ -1186,18 +1170,15 @@ class TestUnifiedResponseContract:
                 f"correlation_id 格式不正确: {result.correlation_id}"
             )
 
-            # 契约断言：审计内部 action 为 redirect（表示重定向到 outbox）
-            assert len(captured_audits) >= 1, "应至少有一条审计记录"
-            failure_audit = captured_audits[-1]  # 最后一条是失败审计
-            assert failure_audit["action"] == "redirect", (
-                f"审计内部 action 必须为 'redirect'，实际: {failure_audit['action']}"
+            # 契约断言：两阶段 finalize 内部语义
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            assert finalize_kwargs.get("status") == "redirected"
+            evidence_patch = finalize_kwargs.get("evidence_refs_json_patch", {})
+            gateway_event = evidence_patch.get("gateway_event", {})
+            assert gateway_event.get("decision", {}).get("action") == "redirect", (
+                "审计内部 action 必须为 redirect"
             )
-
-            # 契约断言：evidence_refs_json 中包含 intended_action="deferred"
-            evidence_refs_json = failure_audit.get("evidence_refs_json", {})
-            assert evidence_refs_json.get("intended_action") == "deferred", (
-                f"evidence_refs_json.intended_action 应为 'deferred'，实际: {evidence_refs_json.get('intended_action')}"
-            )
+            assert evidence_patch.get("intended_action") == "deferred"
 
     @pytest.mark.asyncio
     async def test_allow_response_contract(self, test_config):
@@ -1724,14 +1705,11 @@ class TestDeferredOutboxScenarios:
             assert captured_outbox[0]["payload_md"] == "test content"
             assert captured_outbox[0]["target_space"] == "team:test"
 
-            # 验证审计记录
-            assert len(captured_audits) >= 1
-            # 找到失败审计
-            failure_audit = [
-                a for a in captured_audits if "openmemory" in str(a.get("reason", "")).lower()
-            ]
-            assert len(failure_audit) >= 1
-            assert ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION in failure_audit[0]["reason"]
+            # 验证两阶段 finalize reason
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            assert ErrorCode.OPENMEMORY_WRITE_FAILED_CONNECTION in str(
+                finalize_kwargs.get("reason_suffix", "")
+            )
 
     @pytest.mark.asyncio
     async def test_api_4xx_error_triggers_deferred(self):
@@ -1799,12 +1777,10 @@ class TestDeferredOutboxScenarios:
             assert result.action == "deferred"
             assert result.outbox_id == 200
 
-            # 验证审计记录包含正确的错误码
-            failure_audit = [
-                a for a in captured_audits if "api_error" in str(a.get("reason", "")).lower()
-            ]
-            assert len(failure_audit) >= 1
-            assert "400" in failure_audit[0]["reason"]
+            # 验证 finalize reason_suffix 包含正确错误码
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            reason_suffix = str(finalize_kwargs.get("reason_suffix", ""))
+            assert "api_error_400" in reason_suffix
 
     @pytest.mark.asyncio
     async def test_api_5xx_error_triggers_deferred(self):
@@ -1872,12 +1848,10 @@ class TestDeferredOutboxScenarios:
             assert result.action == "deferred"
             assert result.outbox_id == 300
 
-            # 验证审计记录
-            failure_audit = [
-                a for a in captured_audits if "api_error" in str(a.get("reason", "")).lower()
-            ]
-            assert len(failure_audit) >= 1
-            assert "503" in failure_audit[0]["reason"]
+            # 验证 finalize reason_suffix
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            reason_suffix = str(finalize_kwargs.get("reason_suffix", ""))
+            assert "api_error_503" in reason_suffix
 
     @pytest.mark.asyncio
     async def test_generic_error_triggers_deferred(self):
@@ -1945,12 +1919,10 @@ class TestDeferredOutboxScenarios:
             assert result.action == "deferred"
             assert result.outbox_id == 400
 
-            # 验证审计记录
-            failure_audit = [
-                a for a in captured_audits if "openmemory" in str(a.get("reason", "")).lower()
-            ]
-            assert len(failure_audit) >= 1
-            assert ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC in failure_audit[0]["reason"]
+            # 验证 finalize reason_suffix
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            reason_suffix = str(finalize_kwargs.get("reason_suffix", ""))
+            assert ErrorCode.OPENMEMORY_WRITE_FAILED_GENERIC in reason_suffix
 
     @pytest.mark.asyncio
     async def test_deferred_response_message_contains_error_details(self):
@@ -2137,12 +2109,14 @@ class TestOutboxAuditIntegrity:
                 deps=deps,
             )
 
-            # 验证操作顺序：先 outbox 入队，后审计
+            # 两阶段审计语义：先写 pending 审计，再执行 outbox 入队并 finalize
             assert "outbox" in operation_order
             assert "audit" in operation_order
             outbox_idx = operation_order.index("outbox")
             audit_idx = operation_order.index("audit")
-            assert outbox_idx < audit_idx, f"outbox 应在 audit 之前，实际顺序: {operation_order}"
+            assert audit_idx < outbox_idx, (
+                f"pending 审计应在 outbox 之前，实际顺序: {operation_order}"
+            )
 
     @pytest.mark.asyncio
     async def test_outbox_id_included_in_audit(self):
@@ -2198,16 +2172,10 @@ class TestOutboxAuditIntegrity:
                 deps=deps,
             )
 
-            # 验证审计记录的 evidence_refs_json 包含 outbox_id
-            failure_audit = [
-                a for a in captured_audits if "openmemory" in str(a.get("reason", "")).lower()
-            ]
-            assert len(failure_audit) >= 1
-            evidence_refs = failure_audit[0].get("evidence_refs_json", {})
-            assert (
-                evidence_refs.get("outbox_id") == expected_outbox_id
-                or evidence_refs.get("extra", {}).get("outbox_id") == expected_outbox_id
-            )
+            # 验证 finalize patch 包含 outbox_id
+            finalize_kwargs = _get_last_finalize_call_kwargs(mock_db)
+            evidence_patch = finalize_kwargs.get("evidence_refs_json_patch", {})
+            assert evidence_patch.get("outbox_id") == expected_outbox_id
 
 
 if __name__ == "__main__":
