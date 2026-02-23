@@ -173,7 +173,8 @@ PROFILE_CONFIGS: dict[ProfileType, ProfileConfig] = {
         required_capabilities=[
             "openmemory_endpoint_present",
             "docker_available",
-            "docker_daemon_ok",
+            # 注意：docker_daemon_ok 是运行时状态，不在配置验证阶段检查
+            # CI 中在启动 docker 之前执行 validate-profile，daemon 检查会导致死锁
             "can_stop_openmemory",
             "db_access_available",  # psql 或 psycopg 之一
             "postgres_dsn_present",
@@ -291,24 +292,24 @@ def _check_compose_configured() -> tuple[bool, str]:
 
 
 def _check_can_stop_openmemory() -> tuple[bool, str]:
-    """检查是否可以停止 openmemory 容器（基于 docker + compose 可用性）"""
-    # 先检查 docker
+    """检查是否可以停止 openmemory 容器（基于 docker + compose 可用性）
+
+    注意：此检查仅验证配置层面的前置条件（docker 命令存在 + compose 文件配置）。
+    Docker daemon 的运行状态是运行时检查，不在配置阶段验证。
+    这是为了避免 CI 中的死锁：validate-profile 步骤需要在启动 docker 之前执行，
+    但不应因为 docker 尚未启动而失败。
+    """
+    # 检查 docker 命令是否存在
     if not _check_command_exists("docker"):
         return False, "Docker not available"
 
-    # 检查 daemon
-    daemon_ok, msg = _check_docker_daemon()
-    if not daemon_ok:
-        return False, msg
-
-    # 检查 compose
+    # 检查 compose 文件是否配置（不检查 daemon 状态）
     compose_ok, msg = _check_compose_configured()
     if not compose_ok:
         return False, msg
 
-    # 检查是否有 openmemory 服务定义
-    # （简化检查：假设有 compose 文件就可以停止）
-    return True, "Can stop openmemory container"
+    # 配置层面检查通过
+    return True, "Can stop openmemory container (docker available, compose configured)"
 
 
 def _check_psycopg() -> tuple[bool, str]:
