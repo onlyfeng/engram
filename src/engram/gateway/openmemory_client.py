@@ -167,6 +167,48 @@ class SearchResult:
             self.results = []
 
 
+@dataclass
+class ListResult:
+    """记忆列表结果（OpenMemory 1.3.0+）"""
+
+    success: bool
+    memories: Optional[list[dict[str, Any]]] = None
+    total: int = 0
+    error: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.memories is None:
+            self.memories = []
+
+
+@dataclass
+class GetResult:
+    """单条记忆获取结果（OpenMemory 1.3.0+）"""
+
+    success: bool
+    memory: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class ReinforceResult:
+    """记忆强化结果（OpenMemory 1.3.0+）"""
+
+    success: bool
+    memory_id: Optional[str] = None
+    new_strength: Optional[float] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class WipeResult:
+    """数据库清空结果（OpenMemory 1.3.0+，测试隔离用）"""
+
+    success: bool
+    deleted_count: int = 0
+    error: Optional[str] = None
+
+
 # ---------- HTTP 客户端 ----------
 
 
@@ -576,6 +618,237 @@ class OpenMemoryClient:
             logger.warning(f"OpenMemory health check failed: {e}")
             return False
 
+    # ========== OpenMemory 1.3.0+ 新增方法 ==========
+
+    def list_memories(
+        self,
+        user_id: Optional[str] = None,
+        space: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> ListResult:
+        """
+        列出记忆（OpenMemory 1.3.0+）
+
+        对应端点：GET /memory/all
+
+        Args:
+            user_id: 用户 ID（用于过滤私有空间）
+            space: 空间过滤（如 team:project, private:user）
+            limit: 返回数量限制
+            offset: 分页偏移
+
+        Returns:
+            ListResult 结果对象
+        """
+        url = f"{self.base_url}/memory/all"
+
+        # 构建查询参数
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if user_id:
+            params["user_id"] = user_id
+        if space:
+            params["space"] = space
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(url, params=params, headers=self._get_headers())
+                response.raise_for_status()
+                data = response.json()
+
+                # 兼容返回结构
+                memories = data.get("memories") or data.get("results") or []
+                total = data.get("total") or len(memories)
+
+                return ListResult(
+                    success=True,
+                    memories=memories,
+                    total=total,
+                )
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"OpenMemory list_memories HTTP error: {e.response.status_code}")
+            return ListResult(
+                success=False,
+                error=f"http_error: {e.response.status_code}",
+            )
+
+        except Exception as e:
+            logger.error(f"OpenMemory list_memories error: {e}")
+            return ListResult(success=False, error=str(e))
+
+    def get_memory(self, memory_id: str) -> GetResult:
+        """
+        获取单条记忆详情（OpenMemory 1.3.0+）
+
+        对应端点：GET /memory/{id}
+
+        Args:
+            memory_id: 记忆 ID
+
+        Returns:
+            GetResult 结果对象
+        """
+        url = f"{self.base_url}/memory/{memory_id}"
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(url, headers=self._get_headers())
+                response.raise_for_status()
+                data = response.json()
+
+                # 兼容返回结构
+                memory = data.get("memory") or data.get("data") or data
+
+                return GetResult(success=True, memory=memory)
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return GetResult(success=False, error="memory_not_found")
+            logger.error(f"OpenMemory get_memory HTTP error: {e.response.status_code}")
+            return GetResult(success=False, error=f"http_error: {e.response.status_code}")
+
+        except Exception as e:
+            logger.error(f"OpenMemory get_memory error: {e}")
+            return GetResult(success=False, error=str(e))
+
+    def reinforce(
+        self,
+        memory_id: str,
+        delta: float = 1.0,
+        reason: Optional[str] = None,
+    ) -> ReinforceResult:
+        """
+        强化记忆（OpenMemory 1.3.0+）
+
+        对应端点：POST /memory/reinforce
+
+        Args:
+            memory_id: 记忆 ID
+            delta: 强化增量（默认 1.0）
+            reason: 强化原因（可选）
+
+        Returns:
+            ReinforceResult 结果对象
+        """
+        url = f"{self.base_url}/memory/reinforce"
+
+        payload = {
+            "memory_id": memory_id,
+            "delta": delta,
+        }
+        if reason:
+            payload["reason"] = reason
+
+        try:
+            response = self._post_with_retry(url, payload)
+            data = response.json()
+
+            return ReinforceResult(
+                success=data.get("success", True),
+                memory_id=memory_id,
+                new_strength=data.get("new_strength") or data.get("strength"),
+            )
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"OpenMemory reinforce HTTP error: {e.response.status_code}")
+            return ReinforceResult(
+                success=False,
+                memory_id=memory_id,
+                error=f"http_error: {e.response.status_code}",
+            )
+
+        except OpenMemoryError as e:
+            logger.error(f"OpenMemory reinforce error: {e}")
+            return ReinforceResult(success=False, memory_id=memory_id, error=e.message)
+
+        except Exception as e:
+            logger.error(f"OpenMemory reinforce error: {e}")
+            return ReinforceResult(success=False, memory_id=memory_id, error=str(e))
+
+    def wipe(
+        self,
+        confirm: bool = False,
+        user_id: Optional[str] = None,
+    ) -> WipeResult:
+        """
+        清空数据库（OpenMemory 1.3.0+，测试隔离用）
+
+        ⚠️ 危险操作：会清空所有记忆、向量、路径点等数据
+        对应端点：POST /admin/wipe 或 DELETE /memory/all
+
+        Args:
+            confirm: 必须设置为 True 才会执行
+            user_id: 仅清空该用户的记忆（如支持）
+
+        Returns:
+            WipeResult 结果对象
+        """
+        if not confirm:
+            return WipeResult(
+                success=False,
+                error="confirm must be True to wipe database",
+            )
+
+        # 尝试多个可能的端点（OpenMemory 不同版本实现可能不同）
+        possible_urls = [
+            f"{self.base_url}/admin/wipe",
+            f"{self.base_url}/memory/wipe",
+            f"{self.base_url}/memory/all",
+        ]
+
+        last_error: Optional[str] = None
+
+        for url in possible_urls:
+            try:
+                payload: dict[str, Any] = {"confirm": True}
+                if user_id:
+                    payload["user_id"] = user_id
+
+                with httpx.Client(timeout=30.0) as client:
+                    # 尝试 POST
+                    try:
+                        response = client.post(
+                            url, json=payload, headers=self._get_headers(), timeout=30.0
+                        )
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e_post:
+                        # 如果 POST 405，尝试 DELETE
+                        if e_post.response.status_code == 405 and "all" in url:
+                            response = client.delete(
+                                url, params=payload, headers=self._get_headers(), timeout=30.0
+                            )
+                            response.raise_for_status()
+                        else:
+                            raise
+
+                    data = response.json()
+
+                    return WipeResult(
+                        success=data.get("success", True),
+                        deleted_count=data.get("deleted_count") or data.get("count", 0),
+                    )
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    last_error = f"endpoint not found: {url}"
+                    continue
+                last_error = f"http_error: {e.response.status_code}"
+                if e.response.status_code in (401, 403):
+                    return WipeResult(
+                        success=False,
+                        error=f"unauthorized: {e.response.status_code}",
+                    )
+                continue
+
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        # 所有端点都失败
+        logger.error(f"OpenMemory wipe failed on all endpoints: {last_error}")
+        return WipeResult(success=False, error=last_error or "all endpoints failed")
+
 
 # ---------- 便捷函数 ----------
 
@@ -693,3 +966,83 @@ def search_memory(
 ) -> SearchResult:
     """便捷函数：搜索记忆"""
     return get_client().search(query, user_id, limit, filters)
+
+
+# ---------- OpenMemory 1.3.0+ 便捷函数 ----------
+
+
+def list_memories(
+    user_id: Optional[str] = None,
+    space: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> ListResult:
+    """便捷函数：列出记忆（OpenMemory 1.3.0+）"""
+    return get_client().list_memories(user_id, space, limit, offset)
+
+
+def get_memory(memory_id: str) -> GetResult:
+    """便捷函数：获取单条记忆（OpenMemory 1.3.0+）"""
+    return get_client().get_memory(memory_id)
+
+
+def reinforce_memory(
+    memory_id: str,
+    delta: float = 1.0,
+    reason: Optional[str] = None,
+) -> ReinforceResult:
+    """便捷函数：强化记忆（OpenMemory 1.3.0+）"""
+    return get_client().reinforce(memory_id, delta, reason)
+
+
+def wipe_memory(confirm: bool = False, user_id: Optional[str] = None) -> WipeResult:
+    """
+    便捷函数：清空数据库（OpenMemory 1.3.0+，测试隔离用）
+
+    ⚠️ 危险操作：会清空所有记忆数据
+
+    Args:
+        confirm: 必须设置为 True 才会执行
+        user_id: 仅清空该用户的记忆
+
+    Returns:
+        WipeResult 结果对象
+    """
+    return get_client().wipe(confirm, user_id)
+
+
+# ---------- 导出定义 ----------
+
+__all__ = [
+    # 异常类
+    "OpenMemoryError",
+    "OpenMemoryConnectionError",
+    "OpenMemoryAPIError",
+    # 配置类
+    "RetryConfig",
+    "DEFAULT_RETRY_CONFIG",
+    # 响应数据类
+    "StoreResult",
+    "SearchResult",
+    "ListResult",  # 1.3.0+
+    "GetResult",  # 1.3.0+
+    "ReinforceResult",  # 1.3.0+
+    "WipeResult",  # 1.3.0+
+    # 客户端类
+    "OpenMemoryClient",
+    # 客户端工厂函数
+    "get_client",
+    "reset_client",
+    "override_client",
+    "get_client_or_none",
+    # 便捷函数
+    "store_memory",
+    "search_memory",
+    "list_memories",  # 1.3.0+
+    "get_memory",  # 1.3.0+
+    "reinforce_memory",  # 1.3.0+
+    "wipe_memory",  # 1.3.0+
+    # 配置函数
+    "get_base_url",
+    "get_api_key",
+]
