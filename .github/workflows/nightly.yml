@@ -316,6 +316,17 @@ jobs:
           echo "  RUN_INTEGRATION_TESTS=$RUN_INTEGRATION_TESTS"
           echo "  SKIP_DEGRADATION_TEST=$SKIP_DEGRADATION_TEST"
           echo ""
+
+          # 统一栈集成测试期望 team:* 路径，预置 governance.settings 为团队写入开启
+          docker compose -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO governance.settings (project_key, team_write_enabled, policy_json, updated_at)
+          VALUES ('test', true, '{}'::jsonb, now())
+          ON CONFLICT (project_key) DO UPDATE
+          SET team_write_enabled = EXCLUDED.team_write_enabled,
+              policy_json = EXCLUDED.policy_json,
+              updated_at = now();
+          SQL
           
           # 运行 unified stack 集成测试
           pytest tests/gateway/test_unified_stack_integration.py -v \
