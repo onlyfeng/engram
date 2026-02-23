@@ -213,6 +213,27 @@ jobs:
           echo "启动服务..."
           docker compose -f docker-compose.unified.yml up -d --build
 
+          # 兼容上游 OpenMemory 镜像在启动时执行建表/迁移：
+          # openmemory_svc 默认无 CREATE 权限，这里应用 CI 兜底授权并重启服务。
+          echo ""
+          echo "应用 OpenMemory SVC 兜底授权..."
+          docker compose -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 \
+            -c "GRANT ALL PRIVILEGES ON SCHEMA openmemory TO openmemory_svc;"
+          docker compose -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 \
+            -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA openmemory TO openmemory_svc;"
+          docker compose -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 \
+            -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA openmemory TO openmemory_svc;"
+          docker compose -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 \
+            -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON TABLES TO openmemory_svc;"
+          docker compose -f docker-compose.unified.yml exec -T postgres \
+            psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 \
+            -c "ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT ALL ON SEQUENCES TO openmemory_svc;"
+          docker compose -f docker-compose.unified.yml restart openmemory
+
           # 显示初始状态
           echo ""
           echo "服务初始状态:"
