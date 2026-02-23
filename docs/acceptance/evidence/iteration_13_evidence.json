@@ -1,11 +1,11 @@
 {
   "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
   "iteration_number": 13,
-  "recorded_at": "2026-02-03T03:19:19Z",
+  "recorded_at": "2026-02-23T20:16:55Z",
   "commit_sha": "abc1234def5678901234567890abcdef12345678",
   "runner": {
-    "os": "darwin-24.6.0",
-    "python": "3.13.2",
+    "os": "windows-11",
+    "python": "3.13.6",
     "arch": "x86_64",
     "runner_label": "ubuntu-latest"
   },

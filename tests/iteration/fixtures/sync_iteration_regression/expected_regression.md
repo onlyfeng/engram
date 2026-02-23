@@ -68,7 +68,7 @@ make validate-workflows-strict && \
 |------|-----|
 | **证据文件** | [`iteration_13_evidence.json`](evidence/iteration_13_evidence.json) |
 | **Schema 版本** | `iteration_evidence_v2.schema.json` |
-| **记录时间** | 2026-02-03T03:19:19Z |
+| **记录时间** | 2026-02-23T20:16:55Z |
 | **Commit SHA** | `abc1234` |
 | **CI 运行** | [https://github.com/org/repo/actions/runs/12345](https://github.com/org/repo/actions/runs/12345) |
 

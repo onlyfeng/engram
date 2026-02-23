@@ -7,7 +7,7 @@
 |------|-----|
 | **证据文件** | [`iteration_13_evidence.json`](evidence/iteration_13_evidence.json) |
 | **Schema 版本** | `iteration_evidence_v2.schema.json` |
-| **记录时间** | 2026-02-03T03:19:19Z |
+| **记录时间** | 2026-02-23T20:16:55Z |
 | **Commit SHA** | `abc1234` |
 
 ### 门禁命令执行摘要
