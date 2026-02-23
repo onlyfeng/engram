@@ -118,6 +118,46 @@ make ci              # 2. 再验证，确保无新增问题
 
 **教训**：永远使用 `record_iteration_evidence.py` 生成证据文件，脚本会自动检测当前环境。
 
+### 案例：PowerShell 下 git commit heredoc 语法失败
+
+**问题**：在 Windows PowerShell 中使用 bash 风格的 heredoc 提交多行 commit message 会报语法错误：
+
+```powershell
+# 失败写法（bash heredoc，PowerShell 不支持）
+git commit -m "$(cat <<'EOF'
+feat: some feature
+
+- detail 1
+- detail 2
+EOF
+)"
+```
+
+**根因**：PowerShell 不支持 `<<'EOF'` heredoc 语法，`<` 被解释为重定向运算符，`&&` 也不是有效的语句分隔符（旧版 PowerShell）。
+
+**正确写法**：
+
+```powershell
+# 方法 1：多个 -m 参数（每个 -m 产生一个段落）
+git commit -m "feat: some feature" -m "- detail 1" -m "- detail 2"
+
+# 方法 2：用分号替代 && 连接命令
+cd e:\project; git add .; git commit -m "message"
+
+# 方法 3：反引号换行（PowerShell 续行符）
+git commit -m @"
+feat: some feature
+
+- detail 1
+- detail 2
+"@
+```
+
+**教训**：Agent 在 Windows 环境执行 shell 命令时，必须使用 PowerShell 兼容语法。常见差异：
+- `&&` → `;`（命令分隔）
+- `<<'EOF'...EOF` → 多个 `-m` 参数或 `@"..."@`（多行字符串）
+- `dir /s /b` → `Get-ChildItem -Recurse`（目录列表）
+
 ---
 
 ## 6. 相关文档

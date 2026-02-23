@@ -66,6 +66,7 @@ make check-workflow-contract-docs-sync  # Workflow 合约与文档同步检查
 make check-workflow-contract-version-policy  # Workflow 合约版本策略检查
 make check-mcp-error-contract           # MCP JSON-RPC 错误码合约检查
 make check-mcp-error-docs-sync          # MCP JSON-RPC 错误码文档与 Schema 同步检查
+make check-agent-rule-sync             # Agent 规则 SSOT 同步检查
 
 # 可选的独立检查（未包含在 make ci 中）
 make typecheck-gate                     # mypy baseline 模式检查（用于增量修复）
@@ -79,7 +80,6 @@ make test-iteration-tools               # 迭代工具脚本测试（无需数�
 # 建议工具（辅助开发，不阻断 CI）
 python scripts/ci/suggest_workflow_contract_updates.py --json  # 生成合约更新建议（JSON）
 python scripts/ci/suggest_workflow_contract_updates.py --markdown  # 生成合约更新建议（Markdown）
-python scripts/docs/sync_agent_rules.py --check  # Agent 规则 SSOT 同步检查
 python scripts/docs/sync_agent_rules.py --install-local-cursor-rule  # 安装本地 Cursor 规则副本
 ```
 

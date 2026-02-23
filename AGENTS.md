@@ -40,6 +40,7 @@ make check-workflow-make-targets-consistency      # Workflow Make targets 一致
 make check-mcp-error-contract           # MCP JSON-RPC 错误码合约检查
 make check-mcp-error-docs-sync          # MCP JSON-RPC 错误码文档与 Schema 同步检查
 make check-ci-test-isolation            # CI 测试隔离检查
+make check-agent-rule-sync             # Agent 规则 SSOT 同步检查
 
 # 可选的独立检查（未包含在 make ci 中）
 make typecheck                          # mypy 直接检查
@@ -57,7 +58,6 @@ pytest tests/ci/ -q                     # CI 脚本测试
 # 建议工具（辅助开发，不阻断 CI）
 python scripts/ci/suggest_workflow_contract_updates.py --json  # 生成合约更新建议（JSON）
 python scripts/ci/suggest_workflow_contract_updates.py --markdown  # 生成合约更新建议（Markdown）
-python scripts/docs/sync_agent_rules.py --check  # Agent 规则 SSOT 同步检查
 python scripts/docs/sync_agent_rules.py --install-local-cursor-rule  # 安装本地 Cursor 规则副本
 ```
 

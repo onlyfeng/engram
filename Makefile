@@ -686,6 +686,11 @@ check-ci-test-isolation:  ## CI 测试隔离检查（禁止模块级 sys.path �
 check-ci-test-isolation-json:  ## CI 测试隔离检查（JSON 输出）
 	$(PYTHON) -m scripts.ci.check_ci_test_isolation --json
 
+check-agent-rule-sync:  ## Agent 规则 SSOT 同步检查（.agentx/ssot → 生成产物）
+	@echo "检查 Agent 规则 SSOT 同步..."
+	$(PYTHON) scripts/docs/sync_agent_rules.py --check
+	@echo "Agent 规则 SSOT 同步检查通过"
+
 workflow-contract-preflight:  ## Workflow 合约预检（串行执行合约相关门禁 + CI 脚本测试）
 	@echo "运行 Workflow 合约预检..."
 	@$(MAKE) validate-workflows-strict
@@ -701,7 +706,7 @@ workflow-contract-preflight:  ## Workflow 合约预检（串行执行合约相�
 	$(PYTEST) tests/ci/ -q
 	@echo "Workflow 合约预检通过"
 
-ci: lint format-check typecheck-gate typecheck-strict-island mypy-metrics check-mypy-metrics-thresholds check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-iteration-toolchain-drift-map-contract validate-workflows-strict check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-version-policy check-workflow-contract-internal-consistency check-workflow-make-targets-consistency check-mcp-error-contract check-mcp-error-docs-sync check-ci-test-isolation  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
+ci: lint format-check typecheck-gate typecheck-strict-island mypy-metrics check-mypy-metrics-thresholds check-schemas check-env-consistency check-logbook-consistency check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-iteration-toolchain-drift-map-contract validate-workflows-strict check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-version-policy check-workflow-contract-internal-consistency check-workflow-make-targets-consistency check-mcp-error-contract check-mcp-error-docs-sync check-ci-test-isolation check-agent-rule-sync  ## 运行所有 CI 检查（与 GitHub Actions 对齐）
 	@echo ""
 	@echo "=========================================="
 	@echo "[OK] 所有 CI 检查通过"
