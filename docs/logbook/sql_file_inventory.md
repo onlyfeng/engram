@@ -24,6 +24,7 @@
 | 11 | 11_sync_jobs_dimension_columns.sql | SCM Sync | DDL | sync_jobs 添加维度列 |
 | 12 | 12_governance_artifact_ops_audit.sql | Governance | DDL | artifact 操作审计表 |
 | 13 | 13_governance_object_store_audit_events.sql | Governance | DDL | 对象存储审计事件表 |
+| 14 | 14_write_audit_status.sql | Governance | DDL | write_audit 状态字段与索引扩展 |
 | 99 | verify/99_verify_permissions.sql | Verification | Verify | 权限验证脚本（位于 verify/ 子目录） |
 
 ---
@@ -63,12 +64,13 @@
 **保留版本**: 当前版本
 **注意**: 07 文件同时包含 governance.security_events 表
 
-### 2.4 Governance (12-13)
+### 2.4 Governance (12-14)
 
 | 文件 | 内容 | 创建的表 |
 |-----|------|---------|
 | `12_governance_artifact_ops_audit.sql` | Artifact 操作审计 | governance.artifact_ops_audit |
 | `13_governance_object_store_audit_events.sql` | 对象存储审计 | governance.object_store_audit_events |
+| `14_write_audit_status.sql` | 审计状态扩展 | governance.write_audit.status/correlation_id/updated_at 与相关索引 |
 
 **保留版本**: 当前版本
 
@@ -285,14 +287,14 @@ engram-migrate --plan --no-precheck
 
 | 阶段 | 文件前缀 | 条件 |
 |-----|---------|------|
-| DDL | 01, 02, 03, 06, 07, 08, 09, 11, 12, 13 | 默认执行 |
+| DDL | 01, 02, 03, 06, 07, 08, 09, 11, 12, 13, 14 | 默认执行 |
 | Permission | 04 | `--apply-roles` |
 | Permission | 05 | `--apply-openmemory-grants` |
 | Verify | 99 | `--verify` |
 
 **脚本分类逻辑** (见 `migrate.py`):
 ```python
-DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13"}
+DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13", "14"}
 PERMISSION_SCRIPT_PREFIXES = {"04", "05"}
 VERIFY_SCRIPT_PREFIXES = {"99"}
 ```

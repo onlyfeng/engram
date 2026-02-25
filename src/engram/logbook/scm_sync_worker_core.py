@@ -295,6 +295,14 @@ def insert_sync_run_finish(
                 pass
 
 
+# 兼容旧脚本私有别名（测试与外部 monkeypatch 依赖）
+_get_db_connection = get_db_connection
+_generate_run_id = generate_run_id
+_read_cursor_before = read_cursor_before
+_insert_sync_run_start = insert_sync_run_start
+_insert_sync_run_finish = insert_sync_run_finish
+
+
 def mark_dead(*, job_id: str, worker_id: str, error: str, conn=None) -> bool:
     """标记任务为 dead"""
     try:
@@ -438,6 +446,10 @@ def get_transient_error_backoff_wrapper(error_category: Optional[str], error_mes
     return get_transient_error_backoff(error_category, error_message)
 
 
+# 兼容旧脚本私有别名
+_get_transient_error_backoff = get_transient_error_backoff_wrapper
+
+
 # ============ 执行器集成 ============
 
 
@@ -568,6 +580,7 @@ def process_one_job(
     # 锁确保同一 repo 的同一类型任务只有一个 worker 在执行
     lock_lease_seconds = int(merged_cfg["lease_seconds"])
     lock_acquired = False
+    lock_claim_failed = False
 
     try:
         lock_acquired = scm_sync_lock.claim(
@@ -578,10 +591,10 @@ def process_one_job(
             conn=conn,
         )
     except Exception:
-        # 锁获取异常视为锁获取失败
-        lock_acquired = False
+        # 锁系统异常时降级为继续执行，避免主流程被锁依赖阻断
+        lock_claim_failed = True
 
-    if not lock_acquired:
+    if not lock_acquired and not lock_claim_failed:
         # 锁被其他 worker 持有，无惩罚重入队
         requeue_without_penalty(
             job_id=job_id,
@@ -593,14 +606,14 @@ def process_one_job(
 
     # ============ sync_runs 生命周期开始 ============
     # 1. 生成 run_id
-    run_id = generate_run_id()
+    run_id = _generate_run_id()
 
     # 2. 读取 cursor_before（同步前的游标位置）
-    cursor_before = read_cursor_before(repo_id, job_type, payload, conn)
+    cursor_before = _read_cursor_before(repo_id, job_type, payload, conn)
 
     # 3. 写入 sync_run_start（status=running）
     if enable_sync_runs:
-        insert_sync_run_start(
+        _insert_sync_run_start(
             run_id=run_id,
             repo_id=repo_id,
             job_type=job_type,
@@ -658,7 +671,7 @@ def process_one_job(
             # 写入 sync_run_finish
             if enable_sync_runs:
                 payload_dict = run_payload.to_dict()
-                insert_sync_run_finish(
+                _insert_sync_run_finish(
                     run_id=run_id,
                     status=payload_dict["status"],
                     counts=payload_dict.get("counts"),
@@ -694,7 +707,7 @@ def process_one_job(
         # ============ 写入 sync_run_finish ============
         if enable_sync_runs:
             payload_dict = run_payload.to_dict()
-            insert_sync_run_finish(
+            _insert_sync_run_finish(
                 run_id=run_id,
                 status=payload_dict["status"],
                 cursor_after=payload_dict.get("cursor_after"),
@@ -768,7 +781,7 @@ def process_one_job(
                 cursor_before=cursor_before,
             )
             payload_dict = exc_payload.to_dict()
-            insert_sync_run_finish(
+            _insert_sync_run_finish(
                 run_id=run_id,
                 status=payload_dict["status"],
                 counts=payload_dict.get("counts"),

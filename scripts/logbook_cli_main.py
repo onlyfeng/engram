@@ -37,8 +37,11 @@ from engram.logbook.cli.artifacts import app as artifacts_app
 
 # 向后兼容：导出 make_ok_result, make_err_result 等辅助函数
 from engram.logbook.cli.artifacts import (
+    make_err_result,
     make_ok_result,
 )
+from engram.logbook.config import get_config
+from engram.logbook.scm_db import get_conn as get_connection
 
 # 创建主 app
 app = typer.Typer(add_completion=False)
@@ -62,9 +65,24 @@ def scm_refresh_vfacts(
     raise typer.Exit(code=0 if ok else 1)
 
 
+def load_config(*args, **kwargs):
+    """兼容旧调用方：转发到 get_config。"""
+    return get_config(*args, **kwargs)
+
+
 # 注册子命令
 app.add_typer(artifacts_app, name="artifacts")
 app.add_typer(scm_app, name="scm")
+
+__all__ = [
+    "app",
+    "scm_app",
+    "make_ok_result",
+    "make_err_result",
+    "load_config",
+    "get_connection",
+    "main",
+]
 
 
 def main() -> None:

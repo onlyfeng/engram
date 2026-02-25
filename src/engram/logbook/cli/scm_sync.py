@@ -1129,6 +1129,30 @@ def _redact_job_info(job: dict) -> dict:
     """对任务信息进行脱敏"""
     from engram.logbook.scm_auth import redact, redact_dict
 
+    def _redact_sensitive_payload(value):
+        if isinstance(value, dict):
+            result = {}
+            for key, item in value.items():
+                key_lower = str(key).lower()
+                if any(
+                    token in key_lower
+                    for token in (
+                        "token",
+                        "secret",
+                        "password",
+                        "authorization",
+                        "private_key",
+                        "api_key",
+                    )
+                ):
+                    result[key] = "<redacted>"
+                else:
+                    result[key] = _redact_sensitive_payload(item)
+            return result
+        if isinstance(value, list):
+            return [_redact_sensitive_payload(item) for item in value]
+        return value
+
     result = dict(job)
     # 脱敏 payload_json
     if result.get("payload_json"):
@@ -1140,6 +1164,7 @@ def _redact_job_info(job: dict) -> dict:
                 payload = json_mod.loads(payload)
             except Exception:
                 payload = {}
+        payload = _redact_sensitive_payload(payload) if payload else {}
         result["payload_json"] = redact_dict(payload) if payload else {}
     # 脱敏 last_error
     if result.get("last_error"):
@@ -1376,6 +1401,10 @@ def admin_main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
 
+    if not args.admin_command:
+        parser.print_help()
+        return 0
+
     if not args.dsn:
         if args.json_output:
             print(json.dumps({"error": "未提供数据库连接字符串"}))
@@ -1385,10 +1414,6 @@ def admin_main(argv: Optional[List[str]] = None) -> int:
                 file=sys.stderr,
             )
         return 1
-
-    if not args.admin_command:
-        parser.print_help()
-        return 0
 
     try:
         conn = _get_connection(args.dsn)

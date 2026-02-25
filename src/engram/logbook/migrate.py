@@ -214,9 +214,18 @@ def get_repair_commands_hint(
     db_suffix = f" (数据库: {target_db})" if target_db else ""
 
     base_commands = {
-        "bootstrap": "engram-bootstrap-roles  # 或 python -m engram.logbook.cli.db_bootstrap",
-        "migrate": "engram-migrate  # 或 python -m engram.logbook.cli.db_migrate",
-        "migrate_with_roles": "engram-migrate --apply-roles --apply-openmemory-grants",
+        "bootstrap": (
+            "engram-bootstrap-roles  # 或 python -m engram.logbook.cli.db_bootstrap；"
+            " legacy: python logbook_postgres/scripts/db_bootstrap.py"
+        ),
+        "migrate": (
+            "engram-migrate  # 或 python -m engram.logbook.cli.db_migrate；"
+            " legacy: python logbook_postgres/scripts/db_migrate.py"
+        ),
+        "migrate_with_roles": (
+            "engram-migrate --apply-roles --apply-openmemory-grants"
+            "  # legacy: python logbook_postgres/scripts/db_migrate.py --apply-roles --apply-openmemory-grants"
+        ),
         "verify": "engram-migrate --verify",
         "docker_bootstrap": "docker compose -f docker-compose.unified.yml up bootstrap_roles",
         "docker_migrate": "docker compose -f docker-compose.unified.yml up logbook_migrate openmemory_migrate",

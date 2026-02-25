@@ -305,6 +305,27 @@ def utc_today() -> date:
     return date.today()
 
 
+def _resolve_utc_today() -> date:
+    """
+    运行时解析 today 提供者。
+
+    说明：
+    某些测试会在运行过程中重载 `scripts` 命名空间并 patch
+    `scripts.ci.check_no_root_wrappers_allowlist.utc_today`。
+    为避免函数对象持有旧模块 globals 导致 patch 失效，这里优先从
+    `sys.modules` 的当前模块实例读取 `utc_today`。
+    """
+    module = sys.modules.get("scripts.ci.check_no_root_wrappers_allowlist")
+    if module is not None:
+        provider = getattr(module, "utc_today", None)
+        if callable(provider):
+            try:
+                return provider()
+            except Exception:
+                pass
+    return utc_today()
+
+
 def validate_expires_on(
     entry: Dict[str, Any],
     entry_id: str,
@@ -337,7 +358,7 @@ def validate_expires_on(
     # 校验是否过期
     try:
         expiry_date = date.fromisoformat(expires_value)
-        current_day = today or utc_today()
+        current_day = today or _resolve_utc_today()
         if current_day > expiry_date:
             result.expired_entries.append(entry_id)
             result.errors.append(

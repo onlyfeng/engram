@@ -18,6 +18,7 @@ gitlab_commits - GitLab commits 同步核心实现
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -430,6 +431,22 @@ def ensure_repo(
     )
 
 
+class _ScmRepoCompat:
+    """
+    向后兼容 shim。
+
+    旧测试/调用方会 patch ``gitlab_commits.scm_repo.ensure_repo``，这里保留同名入口。
+    """
+
+    @staticmethod
+    def ensure_repo(conn, repo_type: str, url: str, **kwargs: Any) -> int:
+        return ensure_repo(conn, repo_type=repo_type, url=url, **kwargs)
+
+
+# 兼容旧路径: engram.logbook.scm_sync_tasks.gitlab_commits.scm_repo.ensure_repo
+scm_repo = _ScmRepoCompat()
+
+
 def insert_git_commits(conn, repo_id: int, commits: List[GitCommit]) -> int:
     """插入 git commits 到数据库"""
     count = 0
@@ -502,13 +519,22 @@ def backfill_gitlab_commits(
     )
     commits = [parse_commit(item) for item in raw_commits]
 
+    # dry-run 仅验证拉取能力，不触发任何 DB 连接/写入
+    if dry_run:
+        return {
+            "success": True,
+            "synced_count": 0,
+            "watermark_updated": False,
+            "dry_run": True,
+        }
+
     # 获取或创建数据库连接
     dsn = dsn or os.environ.get("LOGBOOK_DSN") or os.environ.get("POSTGRES_DSN") or ""
     conn = get_connection(dsn)
 
     try:
         # 确保仓库存在
-        repo_id = ensure_repo(
+        repo_id = scm_repo.ensure_repo(
             conn,
             repo_type="gitlab",
             url=f"{sync_config.gitlab_url}/{sync_config.project_id}",
@@ -572,6 +598,21 @@ def sync_gitlab_commits_incremental(
         "synced_count": 0,
         "message": "incremental sync not fully implemented",
     }
+
+
+def parse_args(argv: Optional[List[str]] = None):
+    """
+    兼容旧 CLI 参数解析接口。
+
+    历史上 tests 会直接 import 本函数并验证 backfill 参数行为。
+    """
+    parser = argparse.ArgumentParser(description="scm_sync_gitlab_commits compatibility parser")
+    parser.add_argument("--backfill", action="store_true")
+    parser.add_argument("--since")
+    parser.add_argument("--until")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--update-watermark", action="store_true")
+    return parser.parse_args(argv)
 
 
 def build_mr_id(repo_id: int | str, mr_iid: int | str) -> str:

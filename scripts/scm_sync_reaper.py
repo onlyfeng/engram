@@ -20,6 +20,7 @@ scm_sync_reaper - SCM 同步任务回收器 CLI 入口
 
 from __future__ import annotations
 
+import argparse
 import sys
 import warnings
 from pathlib import Path
@@ -73,12 +74,29 @@ __all__ = [
     "process_expired_runs",
     "process_expired_locks",
     "run_reaper",
+    "build_parser",
     # CLI
     "main",
 ]
 
 
 # ============ CLI 入口（转发到新模块） ============
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """兼容旧测试的参数解析器。"""
+    parser = argparse.ArgumentParser(description="scm_sync_reaper (deprecated wrapper)")
+    parser.add_argument("--grace-seconds", type=int, default=DEFAULT_GRACE_SECONDS)
+    parser.add_argument("--max-duration-seconds", type=int, default=DEFAULT_MAX_DURATION_SECONDS)
+    parser.add_argument(
+        "--policy",
+        choices=[JobRecoveryPolicy.to_failed.value, JobRecoveryPolicy.to_pending.value],
+        default=JobRecoveryPolicy.to_failed.value,
+    )
+    parser.add_argument("--retry-delay", type=int, default=DEFAULT_RETRY_DELAY_SECONDS)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
+    return parser
 
 
 def main():

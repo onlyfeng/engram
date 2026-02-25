@@ -14,11 +14,13 @@ engram_logbook.scm_sync_job_types - SCM 同步 job_type 归一化模块
 逻辑任务类型 (logical_job_type):
 - commits: 提交记录同步（Git 或 SVN）
 - mrs: Merge Request 同步（仅 Git）
+- reviews: Merge Request Review 事件同步（仅 Git）
 - svn: SVN 专用（等同于 commits 但显式指定）
 
 物理任务类型 (physical_job_type):
 - gitlab_commits: GitLab 提交记录
 - gitlab_mrs: GitLab Merge Requests
+- gitlab_reviews: GitLab Merge Request Reviews
 - svn: SVN 提交记录
 
 使用示例:
@@ -55,6 +57,7 @@ class LogicalJobType(str, Enum):
 
     COMMITS = "commits"  # 提交记录（Git commits 或 SVN revisions）
     MRS = "mrs"  # Merge Requests（仅 Git）
+    REVIEWS = "reviews"  # MR Reviews（仅 Git）
     SVN = "svn"  # SVN（显式指定，等同于 commits for svn）
 
 
@@ -68,6 +71,7 @@ class PhysicalJobType(str, Enum):
 
     GITLAB_COMMITS = "gitlab_commits"  # GitLab 提交记录
     GITLAB_MRS = "gitlab_mrs"  # GitLab Merge Requests
+    GITLAB_REVIEWS = "gitlab_reviews"  # GitLab MR Reviews
     SVN = "svn"  # SVN 提交记录
 
 
@@ -85,6 +89,7 @@ class RepoType(str, Enum):
 ALL_PHYSICAL_JOB_TYPES: List[str] = [
     PhysicalJobType.GITLAB_COMMITS.value,
     PhysicalJobType.GITLAB_MRS.value,
+    PhysicalJobType.GITLAB_REVIEWS.value,
     PhysicalJobType.SVN.value,
 ]
 
@@ -92,6 +97,7 @@ ALL_PHYSICAL_JOB_TYPES: List[str] = [
 GIT_PHYSICAL_JOB_TYPES: List[str] = [
     PhysicalJobType.GITLAB_COMMITS.value,
     PhysicalJobType.GITLAB_MRS.value,
+    PhysicalJobType.GITLAB_REVIEWS.value,
 ]
 
 # SVN 仓库支持的物理任务类型
@@ -103,6 +109,7 @@ SVN_PHYSICAL_JOB_TYPES: List[str] = [
 ALL_LOGICAL_JOB_TYPES: List[str] = [
     LogicalJobType.COMMITS.value,
     LogicalJobType.MRS.value,
+    LogicalJobType.REVIEWS.value,
     LogicalJobType.SVN.value,
 ]
 
@@ -110,6 +117,7 @@ ALL_LOGICAL_JOB_TYPES: List[str] = [
 GIT_LOGICAL_JOB_TYPES: List[str] = [
     LogicalJobType.COMMITS.value,
     LogicalJobType.MRS.value,
+    LogicalJobType.REVIEWS.value,
 ]
 
 # SVN 仓库支持的逻辑任务类型
@@ -167,6 +175,7 @@ def logical_to_physical(
         mapping = {
             LogicalJobType.COMMITS.value: PhysicalJobType.GITLAB_COMMITS.value,
             LogicalJobType.MRS.value: PhysicalJobType.GITLAB_MRS.value,
+            LogicalJobType.REVIEWS.value: PhysicalJobType.GITLAB_REVIEWS.value,
         }
         if logical in mapping:
             return mapping[logical]
@@ -213,6 +222,7 @@ def physical_to_logical(physical_job_type: str) -> str:
     mapping = {
         PhysicalJobType.GITLAB_COMMITS.value: LogicalJobType.COMMITS.value,
         PhysicalJobType.GITLAB_MRS.value: LogicalJobType.MRS.value,
+        PhysicalJobType.GITLAB_REVIEWS.value: LogicalJobType.REVIEWS.value,
         PhysicalJobType.SVN.value: LogicalJobType.COMMITS.value,  # SVN 也是 commits
     }
 
@@ -382,6 +392,7 @@ def get_repo_type_for_physical_job_type(physical_job_type: str) -> str:
 DEFAULT_PHYSICAL_JOB_TYPE_PRIORITY = {
     PhysicalJobType.GITLAB_COMMITS.value: 100,
     PhysicalJobType.GITLAB_MRS.value: 200,
+    PhysicalJobType.GITLAB_REVIEWS.value: 300,
     PhysicalJobType.SVN.value: 100,
 }
 

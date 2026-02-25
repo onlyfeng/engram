@@ -252,11 +252,12 @@ class InlineMarker:
     expires: str
     owner: str
 
-    def is_expired(self) -> bool:
+    def is_expired(self, today: Optional[date] = None) -> bool:
         """检查标记是否已过期"""
         try:
             expiry_date = date.fromisoformat(self.expires)
-            return date.today() > expiry_date
+            current_day = today or date.today()
+            return current_day > expiry_date
         except ValueError:
             # 无效日期格式视为过期
             return True
@@ -273,12 +274,16 @@ class AllowlistEntry:
     expiry: str
     reason: str
     ticket: Optional[str] = None
+    scope: str = "import"
+    category: str = "other"
+    file_path_exact: Optional[str] = None
 
-    def is_expired(self) -> bool:
+    def is_expired(self, today: Optional[date] = None) -> bool:
         """检查条目是否已过期"""
         try:
             expiry_date = date.fromisoformat(self.expiry)
-            return date.today() > expiry_date
+            current_day = today or date.today()
+            return current_day > expiry_date
         except ValueError:
             # 无效日期格式视为过期
             return True
@@ -287,6 +292,9 @@ class AllowlistEntry:
         """检查文件路径和模块是否匹配此条目"""
         if self.module != module:
             return False
+        # file_path（精确匹配）优先于 glob
+        if self.file_path_exact:
+            return file_path == self.file_path_exact
         # 支持 glob 模式匹配
         return fnmatch.fnmatch(file_path, self.file_pattern)
 
@@ -415,8 +423,25 @@ def validate_allowlist_entry(entry: Dict[str, Any]) -> tuple[bool, List[str]]:
 
     返回 (is_valid, missing_fields)
     """
-    required_fields = ["id", "file_pattern", "module", "owner", "expiry", "reason"]
-    missing = [f for f in required_fields if f not in entry or not entry[f]]
+    missing: List[str] = []
+    if not entry.get("id"):
+        missing.append("id")
+
+    # 兼容 file_pattern / file_glob / file_path
+    if not (entry.get("file_pattern") or entry.get("file_glob") or entry.get("file_path")):
+        missing.append("file_pattern")
+
+    if not entry.get("module"):
+        missing.append("module")
+    if not entry.get("owner"):
+        missing.append("owner")
+
+    # 兼容 expiry / expires_on
+    if not (entry.get("expiry") or entry.get("expires_on")):
+        missing.append("expiry")
+
+    if not entry.get("reason"):
+        missing.append("reason")
     return len(missing) == 0, missing
 
 
@@ -448,9 +473,12 @@ def load_allowlist(
         return entries
 
     # 校验 version
-    if data.get("version") not in ("2", "2.0"):
+    if data.get("version") not in ("1", "1.0", "2", "2.0"):
         print(
-            f"[WARN] Allowlist version 不匹配，期望 '2' 或 '2.0'，实际 '{data.get('version')}'",
+            (
+                "Allowlist version 不匹配，期望 '1'/'1.0'/'2'/'2.0'，"
+                f"实际 '{data.get('version')}'"
+            ),
             file=sys.stderr,
         )
 
@@ -471,12 +499,19 @@ def load_allowlist(
 
         entry = AllowlistEntry(
             id=entry_data["id"],
-            file_pattern=entry_data["file_pattern"],
+            file_pattern=(
+                entry_data.get("file_glob")
+                or entry_data.get("file_path")
+                or entry_data["file_pattern"]
+            ),
             module=entry_data["module"],
             owner=entry_data["owner"],
-            expiry=entry_data["expiry"],
+            expiry=entry_data.get("expires_on") or entry_data["expiry"],
             reason=entry_data["reason"],
-            ticket=entry_data.get("ticket"),
+            ticket=entry_data.get("ticket") or entry_data.get("jira_ticket"),
+            scope=entry_data.get("scope", "import"),
+            category=entry_data.get("category", "other"),
+            file_path_exact=entry_data.get("file_path"),
         )
 
         # 检查是否过期
@@ -580,6 +615,7 @@ def check_allowlist_match(
     module: str,
     marker_id: Optional[str],
     allowlist: Dict[str, AllowlistEntry],
+    scope: str = "import",
 ) -> Optional[AllowlistEntry]:
     """
     检查是否匹配有效的 allowlist 条目
@@ -591,13 +627,13 @@ def check_allowlist_match(
     if marker_id:
         # 有 marker，必须匹配指定的 allowlist id
         entry = allowlist.get(marker_id)
-        if entry and entry.matches(file_path, module):
+        if entry and entry.scope == scope and entry.matches(file_path, module):
             return entry
         return None
 
     # 无 marker，检查是否有任意匹配的条目
     for entry in allowlist.values():
-        if entry.matches(file_path, module):
+        if entry.scope == scope and entry.matches(file_path, module):
             return entry
 
     return None

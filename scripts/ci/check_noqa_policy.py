@@ -156,8 +156,14 @@ def load_lint_island_paths(project_root: Path | None = None) -> List[str]:
         with open(pyproject_path, "rb") as f:
             config = tomllib.load(f)
 
-        paths = config.get("tool", {}).get("engram", {}).get("ruff", {}).get("lint_island_paths", [])
-        return list(paths) if paths else []
+        tool_config = config.get("tool", {}).get("engram", {})
+        ruff_paths = tool_config.get("ruff", {}).get("lint_island_paths", [])
+        if ruff_paths:
+            return list(ruff_paths)
+
+        # 兼容回退：若未配置 ruff.lint_island_paths，则使用 mypy.strict_island_paths
+        mypy_paths = tool_config.get("mypy", {}).get("strict_island_paths", [])
+        return list(mypy_paths) if mypy_paths else []
     except Exception as e:
         print(f"[WARN] 无法读取 pyproject.toml: {e}", file=sys.stderr)
         return []

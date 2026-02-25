@@ -861,7 +861,7 @@ class SyncRunner:
             repo=str(self.ctx.repo),
             job=str(self.ctx.job),
             status=status,
-            items_synced=int(stats.get("synced_count", 0) or 0),
+            items_synced=int(stats.get("synced_count", stats.get("items_synced", 0)) or 0),
             message=stats.get("message"),
             error=stats.get("error"),
             started_at=started_at,

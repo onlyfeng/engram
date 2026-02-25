@@ -516,7 +516,8 @@ class SyncExecutor:
                 error_category=ErrorCategory.UNKNOWN_JOB_TYPE.value,
             )
 
-        if not is_valid_physical_job_type(job_type):
+        # 允许通过自定义 handlers 扩展非内建 job_type（向后兼容 legacy 类型）
+        if not is_valid_physical_job_type(job_type) and not self.has_handler(job_type):
             return ExecuteResult(
                 success=False,
                 error=f"invalid job_type: {job_type}",

@@ -160,7 +160,7 @@ class TestVersionField:
 
     def test_invalid_version_fails(self, schema):
         """无效的 version 值应失败"""
-        payload = {"version": "v2"}
+        payload = {"version": "v3"}
 
         with pytest.raises(ValidationError):
             validate(instance=payload, schema=schema)
