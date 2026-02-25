@@ -88,6 +88,8 @@ engram-scm-worker = "engram.logbook.cli.scm_sync:worker_main"
 engram-scm-reaper = "engram.logbook.cli.scm_sync:reaper_main"
 engram-scm-status = "engram.logbook.cli.scm_sync:status_main"
 engram-scm-runner = "engram.logbook.cli.scm_sync:runner_main"
+# Identity Sync
+engram-identity-sync = "engram.logbook.identity_sync:main"
 
 [project.urls]
 Homepage = "https://github.com/onlyfeng/engram"
@@ -113,6 +115,7 @@ pythonpath = ["."]
 markers = [
     "unit: 单元测试",
     "integration: 集成测试",
+    "gate_profile(name): 标记门禁 profile（如 full）",
 ]
 
 [tool.ruff]

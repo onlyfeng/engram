@@ -1114,6 +1114,85 @@ def parse_evidence_uri(evidence_uri: str) -> Optional[ParsedEvidenceUri]:
     )
 
 
+class ParsedDocsEvidenceUri(TypedDict):
+    """parse_docs_evidence_uri 返回的结构"""
+
+    rel_path: str  # 文档相对路径，例如 contracts/evidence_packet.md
+    sha256: str  # 64 位十六进制
+
+
+def build_docs_evidence_uri(rel_path: str, sha256: str) -> EvidenceUri:
+    """
+    构建 canonical docs evidence URI
+
+    格式: memory://docs/<rel_path>/<sha256>
+
+    Args:
+        rel_path: 文档相对路径（如 contracts/evidence_packet.md）
+        sha256: 文档内容 SHA256（64 位十六进制）
+
+    Returns:
+        EvidenceUri: 规范化后的 docs evidence URI
+
+    Raises:
+        ValueError: rel_path 为空或 sha256 非法
+    """
+    import re
+
+    normalized_rel_path = normalize_uri(rel_path).strip("/")
+    normalized_sha256 = sha256.strip().lower()
+
+    if not normalized_rel_path:
+        raise ValueError("rel_path 不能为空")
+    if not re.match(r"^[a-f0-9]{64}$", normalized_sha256):
+        raise ValueError(f"sha256 必须为 64 位十六进制字符串，got: {sha256!r}")
+
+    return EvidenceUri(f"memory://docs/{normalized_rel_path}/{normalized_sha256}")
+
+
+def parse_docs_evidence_uri(evidence_uri: str) -> Optional[ParsedDocsEvidenceUri]:
+    """
+    解析 docs evidence URI，提取 rel_path 与 sha256
+
+    规范格式: memory://docs/<rel_path>/<sha256>
+
+    Args:
+        evidence_uri: docs evidence URI 字符串
+
+    Returns:
+        ParsedDocsEvidenceUri: 解析成功时返回 {"rel_path","sha256"}
+        None: 非法格式时返回 None
+    """
+    import re
+
+    parsed = parse_uri(evidence_uri)
+    if parsed.uri_type != UriType.MEMORY:
+        return None
+
+    path = parsed.path.strip("/")
+    if not path.startswith("docs/"):
+        return None
+
+    parts = path.split("/")
+    if len(parts) < 3:
+        return None
+
+    candidate_sha256 = parts[-1].lower()
+    if not re.match(r"^[a-f0-9]{64}$", candidate_sha256):
+        return None
+
+    rel_path = "/".join(parts[1:-1]).strip("/")
+    if not rel_path:
+        return None
+
+    return ParsedDocsEvidenceUri(rel_path=rel_path, sha256=candidate_sha256)
+
+
+def is_docs_evidence_uri(uri: str) -> bool:
+    """检查 URI 是否为 docs evidence URI（memory://docs/.../<sha256>）"""
+    return parse_docs_evidence_uri(uri) is not None
+
+
 def build_evidence_uri_from_patch_blob(
     source_type: str,
     repo_id: int,

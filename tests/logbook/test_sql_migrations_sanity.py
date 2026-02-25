@@ -748,10 +748,13 @@ class TestMigrationNumberingRules:
 
     def test_migration_sequence_is_documented(self):
         """验证迁移序列中的废弃说明"""
-        from engram.logbook.migrate import DDL_SCRIPT_PREFIXES
+        from engram.logbook.migrate import DDL_SCRIPT_PREFIXES, PERMISSION_SCRIPT_PREFIXES
 
-        # 检查是否有跳号（除了已知废弃的 10）
+        # 检查是否有跳号（排除已知非 DDL 编号）
+        # - 04/05: 权限脚本前缀，不属于 DDL 序列
+        # - 10: 已废弃保留编号
         sorted_prefixes = sorted(int(p) for p in DDL_SCRIPT_PREFIXES)
+        known_non_ddl_gaps = {10, *(int(p) for p in PERMISSION_SCRIPT_PREFIXES)}
 
         gaps = []
         for i in range(len(sorted_prefixes) - 1):
@@ -761,7 +764,7 @@ class TestMigrationNumberingRules:
             if gap > 1:
                 # 记录跳号
                 for missing in range(current + 1, next_val):
-                    if missing != 10:  # 10 是已知废弃
+                    if missing not in known_non_ddl_gaps:
                         gaps.append(missing)
 
         # 如果有未记录的跳号，发出警告

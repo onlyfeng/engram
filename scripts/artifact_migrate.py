@@ -238,9 +238,9 @@ class ArtifactMigrator:
         if not self._conn:
             return DbUpdatePreview(0, 0, 0)
         with self._conn.cursor() as cur:
-            cur.execute("SELECT blob_id, uri FROM scm.patch_blobs WHERE uri IS NOT NULL")
+            cur.execute("SELECT blob_id, uri FROM patch_blobs WHERE uri IS NOT NULL")
             patch_rows = cur.fetchall()
-            cur.execute("SELECT attachment_id, uri FROM logbook.attachments WHERE uri IS NOT NULL")
+            cur.execute("SELECT attachment_id, uri FROM attachments WHERE uri IS NOT NULL")
             attach_rows = cur.fetchall()
         converted = len(patch_rows) + len(attach_rows)
         return DbUpdatePreview(
@@ -261,11 +261,11 @@ class ArtifactMigrator:
                     if item.status not in {"migrated", "verified"}:
                         continue
                     cur.execute(
-                        "UPDATE scm.patch_blobs SET uri=%s WHERE uri=%s",
+                        "UPDATE patch_blobs SET uri=%s WHERE uri=%s",
                         (item.target_uri, item.source_uri),
                     )
                     cur.execute(
-                        "UPDATE logbook.attachments SET uri=%s WHERE uri=%s",
+                        "UPDATE attachments SET uri=%s WHERE uri=%s",
                         (item.target_uri, item.source_uri),
                     )
                     updated += 2

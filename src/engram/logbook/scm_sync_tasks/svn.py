@@ -18,6 +18,7 @@ svn - SVN 同步核心实现
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -478,6 +479,20 @@ def sync_patches_for_revisions(
 
 
 # ============ 同步主函数 ============
+
+
+def parse_args(argv: Optional[List[str]] = None):
+    """解析 SVN 同步任务相关参数（兼容历史 CLI 参数形状）"""
+    parser = argparse.ArgumentParser(description="scm_sync_svn task args")
+    parser.add_argument("--repo", dest="repo", default=None)
+    parser.add_argument("--backfill", action="store_true")
+    parser.add_argument("--start-rev", type=int)
+    parser.add_argument("--end-rev", type=int)
+    parser.add_argument("--since")
+    parser.add_argument("--until")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--update-watermark", action="store_true")
+    return parser.parse_args(argv)
 
 
 def sync_svn_revisions(

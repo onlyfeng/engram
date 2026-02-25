@@ -694,46 +694,37 @@ class TestPatchBlobsUriCompatibilityMatrix:
 
 # ---------- Docs Evidence URI 测试 ----------
 #
-# 注意: docs URI 的解析函数尚未实现！
-# 以下测试为 FAILING TESTS（锁定契约），待实现后应能通过。
-#
 # 规范格式: memory://docs/<rel_path>/<sha256>
 # 示例: memory://docs/contracts/evidence_packet.md/a1b2c3d4e5f6...
 
 
 class TestDocsEvidenceUri:
     """
-    Docs Evidence URI 测试（契约锁定）
+    Docs Evidence URI 测试
 
     根据 evidence_packet.md 规范:
     - 格式: memory://docs/<rel_path>/<sha256>
     - 用途: 规格/设计文档引用
-
-    当前状态: 解析函数 parse_docs_evidence_uri() 尚未实现
     """
 
-    @pytest.mark.xfail(reason="parse_docs_evidence_uri 尚未实现，待 implement task 完成")
     def test_parse_docs_evidence_uri_exists(self):
         """契约测试: parse_docs_evidence_uri 函数应存在"""
         from engram.logbook.uri import parse_docs_evidence_uri
 
         assert callable(parse_docs_evidence_uri)
 
-    @pytest.mark.xfail(reason="build_docs_evidence_uri 尚未实现，待 implement task 完成")
     def test_build_docs_evidence_uri_exists(self):
         """契约测试: build_docs_evidence_uri 函数应存在"""
         from engram.logbook.uri import build_docs_evidence_uri
 
         assert callable(build_docs_evidence_uri)
 
-    @pytest.mark.xfail(reason="is_docs_evidence_uri 尚未实现，待 implement task 完成")
     def test_is_docs_evidence_uri_exists(self):
         """契约测试: is_docs_evidence_uri 函数应存在"""
         from engram.logbook.uri import is_docs_evidence_uri
 
         assert callable(is_docs_evidence_uri)
 
-    @pytest.mark.xfail(reason="parse_docs_evidence_uri 尚未实现，待 implement task 完成")
     def test_parse_docs_evidence_uri_contract(self):
         """契约测试: parse_docs_evidence_uri 应能解析标准格式
 
@@ -748,7 +739,6 @@ class TestDocsEvidenceUri:
         assert result["rel_path"] == "contracts/evidence_packet.md"
         assert result["sha256"] == VALID_SHA256
 
-    @pytest.mark.xfail(reason="build_docs_evidence_uri 尚未实现，待 implement task 完成")
     def test_build_docs_evidence_uri_contract(self):
         """契约测试: build_docs_evidence_uri 应能构建标准格式"""
         from engram.logbook.uri import build_docs_evidence_uri
@@ -756,7 +746,6 @@ class TestDocsEvidenceUri:
         uri = build_docs_evidence_uri("contracts/evidence_packet.md", VALID_SHA256)
         assert uri == f"memory://docs/contracts/evidence_packet.md/{VALID_SHA256}"
 
-    @pytest.mark.xfail(reason="docs URI 解析尚未实现，待 implement task 完成")
     def test_docs_uri_roundtrip_contract(self):
         """契约测试: docs URI build/parse 往返一致性"""
         from engram.logbook.uri import build_docs_evidence_uri, parse_docs_evidence_uri
@@ -777,11 +766,9 @@ class TestDocsEvidenceUri:
 
 class TestDocsEvidenceUriCompatibilityMatrix:
     """
-    Docs URI 参数化测试矩阵（契约锁定）
+    Docs URI 参数化测试矩阵
 
     规范: memory://docs/<rel_path>/<sha256>
-
-    当前状态: 解析函数尚未实现，所有测试标记为 xfail
     """
 
     # 参数化测试: (uri, should_succeed, expected_rel_path, description)
@@ -808,7 +795,6 @@ class TestDocsEvidenceUriCompatibilityMatrix:
         (f"https://docs/file.md/{VALID_SHA256}", None, None, "非 memory scheme"),
     ]
 
-    @pytest.mark.xfail(reason="parse_docs_evidence_uri 尚未实现，待 implement task 完成")
     @pytest.mark.parametrize("uri,should_succeed,expected_rel_path,description", DOCS_CASES)
     def test_docs_uri_compatibility(self, uri, should_succeed, expected_rel_path, description):
         """参数化测试: docs URI 格式兼容性"""

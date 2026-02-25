@@ -2256,7 +2256,7 @@ class TestBackfillArgumentValidation:
         """SVN backfill 需要 --start-rev 参数"""
         import sys
 
-        from scripts.scm_sync_svn import parse_args
+        from engram.logbook.scm_sync_tasks.svn import parse_args
 
         # 模拟命令行参数
         test_args = ["scm_sync_svn.py", "--backfill"]
@@ -2283,7 +2283,7 @@ class TestBackfillArgumentValidation:
         """--dry-run 仅在 --backfill 模式下有效"""
         import sys
 
-        from scripts.scm_sync_svn import parse_args
+        from engram.logbook.scm_sync_tasks.svn import parse_args
 
         # dry-run 不带 backfill 应该被解析（验证由 main() 处理）
         test_args = ["scm_sync_svn.py", "--dry-run"]
@@ -2297,7 +2297,7 @@ class TestBackfillArgumentValidation:
         """--update-watermark 仅在 --backfill 模式下有效"""
         import sys
 
-        from scripts.scm_sync_svn import parse_args
+        from engram.logbook.scm_sync_tasks.svn import parse_args
 
         test_args = ["scm_sync_svn.py", "--backfill", "--start-rev", "100", "--update-watermark"]
 
@@ -2311,7 +2311,7 @@ class TestBackfillArgumentValidation:
         """SVN backfill --end-rev 默认为 HEAD"""
         import sys
 
-        from scripts.scm_sync_svn import parse_args
+        from engram.logbook.scm_sync_tasks.svn import parse_args
 
         test_args = ["scm_sync_svn.py", "--backfill", "--start-rev", "100"]
 

@@ -289,7 +289,7 @@ def get_referenced_uris(
         normalized_prefix = _normalize_path(prefix) if prefix else None
         try:
             with conn.cursor() as cur:
-                sql = "SELECT uri FROM scm.patch_blobs WHERE uri IS NOT NULL"
+                sql = "SELECT uri FROM patch_blobs WHERE uri IS NOT NULL"
                 params = None
                 if normalized_prefix:
                     sql += " AND uri LIKE %s"
@@ -302,7 +302,7 @@ def get_referenced_uris(
                     elif uri_type == "physical_uri":
                         physical_refs.append(normalized)
 
-                sql = "SELECT uri FROM logbook.attachments WHERE uri IS NOT NULL"
+                sql = "SELECT uri FROM attachments WHERE uri IS NOT NULL"
                 params = None
                 if normalized_prefix:
                     sql += " AND uri LIKE %s"
