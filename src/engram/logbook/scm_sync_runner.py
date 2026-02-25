@@ -52,6 +52,7 @@ __all__ = [
     "VALID_REPO_TYPES",
     "JOB_TYPE_COMMITS",
     "JOB_TYPE_MRS",
+    "JOB_TYPE_REVIEWS",
     "VALID_JOB_TYPES",
     "DEFAULT_REPAIR_WINDOW_HOURS",
     "DEFAULT_LOOP_INTERVAL_SECONDS",
@@ -100,7 +101,8 @@ VALID_REPO_TYPES = {REPO_TYPE_GITLAB, REPO_TYPE_SVN}
 
 JOB_TYPE_COMMITS = "commits"
 JOB_TYPE_MRS = "mrs"
-VALID_JOB_TYPES = {JOB_TYPE_COMMITS, JOB_TYPE_MRS}
+JOB_TYPE_REVIEWS = "reviews"
+VALID_JOB_TYPES = {JOB_TYPE_COMMITS, JOB_TYPE_MRS, JOB_TYPE_REVIEWS}
 
 DEFAULT_REPAIR_WINDOW_HOURS = 24
 DEFAULT_LOOP_INTERVAL_SECONDS = 60
@@ -514,7 +516,8 @@ def get_script_path(repo_type: str, job_type: str) -> str:
     if repo_type == REPO_TYPE_GITLAB:
         if job_type == JOB_TYPE_COMMITS:
             return str(scripts_dir / "scm_sync_gitlab_commits.py")
-        if job_type == JOB_TYPE_MRS:
+        if job_type in {JOB_TYPE_MRS, JOB_TYPE_REVIEWS}:
+            # `reviews` 历史上为独立任务类型；当前实现复用 MRs 同步脚本。
             return str(scripts_dir / "scm_sync_gitlab_mrs.py")
     if repo_type == REPO_TYPE_SVN and job_type == JOB_TYPE_COMMITS:
         return str(scripts_dir / "scm_sync_svn.py")
@@ -780,7 +783,8 @@ class SyncRunner:
         if repo_type == REPO_TYPE_GITLAB:
             if job_type == JOB_TYPE_COMMITS:
                 physical_job_type = PhysicalJobType.GITLAB_COMMITS.value
-            elif job_type == JOB_TYPE_MRS:
+            elif job_type in {JOB_TYPE_MRS, JOB_TYPE_REVIEWS}:
+                # reviews 逻辑类型兼容映射到现有 MRs 物理执行类型。
                 physical_job_type = PhysicalJobType.GITLAB_MRS.value
             else:
                 physical_job_type = PhysicalJobType.GITLAB_COMMITS.value

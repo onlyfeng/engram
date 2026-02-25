@@ -434,7 +434,7 @@ class TestGetScriptPath:
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             path = get_script_path(REPO_TYPE_GITLAB, JOB_TYPE_REVIEWS)
-            assert "scm_sync_gitlab_reviews.py" in path
+            assert "scm_sync_gitlab_mrs.py" in path
 
     def test_svn_commits(self):
         """测试 SVN commits 脚本路径"""
