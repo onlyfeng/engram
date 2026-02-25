@@ -175,7 +175,8 @@ def logical_to_physical(
         mapping = {
             LogicalJobType.COMMITS.value: PhysicalJobType.GITLAB_COMMITS.value,
             LogicalJobType.MRS.value: PhysicalJobType.GITLAB_MRS.value,
-            LogicalJobType.REVIEWS.value: PhysicalJobType.GITLAB_REVIEWS.value,
+            # 兼容策略：reviews 先复用现有 MRs 执行链路（后续迭代再独立为 gitlab_reviews）
+            LogicalJobType.REVIEWS.value: PhysicalJobType.GITLAB_MRS.value,
         }
         if logical in mapping:
             return mapping[logical]

@@ -580,7 +580,6 @@ def process_one_job(
     # 锁确保同一 repo 的同一类型任务只有一个 worker 在执行
     lock_lease_seconds = int(merged_cfg["lease_seconds"])
     lock_acquired = False
-    lock_claim_failed = False
 
     try:
         lock_acquired = scm_sync_lock.claim(
@@ -590,11 +589,18 @@ def process_one_job(
             lease_seconds=lock_lease_seconds,
             conn=conn,
         )
-    except Exception:
-        # 锁系统异常时降级为继续执行，避免主流程被锁依赖阻断
-        lock_claim_failed = True
+    except Exception as exc:
+        # 锁系统异常时采用 fail-closed：安全让出任务，避免无锁并发执行
+        reason = redact(str(exc) or exc.__class__.__name__)
+        requeue_without_penalty(
+            job_id=job_id,
+            worker_id=worker_id,
+            reason=f"lock_held: lock_claim_exception: {reason}",
+            conn=conn,
+        )
+        return True
 
-    if not lock_acquired and not lock_claim_failed:
+    if not lock_acquired:
         # 锁被其他 worker 持有，无惩罚重入队
         requeue_without_penalty(
             job_id=job_id,

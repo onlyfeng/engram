@@ -23,6 +23,16 @@ sys.modules.setdefault("scm_sync_worker", _scm_sync_worker_core)
 sys.modules.setdefault("scm_sync_svn", _scm_sync_svn)
 
 
+@pytest.fixture(autouse=True)
+def _default_lock_claim_behavior():
+    """默认将分布式锁 mock 为可获取，避免无 DSN 场景触发真实 DB 调用。"""
+    with (
+        patch("scm_sync_worker.scm_sync_lock.claim", return_value=True),
+        patch("scm_sync_worker.scm_sync_lock.release", return_value=True),
+    ):
+        yield
+
+
 class TestHeartbeatManager:
     """HeartbeatManager 续租线程测试"""
 
@@ -3632,6 +3642,35 @@ class TestWorkerSyncRunsLifecycle:
             assert finish_call.kwargs["status"] == "failed"
             assert finish_call.kwargs["error_summary_json"] is not None
             assert finish_call.kwargs["error_summary_json"]["error_category"] == "connection"
+
+    def test_lock_claim_exception_requeues_without_penalty(self):
+        """锁 claim 异常应 fail-closed：无惩罚重入队，且不继续执行任务"""
+        from unittest.mock import patch
+
+        with (
+            patch(f"{self._MODULE}.claim") as mock_claim,
+            patch(f"{self._MODULE}.scm_sync_lock") as mock_lock,
+            patch(f"{self._MODULE}.requeue_without_penalty") as mock_requeue,
+            patch(f"{self._MODULE}.execute_sync_job") as mock_execute,
+        ):
+            mock_claim.return_value = {
+                "job_id": "job-lock-ex",
+                "repo_id": 7,
+                "job_type": "gitlab_commits",
+                "mode": "incremental",
+                "payload": {},
+            }
+            mock_lock.claim.side_effect = RuntimeError("lock backend down")
+
+            from scripts.scm_sync_worker import process_one_job
+
+            result = process_one_job(worker_id="worker-1")
+
+            assert result is True
+            mock_requeue.assert_called_once()
+            requeue_call = mock_requeue.call_args
+            assert "lock_held" in requeue_call.kwargs["reason"]
+            mock_execute.assert_not_called()
 
     def test_lease_lost_path_writes_sync_run_with_error_summary(self):
         """租约丢失路径：验证 build_payload_for_lease_lost 生成正确的 payload"""

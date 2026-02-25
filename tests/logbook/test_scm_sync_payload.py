@@ -958,6 +958,12 @@ class TestSchedulerSvnJobTypeFiltering:
         assert "gitlab_reviews" in job_types
         assert "svn" not in job_types
 
+    def test_logical_reviews_compat_maps_to_gitlab_mrs(self):
+        """兼容策略：reviews 逻辑类型先复用 gitlab_mrs 执行链路"""
+        from engram.logbook.scm_sync_job_types import logical_to_physical
+
+        assert logical_to_physical("reviews", "git") == "gitlab_mrs"
+
     def test_scheduler_does_not_produce_svn_mrs_reviews(self):
         """
         验证 scheduler 逻辑不会为 SVN 仓库产生 mrs/reviews 任务
@@ -1002,10 +1008,10 @@ class TestSchedulerSvnJobTypeFiltering:
             except ValueError:
                 pass
 
-        # Git 仓库应该产生 gitlab_commits, gitlab_mrs, gitlab_reviews
+        # 兼容策略下：reviews 逻辑类型也会映射到 gitlab_mrs
         assert "gitlab_commits" in git_physical_types
         assert "gitlab_mrs" in git_physical_types
-        assert "gitlab_reviews" in git_physical_types
+        assert "gitlab_reviews" not in git_physical_types
 
     def test_scheduler_invalid_combination_filtered(self):
         """
