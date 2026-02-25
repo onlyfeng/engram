@@ -8,6 +8,8 @@
 
 | 迭代 | 日期 | 状态 | 计划 | 详细记录 | 说明 |
 |------|------|------|------|----------|------|
+| **Iteration 22** | 2026-02-03 | ✅ PASS | - | [iteration_22_regression.md](iteration_22_regression.md) | make ci ✅ |
+| **Iteration 21** | 2026-02-03 | ✅ PASS | - | [iteration_21_regression.md](iteration_21_regression.md) | make ci ✅ |
 | **Iteration 15** | 2026-02-03 | ✅ PASS | [iteration_15_plan.md](iteration_15_plan.md) | [iteration_15_regression.md](iteration_15_regression.md) | make ci ✅；pytest tests/gateway ✅（1105 passed, 206 skipped）；pytest tests/acceptance ✅（132 passed, 48 skipped） |
 | **Iteration 14** | 2026-02-02 | ✅ PASS | [iteration_14_plan.md](iteration_14_plan.md) | [iteration_14_regression.md](iteration_14_regression.md) | make ci ✅，check-iteration-docs ✅，CI 测试 1351 passed，iteration 测试 440 passed |
 | **Iteration 13** | 2026-02-02 | ✅ PASS | [iteration_13_plan.md](iteration_13_plan.md) | [iteration_13_regression.md](iteration_13_regression.md) | 所有最小门禁通过：Workflow 合约 (v2.13.0)、Gateway Public API、CI 测试 (608 passed)、Gateway 测试 (1042 passed) |

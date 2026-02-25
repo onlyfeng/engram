@@ -1,15 +1,18 @@
 {
   "$schema": "../../../schemas/iteration_evidence_v2.schema.json",
   "iteration_number": 21,
-  "recorded_at": "2026-02-23T20:16:54Z",
-  "commit_sha": "abc1234567890abc1234567890abc1234567890",
+  "recorded_at": "2026-02-03T11:35:44Z",
+  "commit_sha": "80a747b313a93459df5379b706de36c6a854eb8b",
   "runner": {
-    "os": "windows-11",
-    "python": "3.13.6",
+    "os": "darwin-24.6.0",
+    "python": "3.11.14",
     "arch": "x86_64"
   },
   "source": {
     "source_path": "docs/acceptance/iteration_21_regression.md"
+  },
+  "links": {
+    "regression_doc_url": "docs/acceptance/iteration_21_regression.md"
   },
   "commands": [
     {
