@@ -2,13 +2,18 @@
 # Load .env and .env.local into current shell (source this script).
 
 _is_sourced() {
+  # Bash: BASH_SOURCE[0] != $0 when sourced
   if [ -n "${BASH_SOURCE[0]-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
   fi
-  case "${ZSH_EVAL_CONTEXT-}" in
-    *:file) return 0 ;;
-  esac
-  return 1
+  # Zsh: zsh_eval_context contains "file" when sourced (array; use (I)subscript)
+  if [ -n "${ZSH_VERSION-}" ] && [ -n "${zsh_eval_context-}" ]; then
+    case "${zsh_eval_context[*]-}" in
+      *file*) return 0 ;;
+    esac
+  fi
+  # Fallback: (return 0) succeeds only when sourced, fails when executed
+  (return 0 2>/dev/null)
 }
 
 if ! _is_sourced; then
