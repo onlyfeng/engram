@@ -59,7 +59,7 @@ def valid_allowlist_data() -> dict:
     """有效的 allowlist 数据。"""
     future_date = (date.today() + timedelta(days=365)).isoformat()
     return {
-        "version": "1",
+        "version": "2",
         "entries": [
             {
                 "id": "test-entry-1",
@@ -464,7 +464,7 @@ class TestValidateAgainstSchema:
     def test_valid_data(self, minimal_schema: dict) -> None:
         """有效数据应通过。"""
         result = ValidationResult()
-        data = {"version": "1", "entries": []}
+        data = {"version": "2", "entries": []}
         assert validate_against_schema(data, minimal_schema, result)
         assert len(result.schema_errors) == 0
 
@@ -478,21 +478,21 @@ class TestValidateAgainstSchema:
     def test_missing_entries(self, minimal_schema: dict) -> None:
         """缺少 entries 应报错。"""
         result = ValidationResult()
-        data = {"version": "1"}
+        data = {"version": "2"}
         assert not validate_against_schema(data, minimal_schema, result)
         assert any("entries" in e for e in result.schema_errors)
 
     def test_invalid_version(self, minimal_schema: dict) -> None:
         """无效版本号应报错。"""
         result = ValidationResult()
-        data = {"version": "2.0", "entries": []}
+        data = {"version": "1.0", "entries": []}
         assert not validate_against_schema(data, minimal_schema, result)
         assert any("version" in e for e in result.schema_errors)
 
-    def test_version_1_0_accepted(self, minimal_schema: dict) -> None:
-        """版本 1.0 应被接受。"""
+    def test_version_2_0_accepted(self, minimal_schema: dict) -> None:
+        """版本 2.0 应被接受。"""
         result = ValidationResult()
-        data = {"version": "1.0", "entries": []}
+        data = {"version": "2.0", "entries": []}
         assert validate_against_schema(data, minimal_schema, result)
 
 
@@ -650,7 +650,7 @@ class TestValidateAllowlist:
         """过期条目应导致校验失败。"""
         past_date = (date.today() - timedelta(days=1)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "expired-entry",
@@ -680,7 +680,7 @@ class TestValidateAllowlist:
     ) -> None:
         """缺少 owner 应导致校验失败。"""
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "no-owner-entry",
@@ -709,7 +709,7 @@ class TestValidateAllowlist:
         """重复 id 应导致校验失败。"""
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "same-id",
@@ -902,7 +902,7 @@ class TestMainFunction:
         minimal_schema: dict,
     ) -> None:
         """有效 allowlist 应返回 0。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         allowlist_file = tmp_path / "allowlist.json"
         schema_file = tmp_path / "schema.json"
@@ -913,7 +913,7 @@ class TestMainFunction:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -937,11 +937,11 @@ class TestMainFunction:
         minimal_schema: dict,
     ) -> None:
         """无效 allowlist 应返回 1。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         # 缺少必需字段的 allowlist
         invalid_data = {
-            "version": "1",
+            "version": "2",
             "entries": [{"id": "bad-entry"}],  # 缺少 owner, module, reason
         }
 
@@ -954,7 +954,7 @@ class TestMainFunction:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -979,7 +979,7 @@ class TestMainFunction:
         minimal_schema: dict,
     ) -> None:
         """--json 应输出有效 JSON。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         allowlist_file = tmp_path / "allowlist.json"
         schema_file = tmp_path / "schema.json"
@@ -990,7 +990,7 @@ class TestMainFunction:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1030,12 +1030,12 @@ class TestFailOnMaxExpiryExitCode:
         minimal_schema: dict,
     ) -> None:
         """超过 max-expiry 且启用 --fail-on-max-expiry 时应返回 exit code=1。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         # 设置一个超过 180 天的过期日期
         far_future_date = (date.today() + timedelta(days=365)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "far-future-entry",
@@ -1057,7 +1057,7 @@ class TestFailOnMaxExpiryExitCode:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1084,12 +1084,12 @@ class TestFailOnMaxExpiryExitCode:
         minimal_schema: dict,
     ) -> None:
         """超过 max-expiry 但未启用 --fail-on-max-expiry 时应返回 exit code=0（仅警告）。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         # 设置一个超过 180 天的过期日期
         far_future_date = (date.today() + timedelta(days=365)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "far-future-entry",
@@ -1111,7 +1111,7 @@ class TestFailOnMaxExpiryExitCode:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1136,12 +1136,12 @@ class TestFailOnMaxExpiryExitCode:
         minimal_schema: dict,
     ) -> None:
         """即将过期（14天内）产生 warning 但 exit code 仍为 0。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         # 设置一个 7 天后过期的日期（在 14 天预警期内）
         soon_expiring_date = (date.today() + timedelta(days=7)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "soon-expiring-entry",
@@ -1163,7 +1163,7 @@ class TestFailOnMaxExpiryExitCode:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1190,11 +1190,11 @@ class TestFailOnMaxExpiryExitCode:
         minimal_schema: dict,
     ) -> None:
         """验证 JSON 输出包含即将过期的警告信息。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         soon_expiring_date = (date.today() + timedelta(days=7)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "soon-expiring-entry",
@@ -1216,7 +1216,7 @@ class TestFailOnMaxExpiryExitCode:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1245,11 +1245,11 @@ class TestFailOnMaxExpiryExitCode:
         minimal_schema: dict,
     ) -> None:
         """验证 --fail-on-max-expiry 时 JSON 输出包含错误信息。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         far_future_date = (date.today() + timedelta(days=365)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "far-future-entry",
@@ -1271,7 +1271,7 @@ class TestFailOnMaxExpiryExitCode:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1330,7 +1330,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 8, 1)  # 2026-01-01 + 212 days = 2026-08-01
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-exceeds-max",
@@ -1351,7 +1351,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
         schema_file.write_text(json.dumps(minimal_schema), encoding="utf-8")
 
         # 使用 monkeypatch 注入固定日期
-        with patch("check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today):
+        with patch(
+            "scripts.ci.check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today
+        ):
             result = validate_allowlist(
                 allowlist_file,
                 schema_file,
@@ -1398,7 +1400,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 8, 1)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-exceeds-max-fail",
@@ -1419,7 +1421,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
         schema_file.write_text(json.dumps(minimal_schema), encoding="utf-8")
 
         # 使用 monkeypatch 注入固定日期
-        with patch("check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today):
+        with patch(
+            "scripts.ci.check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today
+        ):
             result = validate_allowlist(
                 allowlist_file,
                 schema_file,
@@ -1459,7 +1463,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = date(2026, 4, 1)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-within-max",
@@ -1479,7 +1483,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
         allowlist_file.write_text(json.dumps(data), encoding="utf-8")
         schema_file.write_text(json.dumps(minimal_schema), encoding="utf-8")
 
-        with patch("check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today):
+        with patch(
+            "scripts.ci.check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today
+        ):
             result = validate_allowlist(
                 allowlist_file,
                 schema_file,
@@ -1511,7 +1517,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = fixed_today + timedelta(days=180)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-boundary-180",
@@ -1531,7 +1537,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
         allowlist_file.write_text(json.dumps(data), encoding="utf-8")
         schema_file.write_text(json.dumps(minimal_schema), encoding="utf-8")
 
-        with patch("check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today):
+        with patch(
+            "scripts.ci.check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today
+        ):
             result = validate_allowlist(
                 allowlist_file,
                 schema_file,
@@ -1560,7 +1568,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         expires_date = fixed_today + timedelta(days=181)
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "test-boundary-181",
@@ -1580,7 +1588,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
         allowlist_file.write_text(json.dumps(data), encoding="utf-8")
         schema_file.write_text(json.dumps(minimal_schema), encoding="utf-8")
 
-        with patch("check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today):
+        with patch(
+            "scripts.ci.check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today
+        ):
             result = validate_allowlist(
                 allowlist_file,
                 schema_file,
@@ -1597,13 +1607,13 @@ class TestExceedsMaxExpiryWithTodayInjection:
         self, tmp_path: Path, minimal_schema: dict
     ) -> None:
         """验证 JSON 输出在 warn-only 模式下包含 exceeds_max_expiry_entries 且 ok=true。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         fixed_today = date(2026, 1, 1)
         expires_date = date(2026, 8, 1)  # 超过 180 天
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "json-test-exceeds",
@@ -1626,7 +1636,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1640,7 +1650,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
                 # 不传 --fail-on-max-expiry（warn-only 模式）
             ],
         ):
-            with patch("check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today):
+            with patch(
+                "scripts.ci.check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today
+            ):
                 captured = StringIO()
                 with patch("sys.stdout", captured):
                     exit_code = main()
@@ -1661,13 +1673,13 @@ class TestExceedsMaxExpiryWithTodayInjection:
         self, tmp_path: Path, minimal_schema: dict
     ) -> None:
         """验证 JSON 输出在 fail-on-max-expiry 模式下 ok=false 且 errors 非空。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         fixed_today = date(2026, 1, 1)
         expires_date = date(2026, 8, 1)  # 超过 180 天
 
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "json-test-exceeds-fail",
@@ -1690,7 +1702,7 @@ class TestExceedsMaxExpiryWithTodayInjection:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",
@@ -1704,7 +1716,9 @@ class TestExceedsMaxExpiryWithTodayInjection:
                 "--fail-on-max-expiry",  # fail 模式
             ],
         ):
-            with patch("check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today):
+            with patch(
+                "scripts.ci.check_no_root_wrappers_allowlist.utc_today", return_value=fixed_today
+            ):
                 captured = StringIO()
                 with patch("sys.stdout", captured):
                     exit_code = main()
@@ -1736,7 +1750,7 @@ class TestCategoryOwnerSummary:
         """验证 category 汇总正确生成。"""
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "entry-1",
@@ -1790,7 +1804,7 @@ class TestCategoryOwnerSummary:
         """验证 owner 汇总正确生成。"""
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "entry-1",
@@ -1842,11 +1856,11 @@ class TestCategoryOwnerSummary:
         minimal_schema: dict,
     ) -> None:
         """验证 JSON 输出包含汇总信息。"""
-        from check_no_root_wrappers_allowlist import main
+        from scripts.ci.check_no_root_wrappers_allowlist import main
 
         future_date = (date.today() + timedelta(days=30)).isoformat()
         data = {
-            "version": "1",
+            "version": "2",
             "entries": [
                 {
                     "id": "entry-1",
@@ -1869,7 +1883,7 @@ class TestCategoryOwnerSummary:
         with patch(
             "sys.argv",
             [
-                "check_no_root_wrappers_allowlist.py",
+                "scripts/ci/check_no_root_wrappers_allowlist.py",
                 "--allowlist-file",
                 str(allowlist_file),
                 "--schema-file",

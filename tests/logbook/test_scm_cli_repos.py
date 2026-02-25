@@ -12,6 +12,7 @@ SCM CLI 仓库管理命令单元测试
 """
 
 import json
+import os
 import subprocess
 import sys
 from unittest.mock import MagicMock, patch
@@ -492,6 +493,8 @@ class TestCLIIntegration:
     def test_no_dsn_error_message(self, monkeypatch):
         """无 DSN 时输出清晰的错误信息"""
         monkeypatch.delenv("POSTGRES_DSN", raising=False)
+        env = os.environ.copy()
+        env.pop("POSTGRES_DSN", None)
         result = subprocess.run(
             [
                 sys.executable,
@@ -502,7 +505,7 @@ class TestCLIIntegration:
             capture_output=True,
             text=True,
             timeout=30,
-            env={k: v for k, v in monkeypatch._ENV.items() if k != "POSTGRES_DSN"},
+            env=env,
         )
         assert result.returncode == EXIT_NO_DSN
         data = json.loads(result.stdout)

@@ -48,6 +48,12 @@ OWNER_PATTERN = re.compile(r"^@?[a-zA-Z0-9_-]+(-[a-zA-Z0-9_-]+)*$")
 # ISO8601 日期格式
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# 临近过期预警阈值（天）
+EXPIRING_SOON_DAYS = 14
+
+# allowlist 条目最长有效期阈值（天）
+DEFAULT_MAX_EXPIRY_DAYS = 180
+
 
 # ============================================================================
 # 数据结构
@@ -75,6 +81,17 @@ class UsageHit:
 
 
 @dataclass
+class ExpiryWindowEntry:
+    """过期窗口检查命中信息"""
+
+    entry_id: str
+    expires_on: str
+    days_until_expiry: int
+    owner: Optional[str] = None
+    category: Optional[str] = None
+
+
+@dataclass
 class ValidationResult:
     """校验结果"""
 
@@ -84,6 +101,10 @@ class ValidationResult:
     expired_entries: List[str] = field(default_factory=list)
     unused_entries: List[str] = field(default_factory=list)
     usage_hits: List[UsageHit] = field(default_factory=list)
+    expiring_soon_entries: List[ExpiryWindowEntry] = field(default_factory=list)
+    exceeds_max_expiry_entries: List[ExpiryWindowEntry] = field(default_factory=list)
+    category_summary: Dict[str, int] = field(default_factory=dict)
+    owner_summary: Dict[str, int] = field(default_factory=dict)
     entries_checked: int = 0
     files_scanned: int = 0
 
@@ -128,6 +149,28 @@ class ValidationResult:
                 }
                 for h in self.usage_hits
             ],
+            "expiring_soon_entries": [
+                {
+                    "entry_id": e.entry_id,
+                    "expires_on": e.expires_on,
+                    "days_until_expiry": e.days_until_expiry,
+                    "owner": e.owner,
+                    "category": e.category,
+                }
+                for e in self.expiring_soon_entries
+            ],
+            "exceeds_max_expiry_entries": [
+                {
+                    "entry_id": e.entry_id,
+                    "expires_on": e.expires_on,
+                    "days_until_expiry": e.days_until_expiry,
+                    "owner": e.owner,
+                    "category": e.category,
+                }
+                for e in self.exceeds_max_expiry_entries
+            ],
+            "category_summary": self.category_summary,
+            "owner_summary": self.owner_summary,
         }
 
 
@@ -257,8 +300,20 @@ def validate_date_format(date_str: str) -> bool:
         return False
 
 
+def utc_today() -> date:
+    """统一 today 来源，便于测试注入。"""
+    return date.today()
+
+
 def validate_expires_on(
-    entry: Dict[str, Any], entry_id: str, result: ValidationResult
+    entry: Dict[str, Any],
+    entry_id: str,
+    result: ValidationResult,
+    *,
+    today: Optional[date] = None,
+    expiring_soon_days: int = EXPIRING_SOON_DAYS,
+    max_expiry_days: int = DEFAULT_MAX_EXPIRY_DAYS,
+    fail_on_max_expiry: bool = False,
 ) -> bool:
     """校验 expires_on（或 expiry）字段"""
     # 支持两种字段名
@@ -282,7 +337,8 @@ def validate_expires_on(
     # 校验是否过期
     try:
         expiry_date = date.fromisoformat(expires_value)
-        if date.today() > expiry_date:
+        current_day = today or utc_today()
+        if current_day > expiry_date:
             result.expired_entries.append(entry_id)
             result.errors.append(
                 ValidationError(
@@ -292,15 +348,63 @@ def validate_expires_on(
                 )
             )
             return False
+
+        days_until_expiry = (expiry_date - current_day).days
+        owner = entry.get("owner")
+        category = entry.get("category")
+        expiry_entry = ExpiryWindowEntry(
+            entry_id=entry_id,
+            expires_on=expires_value,
+            days_until_expiry=days_until_expiry,
+            owner=owner if isinstance(owner, str) else None,
+            category=category if isinstance(category, str) else None,
+        )
+
+        if 0 <= days_until_expiry <= expiring_soon_days:
+            result.expiring_soon_entries.append(expiry_entry)
+            result.warnings.append(
+                ValidationError(
+                    entry_id=entry_id,
+                    field="expires_on",
+                    message=(
+                        f"条目即将过期: {expires_value} "
+                        f"（剩余 {days_until_expiry} 天，阈值 {expiring_soon_days} 天）"
+                    ),
+                    severity="warning",
+                )
+            )
+
+        if days_until_expiry > max_expiry_days:
+            result.exceeds_max_expiry_entries.append(expiry_entry)
+            over_expiry_message = (
+                f"条目 expires_on 超过最大期限: {expires_value} "
+                f"（剩余 {days_until_expiry} 天，阈值 {max_expiry_days} 天）"
+            )
+            if fail_on_max_expiry:
+                result.errors.append(
+                    ValidationError(
+                        entry_id=entry_id,
+                        field="expires_on",
+                        message=over_expiry_message,
+                    )
+                )
+                return False
+
+            result.warnings.append(
+                ValidationError(
+                    entry_id=entry_id,
+                    field="expires_on",
+                    message=over_expiry_message,
+                    severity="warning",
+                )
+            )
     except ValueError:
         pass  # 格式错误已在上面报告
 
     return True
 
 
-def validate_owner(
-    entry: Dict[str, Any], entry_id: str, result: ValidationResult
-) -> bool:
+def validate_owner(entry: Dict[str, Any], entry_id: str, result: ValidationResult) -> bool:
     """校验 owner 字段"""
     owner = entry.get("owner")
 
@@ -349,9 +453,7 @@ def validate_owner(
     return True
 
 
-def validate_id_format(
-    entry: Dict[str, Any], entry_id: str, result: ValidationResult
-) -> bool:
+def validate_id_format(entry: Dict[str, Any], entry_id: str, result: ValidationResult) -> bool:
     """校验 id 字段格式"""
     if not entry_id:
         result.errors.append(
@@ -505,6 +607,8 @@ def validate_allowlist(
     project_root: Path,
     check_usage: bool = True,
     strict: bool = False,
+    max_expiry_days: int = DEFAULT_MAX_EXPIRY_DAYS,
+    fail_on_max_expiry: bool = False,
 ) -> ValidationResult:
     """执行完整的 allowlist 校验"""
     result = ValidationResult()
@@ -568,8 +672,24 @@ def validate_allowlist(
         # 校验必需字段（使用宽松模式，支持旧字段名）
         validate_entry_fields(entry, entry_id, required_fields, valid_fields, result)
 
+        category = entry.get("category")
+        if isinstance(category, str) and category.strip():
+            category_key = category.strip()
+            result.category_summary[category_key] = result.category_summary.get(category_key, 0) + 1
+
+        owner = entry.get("owner")
+        if isinstance(owner, str) and owner.strip():
+            owner_key = owner.strip()
+            result.owner_summary[owner_key] = result.owner_summary.get(owner_key, 0) + 1
+
         # 校验 expires_on
-        validate_expires_on(entry, entry_id, result)
+        validate_expires_on(
+            entry,
+            entry_id,
+            result,
+            max_expiry_days=max_expiry_days,
+            fail_on_max_expiry=fail_on_max_expiry,
+        )
 
         # 校验 owner
         validate_owner(entry, entry_id, result)
@@ -587,9 +707,7 @@ def validate_allowlist(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="校验 no_root_wrappers_allowlist.json 的有效性"
-    )
+    parser = argparse.ArgumentParser(description="校验 no_root_wrappers_allowlist.json 的有效性")
     parser.add_argument(
         "--allowlist-file",
         type=Path,
@@ -624,6 +742,17 @@ def main() -> int:
         help="JSON 格式输出",
     )
     parser.add_argument(
+        "--max-expiry-days",
+        type=int,
+        default=DEFAULT_MAX_EXPIRY_DAYS,
+        help=f"expires_on 最大有效期天数（默认: {DEFAULT_MAX_EXPIRY_DAYS}）",
+    )
+    parser.add_argument(
+        "--fail-on-max-expiry",
+        action="store_true",
+        help="超过 --max-expiry-days 时按错误处理（默认仅警告）",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -649,9 +778,7 @@ def main() -> int:
         else project_root / DEFAULT_ALLOWLIST_FILE
     )
     schema_path = (
-        args.schema_file.resolve()
-        if args.schema_file
-        else project_root / DEFAULT_SCHEMA_FILE
+        args.schema_file.resolve() if args.schema_file else project_root / DEFAULT_SCHEMA_FILE
     )
 
     # 执行校验
@@ -661,6 +788,8 @@ def main() -> int:
         project_root=project_root,
         check_usage=not args.skip_usage_check,
         strict=args.strict,
+        max_expiry_days=args.max_expiry_days,
+        fail_on_max_expiry=args.fail_on_max_expiry,
     )
 
     # 输出结果
@@ -694,10 +823,13 @@ def main() -> int:
             print()
 
         # 警告
-        if result.warnings and args.verbose:
+        if result.warnings:
             print(f"[WARN] 发现 {len(result.warnings)} 个警告:")
-            for warn in result.warnings:
-                print(f"  - [{warn.entry_id}] {warn.field}: {warn.message}")
+            if args.verbose:
+                for warn in result.warnings:
+                    print(f"  - [{warn.entry_id}] {warn.field}: {warn.message}")
+            else:
+                print("  - 使用 --verbose 查看详细警告")
             print()
 
         # 过期条目
