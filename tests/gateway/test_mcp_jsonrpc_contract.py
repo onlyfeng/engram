@@ -3951,5 +3951,63 @@ class TestMcpRequestLogging:
         assert "session-123" not in record_payload
 
 
+class TestGptSchemaCompatibility:
+    """GPT (OpenAI) JSON Schema 兼容性回归测试。
+
+    GPT strict mode 对 JSON Schema 有额外限制:
+    - type=array 必须提供 items
+    - 不支持 default 关键字
+    - type 数组语法（如 ["string","number"]）不兼容，应使用 oneOf
+    """
+
+    def _iter_schemas(self, schema, path=""):
+        """递归遍历 schema 中所有子 schema，yield (path, sub_schema)。"""
+        yield path, schema
+        for key in ("items", "additionalProperties"):
+            if isinstance(schema.get(key), dict):
+                yield from self._iter_schemas(schema[key], f"{path}.{key}")
+        for name, prop in schema.get("properties", {}).items():
+            yield from self._iter_schemas(prop, f"{path}.properties.{name}")
+        for combiner in ("oneOf", "anyOf", "allOf"):
+            for i, branch in enumerate(schema.get(combiner, [])):
+                yield from self._iter_schemas(branch, f"{path}.{combiner}[{i}]")
+
+    def test_array_type_must_have_items(self):
+        """type=array（含 oneOf 分支）必须声明 items。"""
+        from engram.gateway.mcp_rpc import AVAILABLE_TOOLS
+
+        violations = []
+        for tool in AVAILABLE_TOOLS:
+            for path, sub in self._iter_schemas(tool.inputSchema):
+                typ = sub.get("type")
+                if typ == "array" and "items" not in sub:
+                    violations.append(f"{tool.name}{path}")
+                if isinstance(typ, list) and "array" in typ and "items" not in sub:
+                    violations.append(f"{tool.name}{path} (type union contains array)")
+        assert not violations, f"array without items: {violations}"
+
+    def test_no_default_keyword(self):
+        """GPT strict mode 不支持 default。"""
+        from engram.gateway.mcp_rpc import AVAILABLE_TOOLS
+
+        violations = []
+        for tool in AVAILABLE_TOOLS:
+            for path, sub in self._iter_schemas(tool.inputSchema):
+                if "default" in sub:
+                    violations.append(f"{tool.name}{path}")
+        assert not violations, f"schema uses 'default': {violations}"
+
+    def test_no_type_union_array_syntax(self):
+        """type 不应使用数组语法（如 ["string","array"]），应用 oneOf 替代。"""
+        from engram.gateway.mcp_rpc import AVAILABLE_TOOLS
+
+        violations = []
+        for tool in AVAILABLE_TOOLS:
+            for path, sub in self._iter_schemas(tool.inputSchema):
+                if isinstance(sub.get("type"), list):
+                    violations.append(f"{tool.name}{path}")
+        assert not violations, f"type union array syntax: {violations}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
