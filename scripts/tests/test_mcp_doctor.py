@@ -243,11 +243,12 @@ def test_check_tools_list_sends_custom_header(monkeypatch: pytest.MonkeyPatch) -
 
     assert result.passed is True
     assert captured["headers"]["X-Project-Key"] == "demo"
+    assert "Mcp-Session-Id" not in captured["headers"]
     declared = mcp_doctor._split_header_values(
         preflight["Access-Control-Request-Headers"]
     )
     sent = {key.lower() for key in captured["headers"]}
-    assert declared.issubset(sent)
+    assert declared - {"mcp-session-id"} <= sent
 
 
 def test_main_skips_when_no_config(
@@ -323,6 +324,9 @@ def test_main_connectable(
         counter["value"] += 1
         return f"corr-{counter['value']:016x}"
 
+    expected_session_id = "session-1234567890abcdef"
+    seen_methods: list[tuple[str, str | None, str | None]] = []
+
     def _request(
         method: str,
         url: str,
@@ -345,12 +349,16 @@ def test_main_connectable(
         if method == "POST" and url.endswith("/mcp"):
             payload = json.loads((data or b"{}").decode("utf-8"))
             method_name = payload.get("method")
+            session_header = (headers or {}).get("Mcp-Session-Id")
+            seen_methods.append((method, method_name, session_header))
             corr_id = _next_corr_id()
             response_headers = {
                 "X-Correlation-ID": corr_id,
                 "Access-Control-Expose-Headers": "X-Correlation-ID",
             }
             if method_name == "initialize":
+                assert session_header is None
+                response_headers["Mcp-Session-Id"] = expected_session_id
                 body = json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -363,7 +371,13 @@ def test_main_connectable(
                     }
                 ).encode("utf-8")
                 return 200, body, response_headers, None
+            if method_name == "notifications/initialized":
+                if session_header != expected_session_id:
+                    return 404, b"", response_headers, None
+                return 202, b"", response_headers, None
             if method_name == "ping":
+                if session_header != expected_session_id:
+                    return 404, b"", response_headers, None
                 body = json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -373,11 +387,15 @@ def test_main_connectable(
                 ).encode("utf-8")
                 return 200, body, response_headers, None
             if method_name == "tools/list":
+                if session_header != expected_session_id:
+                    return 404, b"", response_headers, None
                 tools_payload = _valid_tools_list_payload()
                 tools_payload["id"] = payload.get("id")
                 body = json.dumps(tools_payload).encode("utf-8")
                 return 200, body, response_headers, None
             if method_name == "unknown/method":
+                if session_header != expected_session_id:
+                    return 404, b"", response_headers, None
                 body = json.dumps(
                     {
                         "jsonrpc": "2.0",
@@ -405,6 +423,7 @@ def test_main_connectable(
 
     assert exit_code == 0
     assert "[OK]" in captured.out
+    assert ("POST", "notifications/initialized", expected_session_id) in seen_methods
 
 
 if __name__ == "__main__":

@@ -306,6 +306,25 @@ def _prepare_request_headers(
     )
 
 
+def _prepare_runtime_request_headers(
+    request_headers: Dict[str, str],
+    *,
+    mcp_session_id: Optional[str] = None,
+) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    placeholder_session_id = CONTRACT_REQUIRED_HEADERS.get("Mcp-Session-Id")
+    for key, value in request_headers.items():
+        if key.lower() == "mcp-session-id" and value == placeholder_session_id:
+            continue
+        headers[key] = value
+    if mcp_session_id:
+        headers = {
+            key: value for key, value in headers.items() if key.lower() != "mcp-session-id"
+        }
+        headers["Mcp-Session-Id"] = mcp_session_id
+    return headers
+
+
 def _build_required_headers(preflight_headers: Dict[str, str]) -> set[str]:
     return _split_header_values(preflight_headers.get("Access-Control-Request-Headers"))
 
@@ -554,7 +573,7 @@ def _check_options(
 def _check_tools_list(
     gateway_url: str, timeout: float, *, request_headers: Dict[str, str]
 ) -> CheckResult:
-    headers = dict(request_headers)
+    headers = _prepare_runtime_request_headers(request_headers)
     mcp_url = _build_mcp_url(gateway_url)
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
@@ -768,12 +787,12 @@ def _check_tools_list(
 
 def _check_initialize(
     gateway_url: str, timeout: float, *, request_headers: Dict[str, str]
-) -> CheckResult:
-    headers = dict(request_headers)
+) -> Tuple[CheckResult, Optional[str]]:
+    headers = _prepare_runtime_request_headers(request_headers)
     mcp_url = _build_mcp_url(gateway_url)
     payload = {"jsonrpc": "2.0", "id": 1, "method": "initialize"}
 
-    status, parsed, _, err, preview = _post_jsonrpc(
+    status, parsed, response_headers, err, preview = _post_jsonrpc(
         mcp_url, payload, headers=headers, timeout=timeout
     )
     if err:
@@ -785,7 +804,7 @@ def _check_initialize(
             status_code=status,
             error=err,
             response_preview=preview,
-        )
+        ), None
     if status != 200:
         detail = "鉴权失败" if status in (401, 403) else None
         return CheckResult(
@@ -795,7 +814,7 @@ def _check_initialize(
             details=detail,
             status_code=status,
             response_preview=preview,
-        )
+        ), None
     if parsed.get("error") is not None:
         return CheckResult(
             "POST /mcp (initialize)",
@@ -803,7 +822,7 @@ def _check_initialize(
             "JSON-RPC 返回错误",
             status_code=status,
             response_preview=preview,
-        )
+        ), None
     result = parsed.get("result")
     if not isinstance(result, dict):
         return CheckResult(
@@ -812,7 +831,7 @@ def _check_initialize(
             "result 字段缺失或格式错误",
             status_code=status,
             response_preview=preview,
-        )
+        ), None
     if not isinstance(result.get("protocolVersion"), str):
         return CheckResult(
             "POST /mcp (initialize)",
@@ -820,7 +839,7 @@ def _check_initialize(
             "protocolVersion 缺失或格式错误",
             status_code=status,
             response_preview=preview,
-        )
+        ), None
     capabilities = result.get("capabilities")
     if not isinstance(capabilities, dict) or not isinstance(capabilities.get("tools"), dict):
         return CheckResult(
@@ -829,7 +848,7 @@ def _check_initialize(
             "capabilities.tools 缺失或格式错误",
             status_code=status,
             response_preview=preview,
-        )
+        ), None
     server_info = result.get("serverInfo")
     if (
         not isinstance(server_info, dict)
@@ -842,15 +861,67 @@ def _check_initialize(
             "serverInfo 缺失或格式错误",
             status_code=status,
             response_preview=preview,
+        ), None
+
+    session_id = _get_header(response_headers, "Mcp-Session-Id")
+    if not session_id:
+        return (
+            CheckResult(
+                "POST /mcp (initialize)",
+                False,
+                "响应头缺少 Mcp-Session-Id",
+                status_code=status,
+                response_preview=preview,
+            ),
+            None,
         )
 
-    return CheckResult("POST /mcp (initialize)", True, "OK", status_code=status)
+    notification_payload = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    notification_data = json.dumps(notification_payload).encode("utf-8")
+    notification_headers = _prepare_runtime_request_headers(
+        request_headers, mcp_session_id=session_id
+    )
+    notify_status, notify_body, _, notify_err = _request(
+        "POST",
+        mcp_url,
+        data=notification_data,
+        headers=notification_headers,
+        timeout=timeout,
+    )
+    notify_preview = _preview_body(notify_body)
+    if notify_err:
+        return (
+            CheckResult(
+                "POST /mcp (initialize)",
+                False,
+                "initialized 通知失败",
+                details=notify_err,
+                status_code=notify_status,
+                error=notify_err,
+                response_preview=notify_preview,
+            ),
+            None,
+        )
+    if notify_status != 202:
+        return (
+            CheckResult(
+                "POST /mcp (initialize)",
+                False,
+                "initialized 通知状态码异常",
+                details=f"状态码: {notify_status}",
+                status_code=notify_status,
+                response_preview=notify_preview,
+            ),
+            None,
+        )
+
+    return CheckResult("POST /mcp (initialize)", True, "OK", status_code=status), session_id
 
 
 def _check_ping(
     gateway_url: str, timeout: float, *, request_headers: Dict[str, str]
 ) -> CheckResult:
-    headers = dict(request_headers)
+    headers = _prepare_runtime_request_headers(request_headers)
     mcp_url = _build_mcp_url(gateway_url)
     payload = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
 
@@ -899,7 +970,7 @@ def _check_ping(
 def _check_unknown_method_error(
     gateway_url: str, timeout: float, *, request_headers: Dict[str, str]
 ) -> CheckResult:
-    headers = dict(request_headers)
+    headers = _prepare_runtime_request_headers(request_headers)
     mcp_url = _build_mcp_url(gateway_url)
     payload = {"jsonrpc": "2.0", "id": 3, "method": "unknown/method"}
 
@@ -970,7 +1041,7 @@ def _check_unknown_method_error(
 def _check_correlation_id_uniqueness(
     gateway_url: str, timeout: float, *, request_headers: Dict[str, str], attempts: int = 3
 ) -> CheckResult:
-    headers = dict(request_headers)
+    headers = _prepare_runtime_request_headers(request_headers)
     mcp_url = _build_mcp_url(gateway_url)
     seen: set[str] = set()
 
@@ -1288,6 +1359,13 @@ def main() -> int:
             _print_error(reason, next_steps, config_path=config_path)
         return 2
 
+    initialize_check, session_id = _check_initialize(
+        tools_url, timeout, request_headers=request_headers
+    )
+    session_request_headers = _prepare_runtime_request_headers(
+        request_headers, mcp_session_id=session_id
+    )
+
     checks = [
         *([_check_health(gateway_url, timeout)] if gateway_url else []),
         *(
@@ -1301,11 +1379,13 @@ def main() -> int:
             if gateway_url
             else []
         ),
-        _check_initialize(tools_url, timeout, request_headers=request_headers),
-        _check_ping(tools_url, timeout, request_headers=request_headers),
-        _check_tools_list(tools_url, timeout, request_headers=request_headers),
-        _check_correlation_id_uniqueness(tools_url, timeout, request_headers=request_headers),
-        _check_unknown_method_error(tools_url, timeout, request_headers=request_headers),
+        initialize_check,
+        _check_ping(tools_url, timeout, request_headers=session_request_headers),
+        _check_tools_list(tools_url, timeout, request_headers=session_request_headers),
+        _check_correlation_id_uniqueness(
+            tools_url, timeout, request_headers=session_request_headers
+        ),
+        _check_unknown_method_error(tools_url, timeout, request_headers=session_request_headers),
     ]
 
     if args.json:
