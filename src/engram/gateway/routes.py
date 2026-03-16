@@ -122,13 +122,16 @@ def register_routes(app: FastAPI) -> None:
         ErrorReason,
         JsonRpcErrorCode,
         dispatch_jsonrpc_request,
+        get_current_mcp_session_id,
         handle_tools_call_with_executor,
+        is_jsonrpc_notification,
         is_jsonrpc_request,
         is_valid_correlation_id,
         make_jsonrpc_error,
         mcp_router,
         register_tool_executor,
     )
+    from .mcp_session import get_session_store
 
     # 1. 注册 MinIO Audit Webhook 路由
     from .minio_audit_webhook import router as minio_audit_router
@@ -268,18 +271,57 @@ def register_routes(app: FastAPI) -> None:
         )
         return Response(status_code=204 if is_preflight else 200, headers=response_headers)
 
+    @app.get("/mcp")
+    async def mcp_get_endpoint(request: Request):
+        """
+        GET /mcp — SSE 通道（当前未实现，返回 405）
+
+        MCP Streamable HTTP 规范允许 GET /mcp 用于 SSE 流式通知。
+        当前所有 tool 调用均为同步快速操作，不需要 SSE，返回 405。
+        """
+        return Response(
+            status_code=405,
+            headers={**MCP_CORS_HEADERS, "Allow": "POST, DELETE, OPTIONS"},
+        )
+
+    @app.delete("/mcp")
+    async def mcp_delete_endpoint(request: Request):
+        """
+        DELETE /mcp — 会话终止
+
+        验证 Mcp-Session-Id 并删除会话，返回 204。
+        无效 session_id 返回 404。
+        缺少 session_id 返回 400。
+        """
+        session_id = request.headers.get("Mcp-Session-Id") or request.headers.get(
+            "mcp-session-id"
+        )
+        if not session_id:
+            return JSONResponse(
+                content={"error": "Missing Mcp-Session-Id header"},
+                status_code=400,
+                headers=dict(MCP_CORS_HEADERS),
+            )
+        store = get_session_store()
+        if store.delete_session(session_id):
+            return Response(status_code=204, headers=dict(MCP_CORS_HEADERS))
+        return Response(status_code=404, headers=dict(MCP_CORS_HEADERS))
+
     @app.post("/mcp")
     async def mcp_endpoint(request: Request):
         """
-        MCP 统一入口（双协议兼容）
+        MCP 统一入口（双协议兼容 + Streamable HTTP 会话管理）
 
         自动识别请求格式:
         - JSON-RPC 2.0: {"jsonrpc": "2.0", "method": "...", ...}
+        - JSON-RPC 2.0 批量请求: [{"jsonrpc": "2.0", ...}, ...]
         - 旧格式 (MCPToolCall): {"tool": "...", "arguments": {...}}
 
-        设计原则：
-        - JSON-RPC 请求使用 dispatch_jsonrpc_request 统一处理
-        - Legacy 请求保持 MCPResponse 结构，兼容旧客户端
+        Streamable HTTP 特性：
+        - 通知（无 id 字段）→ 202 空 body
+        - initialize 响应附带 Mcp-Session-Id header
+        - 有效 session_id 验证（向后兼容：不携带 session_id 的请求仍正常处理）
+        - 批量请求支持
         """
         # 通过 dependencies 模块获取 correlation_id（保持单一来源）
         # 优先使用中间件上下文，若不在上下文中则生成新的
@@ -358,18 +400,46 @@ def register_routes(app: FastAPI) -> None:
                 headers=response_headers,
             )
 
+        # ---- 批量请求处理 ----
+        if isinstance(body, list):
+            return await _handle_batch_request(
+                body, correlation_id, mcp_session_id, response_headers
+            )
+
+        # ---- 通知处理（无 id 字段的 JSON-RPC 请求）----
+        if isinstance(body, dict) and is_jsonrpc_notification(body):
+            method = body.get("method", "")
+            logger.info(
+                "MCP notification",
+                extra={
+                    "method": method,
+                    "correlation_id": correlation_id,
+                    "mcp_session_id_present": bool(mcp_session_id),
+                },
+            )
+            # notifications/initialized: 标记会话已完成初始化
+            if method == "notifications/initialized" and mcp_session_id:
+                get_session_store().mark_initialized(mcp_session_id)
+            return Response(status_code=202, headers=response_headers)
+
         is_jsonrpc = isinstance(body, dict) and is_jsonrpc_request(body)
-        method: str | None = body.get("method") if is_jsonrpc else None
+        method_name: str | None = body.get("method") if is_jsonrpc else None
 
         logger.info(
             "MCP request",
             extra={
                 "is_jsonrpc": is_jsonrpc,
-                "method": method,
+                "method": method_name,
                 "correlation_id": correlation_id,
                 "mcp_session_id_present": bool(mcp_session_id),
             },
         )
+
+        # ---- 会话验证（向后兼容：不携带 session_id 的请求仍正常处理）----
+        if mcp_session_id and is_jsonrpc and method_name != "initialize":
+            session = get_session_store().get_session(mcp_session_id)
+            if session is None:
+                return Response(status_code=404, headers=response_headers)
 
         if is_jsonrpc:
             # 使用统一入口函数处理 JSON-RPC 请求（方便 patch 测试）
@@ -401,6 +471,11 @@ def register_routes(app: FastAPI) -> None:
                     assert result.response.error.data["correlation_id"] == result.correlation_id, (
                         "契约违反: error.data.correlation_id 与入口 correlation_id 不一致。"
                     )
+
+            # initialize 响应：附带 Mcp-Session-Id header
+            new_session_id = get_current_mcp_session_id()
+            if new_session_id and method_name == "initialize":
+                response_headers["Mcp-Session-Id"] = new_session_id
 
             return JSONResponse(
                 content=result.to_dict(),
@@ -467,6 +542,41 @@ def register_routes(app: FastAPI) -> None:
                 content={"ok": False, "error": str(e), "correlation_id": correlation_id},
                 headers=response_headers,
             )
+
+    async def _handle_batch_request(
+        body: list,
+        correlation_id: str,
+        mcp_session_id: str | None,
+        response_headers: dict,
+    ) -> Response:
+        """
+        处理 JSON-RPC 批量请求
+
+        逐项 dispatch，通知不产生响应项。
+        若所有项均为通知，返回 202。
+        """
+        results = []
+        for item in body:
+            if not isinstance(item, dict):
+                continue
+            # 通知：处理副作用但不产生响应
+            if is_jsonrpc_notification(item):
+                method = item.get("method", "")
+                if method == "notifications/initialized" and mcp_session_id:
+                    get_session_store().mark_initialized(mcp_session_id)
+                continue
+            # 常规请求
+            if is_jsonrpc_request(item):
+                result = await dispatch_jsonrpc_request(
+                    item,
+                    correlation_id,
+                    strict_correlation_id=True,
+                )
+                results.append(result.to_dict())
+
+        if not results:
+            return Response(status_code=202, headers=response_headers)
+        return JSONResponse(content=results, headers=response_headers)
 
     @app.post("/memory/store", response_model=MemoryStoreResponse)
     async def memory_store_endpoint(request: MemoryStoreRequest):

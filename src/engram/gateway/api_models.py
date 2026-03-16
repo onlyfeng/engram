@@ -446,7 +446,7 @@ class GovernanceSettingsUpdateRequest(BaseModel):
 # CORS 配置常量
 MCP_CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Session-Id",
     "Access-Control-Expose-Headers": "Mcp-Session-Id, X-Correlation-ID",
     "Access-Control-Max-Age": "86400",

@@ -3923,22 +3923,35 @@ class TestMcpRequestLogging:
     def test_mcp_endpoint_logs_request_metadata_without_token_leak(self, client, caplog):
         caplog.set_level(logging.INFO, logger="gateway")
 
+        # First initialize to get a valid session ID
+        init_resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-03-26", "capabilities": {}},
+            },
+        )
+        session_id = init_resp.headers.get("Mcp-Session-Id", "session-123")
+
         response = client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
             headers={
                 "Authorization": "Bearer top-secret",
                 "X-Engram-Auth": "engram-secret",
-                "Mcp-Session-Id": "session-123",
+                "Mcp-Session-Id": session_id,
             },
         )
         assert response.status_code == 200
 
-        record = next(
-            (item for item in caplog.records if item.getMessage() == "MCP request"),
-            None,
-        )
-        assert record is not None, "应记录 MCP request 日志"
+        # Use the last "MCP request" record (the first is from the initialize call)
+        mcp_records = [
+            item for item in caplog.records if item.getMessage() == "MCP request"
+        ]
+        assert len(mcp_records) >= 1, "应记录 MCP request 日志"
+        record = mcp_records[-1]
 
         assert getattr(record, "is_jsonrpc", None) is True
         assert getattr(record, "method", None) == "tools/list"
@@ -3948,7 +3961,7 @@ class TestMcpRequestLogging:
         record_payload = json.dumps(record.__dict__, default=str)
         assert "top-secret" not in record_payload
         assert "engram-secret" not in record_payload
-        assert "session-123" not in record_payload
+        assert session_id not in record_payload
 
 
 class TestGptSchemaCompatibility:

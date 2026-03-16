@@ -270,6 +270,11 @@ _current_correlation_id: contextvars.ContextVar[Optional[str]] = contextvars.Con
     "_current_correlation_id", default=None
 )
 
+# 用于在 handle_initialize -> routes 之间传递新创建的 session_id
+_current_mcp_session_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_current_mcp_session_id", default=None
+)
+
 
 def get_current_correlation_id() -> Optional[str]:
     """
@@ -307,6 +312,21 @@ def reset_current_correlation_id_for_testing() -> None:
     """
     # 直接设置为 None（ContextVar 的 default）
     _current_correlation_id.set(None)
+
+
+def get_current_mcp_session_id() -> Optional[str]:
+    """获取当前请求在 initialize 时创建的 session_id"""
+    return _current_mcp_session_id.get()
+
+
+def set_current_mcp_session_id(session_id: Optional[str]) -> contextvars.Token:
+    """设置当前请求的 mcp session_id"""
+    return _current_mcp_session_id.set(session_id)
+
+
+def reset_current_mcp_session_id_for_testing() -> None:
+    """重置 mcp session_id ContextVar（仅测试用）"""
+    _current_mcp_session_id.set(None)
 
 
 # ===================== JSON-RPC 2.0 数据模型 =====================
@@ -377,6 +397,15 @@ def make_jsonrpc_result(id: Optional[Any], result: Any) -> JsonRpcResponse:
 def is_jsonrpc_request(body: Dict[str, Any]) -> bool:
     """判断请求是否为 JSON-RPC 2.0 格式"""
     return body.get("jsonrpc") == "2.0" and "method" in body
+
+
+def is_jsonrpc_notification(body: Dict[str, Any]) -> bool:
+    """
+    判断请求是否为 JSON-RPC 2.0 通知（无 id 字段的请求）
+
+    JSON-RPC 2.0 规范：通知是没有 "id" 成员的请求对象。
+    """
+    return body.get("jsonrpc") == "2.0" and "method" in body and "id" not in body
 
 
 def parse_jsonrpc_request(
@@ -1725,12 +1754,23 @@ async def handle_initialize(params: Dict[str, Any]) -> Dict[str, Any]:
     - params 允许为空或缺省（dispatch 会传入 {}）
     - 当 params 提供 protocolVersion/capabilities/clientInfo 时，当前实现不做强校验
 
+    会话管理：
+    - 创建新的 MCP 会话，将 session_id 存入 contextvar
+    - 路由层通过 get_current_mcp_session_id() 读取并设置响应头
+
     返回最小字段集合（对齐 MCP/Cursor 预期）：
     - protocolVersion
     - capabilities
     - serverInfo
     """
     _ = params  # 兼容：允许空 params，不强制使用
+
+    # 创建会话并存入 contextvar
+    from .mcp_session import get_session_store
+
+    session = get_session_store().create_session()
+    set_current_mcp_session_id(session.session_id)
+
     return {
         "protocolVersion": MCP_PROTOCOL_VERSION,
         "capabilities": MCP_SERVER_CAPABILITIES,

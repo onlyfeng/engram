@@ -619,11 +619,21 @@ def reset_all_gateway_state():
     try:
         from engram.gateway.mcp_rpc import (
             reset_current_correlation_id_for_testing,
+            reset_current_mcp_session_id_for_testing,
             reset_tool_executor_for_testing,
         )
 
         reset_current_correlation_id_for_testing()
+        reset_current_mcp_session_id_for_testing()
         reset_tool_executor_for_testing()
+    except (ImportError, AttributeError):
+        pass
+
+    # 重置 mcp_session store
+    try:
+        from engram.gateway.mcp_session import reset_session_store_for_testing
+
+        reset_session_store_for_testing()
     except (ImportError, AttributeError):
         pass
 
