@@ -77,11 +77,7 @@ class McpSessionStore:
     def _lazy_cleanup(self) -> None:
         """惰性清理过期会话"""
         now = time.monotonic()
-        expired = [
-            sid
-            for sid, s in self._sessions.items()
-            if (now - s.created_at) > self._ttl
-        ]
+        expired = [sid for sid, s in self._sessions.items() if (now - s.created_at) > self._ttl]
         for sid in expired:
             del self._sessions[sid]
 

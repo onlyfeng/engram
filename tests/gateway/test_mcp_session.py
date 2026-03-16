@@ -10,9 +10,6 @@ MCP 会话管理模块测试
 
 from __future__ import annotations
 
-import time
-from unittest.mock import patch
-
 from engram.gateway.mcp_session import (
     McpSessionStore,
     get_session_store,

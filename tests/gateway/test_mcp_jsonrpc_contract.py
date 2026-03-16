@@ -3947,9 +3947,7 @@ class TestMcpRequestLogging:
         assert response.status_code == 200
 
         # Use the last "MCP request" record (the first is from the initialize call)
-        mcp_records = [
-            item for item in caplog.records if item.getMessage() == "MCP request"
-        ]
+        mcp_records = [item for item in caplog.records if item.getMessage() == "MCP request"]
         assert len(mcp_records) >= 1, "应记录 MCP request 日志"
         record = mcp_records[-1]
 

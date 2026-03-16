@@ -38,12 +38,8 @@ def mock_dependencies():
     fake_adapter = FakeLogbookAdapter()
     fake_adapter.configure_dedup_miss()
     mock_client = MagicMock()
-    mock_client.store.return_value = MagicMock(
-        success=True, memory_id="mock-id", error=None
-    )
-    mock_client.search.return_value = MagicMock(
-        success=True, results=[], error=None
-    )
+    mock_client.store.return_value = MagicMock(success=True, memory_id="mock-id", error=None)
+    mock_client.search.return_value = MagicMock(success=True, results=[], error=None)
     test_container = GatewayContainer.create_for_testing(
         config=fake_config,
         db=fake_db,
@@ -160,9 +156,7 @@ class TestSessionValidation:
 class TestDeleteMcp:
     def test_delete_valid_session(self, client):
         session_id = _do_initialize(client)
-        resp = client.delete(
-            "/mcp", headers={"Mcp-Session-Id": session_id}
-        )
+        resp = client.delete("/mcp", headers={"Mcp-Session-Id": session_id})
         assert resp.status_code == 204
 
         # Session should no longer exist
@@ -174,9 +168,7 @@ class TestDeleteMcp:
         assert resp.status_code == 404
 
     def test_delete_invalid_session(self, client):
-        resp = client.delete(
-            "/mcp", headers={"Mcp-Session-Id": "nonexistent"}
-        )
+        resp = client.delete("/mcp", headers={"Mcp-Session-Id": "nonexistent"})
         assert resp.status_code == 404
 
     def test_delete_missing_session_header(self, client):
@@ -234,7 +226,5 @@ class TestCorsHeaders:
 
     def test_delete_has_cors_headers(self, client):
         session_id = _do_initialize(client)
-        resp = client.delete(
-            "/mcp", headers={"Mcp-Session-Id": session_id}
-        )
+        resp = client.delete("/mcp", headers={"Mcp-Session-Id": session_id})
         assert "Access-Control-Allow-Origin" in resp.headers

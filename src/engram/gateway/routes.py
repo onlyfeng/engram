@@ -293,9 +293,7 @@ def register_routes(app: FastAPI) -> None:
         无效 session_id 返回 404。
         缺少 session_id 返回 400。
         """
-        session_id = request.headers.get("Mcp-Session-Id") or request.headers.get(
-            "mcp-session-id"
-        )
+        session_id = request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id")
         if not session_id:
             return JSONResponse(
                 content={"error": "Missing Mcp-Session-Id header"},
