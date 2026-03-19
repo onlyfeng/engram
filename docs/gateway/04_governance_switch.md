@@ -141,3 +141,27 @@ tool: governance_update
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
 | GOVERNANCE_ADMIN_KEY | 治理管理密钥 | `sk-governance-xxx` |
+
+> ⚠️ **首次部署必读**：`GOVERNANCE_ADMIN_KEY` 必须在首次启动前配置。
+> 若未配置，`governance_update` 鉴权将永远失败，`team_write_enabled` 无法从默认的 `false` 修改为 `true`，
+> 导致所有 `memory_store` 写入静默降级到 `private` 空间而非 `team` 空间。
+> 补救方式：在 `.env` 补充配置后重启 Gateway，再手动调用一次 `governance_update`。
+
+### 初始化检查清单
+
+部署完成后，建议执行以下 SQL 验证状态：
+
+```sql
+-- 1. 确认 settings 行已创建且 team 写入已开启
+SELECT project_key, team_write_enabled, policy_json, updated_at
+FROM governance.settings;
+
+-- 2. 确认最近写入进了 team 空间而非 private 空间
+SELECT action, reason, target_space, count(*)
+FROM governance.write_audit
+GROUP BY action, reason, target_space
+ORDER BY count(*) DESC
+LIMIT 10;
+```
+
+如果 `action = redirect` 且 `reason = team_write_disabled`，说明 `GOVERNANCE_ADMIN_KEY` 未配置或 `governance_update` 未调用。
