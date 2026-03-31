@@ -371,6 +371,7 @@ async def memory_store_impl(
             result = client.store(
                 content=payload_md,
                 space=final_space,
+                user_id=actor_user_id or "anonymous",
                 metadata=meta_json,
             )
 
