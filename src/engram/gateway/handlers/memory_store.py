@@ -368,11 +368,19 @@ async def memory_store_impl(
         # 获取 OpenMemory client（统一从 deps 获取）
         try:
             client = deps.openmemory_client
+            # 构建完整 metadata：合并调用方 meta_json + handler 上下文字段
+            om_metadata: Dict[str, Any] = dict(meta_json) if meta_json else {}
+            if evidence_refs:
+                om_metadata["evidence_refs"] = evidence_refs
+            if payload_sha:
+                om_metadata["payload_sha"] = payload_sha
+            if kind:
+                om_metadata["kind"] = kind
             result = client.store(
                 content=payload_md,
                 space=final_space,
                 user_id=actor_user_id or "anonymous",
-                metadata=meta_json,
+                metadata=om_metadata,
             )
 
             if not result.success:
