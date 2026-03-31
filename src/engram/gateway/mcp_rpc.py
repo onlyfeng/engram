@@ -1768,7 +1768,7 @@ async def handle_initialize(params: Dict[str, Any]) -> Dict[str, Any]:
     # 创建会话并存入 contextvar
     from .mcp_session import get_session_store
 
-    session = get_session_store().create_session()
+    session = await get_session_store().create_session()
     set_current_mcp_session_id(session.session_id)
 
     return {

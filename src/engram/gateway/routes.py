@@ -301,7 +301,7 @@ def register_routes(app: FastAPI) -> None:
                 headers=dict(MCP_CORS_HEADERS),
             )
         store = get_session_store()
-        if store.delete_session(session_id):
+        if await store.delete_session(session_id):
             return Response(status_code=204, headers=dict(MCP_CORS_HEADERS))
         return Response(status_code=404, headers=dict(MCP_CORS_HEADERS))
 
@@ -417,7 +417,7 @@ def register_routes(app: FastAPI) -> None:
             )
             # notifications/initialized: 标记会话已完成初始化
             if method == "notifications/initialized" and mcp_session_id:
-                get_session_store().mark_initialized(mcp_session_id)
+                await get_session_store().mark_initialized(mcp_session_id)
             return Response(status_code=202, headers=response_headers)
 
         is_jsonrpc = isinstance(body, dict) and is_jsonrpc_request(body)
@@ -435,7 +435,7 @@ def register_routes(app: FastAPI) -> None:
 
         # ---- 会话验证（向后兼容：不携带 session_id 的请求仍正常处理）----
         if mcp_session_id and is_jsonrpc and method_name != "initialize":
-            session = get_session_store().get_session(mcp_session_id)
+            session = await get_session_store().get_session(mcp_session_id)
             if session is None:
                 return Response(status_code=404, headers=response_headers)
 
@@ -561,7 +561,7 @@ def register_routes(app: FastAPI) -> None:
             if is_jsonrpc_notification(item):
                 method = item.get("method", "")
                 if method == "notifications/initialized" and mcp_session_id:
-                    get_session_store().mark_initialized(mcp_session_id)
+                    await get_session_store().mark_initialized(mcp_session_id)
                 continue
             # 常规请求
             if is_jsonrpc_request(item):

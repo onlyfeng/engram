@@ -8,10 +8,12 @@ MCP Streamable HTTP 会话管理模块
 - 惰性 TTL 过期清理
 
 内存 dict 存储，单进程足够。
+使用 asyncio.Lock 保护共享状态，防止协程并发导致的竞态条件。
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -35,51 +37,55 @@ class McpSessionStore:
     MCP 会话存储
 
     内存 dict 存储，惰性 TTL 过期清理。
+    使用 asyncio.Lock 保护所有 _sessions 操作，
+    防止并发协程间的 check-then-act 竞态。
     """
 
     def __init__(self, ttl: float = DEFAULT_SESSION_TTL_SECONDS) -> None:
         self._sessions: Dict[str, McpSession] = {}
         self._ttl = ttl
+        self._lock = asyncio.Lock()
 
-    def create_session(self) -> McpSession:
+    async def create_session(self) -> McpSession:
         """创建新会话，返回 McpSession 实例"""
-        self._lazy_cleanup()
-        session = McpSession(session_id=uuid4().hex)
-        self._sessions[session.session_id] = session
-        return session
+        async with self._lock:
+            self._lazy_cleanup()
+            session = McpSession(session_id=uuid4().hex)
+            self._sessions[session.session_id] = session
+            return session
 
-    def get_session(self, session_id: str) -> Optional[McpSession]:
+    async def get_session(self, session_id: str) -> Optional[McpSession]:
         """获取会话，不存在或已过期返回 None"""
-        session = self._sessions.get(session_id)
-        if session is None:
-            return None
-        if self._is_expired(session):
-            del self._sessions[session_id]
-            return None
-        return session
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+            if self._is_expired(session):
+                self._sessions.pop(session_id, None)
+                return None
+            return session
 
-    def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str) -> bool:
         """删除会话，返回是否成功删除"""
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            return True
-        return False
+        async with self._lock:
+            return self._sessions.pop(session_id, None) is not None
 
-    def mark_initialized(self, session_id: str) -> None:
+    async def mark_initialized(self, session_id: str) -> None:
         """标记会话已完成 initialized 通知"""
-        session = self.get_session(session_id)
-        if session is not None:
-            session.initialized = True
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is not None and not self._is_expired(session):
+                session.initialized = True
 
     def _is_expired(self, session: McpSession) -> bool:
         return (time.monotonic() - session.created_at) > self._ttl
 
     def _lazy_cleanup(self) -> None:
-        """惰性清理过期会话"""
+        """惰性清理过期会话（必须在持有 _lock 时调用）"""
         now = time.monotonic()
         expired = [sid for sid, s in self._sessions.items() if (now - s.created_at) > self._ttl]
         for sid in expired:
-            del self._sessions[sid]
+            self._sessions.pop(sid, None)
 
 
 # 模块级单例
