@@ -442,6 +442,7 @@ class OpenMemoryClient:
             "user_id": actor_user_id,  # 可为 None
             "tags": tags or [],
             "metadata": metadata,
+            "infer": False,  # 保留原始 content 全文，不经 LLM 摘要
         }
 
         try:
@@ -517,6 +518,7 @@ class OpenMemoryClient:
             "user_id": user_id,
             "tags": tags or [],
             "metadata": final_metadata,
+            "infer": False,  # 保留原始 content 全文，不经 LLM 摘要
         }
 
         try:
