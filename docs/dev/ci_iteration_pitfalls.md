@@ -160,7 +160,31 @@ feat: some feature
 
 ---
 
-## 6. 相关文档
+## 6. OpenMemory pg_type 启动竞态（nightly 自愈）
+
+**症状**：nightly "Wait for services to be healthy" 步骤在 OpenMemory 健康检查失败，日志含
+
+```
+[DB] Init failed: error: duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+detail: 'Key (typname, typnamespace)=(<some_table>, <oid>) already exists.'
+```
+
+**根因**：OpenMemory 上游镜像首次 init 偶发竞态——表/类型重复创建。Postgres 为每个 TABLE 隐式创建同名 row type，因此 `pg_type` 上的冲突源往往是上一次半初始化遗留的 TABLE，而不是真正的 TYPE。
+
+**易踩坑**：
+- 在自愈 SQL 中硬编码具体表名（如 `openmemory_users`），下次冲突表名一变就失效——2026-04-16 nightly 实际冲突在 `openmemory_memories` 上。
+- 用 `DROP TYPE openmemory.<name> CASCADE` 兜底，会触发 `cannot drop type ... because table ... requires it`，整步退出 1。
+
+**正确写法**：枚举 `openmemory` schema 全部 TABLE 做 `DROP TABLE ... CASCADE`，再清理残留的 enum/composite/domain 类型。已抽离至 `scripts/ci/recover_openmemory_init_race.sh`，nightly.yml 直接调用。
+
+**本地校验**：
+- `bash scripts/ci/recover_openmemory_init_race.sh --print-sql` 可在无 Docker 环境下输出将执行的 SQL。
+- `make recover-openmemory-init-race` 在已起 compose 时手动触发自愈。
+- `tests/ci/test_recover_openmemory_init_race.py` 锁死回归契约：禁止重新引入硬编码表名或对表用 `DROP TYPE`，并要求 nightly.yml 调用脚本而非 inline SQL。
+
+---
+
+## 7. 相关文档
 
 | 文档 | 用途 |
 |------|------|

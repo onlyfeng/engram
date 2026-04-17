@@ -290,12 +290,13 @@ jobs:
             om_logs="$(docker compose -f docker-compose.unified.yml logs openmemory --tail=200 || true)"
             echo "$om_logs"
 
-            # 处理上游 OpenMemory 启动期偶发 DDL 竞态（pg_type duplicate key）
+            # 处理上游 OpenMemory 启动期偶发 DDL 竞态（pg_type duplicate key）。
+            # 自愈逻辑独立成脚本，便于本地复现/单测；详见
+            # docs/dev/ci_iteration_pitfalls.md §"OpenMemory pg_type 启动竞态"。
             if echo "$om_logs" | grep -q "pg_type_typname_nsp_index"; then
-              echo "检测到 pg_type 冲突，清理 openmemory.openmemory_users 后重试..."
-              docker compose -f docker-compose.unified.yml exec -T postgres \
-                psql -U postgres -d "${POSTGRES_DB}" -v ON_ERROR_STOP=1 \
-                -c "DO \$\$ BEGIN IF EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'openmemory' AND t.typname = 'openmemory_users') THEN EXECUTE 'DROP TYPE openmemory.openmemory_users CASCADE'; END IF; END \$\$;"
+              echo "检测到 pg_type 冲突，清理 openmemory schema 后重试..."
+              POSTGRES_DB="${POSTGRES_DB}" POSTGRES_USER=postgres \
+                bash scripts/ci/recover_openmemory_init_race.sh
             fi
 
             docker compose -f docker-compose.unified.yml up -d --force-recreate openmemory
