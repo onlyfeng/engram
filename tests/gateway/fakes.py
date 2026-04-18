@@ -85,6 +85,44 @@ class FakeSearchResult:
     error: Optional[str] = None
 
 
+@dataclass
+class FakeListResult:
+    """Fake 记忆列表结果"""
+
+    success: bool
+    memories: List[Dict[str, Any]] = field(default_factory=list)
+    total: int = 0
+    error: Optional[str] = None
+
+
+@dataclass
+class FakeGetResult:
+    """Fake 单条记忆结果"""
+
+    success: bool
+    memory: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class FakeReinforceResult:
+    """Fake 强化结果"""
+
+    success: bool
+    memory_id: Optional[str] = None
+    new_strength: Optional[float] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class FakeWipeResult:
+    """Fake 清理结果"""
+
+    success: bool
+    deleted_count: int = 0
+    error: Optional[str] = None
+
+
 class FakeOpenMemoryConnectionError(OpenMemoryConnectionError):
     """
     Fake OpenMemory 连接异常
@@ -138,14 +176,26 @@ class FakeOpenMemoryClient:
         # 存储调用记录
         self.store_calls: List[Dict[str, Any]] = []
         self.search_calls: List[Dict[str, Any]] = []
+        self.list_calls: List[Dict[str, Any]] = []
+        self.get_calls: List[Dict[str, Any]] = []
+        self.reinforce_calls: List[Dict[str, Any]] = []
+        self.wipe_calls: List[Dict[str, Any]] = []
 
         # 配置的响应行为
         self._store_behavior: Optional[Callable] = None
         self._search_behavior: Optional[Callable] = None
+        self._list_behavior: Optional[Callable] = None
+        self._get_behavior: Optional[Callable] = None
+        self._reinforce_behavior: Optional[Callable] = None
+        self._wipe_behavior: Optional[Callable] = None
 
         # 默认配置为成功响应
         self.configure_store_success()
         self.configure_search_success()
+        self.configure_list_success()
+        self.configure_get_success()
+        self.configure_reinforce_success()
+        self.configure_wipe_success()
 
     # ============== 配置方法 ==============
 
@@ -265,6 +315,52 @@ class FakeOpenMemoryClient:
         """配置 search 使用自定义回调"""
         self._search_behavior = callback
 
+    def configure_list_success(
+        self,
+        memories: Optional[List[Dict[str, Any]]] = None,
+        total: Optional[int] = None,
+    ):
+        """配置 list_memories 返回成功"""
+
+        def _behavior(**kwargs):
+            items = memories or []
+            return FakeListResult(success=True, memories=items, total=total or len(items))
+
+        self._list_behavior = _behavior
+
+    def configure_get_success(self, memory: Optional[Dict[str, Any]] = None):
+        """配置 get_memory 返回成功"""
+
+        def _behavior(**kwargs):
+            target_memory = memory or {"id": kwargs.get("memory_id", "fake_memory_id")}
+            return FakeGetResult(success=True, memory=target_memory)
+
+        self._get_behavior = _behavior
+
+    def configure_reinforce_success(
+        self,
+        memory_id: str = "fake_memory_id",
+        new_strength: Optional[float] = 1.0,
+    ):
+        """配置 reinforce 返回成功"""
+
+        def _behavior(**kwargs):
+            return FakeReinforceResult(
+                success=True,
+                memory_id=kwargs.get("memory_id", memory_id),
+                new_strength=new_strength,
+            )
+
+        self._reinforce_behavior = _behavior
+
+    def configure_wipe_success(self, deleted_count: int = 0):
+        """配置 wipe 返回成功"""
+
+        def _behavior(**kwargs):
+            return FakeWipeResult(success=True, deleted_count=deleted_count)
+
+        self._wipe_behavior = _behavior
+
     # ============== API 方法 ==============
 
     def store(
@@ -310,12 +406,64 @@ class FakeOpenMemoryClient:
         """健康检查（默认返回 True）"""
         return True
 
+    def list_memories(
+        self,
+        user_id: Optional[str] = None,
+        space: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> FakeListResult:
+        """列出记忆（模拟）"""
+        call_args = {
+            "user_id": user_id,
+            "space": space,
+            "limit": limit,
+            "offset": offset,
+        }
+        self.list_calls.append(call_args)
+        assert self._list_behavior is not None
+        return self._list_behavior(**call_args)
+
+    def get_memory(self, memory_id: str) -> FakeGetResult:
+        """获取单条记忆（模拟）"""
+        call_args = {"memory_id": memory_id}
+        self.get_calls.append(call_args)
+        assert self._get_behavior is not None
+        return self._get_behavior(**call_args)
+
+    def reinforce(
+        self,
+        memory_id: str,
+        delta: float = 1.0,
+        reason: Optional[str] = None,
+    ) -> FakeReinforceResult:
+        """强化记忆（模拟）"""
+        call_args = {
+            "memory_id": memory_id,
+            "delta": delta,
+            "reason": reason,
+        }
+        self.reinforce_calls.append(call_args)
+        assert self._reinforce_behavior is not None
+        return self._reinforce_behavior(**call_args)
+
+    def wipe(self, confirm: bool = False, user_id: Optional[str] = None) -> FakeWipeResult:
+        """清理记忆（模拟）"""
+        call_args = {"confirm": confirm, "user_id": user_id}
+        self.wipe_calls.append(call_args)
+        assert self._wipe_behavior is not None
+        return self._wipe_behavior(**call_args)
+
     # ============== 辅助方法 ==============
 
     def reset_calls(self):
         """重置调用记录"""
         self.store_calls.clear()
         self.search_calls.clear()
+        self.list_calls.clear()
+        self.get_calls.clear()
+        self.reinforce_calls.clear()
+        self.wipe_calls.clear()
 
     def get_last_store_call(self) -> Optional[Dict[str, Any]]:
         """获取最后一次 store 调用"""

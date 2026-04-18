@@ -72,7 +72,11 @@ function Install-Service($name, $cmd, $args, $workdir, $envMap) {
 }
 
 Install-Service -name "engram" -cmd $EngramCmd -args $EngramArgs -workdir $EngramHome -envMap $EngramEnv
-$openMemoryWorkDir = Resolve-WorkDirFromArgs $OpenMemoryCmd $OpenMemoryArgs
+$openMemoryWorkDir = if (-not [string]::IsNullOrWhiteSpace($OpenMemoryWorkDir)) {
+  $OpenMemoryWorkDir
+} else {
+  Resolve-WorkDirFromArgs $OpenMemoryCmd $OpenMemoryArgs
+}
 Install-Service -name "openmemory" -cmd $OpenMemoryCmd -args $OpenMemoryArgs -workdir $openMemoryWorkDir -envMap $OpenMemoryEnv
 
 Write-Host "OK: services installed and started. Logs: $LogsDir"

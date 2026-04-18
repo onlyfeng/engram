@@ -55,7 +55,7 @@
 | `OM_MODE` | `standard` | 运行模式 |
 | `OM_VECTOR_BACKEND` | `postgres` | 向量后端 |
 | `OM_EMBEDDINGS` | `synthetic` | Embedding 提供者 |
-| `OM_VEC_DIM` | `256` | 向量维度 |
+| `OM_VEC_DIM` | 建议显式设为 `1536` | 向量维度（避免随上游默认值漂移） |
 
 ### API 路径与字段映射（openmemory_client.py）
 
@@ -64,18 +64,21 @@
 | 方法 | 路径 | 用途 |
 |------|------|------|
 | `POST` | `/memory/add` | 添加记忆 |
-| `POST` | `/memory/search` | 搜索记忆 |
+| `POST` | `/memory/query` | 搜索记忆（当前上游主路径） |
 | `GET` | `/health` | 健康检查 |
 | `GET` | `/dashboard/health` | Dashboard 健康检查（public endpoint） |
 | `GET` | `/dashboard/stats` | Dashboard 指标（JSON） |
 | `GET` | `/dashboard/activity` | 最近活动（JSON） |
 | `GET` | `/memory/all` | 记忆列表（JSON） |
 | `GET` | `/memory/:id` | 记忆详情（JSON） |
+| `POST` | `/memory/reinforce` | 强化记忆 |
+| `DELETE` | `/users/:user_id/memories` | 按用户清空记忆（当前上游主路径） |
 
 > 说明：
 > - `/dashboard/*` 为指标 JSON 端点（非 HTML UI），浏览器可直接打开查看 JSON。
 > - 当设置了 `OM_API_KEY`（或 `OPENMEMORY_API_KEY`）时，除 public endpoint 外都需要携带 `Authorization: Bearer <key>` 或 `x-api-key: <key>`。
 > - 浏览器注入 Header（ModHeader）与端点自检清单，参见 [安装指南](../installation.md) 的「验证 OpenMemory 连接」小节。
+> - 由于 OpenMemory 上游处于重写期，Gateway client 当前会自动兼容 `/memory/query` / `/memory/search`、`/memory/*` / `/api/memory/*`、以及缺失 wipe 端点时的逐条删除回退。
 
 **字段映射规范**
 
@@ -119,8 +122,8 @@ make openmemory-upgrade-check          # OpenMemory 升级验证
 
 ## OpenMemory 上游镜像说明
 
-统一栈默认使用上游镜像（`OPENMEMORY_IMAGE`），无需 vendoring。  
-如需锁定版本或内部定制，请维护你自己的镜像仓库并在 `.env` 中替换 `OPENMEMORY_IMAGE`。
+统一栈默认固定到上游镜像 `ghcr.io/caviraoss/openmemory:v1.3.3`（通过 `OPENMEMORY_IMAGE` 配置），无需 vendoring。  
+如需升级、回滚或内部定制，请维护你自己的镜像仓库或 tag/digest，并在 `.env` 中替换 `OPENMEMORY_IMAGE`。
 
 详细的冲突分级（L0-L3）、Freeze 机制、回滚流程请参阅 [docs/openmemory/00_vendoring_and_patches.md](../openmemory/00_vendoring_and_patches.md)。
 

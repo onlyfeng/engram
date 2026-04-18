@@ -511,8 +511,8 @@ OPENMEMORY_SVC_PASSWORD=changeme4
 # ============================================================
 # API 密钥配置
 # ============================================================
-# 推荐变量名: OM_API_KEY（规范前缀）
-# ⚠️ 废弃变量: OPENMEMORY_API_KEY 仍支持但优先级低于 OM_API_KEY
+# 推荐变量名: OM_API_KEY（OpenMemory 服务端主配置）
+# Gateway / CLI 为兼容旧配置仍支持 OPENMEMORY_API_KEY，但不要把它当作服务端主变量
 # 详见: docs/reference/environment_variables.md#openmemory-组件
 #
 # OM_API_KEY=your-api-key
@@ -663,7 +663,7 @@ POSTGRES_DSN="postgresql://logbook_svc:${LOGBOOK_SVC_PASSWORD}@localhost:5432/${
 | 检查项 | 成功标志 |
 |--------|----------|
 | PostgreSQL | 状态显示 `running (healthy)` |
-| OpenMemory | `curl /health` 返回 `{"status":"ok"}` |
+| OpenMemory | `curl /health` 返回 HTTP 200，且 payload 至少包含 `ok=true` 或 `status="ok"` |
 | Gateway | `curl /health` 返回 `{"status":"ok"}` |
 | Logbook CLI | JSON 输出包含 `"ok": true` |
 
@@ -699,7 +699,7 @@ echo "✓ Unified stack 部署成功"
 在 `.env` 中指定具体 tag 或 digest 以锁定版本：
 
 ```bash
-OPENMEMORY_IMAGE=ghcr.io/caviraoss/openmemory:v1.2.3
+OPENMEMORY_IMAGE=ghcr.io/caviraoss/openmemory:v1.3.3
 # 或
 OPENMEMORY_IMAGE=ghcr.io/caviraoss/openmemory@sha256:...
 ```
@@ -843,11 +843,11 @@ ls -la docker/engram.Dockerfile
 # 推荐（规范前缀）
 OM_API_KEY=your-api-key
 
-# 仍支持但不推荐（优先级高于 OM_API_KEY，但命名不规范）
+# 兼容旧配置时才使用（优先级高于 OM_API_KEY，但命名不规范）
 OPENMEMORY_API_KEY=your-api-key
 ```
 
-**说明**：Gateway 组件同时支持 `OM_API_KEY` 和 `OPENMEMORY_API_KEY`，后者优先级更高（为兼容旧配置）。新项目建议统一使用 `OM_API_KEY`。
+**说明**：Gateway 组件同时支持 `OM_API_KEY` 和 `OPENMEMORY_API_KEY`，后者优先级更高仅用于兼容历史配置。新项目建议统一使用 `OM_API_KEY`，避免在 1.3.3 固定版本场景下继续扩散旧变量名。
 
 详见 [环境变量参考 - Gateway 组件](../reference/environment_variables.md#gateway-组件) 和 [API Key 优先级](../reference/environment_variables.md#api-key-优先级)。
 

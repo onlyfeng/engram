@@ -680,7 +680,7 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
     ),
     ToolDefinition(
         name="memory_reinforce",
-        description="强化指定记忆强度（OpenMemory 1.3.0+）",
+        description="强化指定记忆强度（OpenMemory 1.3.x 兼容）",
         inputSchema={
             "type": "object",
             "properties": {

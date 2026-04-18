@@ -448,7 +448,9 @@ OpenMemory 是独立的语义记忆服务，Engram 通过 HTTP API 与其通信�
 
 ```bash
 git clone https://github.com/caviraoss/openmemory.git ~/openmemory
-cd ~/openmemory/packages/openmemory-js
+cd ~/openmemory
+git checkout v1.3.3
+cd packages/openmemory-js
 npm install
 npm run build
 npm link   # 将 opm 添加到 PATH（仅对当前用户）
@@ -965,6 +967,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT
 
 git clone https://github.com/caviraoss/openmemory.git ~/openmemory
 cd ~/openmemory
+git checkout v1.3.3
 
 # 配置环境变量（连接到 Step 4 创建的 PostgreSQL）
 export OM_METADATA_BACKEND=postgres
@@ -1208,11 +1211,10 @@ eval "$(make --no-print-directory env-shell)"
   <key>Label</key><string>ai.openmemory</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/path/to/npm</string>
-    <string>run</string>
-    <string>start</string>
+    <string>/path/to/opm</string>
+    <string>serve</string>
   </array>
-  <key>WorkingDirectory</key><string>/path/to/openmemory/backend</string>
+  <key>WorkingDirectory</key><string>/path/to/openmemory/packages/openmemory-js</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>OM_METADATA_BACKEND</key><string>postgres</string>
@@ -1353,8 +1355,8 @@ sudo tee /usr/local/engram/bin/openmemory.sh <<'EOF'
 #!/bin/zsh
 set -euo pipefail
 source /var/db/engram/openmemory/env
-cd /path/to/openmemory/backend
-exec /path/to/npm run start
+cd /path/to/openmemory/packages/openmemory-js
+exec /path/to/opm serve
 EOF
 
 sudo chmod 755 /usr/local/engram/bin/*.sh

@@ -192,9 +192,9 @@ docker compose -f docker-compose.engram.yml up -d
 # docker-compose.override.yml
 services:
   openmemory:
-    image: your-registry/openmemory:latest
+    image: your-registry/openmemory:v1.3.3
   openmemory_migrate:
-    image: your-registry/openmemory:latest
+    image: your-registry/openmemory:v1.3.3
 ```
 
 ---

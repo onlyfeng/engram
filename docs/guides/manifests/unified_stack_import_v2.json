@@ -218,7 +218,7 @@
       {
         "name": "OPENMEMORY_IMAGE",
         "description": "OpenMemory 上游镜像",
-        "default": "ghcr.io/caviraoss/openmemory:latest"
+        "default": "ghcr.io/caviraoss/openmemory:v1.3.3"
       },
       {
         "name": "OM_PORT",

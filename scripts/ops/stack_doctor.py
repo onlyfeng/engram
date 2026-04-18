@@ -226,14 +226,14 @@ def _check_openmemory_health(openmemory_url: str, timeout: float) -> CheckResult
         parsed = json.loads(body.decode("utf-8", errors="replace") or "{}")
     except Exception:
         parsed = {}
-    # OpenMemory 约定返回 {"status": "ok"}（兼容 ok/healthy 字段）
+    # OpenMemory 健康检查兼容 status=ok / ok=true / healthy=true 三种返回
     status_val = str(parsed.get("status", "")).lower()
     ok = status_val == "ok" or bool(parsed.get("ok")) or bool(parsed.get("healthy"))
     if not ok:
         return CheckResult(
             "OpenMemory GET /health",
             False,
-            "响应不符合预期（缺少 status=ok）",
+            "响应不符合预期（缺少 status=ok / ok=true / healthy=true）",
             status_code=status,
             details=preview,
         )
