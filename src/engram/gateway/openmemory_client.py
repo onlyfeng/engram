@@ -466,9 +466,10 @@ class OpenMemoryClient:
                 if memory_id is None:
                     continue
                 try:
+                    params_variants = [{"user_id": user_id}] if user_id else [{}]
                     self._delete_compat(
                         paths=[f"/memory/{memory_id}"],
-                        params_variants=[({"user_id": user_id} if user_id else {}), {}],
+                        params_variants=params_variants,
                         allowed_statuses=(404,),
                     )
                 except httpx.HTTPStatusError as exc:
@@ -893,6 +894,34 @@ class OpenMemoryClient:
 
     # ========== OpenMemory 1.3.x 新增方法 ==========
 
+    def _build_list_params(
+        self,
+        *,
+        user_id: Optional[str],
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        """构建 list_memories 兼容 query 参数。"""
+        params: dict[str, Any] = {"limit": limit, "offset": offset, "l": limit, "u": offset}
+        if user_id:
+            params["user_id"] = user_id
+        return params
+
+    def _fetch_list_page(
+        self,
+        *,
+        user_id: Optional[str],
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """抓取一页 OpenMemory 记忆列表。"""
+        params = self._build_list_params(user_id=user_id, limit=limit, offset=offset)
+        response = self._get_compat(paths=["/memory/all"], params_variants=[params])
+        data = response.json()
+        memories = _extract_list_items(data)
+        total = _extract_total(data, len(memories))
+        return memories, total
+
     def list_memories(
         self,
         user_id: Optional[str] = None,
@@ -918,33 +947,44 @@ class OpenMemoryClient:
         started = time.perf_counter()
         status = "error"
 
-        # 构建查询参数
-        params: dict[str, Any] = {"limit": limit, "offset": offset, "l": limit, "u": offset}
-        if user_id:
-            params["user_id"] = user_id
-        if space:
-            params["space"] = space
-
         with start_span(
             "gateway.openmemory.list_memories",
             attributes={"openmemory.operation": operation},
         ):
             try:
-                response = self._get_compat(paths=["/memory/all"], params_variants=[params])
-                data = response.json()
+                if space:
+                    # OpenMemory 1.3.3 尚未提供稳定的服务端 space 过滤；为保证
+                    # offset/limit/total 语义正确，这里退化为逐页扫描后再分页。
+                    scan_limit = max(limit, 100)
+                    scan_offset = 0
+                    matched: list[dict[str, Any]] = []
 
-                # 兼容返回结构：
-                # - 旧版本: {"items": [...]}
-                # - 中间版本: {"results": [...]}
-                # - 新版本: {"memories": [...]}
-                memories = _extract_list_items(data)
-                if space:
-                    memories = [
-                        memory for memory in memories if _memory_matches_space(memory, space)
-                    ]
-                total = _extract_total(data, len(memories))
-                if space:
-                    total = len(memories)
+                    while True:
+                        page_memories, _ = self._fetch_list_page(
+                            user_id=user_id,
+                            limit=scan_limit,
+                            offset=scan_offset,
+                        )
+                        if not page_memories:
+                            break
+                        matched.extend(
+                            memory
+                            for memory in page_memories
+                            if _memory_matches_space(memory, space)
+                        )
+                        if len(page_memories) < scan_limit:
+                            break
+                        scan_offset += scan_limit
+
+                    total = len(matched)
+                    memories = matched[offset : offset + limit]
+                else:
+                    page_memories, total = self._fetch_list_page(
+                        user_id=user_id,
+                        limit=limit,
+                        offset=offset,
+                    )
+                    memories = page_memories
                 status = "ok"
 
                 return ListResult(success=True, memories=memories, total=total)
@@ -1128,6 +1168,16 @@ class OpenMemoryClient:
                         last_error = f"http_error: {e.response.status_code}"
                     except Exception as e:
                         last_error = str(e)
+
+                    iterative_fallback = self._delete_memories_by_iteration(user_id=user_id)
+                    if iterative_fallback.success:
+                        status = "ok"
+                        return iterative_fallback
+                    return WipeResult(
+                        success=False,
+                        deleted_count=iterative_fallback.deleted_count,
+                        error=iterative_fallback.error or last_error or "user_scoped_wipe_failed",
+                    )
 
                 payload_variants = [
                     {"confirm": True, **({"user_id": user_id} if user_id else {})},
