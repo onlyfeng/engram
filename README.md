@@ -83,7 +83,7 @@ make setup-db
 DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 ```
 
-**Windows 无 make 时**：请使用 WSL 执行上述命令，或参考 [安装指南](docs/installation.md) 中的 Windows 与分步操作（db-create → bootstrap-roles → migrate-ddl → apply-roles → apply-openmemory-grants → verify-permissions）。
+**Windows 无 make 时**：推荐使用 `.\scripts\windows\setup_db.ps1` 完成原生初始化；如需查看分步操作，再参考 [安装指南](docs/installation.md) 中的 Windows 章节（db-create → bootstrap-roles → migrate-ddl → apply-roles → apply-openmemory-grants → verify-permissions）。
 
 > macOS / WSL2 原生推荐：执行 `make setup-db` 时选择 `2) unified-stack`，并在结束时将配置写入 `.env.local`。后续启动 OpenMemory / Gateway 时就可以直接加载 `.env.local`，不需要重复手敲 `POSTGRES_DSN` 和 `OM_PG_*`。
 > 详细安装（PostgreSQL、pgvector、多平台）请参考 [安装指南](docs/installation.md)
@@ -153,7 +153,7 @@ npm run build
 npm link
 ```
 
-> macOS / WSL2 下，`make setup-db` 生成的 `.env.local` 默认会包含 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 以及常用的 `OM_PG_*` 配置；之后推荐统一用 `source scripts/ops/load_env_local.sh` 加载。
+> macOS / WSL2 下，`make setup-db` 生成的 `.env.local` 默认会包含 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 以及常用的 `OM_PG_*` 配置；`make openmemory` / `make gateway` 会自动加载它。
 > Windows 原生下，推荐使用 `.\scripts\windows\setup_db.ps1` 生成并维护本地 `.\.env.ps1`，后续终端直接加载它。
 
 **日常启动**
@@ -163,19 +163,13 @@ npm link
 macOS / WSL2：
 
 ```bash
-cd /path/to/engram
-source scripts/ops/load_env_local.sh
-cd ~/openmemory/packages/openmemory-js
-opm serve
+make openmemory
 ```
 
 Windows PowerShell：
 
 ```powershell
-cd C:\path\to\engram
-if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { .\scripts\windows\load_env_local.ps1 }
-cd $env:USERPROFILE\openmemory\packages\openmemory-js
-opm serve
+.\scripts\windows\start_openmemory.ps1
 ```
 
 终端 B：启动 Gateway
@@ -183,19 +177,13 @@ opm serve
 macOS / WSL2：
 
 ```bash
-cd /path/to/engram
-source .venv/bin/activate
-source scripts/ops/load_env_local.sh
 make gateway
 ```
 
 Windows PowerShell：
 
 ```powershell
-cd C:\path\to\engram
-.\.venv\Scripts\Activate.ps1
-if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { .\scripts\windows\load_env_local.ps1 }
-uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
+.\scripts\windows\start_gateway.ps1
 ```
 
 **启动后验证**
@@ -297,6 +285,8 @@ $env:PROJECT_KEY="default"
 
 ##### 3.3 Windows 原生补充
 
+如果你不想使用 `start_openmemory.ps1` / `start_gateway.ps1`，手动等价命令如下。
+
 Windows PowerShell（两个终端）：
 
 ```powershell
@@ -337,6 +327,8 @@ docker compose -f docker-compose.unified.yml down -v
 | Linux/macOS/WSL | 加载环境变量 | `source scripts/ops/load_env_local.sh` |
 | Windows PowerShell | 加载环境变量 | `.\scripts\windows\load_env_local.ps1` |
 | Windows PowerShell | 一键初始化数据库 | `.\scripts\windows\setup_db.ps1` |
+| Windows PowerShell | 启动 OpenMemory | `.\scripts\windows\start_openmemory.ps1` |
+| Windows PowerShell | 启动 Gateway | `.\scripts\windows\start_gateway.ps1` |
 | Windows PowerShell | 无 make 运行 CI 门禁 | `.\scripts\windows\ci.ps1` |
 | Windows PowerShell | 全栈诊断 | `.\scripts\windows\stack_doctor.ps1` |
 | Windows PowerShell | 注册 Windows 服务（NSSM） | `.\scripts\windows\install_services.ps1` |
@@ -481,6 +473,7 @@ make apply-openmemory-grants # 应用 OpenMemory 权限
 make verify-permissions     # 验证数据库权限配置
 
 # 服务
+make openmemory    # 启动 OpenMemory（自动加载 .env/.env.local）
 make gateway       # 启动 Gateway（带热重载）
 
 # 测试
@@ -501,7 +494,8 @@ make check-iteration-docs  # 迭代文档规范检查
 | `make install-full` | `pip install -e ".[full]"` |
 | `make install-dev` | `pip install -e ".[full,dev]"` |
 | `make setup-db` | 建议使用 WSL 或参考 [安装指南](docs/installation.md) 分步执行 |
-| `make gateway` | `uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload` |
+| `make openmemory` | `.\scripts\windows\start_openmemory.ps1` |
+| `make gateway` | `.\scripts\windows\start_gateway.ps1` |
 | `make ci` | `.\scripts\windows\ci.ps1`（或 `python scripts/ops/ci_no_make.py`） |
 | `make mcp-doctor` | `python scripts/ops/mcp_doctor.py` |
 | `make stack-doctor` | `python scripts/ops/stack_doctor.py` |

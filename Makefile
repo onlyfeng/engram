@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-mcp-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified recover-openmemory-init-race mcp-doctor stack-doctor bootstrap-roles bootstrap-roles-required gateway clean help setup-db setup-db-core setup-db-logbook-only reset-native openmemory-fix-vector-dim openmemory-grant-svc-full env-write-local env-shell env-openmemory-first-run precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json check-agent-rule-sync
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-mcp-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified recover-openmemory-init-race mcp-doctor stack-doctor bootstrap-roles bootstrap-roles-required gateway openmemory clean help setup-db setup-db-core setup-db-logbook-only reset-native openmemory-fix-vector-dim openmemory-grant-svc-full env-write-local env-shell env-openmemory-first-run precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json check-agent-rule-sync
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -18,6 +18,7 @@ PYTHON := python3 -X utf8
 PIP := pip
 PYTEST := pytest
 UVICORN := uvicorn
+OPM ?= opm
 ifeq ($(OS),Windows_NT)
 UNAME_S := Windows
 else
@@ -49,6 +50,7 @@ PROJECT_KEY ?= default
 # Gateway 配置
 GATEWAY_PORT ?= 8787
 OPENMEMORY_BASE_URL ?= http://localhost:8080
+OPENMEMORY_DIR ?=
 ENV_LOCAL_FILE ?= .env.local
 
 # 服务账号密码（unified-stack 模式必须设置，logbook-only 模式可不设置）
@@ -1017,23 +1019,75 @@ iteration-min-regression:  ## 运行最小迭代回归命令集（TYPES=cycle DR
 
 ## ==================== 服务 ====================
 
-gateway:  ## 启动 Gateway 服务（带热重载）
-	@echo "启动 Gateway 服务..."
-	@echo "  端口: $(GATEWAY_PORT)"
-	@echo "  项目: $(PROJECT_KEY)"
-	@echo "  OpenMemory: $(OPENMEMORY_BASE_URL)"
-	@echo ""
-	POSTGRES_DSN=$(POSTGRES_DSN) \
-	PROJECT_KEY=$(PROJECT_KEY) \
-	OPENMEMORY_BASE_URL=$(OPENMEMORY_BASE_URL) \
-	$(UVICORN) engram.gateway.main:app --host 0.0.0.0 --port $(GATEWAY_PORT) --reload
+openmemory:  ## 启动 OpenMemory 服务（自动加载 .env/.env.local）
+	@set -e; \
+	set -a; \
+	[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"; \
+	[ -f "$(CURDIR)/$(ENV_LOCAL_FILE)" ] && . "$(CURDIR)/$(ENV_LOCAL_FILE)"; \
+	set +a; \
+	OPENMEMORY_DIR="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
+	if [ -z "$$OPENMEMORY_DIR" ]; then \
+		for d in "$$HOME/openmemory/packages/openmemory-js" "$$HOME/Documents/openmemory/packages/openmemory-js" "$$HOME/Documents/ai/openmemory/packages/openmemory-js"; do \
+			if [ -d "$$d" ]; then OPENMEMORY_DIR="$$d"; break; fi; \
+		done; \
+	fi; \
+	if ! command -v "$(OPM)" >/dev/null 2>&1; then \
+		echo "[ERROR] 未找到 opm 命令"; \
+		echo "        请先安装 OpenMemory CLI，或通过 OPENMEMORY_DIR=/path/to/openmemory/packages/openmemory-js make openmemory 指定目录"; \
+		exit 1; \
+	fi; \
+	echo "启动 OpenMemory 服务..."; \
+	if [ -n "$$OPENMEMORY_DIR" ]; then \
+		echo "  目录: $$OPENMEMORY_DIR"; \
+	else \
+		echo "  目录: <auto>"; \
+		echo "  提示: 未找到本地 OpenMemory 源码目录，直接使用已安装的 opm"; \
+	fi; \
+	echo ""; \
+	if [ -n "$$OPENMEMORY_DIR" ]; then cd "$$OPENMEMORY_DIR"; fi; \
+	$(OPM) serve
 
-gateway-prod:  ## 启动 Gateway 服务（生产模式，无热重载）
-	@echo "启动 Gateway 服务（生产模式）..."
-	POSTGRES_DSN=$(POSTGRES_DSN) \
-	PROJECT_KEY=$(PROJECT_KEY) \
-	OPENMEMORY_BASE_URL=$(OPENMEMORY_BASE_URL) \
-	$(UVICORN) engram.gateway.main:app --host 0.0.0.0 --port $(GATEWAY_PORT) --workers 4
+gateway:  ## 启动 Gateway 服务（带热重载，自动加载 .env/.env.local）
+	@set -e; \
+	set -a; \
+	[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"; \
+	[ -f "$(CURDIR)/$(ENV_LOCAL_FILE)" ] && . "$(CURDIR)/$(ENV_LOCAL_FILE)"; \
+	set +a; \
+	POSTGRES_DSN="$${POSTGRES_DSN:-$(POSTGRES_DSN)}"; \
+	PROJECT_KEY="$${PROJECT_KEY:-$(PROJECT_KEY)}"; \
+	OPENMEMORY_BASE_URL="$${OPENMEMORY_BASE_URL:-$(OPENMEMORY_BASE_URL)}"; \
+	GATEWAY_PORT="$${GATEWAY_PORT:-$(GATEWAY_PORT)}"; \
+	if [ -x "$(CURDIR)/.venv/bin/uvicorn" ]; then UVICORN_BIN="$(CURDIR)/.venv/bin/uvicorn"; else UVICORN_BIN="$(UVICORN)"; fi; \
+	echo "启动 Gateway 服务..."; \
+	echo "  端口: $$GATEWAY_PORT"; \
+	echo "  项目: $$PROJECT_KEY"; \
+	echo "  OpenMemory: $$OPENMEMORY_BASE_URL"; \
+	echo ""; \
+	POSTGRES_DSN="$$POSTGRES_DSN" \
+	PROJECT_KEY="$$PROJECT_KEY" \
+	OPENMEMORY_BASE_URL="$$OPENMEMORY_BASE_URL" \
+	"$$UVICORN_BIN" engram.gateway.main:app --host 0.0.0.0 --port "$$GATEWAY_PORT" --reload
+
+gateway-prod:  ## 启动 Gateway 服务（生产模式，无热重载，自动加载 .env/.env.local）
+	@set -e; \
+	set -a; \
+	[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"; \
+	[ -f "$(CURDIR)/$(ENV_LOCAL_FILE)" ] && . "$(CURDIR)/$(ENV_LOCAL_FILE)"; \
+	set +a; \
+	POSTGRES_DSN="$${POSTGRES_DSN:-$(POSTGRES_DSN)}"; \
+	PROJECT_KEY="$${PROJECT_KEY:-$(PROJECT_KEY)}"; \
+	OPENMEMORY_BASE_URL="$${OPENMEMORY_BASE_URL:-$(OPENMEMORY_BASE_URL)}"; \
+	GATEWAY_PORT="$${GATEWAY_PORT:-$(GATEWAY_PORT)}"; \
+	if [ -x "$(CURDIR)/.venv/bin/uvicorn" ]; then UVICORN_BIN="$(CURDIR)/.venv/bin/uvicorn"; else UVICORN_BIN="$(UVICORN)"; fi; \
+	echo "启动 Gateway 服务（生产模式）..."; \
+	echo "  端口: $$GATEWAY_PORT"; \
+	echo "  项目: $$PROJECT_KEY"; \
+	echo "  OpenMemory: $$OPENMEMORY_BASE_URL"; \
+	echo ""; \
+	POSTGRES_DSN="$$POSTGRES_DSN" \
+	PROJECT_KEY="$$PROJECT_KEY" \
+	OPENMEMORY_BASE_URL="$$OPENMEMORY_BASE_URL" \
+	"$$UVICORN_BIN" engram.gateway.main:app --host 0.0.0.0 --port "$$GATEWAY_PORT" --workers 4
 
 ## ==================== 清理 ====================
 
@@ -1053,7 +1107,8 @@ help:  ## 显示帮助信息
 	@echo ""
 	@echo "\033[1m快速开始:\033[0m"
 	@echo "  1. make setup-db     # 一键初始化数据库（自动识别/交互；推荐）"
-	@echo "  2. make gateway      # 启动服务"
+	@echo "  2. make openmemory   # 启动 OpenMemory"
+	@echo "  3. make gateway      # 启动 Gateway"
 	@echo ""
 	@echo "\033[1m可用命令:\033[0m"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -1076,6 +1131,7 @@ help:  ## 显示帮助信息
 	@echo "  PROJECT_KEY           项目标识 (默认: default)"
 	@echo "  GATEWAY_PORT          Gateway 端口 (默认: 8787)"
 	@echo "  OPENMEMORY_BASE_URL   OpenMemory 地址 (默认: http://localhost:8080)"
+	@echo "  OPENMEMORY_DIR        OpenMemory 目录（可选；未设置时自动探测，失败则直接使用已安装的 opm）"
 	@echo ""
 	@echo "\033[1m多项目部署示例:\033[0m"
 	@echo "  PROJECT_KEY=proj_a POSTGRES_DB=proj_a make setup-db"
