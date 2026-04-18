@@ -13,6 +13,7 @@ MCP Streamable HTTP 传输测试
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -180,6 +181,74 @@ class TestGetMcp:
     def test_get_returns_405(self, client):
         resp = client.get("/mcp")
         assert resp.status_code == 405
+
+
+class TestKnownProbeAccessLogFilter:
+    def test_known_probe_classifier_matches_expected_paths(self):
+        from engram.gateway.routes import _is_known_mcp_probe_access
+
+        assert _is_known_mcp_probe_access("GET", "/mcp", 405) is True
+        assert _is_known_mcp_probe_access("GET", "/mcp?transport=sse", 405) is True
+        assert (
+            _is_known_mcp_probe_access("GET", "/.well-known/oauth-protected-resource", 404) is True
+        )
+        assert (
+            _is_known_mcp_probe_access("GET", "/.well-known/oauth-protected-resource/mcp", 404)
+            is True
+        )
+
+        assert _is_known_mcp_probe_access("POST", "/mcp", 200) is False
+        assert _is_known_mcp_probe_access("GET", "/mcp", 200) is False
+        assert _is_known_mcp_probe_access("GET", "/health", 404) is False
+
+    def test_known_probe_filter_suppresses_only_expected_access_logs(self):
+        from engram.gateway.routes import _KnownMcpProbeAccessFilter
+
+        access_filter = _KnownMcpProbeAccessFilter()
+
+        known_probe = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %s',
+            args=("127.0.0.1:51215", "GET", "/mcp", "1.1", 405),
+            exc_info=None,
+        )
+        normal_request = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %s',
+            args=("127.0.0.1:51215", "POST", "/mcp", "1.1", 200),
+            exc_info=None,
+        )
+
+        assert access_filter.filter(known_probe) is False
+        assert access_filter.filter(normal_request) is True
+
+    def test_create_app_installs_uvicorn_access_filter_once(self):
+        from engram.gateway.app import create_app
+
+        access_logger = logging.getLogger("uvicorn.access")
+        original_filters = list(access_logger.filters)
+        access_logger.filters.clear()
+        try:
+            create_app()
+            first_count = sum(
+                flt.__class__.__name__ == "_KnownMcpProbeAccessFilter"
+                for flt in access_logger.filters
+            )
+            create_app()
+            second_count = sum(
+                flt.__class__.__name__ == "_KnownMcpProbeAccessFilter"
+                for flt in access_logger.filters
+            )
+            assert first_count == 1
+            assert second_count == 1
+        finally:
+            access_logger.filters[:] = original_filters
 
 
 class TestBatchRequests:

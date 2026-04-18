@@ -10,6 +10,7 @@
 > - [MCP 协议规范][mcp-spec] — Model Context Protocol 官方规范
 > - [MCP JSON-RPC 传输规范][mcp-transport] — HTTP 传输层协议细节
 > - [Cursor MCP 配置指南][cursor-mcp] — Cursor IDE 官方 MCP 集成文档
+> - [Codex CLI 配置参考][codex-config] — Codex `config.toml` 配置项说明
 > - [MCP Server 添加方法][cursor-mcp-install] — 如何在 Cursor 中添加 MCP Server
 > - [MCP Server 目录][mcp-directory] — 社区 MCP Server 列表
 > - [Cursor Rules 配置][cursor-rules] — 自定义 Agent 行为规则
@@ -19,6 +20,7 @@
 [mcp-spec]: https://modelcontextprotocol.io/specification "MCP Protocol Specification"
 [mcp-transport]: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports "MCP Transports - Streamable HTTP"
 [cursor-mcp]: https://docs.cursor.com/context/model-context-protocol "Cursor MCP Documentation"
+[codex-config]: https://developers.openai.com/codex/config-reference "Codex Config Reference"
 [cursor-mcp-install]: https://docs.cursor.com/context/model-context-protocol#adding-mcp-servers "Adding MCP Servers"
 [mcp-directory]: https://cursor.directory/ "MCP Server Directory"
 [cursor-rules]: https://docs.cursor.com/context/rules-for-ai "Cursor Rules for AI"
@@ -83,8 +85,6 @@ mcp-client --server engram tools/list
   }
 }
 ```
-
-> 说明：`Authorization: Bearer <your-api-key>` 需与服务端 `GATEWAY_AUTH_TOKEN` 或 `GATEWAY_AUTH_TOKENS_JSON` 配置匹配。
 <!-- END GENERATED -->
 
 **生产配置（带认证）**：
@@ -123,6 +123,50 @@ mcp-client --server engram tools/list
   }
 }
 ```
+
+### 补充：Codex CLI 配置 `~/.codex/config.toml`
+
+如果你通过 Codex CLI 连接 Gateway，推荐在 `~/.codex/config.toml`（或项目级 `.codex/config.toml`）里显式配置 `engram` MCP server。
+
+**推荐排障配置**（适合排查多代理场景中长期停留在 `Booting MCP Server: engram`）：
+
+```toml
+[mcp_servers.engram]
+url = "http://127.0.0.1:8787/mcp"
+startup_timeout_sec = 45
+tool_timeout_sec = 120
+required = false
+enabled = true
+```
+
+**带认证头示例**：
+
+```toml
+[mcp_servers.engram]
+url = "http://127.0.0.1:8787/mcp"
+startup_timeout_sec = 45
+tool_timeout_sec = 120
+required = false
+enabled = true
+
+[mcp_servers.engram.http_headers]
+Authorization = "Bearer <your-api-key>"
+X-Project-Key = "myproject"
+```
+
+**排查建议**：
+
+- `startup_timeout_sec`：Codex 默认启动超时较短；本地 Gateway 在多代理并发握手时，建议先提高到 `30-60` 秒再观察。
+- `required = false`：排障阶段建议关闭强依赖，避免某次 MCP 初始化慢导致整个线程启动失败；确认稳定后再评估是否改回 `true`。
+- `tool_timeout_sec`：若后续计划暴露较慢的读写工具，可适当增大，避免工具调用被 Codex 过早判定超时。
+- `enabled_tools`：如果你怀疑启动阶段与工具发现范围有关，可临时只暴露核心工具做 A/B 对比。
+
+**已知启动探测行为**：
+
+- Cursor / Codex 在连接 HTTP MCP server 时，可能会探测 `GET /mcp` 或 `/.well-known/oauth-protected-resource*`。
+- Engram 当前不提供 OAuth Protected Resource Metadata，相关 well-known 路径返回 `404` 仍属可接受行为。
+- Engram 当前不提供 `GET /mcp` 的 SSE 流，因此 `405 Method Not Allowed` 也属可接受行为。
+- Gateway 已对这些已知探测增加访问日志降噪，避免在常规排障时淹没真正的 `initialize` / `tools/list` 请求。
 
 ### 步骤 2: 环境变量（服务端）
 

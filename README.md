@@ -397,6 +397,22 @@ Cursor MCP 只连接 Gateway，不直连 OpenMemory；因此 OpenMemory 只需�
 > - 如果 Cursor 不在运行 Gateway 的同一台机器上，请把 `url` 里的 `127.0.0.1` 替换成 **Gateway 所在机器的 IP/域名**（例如 `http://192.168.1.100:8787/mcp`）
 > - 若 Gateway 跑在 Windows 的 WSL2 中并希望局域网其它机器可访问，请参考 `docs/gateway/01_openmemory_deploy_windows.md` 的 “B.9 Windows / 局域网访问说明”
 
+如果你通过 Codex CLI 连接同一个 Gateway，可在 `~/.codex/config.toml` 中添加：
+
+```toml
+[mcp_servers.engram]
+url = "http://127.0.0.1:8787/mcp"
+startup_timeout_sec = 45
+tool_timeout_sec = 120
+required = false
+enabled = true
+```
+
+> Codex CLI 多代理排障建议：
+> - 若长期停留在 `Booting MCP Server: engram`，先提高 `startup_timeout_sec` 到 `30-60` 秒
+> - 排障阶段建议 `required = false`，确认稳定后再评估是否收紧为 `true`
+> - Cursor / Codex 对 `GET /mcp` 或 `/.well-known/oauth-protected-resource*` 的启动探测属于已知行为；Engram 已对这些访问日志做降噪处理，`initialize` / `tools/list` 仍是判断可用性的核心信号
+
 配置完成后，AI Agent 即可使用记忆管理功能。
 
 ---

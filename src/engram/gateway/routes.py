@@ -65,6 +65,53 @@ __all__ = [
 ]
 
 logger = logging.getLogger("gateway")
+_KNOWN_MCP_AUTH_METADATA_PATHS = frozenset(
+    {
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+    }
+)
+
+
+def _normalize_access_log_path(path: str) -> str:
+    """Strip query strings from access-log paths before probe matching."""
+    return path.split("?", 1)[0]
+
+
+def _is_known_mcp_probe_access(method: str, path: str, status_code: int) -> bool:
+    """Identify benign MCP probe requests that should not clutter access logs."""
+    normalized_path = _normalize_access_log_path(path)
+    if method != "GET":
+        return False
+    if normalized_path == "/mcp":
+        return status_code == 405
+    return normalized_path in _KNOWN_MCP_AUTH_METADATA_PATHS and status_code == 404
+
+
+class _KnownMcpProbeAccessFilter(logging.Filter):
+    """Filter known MCP probe access logs from uvicorn's noisy access logger."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = getattr(record, "args", ())
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+
+        try:
+            method = str(args[1])
+            path = str(args[2])
+            status_code = int(args[4])
+        except (TypeError, ValueError):
+            return True
+
+        return not _is_known_mcp_probe_access(method, path, status_code)
+
+
+def _install_known_mcp_probe_access_filter() -> None:
+    """Suppress uvicorn access logs for known benign MCP startup probes."""
+    access_logger = logging.getLogger("uvicorn.access")
+    if any(isinstance(flt, _KnownMcpProbeAccessFilter) for flt in access_logger.filters):
+        return
+    access_logger.addFilter(_KnownMcpProbeAccessFilter())
 
 
 def _make_cors_headers_with_correlation_id(correlation_id: str) -> dict:
@@ -104,6 +151,8 @@ def register_routes(app: FastAPI) -> None:
     Args:
         app: FastAPI 应用实例
     """
+    _install_known_mcp_probe_access_filter()
+
     # 延迟导入: 在函数调用时才导入，不在模块顶层导入
     # 这确保 routes.py 可以在无环境变量时被导入
     from .dependencies import get_deps_for_request, get_request_correlation_id_or_new
@@ -279,6 +328,15 @@ def register_routes(app: FastAPI) -> None:
         MCP Streamable HTTP 规范允许 GET /mcp 用于 SSE 流式通知。
         当前所有 tool 调用均为同步快速操作，不需要 SSE，返回 405。
         """
+        correlation_id = get_request_correlation_id_or_new()
+        logger.debug(
+            "Known MCP probe",
+            extra={
+                "known_probe": "sse_probe",
+                "path": request.url.path,
+                "correlation_id": correlation_id,
+            },
+        )
         return Response(
             status_code=405,
             headers={**MCP_CORS_HEADERS, "Allow": "POST, DELETE, OPTIONS"},
