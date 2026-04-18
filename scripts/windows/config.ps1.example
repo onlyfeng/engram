@@ -19,9 +19,10 @@ $Global:EngramEnv = @{
   "GATEWAY_PORT" = "8787"
 }
 
-# OpenMemory (Node backend)
-$Global:OpenMemoryCmd  = "C:\Program Files\nodejs\node.exe"
-$Global:OpenMemoryArgs = "C:\openmemory\backend\server.js"
+# OpenMemory (`opm` CLI from `npm link`; adjust path via `npm prefix -g`)
+$Global:OpenMemoryCmd  = "C:\Users\<user>\AppData\Roaming\npm\opm.cmd"
+$Global:OpenMemoryArgs = "serve"
+$Global:OpenMemoryWorkDir = "C:\openmemory\packages\openmemory-js"
 
 $Global:OpenMemoryEnv = @{
   "OM_METADATA_BACKEND" = "postgres"

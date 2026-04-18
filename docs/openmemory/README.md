@@ -9,6 +9,7 @@
 | 文档 | 说明 |
 |------|------|
 | [00_vendoring_and_patches.md](00_vendoring_and_patches.md) | 上游镜像、补丁分级、升级与回滚流程 |
+| [01_upgrade_compatibility_matrix.md](01_upgrade_compatibility_matrix.md) | 已验证兼容面、版本锁定策略、升级前检查清单 |
 | [02_ci_governance_contract.md](02_ci_governance_contract.md) | CI 治理与检查项约束 |
 
 ---

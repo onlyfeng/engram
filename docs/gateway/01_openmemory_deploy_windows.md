@@ -128,8 +128,8 @@ python scripts/ops/stack_doctor.py --gateway-url http://127.0.0.1:8787 --full
 
 **OpenMemory（示例）**：
 ```powershell
-# 如已生成/加载 `.\.env.ps1`，可省略下方 $env:OM_* 赋值（仅保留 cd/npm 命令即可）
-cd C:\openmemory\backend
+# 如已生成/加载 `.\.env.ps1`，可省略下方 $env:OM_* 赋值（仅保留 cd/opm 命令即可）
+cd C:\openmemory\packages\openmemory-js
 $env:OM_METADATA_BACKEND="postgres"
 $env:OM_PG_HOST="127.0.0.1"
 $env:OM_PG_PORT="5432"
@@ -139,8 +139,11 @@ $env:OM_PG_PASSWORD="<migrator_pwd>"
 $env:OM_PG_SCHEMA="openmemory"
 $env:OM_API_KEY="<your_om_key>"
 $env:OM_PORT="8080"
-npm install
-npm run start
+# 首次构建时执行一次：
+# npm install
+# npm run build
+# npm link
+opm serve
 ```
 
 **Outbox Worker**：
@@ -169,13 +172,15 @@ nssm set engram_outbox AppEnvironmentExtra "POSTGRES_DSN=postgresql://logbook_sv
 nssm set engram_outbox Start SERVICE_AUTO_START
 nssm start engram_outbox
 
-# OpenMemory（示例，按上游启动命令替换）
-nssm install openmemory "C:\Program Files\nodejs\node.exe" "C:\openmemory\backend\server.js"
-nssm set openmemory AppDirectory "C:\openmemory\backend"
+# OpenMemory（示例，按实际 npm global bin 路径调整）
+nssm install openmemory "C:\Users\<user>\AppData\Roaming\npm\opm.cmd" "serve"
+nssm set openmemory AppDirectory "C:\openmemory\packages\openmemory-js"
 nssm set openmemory AppEnvironmentExtra "OM_METADATA_BACKEND=postgres`nOM_PG_HOST=127.0.0.1`nOM_PG_PORT=5432`nOM_PG_DB=engram`nOM_PG_USER=openmemory_migrator_login`nOM_PG_PASSWORD=<migrator_pwd>`nOM_PG_SCHEMA=openmemory`nOM_API_KEY=<your_om_key>`nOM_PORT=8080"
 nssm set openmemory Start SERVICE_AUTO_START
 nssm start openmemory
 ```
+
+> 若 `opm.cmd` 不在该目录，可先执行 `npm prefix -g` 确认全局 bin 路径，再替换 NSSM 命令中的可执行文件位置。
 
 ### A.8 Event Viewer 诊断
 
@@ -358,7 +363,9 @@ sudo apt install -y nodejs
 
 # 克隆并构建 OpenMemory
 git clone https://github.com/caviraoss/openmemory.git ~/openmemory
-cd ~/openmemory/packages/openmemory-js
+cd ~/openmemory
+git checkout v1.3.3
+cd packages/openmemory-js
 npm install
 npm run build
 sudo npm link

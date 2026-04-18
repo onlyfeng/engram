@@ -941,7 +941,7 @@ class TestOpenMemoryClientConfigPropagation:
     OpenMemoryClient 构造函数不会发起 HTTP 请求，只有以下方法才会：
     - add_memory(): POST /memory/add
     - store(): POST /memory/add
-    - search(): POST /memory/search
+    - search(): POST /memory/query 或 /memory/search
     - health_check(): GET /health
 
     因此这些测试在 CI 环境下是安全的，不依赖 OpenMemory 服务。

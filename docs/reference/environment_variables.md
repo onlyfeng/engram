@@ -105,6 +105,10 @@ level = "INFO"
 | `OM_TIER` | 性能层级（`hybrid` / `fast` / `smart` / `deep`） | `hybrid` | |
 | `OM_API_KEY` | API 认证密钥（生产环境强烈建议设置） | - | 生产推荐 |
 
+> **兼容说明**：
+> - 当前上游重写中的 OpenMemory 服务端实际读取的是 `OM_API_KEY`
+> - `OPENMEMORY_API_KEY` 仍可作为 Gateway / CLI 兼容变量，但不应作为服务端主配置名
+
 ### 元数据后端
 
 | 变量 | 说明 | 默认值 | 必填 |
@@ -142,7 +146,7 @@ level = "INFO"
 | `OM_VECTOR_BACKEND` | 向量存储后端（跟随 `OM_METADATA_BACKEND` 或 `valkey`） | - | |
 | `OM_VECTOR_TABLE` | 向量表名 | `vectors` | |
 | `OM_VEC_DIM` | 向量维度（按 TIER 自动调整） | 按 tier | |
-| `OM_EMBEDDINGS` | 嵌入提供者（`openai` / `gemini` / `ollama` / `synthetic`） | `openai` | |
+| `OM_EMBEDDINGS` | 嵌入提供者（`openai` / `gemini` / `ollama` / `synthetic`） | `synthetic` | |
 | `OM_EMBEDDING_FALLBACK` | 嵌入失败回退链（逗号分隔） | `synthetic` | |
 | `OM_EMBED_MODE` | 嵌入模式（`simple` / `advanced`） | `simple` | |
 
@@ -163,14 +167,14 @@ level = "INFO"
 | `OM_MIN_SCORE` | 搜索最小相似度分数 | `0.3` | |
 | `OM_MAX_PAYLOAD_SIZE` | 最大请求体大小（字节） | `1000000` | |
 | `OM_USE_SUMMARY_ONLY` | 仅存储摘要 | `true` | |
-| `OM_SUMMARY_MAX_LENGTH` | 摘要最大长度 | `300` | |
+| `OM_SUMMARY_MAX_LENGTH` | 摘要最大长度 | `200` | |
 | `OM_SEG_SIZE` | 每段记忆数 | `10000` | |
 
 ### 衰减系统
 
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
-| `OM_DECAY_INTERVAL_MINUTES` | 衰减周期间隔（分钟） | `120` | |
+| `OM_DECAY_INTERVAL_MINUTES` | 衰减周期间隔（分钟） | `1440` | |
 | `OM_DECAY_THREADS` | 衰减工作线程数 | `3` | |
 | `OM_DECAY_COLD_THRESHOLD` | 冷记忆阈值 | `0.25` | |
 | `OM_DECAY_REINFORCE_ON_QUERY` | 查询时强化记忆 | `true` | |
@@ -312,7 +316,7 @@ POSTGRES_PASSWORD=postgres
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `OPENMEMORY_IMAGE` | OpenMemory 上游镜像 | `ghcr.io/caviraoss/openmemory:latest` |
+| `OPENMEMORY_IMAGE` | OpenMemory 上游镜像 | `ghcr.io/caviraoss/openmemory:v1.3.3` |
 | `POSTGRES_IMAGE` | PostgreSQL（含 pgvector）镜像 | `pgvector/pgvector:pg16` |
 
 ### Dashboard 配置（可选）

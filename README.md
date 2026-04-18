@@ -137,7 +137,9 @@ macOS / WSL2：
 
 ```bash
 git clone https://github.com/caviraoss/openmemory.git ~/openmemory
-cd ~/openmemory/packages/openmemory-js
+cd ~/openmemory
+git checkout v1.3.3
+cd packages/openmemory-js
 npm install
 npm run build
 npm link
@@ -147,7 +149,9 @@ Windows PowerShell：
 
 ```powershell
 git clone https://github.com/caviraoss/openmemory.git $env:USERPROFILE\openmemory
-cd $env:USERPROFILE\openmemory\packages\openmemory-js
+cd $env:USERPROFILE\openmemory
+git checkout v1.3.3
+cd packages\openmemory-js
 npm install
 npm run build
 npm link
@@ -221,6 +225,7 @@ eval "$(make --no-print-directory env-openmemory-first-run)"
 然后重新执行：
 
 ```bash
+# 默认你已按上文将 ~/openmemory 固定到 v1.3.3
 cd ~/openmemory/packages/openmemory-js
 opm serve
 ```
@@ -228,6 +233,7 @@ opm serve
 Windows PowerShell：
 
 ```powershell
+# 默认你已按上文将 $env:USERPROFILE\openmemory 固定到 v1.3.3
 cd C:\path\to\engram
 if (Test-Path ".\.env.ps1") { . .\.env.ps1 }
 $env:OM_PG_USER = "openmemory_migrator_login"
