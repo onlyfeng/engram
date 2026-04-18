@@ -96,11 +96,13 @@ DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 - **方式 A（原生部署）**：手动启动 OpenMemory，再启动 Gateway
 - **方式 B（Docker Compose 统一栈）**：一条命令拉起 OpenMemory + Gateway + PostgreSQL
 
-##### 3.1 推荐路径：macOS / WSL2 原生（不走 Docker）
+##### 3.1 推荐路径：macOS / Windows 原生 / WSL2（不走 Docker）
 
-如果你日常是在 macOS 或 Windows 的 WSL2(Debian) 下开发，推荐把流程分成“一次性初始化”和“日常启动”两部分。
+如果你日常是在 macOS、Windows 原生 PowerShell，或 Windows 的 WSL2(Debian) 下开发，推荐把流程分成“一次性初始化”和“日常启动”两部分。
 
 **一次性初始化**
+
+macOS / WSL2：
 
 ```bash
 # 仓库内：激活 Python 环境
@@ -115,7 +117,23 @@ make setup-db
 printf '\nOM_API_KEY="change_me"\nOM_TIER="hybrid"\n' >> .env.local
 ```
 
+Windows PowerShell：
+
+```powershell
+cd C:\path\to\engram
+.\.venv\Scripts\Activate.ps1
+
+# 建议直接用 Windows 脚本完成数据库初始化，并生成本地 .env.ps1
+.\scripts\windows\setup_db.ps1
+
+# 如需补充 OpenMemory API Key / TIER，可写入本地 .env.ps1
+Add-Content -Path ".\.env.ps1" -Value '$env:OM_API_KEY="change_me"'
+Add-Content -Path ".\.env.ps1" -Value '$env:OM_TIER="hybrid"'
+```
+
 如果你还没有安装 OpenMemory 的 `opm` 命令，再额外执行一次：
+
+macOS / WSL2：
 
 ```bash
 git clone https://github.com/caviraoss/openmemory.git ~/openmemory
@@ -125,11 +143,24 @@ npm run build
 npm link
 ```
 
-> `make setup-db` 生成的 `.env.local` 默认会包含 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 以及常用的 `OM_PG_*` 配置；之后推荐统一用 `source scripts/ops/load_env_local.sh` 加载。
+Windows PowerShell：
+
+```powershell
+git clone https://github.com/caviraoss/openmemory.git $env:USERPROFILE\openmemory
+cd $env:USERPROFILE\openmemory\packages\openmemory-js
+npm install
+npm run build
+npm link
+```
+
+> macOS / WSL2 下，`make setup-db` 生成的 `.env.local` 默认会包含 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 以及常用的 `OM_PG_*` 配置；之后推荐统一用 `source scripts/ops/load_env_local.sh` 加载。
+> Windows 原生下，推荐使用 `.\scripts\windows\setup_db.ps1` 生成并维护本地 `.\.env.ps1`，后续终端直接加载它。
 
 **日常启动**
 
 终端 A：启动 OpenMemory
+
+macOS / WSL2：
 
 ```bash
 cd /path/to/engram
@@ -138,7 +169,18 @@ cd ~/openmemory/packages/openmemory-js
 opm serve
 ```
 
+Windows PowerShell：
+
+```powershell
+cd C:\path\to\engram
+if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { .\scripts\windows\load_env_local.ps1 }
+cd $env:USERPROFILE\openmemory\packages\openmemory-js
+opm serve
+```
+
 终端 B：启动 Gateway
+
+macOS / WSL2：
 
 ```bash
 cd /path/to/engram
@@ -147,7 +189,18 @@ source scripts/ops/load_env_local.sh
 make gateway
 ```
 
+Windows PowerShell：
+
+```powershell
+cd C:\path\to\engram
+.\.venv\Scripts\Activate.ps1
+if (Test-Path ".\.env.ps1") { . .\.env.ps1 } else { .\scripts\windows\load_env_local.ps1 }
+uvicorn engram.gateway.main:app --host 0.0.0.0 --port 8787 --reload
+```
+
 **启动后验证**
+
+macOS / WSL2：
 
 ```bash
 curl -fsS http://127.0.0.1:8080/health && echo "OpenMemory OK"
@@ -156,9 +209,20 @@ make mcp-doctor
 # 可选：make stack-doctor
 ```
 
+Windows PowerShell：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/health | Out-Null
+Invoke-RestMethod http://127.0.0.1:8787/health | Out-Null
+python scripts/ops/mcp_doctor.py
+# 可选：python scripts/ops/stack_doctor.py
+```
+
 **首次启动 OpenMemory 遇到权限问题**
 
 如果 `opm serve` 报 `permission denied for schema openmemory`，优先用仓库里现成的兜底方式：
+
+macOS / WSL2：
 
 ```bash
 cd /path/to/engram
@@ -173,12 +237,34 @@ cd ~/openmemory/packages/openmemory-js
 opm serve
 ```
 
+Windows PowerShell：
+
+```powershell
+cd C:\path\to\engram
+if (Test-Path ".\.env.ps1") { . .\.env.ps1 }
+$env:OM_PG_USER = "openmemory_migrator_login"
+if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_MIGRATOR_PASSWORD)) {
+  $env:OM_PG_PASSWORD = $env:OPENMEMORY_MIGRATOR_PASSWORD
+}
+$env:OM_PG_AUTO_DDL = "true"
+cd $env:USERPROFILE\openmemory\packages\openmemory-js
+opm serve
+```
+
 如果你希望后续一直使用 `openmemory_svc` 运行，可补一次授权：
+
+macOS / WSL2：
 
 ```bash
 cd /path/to/engram
 source .venv/bin/activate
 make openmemory-grant-svc-full
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\windows\openmemory_grant_svc_full.ps1
 ```
 
 ##### 3.2 初始化环境变量（通用）
@@ -209,7 +295,7 @@ $env:OPENMEMORY_BASE_URL="http://localhost:8080"
 $env:PROJECT_KEY="default"
 ```
 
-##### 3.3 其他平台原生启动
+##### 3.3 Windows 原生补充
 
 Windows PowerShell（两个终端）：
 
