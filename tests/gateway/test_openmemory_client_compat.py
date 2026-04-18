@@ -1,11 +1,15 @@
 import httpx
 
-from engram.gateway.openmemory_client import OpenMemoryClient
+from engram.gateway.openmemory_client import OpenMemoryClient, RetryConfig
 
 
 def _response(method: str, url: str, status_code: int, payload: dict) -> httpx.Response:
     request = httpx.Request(method, url)
     return httpx.Response(status_code, json=payload, request=request)
+
+
+def _retry_config(max_retries: int) -> RetryConfig:
+    return RetryConfig(max_retries=max_retries, base_delay=0.01, max_delay=0.01, jitter=0.0)
 
 
 def test_search_sends_k_compat_field_for_openmemory_1_3(monkeypatch):
@@ -25,6 +29,98 @@ def test_search_sends_k_compat_field_for_openmemory_1_3(monkeypatch):
     assert calls[0][1]["k"] == 5
     assert calls[0][1]["limit"] == 5
     assert calls[0][1]["filters"]["user_id"] == "u-1"
+
+
+def test_post_compat_prefers_same_url_before_switching_route(monkeypatch):
+    client = OpenMemoryClient(base_url="http://openmemory.test")
+    attempts: list[tuple[str, dict]] = []
+
+    def fake_post(url, payload, retry_config=None):  # noqa: ARG001
+        attempts.append((url, payload))
+        if url.endswith("/memory/query") and "memory_id" not in payload:
+            response = _response("POST", url, 422, {"error": "strict schema"})
+            raise httpx.HTTPStatusError("422", request=response.request, response=response)
+        return _response("POST", url, 200, {"ok": True})
+
+    monkeypatch.setattr(client, "_post_with_retry", fake_post)
+
+    response = client._post_compat(
+        paths=["/memory/query", "/memory/search"],
+        payload_variants=[
+            {"query": "hello"},
+            {"memory_id": "m-1"},
+        ],
+    )
+
+    assert response.status_code == 200
+    assert attempts[:2] == [
+        ("http://openmemory.test/memory/query", {"query": "hello"}),
+        ("http://openmemory.test/memory/query", {"memory_id": "m-1"}),
+    ]
+
+
+def test_get_compat_retries_network_errors(monkeypatch):
+    client = OpenMemoryClient(
+        base_url="http://openmemory.test",
+        retry_config=_retry_config(max_retries=1),
+    )
+    attempts: list[tuple[str, dict]] = []
+
+    class FakeHttpxClient:
+        def __init__(self, *args, **kwargs):  # noqa: D401, ANN002, ANN003
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def get(self, url, params=None, headers=None):  # noqa: ANN001
+            attempts.append((url, params or {}))
+            if len(attempts) == 1:
+                raise httpx.ConnectError("boom")
+            return _response("GET", url, 200, {"items": []})
+
+    monkeypatch.setattr("engram.gateway.openmemory_client.httpx.Client", FakeHttpxClient)
+    monkeypatch.setattr("engram.gateway.openmemory_client.time.sleep", lambda _: None)
+
+    response = client._get_compat(paths=["/memory/all"], params_variants=[{"limit": 1}])
+
+    assert response.status_code == 200
+    assert len(attempts) == 2
+
+
+def test_delete_compat_retries_network_errors(monkeypatch):
+    client = OpenMemoryClient(
+        base_url="http://openmemory.test",
+        retry_config=_retry_config(max_retries=1),
+    )
+    attempts: list[tuple[str, dict]] = []
+
+    class FakeHttpxClient:
+        def __init__(self, *args, **kwargs):  # noqa: D401, ANN002, ANN003
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def delete(self, url, params=None, headers=None):  # noqa: ANN001
+            attempts.append((url, params or {}))
+            if len(attempts) == 1:
+                raise httpx.ConnectError("boom")
+            return _response("DELETE", url, 200, {"ok": True})
+
+    monkeypatch.setattr("engram.gateway.openmemory_client.httpx.Client", FakeHttpxClient)
+    monkeypatch.setattr("engram.gateway.openmemory_client.time.sleep", lambda _: None)
+
+    response = client._delete_compat(paths=["/memory/m-1"], params_variants=[{}])
+
+    assert response.status_code == 200
+    assert len(attempts) == 2
 
 
 def test_list_memories_parses_items_and_filters_space(monkeypatch):
@@ -151,6 +247,7 @@ def test_reinforce_falls_back_to_legacy_payload(monkeypatch):
     assert result.success is True
     assert result.memory_id == "m-1"
     assert result.new_strength is None
+    assert payloads[0] == {"memory_id": "m-1", "delta": 2.5, "reason": "useful"}
     assert any(payload.get("id") == "m-1" and payload.get("boost") == 2.5 for payload in payloads)
 
 

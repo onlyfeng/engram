@@ -374,8 +374,8 @@ class OpenMemoryClient:
     ) -> httpx.Response:
         """对多个路由和 payload 变体执行兼容 POST。"""
         last_http_error: Optional[httpx.HTTPStatusError] = None
-        for payload in payload_variants:
-            for url in self._candidate_urls(*paths):
+        for url in self._candidate_urls(*paths):
+            for payload in payload_variants:
                 try:
                     return self._post_with_retry(url, payload)
                 except httpx.HTTPStatusError as exc:
@@ -387,6 +387,142 @@ class OpenMemoryClient:
             raise last_http_error
         raise OpenMemoryError("OpenMemory 兼容 POST 请求失败")
 
+    def _get_with_retry(
+        self,
+        url: str,
+        params: dict[str, Any],
+        retry_config: Optional[RetryConfig] = None,
+    ) -> httpx.Response:
+        """带重试的 GET 请求。"""
+        config = retry_config or self.retry_config
+        last_exception: Optional[Exception] = None
+
+        for attempt in range(config.max_retries + 1):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    response = client.get(url, params=params, headers=self._get_headers())
+                    response.raise_for_status()
+                    return response
+            except Exception as exc:
+                last_exception = exc
+                if not self._is_retryable_error(exc):
+                    raise
+                if attempt < config.max_retries:
+                    delay = config.calculate_delay(attempt)
+                    logger.warning(
+                        "OpenMemory GET 请求失败 (尝试 %s/%s), %.2fs 后重试: %s",
+                        attempt + 1,
+                        config.max_retries + 1,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "OpenMemory GET 请求失败，已达最大重试次数 (%s): %s",
+                        config.max_retries + 1,
+                        exc,
+                    )
+
+        if isinstance(last_exception, (httpx.TimeoutException,)):
+            raise OpenMemoryConnectionError(
+                message=f"OpenMemory GET 请求超时（已重试 {config.max_retries} 次）: {last_exception}",
+                status_code=None,
+                response=None,
+            )
+        if isinstance(last_exception, (httpx.ConnectError, httpx.RemoteProtocolError)):
+            raise OpenMemoryConnectionError(
+                message=f"无法连接到 OpenMemory 服务（已重试 {config.max_retries} 次）: {last_exception}",
+                status_code=None,
+                response=None,
+            )
+        if isinstance(last_exception, httpx.HTTPStatusError):
+            try:
+                error_body = last_exception.response.json()
+            except Exception:
+                error_body = {"detail": last_exception.response.text}
+            raise OpenMemoryAPIError(
+                message=(
+                    "OpenMemory API 错误（已重试 "
+                    f"{config.max_retries} 次）: {last_exception.response.status_code}"
+                ),
+                status_code=last_exception.response.status_code,
+                response=error_body,
+            )
+        raise OpenMemoryError(
+            message=f"OpenMemory GET 请求失败（已重试 {config.max_retries} 次）: {last_exception}",
+            status_code=None,
+            response=None,
+        )
+
+    def _delete_with_retry(
+        self,
+        url: str,
+        params: dict[str, Any],
+        retry_config: Optional[RetryConfig] = None,
+    ) -> httpx.Response:
+        """带重试的 DELETE 请求。"""
+        config = retry_config or self.retry_config
+        last_exception: Optional[Exception] = None
+
+        for attempt in range(config.max_retries + 1):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    response = client.delete(url, params=params, headers=self._get_headers())
+                    response.raise_for_status()
+                    return response
+            except Exception as exc:
+                last_exception = exc
+                if not self._is_retryable_error(exc):
+                    raise
+                if attempt < config.max_retries:
+                    delay = config.calculate_delay(attempt)
+                    logger.warning(
+                        "OpenMemory DELETE 请求失败 (尝试 %s/%s), %.2fs 后重试: %s",
+                        attempt + 1,
+                        config.max_retries + 1,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "OpenMemory DELETE 请求失败，已达最大重试次数 (%s): %s",
+                        config.max_retries + 1,
+                        exc,
+                    )
+
+        if isinstance(last_exception, (httpx.TimeoutException,)):
+            raise OpenMemoryConnectionError(
+                message=f"OpenMemory DELETE 请求超时（已重试 {config.max_retries} 次）: {last_exception}",
+                status_code=None,
+                response=None,
+            )
+        if isinstance(last_exception, (httpx.ConnectError, httpx.RemoteProtocolError)):
+            raise OpenMemoryConnectionError(
+                message=f"无法连接到 OpenMemory 服务（已重试 {config.max_retries} 次）: {last_exception}",
+                status_code=None,
+                response=None,
+            )
+        if isinstance(last_exception, httpx.HTTPStatusError):
+            try:
+                error_body = last_exception.response.json()
+            except Exception:
+                error_body = {"detail": last_exception.response.text}
+            raise OpenMemoryAPIError(
+                message=(
+                    "OpenMemory API 错误（已重试 "
+                    f"{config.max_retries} 次）: {last_exception.response.status_code}"
+                ),
+                status_code=last_exception.response.status_code,
+                response=error_body,
+            )
+        raise OpenMemoryError(
+            message=f"OpenMemory DELETE 请求失败（已重试 {config.max_retries} 次）: {last_exception}",
+            status_code=None,
+            response=None,
+        )
+
     def _get_compat(
         self,
         *,
@@ -396,18 +532,15 @@ class OpenMemoryClient:
     ) -> httpx.Response:
         """对多个路由和 query 参数变体执行兼容 GET。"""
         last_http_error: Optional[httpx.HTTPStatusError] = None
-        for params in params_variants:
-            for url in self._candidate_urls(*paths):
-                with httpx.Client(timeout=self.timeout) as client:
-                    try:
-                        response = client.get(url, params=params, headers=self._get_headers())
-                        response.raise_for_status()
-                        return response
-                    except httpx.HTTPStatusError as exc:
-                        if self._is_compat_status(exc, allowed_statuses):
-                            last_http_error = exc
-                            continue
-                        raise
+        for url in self._candidate_urls(*paths):
+            for params in params_variants:
+                try:
+                    return self._get_with_retry(url, params)
+                except httpx.HTTPStatusError as exc:
+                    if self._is_compat_status(exc, allowed_statuses):
+                        last_http_error = exc
+                        continue
+                    raise
         if last_http_error is not None:
             raise last_http_error
         raise OpenMemoryError("OpenMemory 兼容 GET 请求失败")
@@ -421,18 +554,15 @@ class OpenMemoryClient:
     ) -> httpx.Response:
         """对多个路由和参数变体执行兼容 DELETE。"""
         last_http_error: Optional[httpx.HTTPStatusError] = None
-        for params in params_variants:
-            for url in self._candidate_urls(*paths):
-                with httpx.Client(timeout=self.timeout) as client:
-                    try:
-                        response = client.delete(url, params=params, headers=self._get_headers())
-                        response.raise_for_status()
-                        return response
-                    except httpx.HTTPStatusError as exc:
-                        if self._is_compat_status(exc, allowed_statuses):
-                            last_http_error = exc
-                            continue
-                        raise
+        for url in self._candidate_urls(*paths):
+            for params in params_variants:
+                try:
+                    return self._delete_with_retry(url, params)
+                except httpx.HTTPStatusError as exc:
+                    if self._is_compat_status(exc, allowed_statuses):
+                        last_http_error = exc
+                        continue
+                    raise
         if last_http_error is not None:
             raise last_http_error
         raise OpenMemoryError("OpenMemory 兼容 DELETE 请求失败")
@@ -1068,13 +1198,6 @@ class OpenMemoryClient:
             ReinforceResult 结果对象
         """
         payload_variants = [
-            {
-                "memory_id": memory_id,
-                "id": memory_id,
-                "delta": delta,
-                "boost": delta,
-                **({"reason": reason} if reason else {}),
-            },
             {
                 "memory_id": memory_id,
                 "delta": delta,
