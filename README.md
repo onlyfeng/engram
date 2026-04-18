@@ -41,6 +41,11 @@ AI 友好的事实账本与记忆管理模块 - 为 AI Agent 提供可审计、�
 git clone https://github.com/onlyfeng/engram.git
 cd engram
 
+# macOS 原生开发：先准备系统依赖
+brew install postgresql@18 pgvector node
+brew services start postgresql@18
+export PATH="$(brew --prefix postgresql@18)/bin:$PATH"
+
 # Python 环境（推荐：venv）
 python3 -m venv .venv
 # 激活虚拟环境（二选一）：
@@ -64,6 +69,7 @@ make --version
 ```
 
 > 若终端提示找不到 `make`，请关闭并重新打开 PowerShell 再试。
+> WSL2 / Linux 原生安装 PostgreSQL、pgvector、Node.js 的命令请参考 [安装指南](docs/installation.md)。
 
 #### 2. 一键初始化数据库
 
@@ -79,6 +85,7 @@ DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 
 **Windows 无 make 时**：请使用 WSL 执行上述命令，或参考 [安装指南](docs/installation.md) 中的 Windows 与分步操作（db-create → bootstrap-roles → migrate-ddl → apply-roles → apply-openmemory-grants → verify-permissions）。
 
+> macOS / WSL2 原生推荐：执行 `make setup-db` 时选择 `2) unified-stack`，并在结束时将配置写入 `.env.local`。后续启动 OpenMemory / Gateway 时就可以直接加载 `.env.local`，不需要重复手敲 `POSTGRES_DSN` 和 `OM_PG_*`。
 > 详细安装（PostgreSQL、pgvector、多平台）请参考 [安装指南](docs/installation.md)
 
 #### 3. 启动服务
@@ -89,7 +96,92 @@ DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 - **方式 A（原生部署）**：手动启动 OpenMemory，再启动 Gateway
 - **方式 B（Docker Compose 统一栈）**：一条命令拉起 OpenMemory + Gateway + PostgreSQL
 
-##### 3.1 初始化环境变量（跨平台）
+##### 3.1 推荐路径：macOS / WSL2 原生（不走 Docker）
+
+如果你日常是在 macOS 或 Windows 的 WSL2(Debian) 下开发，推荐把流程分成“一次性初始化”和“日常启动”两部分。
+
+**一次性初始化**
+
+```bash
+# 仓库内：激活 Python 环境
+cd /path/to/engram
+source .venv/bin/activate
+
+# 初始化数据库、角色、权限
+# 推荐选择 2) unified-stack，并在结束时写入 .env.local
+make setup-db
+
+# 如果 .env.local 里还没有 OpenMemory 的 API Key / TIER，可补充一次
+printf '\nOM_API_KEY="change_me"\nOM_TIER="hybrid"\n' >> .env.local
+```
+
+如果你还没有安装 OpenMemory 的 `opm` 命令，再额外执行一次：
+
+```bash
+git clone https://github.com/caviraoss/openmemory.git ~/openmemory
+cd ~/openmemory/packages/openmemory-js
+npm install
+npm run build
+npm link
+```
+
+> `make setup-db` 生成的 `.env.local` 默认会包含 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 以及常用的 `OM_PG_*` 配置；之后推荐统一用 `source scripts/ops/load_env_local.sh` 加载。
+
+**日常启动**
+
+终端 A：启动 OpenMemory
+
+```bash
+cd /path/to/engram
+source scripts/ops/load_env_local.sh
+cd ~/openmemory/packages/openmemory-js
+opm serve
+```
+
+终端 B：启动 Gateway
+
+```bash
+cd /path/to/engram
+source .venv/bin/activate
+source scripts/ops/load_env_local.sh
+make gateway
+```
+
+**启动后验证**
+
+```bash
+curl -fsS http://127.0.0.1:8080/health && echo "OpenMemory OK"
+curl -fsS http://127.0.0.1:8787/health && echo "Gateway OK"
+make mcp-doctor
+# 可选：make stack-doctor
+```
+
+**首次启动 OpenMemory 遇到权限问题**
+
+如果 `opm serve` 报 `permission denied for schema openmemory`，优先用仓库里现成的兜底方式：
+
+```bash
+cd /path/to/engram
+source scripts/ops/load_env_local.sh
+eval "$(make --no-print-directory env-openmemory-first-run)"
+```
+
+然后重新执行：
+
+```bash
+cd ~/openmemory/packages/openmemory-js
+opm serve
+```
+
+如果你希望后续一直使用 `openmemory_svc` 运行，可补一次授权：
+
+```bash
+cd /path/to/engram
+source .venv/bin/activate
+make openmemory-grant-svc-full
+```
+
+##### 3.2 初始化环境变量（通用）
 
 推荐优先使用仓库内脚本加载 `.env` / `.env.local`：
 
@@ -117,28 +209,7 @@ $env:OPENMEMORY_BASE_URL="http://localhost:8080"
 $env:PROJECT_KEY="default"
 ```
 
-##### 3.2 原生部署启动（OpenMemory + Gateway）
-
-Linux/macOS/WSL（两个终端）：
-
-```bash
-# 终端 A：启动 OpenMemory
-# 首次建表可先临时切 migrator 身份（不写入 .env）
-# eval "$(make --no-print-directory env-openmemory-first-run)"
-opm serve
-```
-
-```bash
-# 终端 B：启动 Gateway
-make gateway
-
-# 可选验证
-make mcp-doctor
-make stack-doctor
-# STACK_DOCTOR_FULL=1 make stack-doctor
-# 观测性（Prometheus 指标）
-curl -fsS http://127.0.0.1:8787/metrics | head
-```
+##### 3.3 其他平台原生启动
 
 Windows PowerShell（两个终端）：
 
@@ -161,7 +232,7 @@ python scripts/ops/stack_doctor.py
 Invoke-WebRequest http://127.0.0.1:8787/metrics | Select-Object -ExpandProperty Content
 ```
 
-##### 3.3 Docker Compose 统一栈启动
+##### 3.4 Docker Compose 统一栈启动
 
 ```bash
 docker compose -f docker-compose.unified.yml up -d --build
@@ -173,7 +244,7 @@ docker compose -f docker-compose.unified.yml ps
 docker compose -f docker-compose.unified.yml down -v
 ```
 
-##### 3.4 各平台便携脚本与服务注册
+##### 3.5 各平台便携脚本与服务注册
 
 | 平台 | 场景 | 脚本 / 方式 |
 |------|------|-------------|
@@ -187,9 +258,9 @@ docker compose -f docker-compose.unified.yml down -v
 **Windows 服务注册（NSSM）**
 
 1. 以管理员 PowerShell 运行  
-2. 准备 `scripts/windows/tools/nssm/nssm.exe`  
+2. 准备 `nssm.exe`（放到你本机约定的工具目录即可）  
 3. 复制并编辑本地配置：
-   - `scripts/windows/config.ps1.example` → `scripts/windows/config.ps1`
+   - 以 [`scripts/windows/config.ps1.example`](scripts/windows/config.ps1.example) 为模板准备本地 `config.ps1`
 4. 执行：
 
 ```powershell
