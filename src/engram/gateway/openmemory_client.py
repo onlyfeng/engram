@@ -74,6 +74,8 @@ class RetryConfig:
 
 
 DEFAULT_RETRY_CONFIG = RetryConfig()
+SPACE_SCAN_MAX_PAGES = 50
+ITERATIVE_WIPE_MAX_BATCHES = 50
 
 
 # ---------- 异常类 ----------
@@ -577,7 +579,8 @@ class OpenMemoryClient:
         """
         deleted_count = 0
 
-        while True:
+        batch_count = 0
+        while batch_count < ITERATIVE_WIPE_MAX_BATCHES:
             list_result = self.list_memories(user_id=user_id, limit=200, offset=0)
             if not list_result.success:
                 return WipeResult(
@@ -629,6 +632,17 @@ class OpenMemoryClient:
                     deleted_count=deleted_count,
                     error="iterative_wipe_failed:memory_id_missing",
                 )
+            batch_count += 1
+
+        logger.warning(
+            "OpenMemory iterative wipe reached max batches (%s), aborting for safety",
+            ITERATIVE_WIPE_MAX_BATCHES,
+        )
+        return WipeResult(
+            success=False,
+            deleted_count=deleted_count,
+            error=f"iterative_wipe_limit_exceeded:{ITERATIVE_WIPE_MAX_BATCHES}",
+        )
 
     def _is_retryable_error(self, exc: Exception) -> bool:
         """判断异常是否应该重试"""
@@ -1088,8 +1102,9 @@ class OpenMemoryClient:
                     scan_limit = max(limit, 100)
                     scan_offset = 0
                     matched: list[dict[str, Any]] = []
+                    page_count = 0
 
-                    while True:
+                    while page_count < SPACE_SCAN_MAX_PAGES:
                         page_memories, _ = self._fetch_list_page(
                             user_id=user_id,
                             limit=scan_limit,
@@ -1105,6 +1120,18 @@ class OpenMemoryClient:
                         if len(page_memories) < scan_limit:
                             break
                         scan_offset += scan_limit
+                        page_count += 1
+                    else:
+                        logger.warning(
+                            "OpenMemory space scan reached max pages (%s), aborting for safety",
+                            SPACE_SCAN_MAX_PAGES,
+                        )
+                        return ListResult(
+                            success=False,
+                            memories=[],
+                            total=0,
+                            error=f"space_scan_limit_exceeded:{SPACE_SCAN_MAX_PAGES}",
+                        )
 
                     total = len(matched)
                     memories = matched[offset : offset + limit]

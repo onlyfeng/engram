@@ -1,6 +1,6 @@
 import httpx
 
-from engram.gateway.openmemory_client import OpenMemoryClient, RetryConfig
+from engram.gateway.openmemory_client import ListResult, OpenMemoryClient, RetryConfig
 
 
 def _response(method: str, url: str, status_code: int, payload: dict) -> httpx.Response:
@@ -229,6 +229,49 @@ def test_list_memories_space_filter_keeps_pagination_semantics(monkeypatch):
     assert [query["u"] for _, query in calls] == [0, 100]
 
 
+def test_list_memories_space_scan_limit_returns_error(monkeypatch):
+    client = OpenMemoryClient(base_url="http://openmemory.test")
+    calls: list[dict] = []
+
+    class FakeHttpxClient:
+        def __init__(self, *args, **kwargs):  # noqa: D401, ANN002, ANN003
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def get(self, url, params=None, headers=None):  # noqa: ANN001
+            query = params or {}
+            calls.append(query)
+            return _response(
+                "GET",
+                url,
+                200,
+                {
+                    "items": [
+                        {
+                            "id": f"m-{query.get('u', 0)}-{idx}",
+                            "content": "keep",
+                            "metadata": {"target_space": "team:demo"},
+                        }
+                        for idx in range(100)
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("engram.gateway.openmemory_client.httpx.Client", FakeHttpxClient)
+    monkeypatch.setattr("engram.gateway.openmemory_client.SPACE_SCAN_MAX_PAGES", 1)
+
+    result = client.list_memories(limit=1, offset=0, space="team:demo")
+
+    assert result.success is False
+    assert result.error == "space_scan_limit_exceeded:1"
+    assert [query["u"] for query in calls] == [0]
+
+
 def test_reinforce_falls_back_to_legacy_payload(monkeypatch):
     client = OpenMemoryClient(base_url="http://openmemory.test")
     payloads: list[dict] = []
@@ -414,3 +457,30 @@ def test_wipe_falls_back_to_iterative_delete_when_no_wipe_endpoint(monkeypatch):
     assert result.deleted_count == 2
     assert any(method == "DELETE" and url.endswith("/memory/m-1") for method, url, _ in calls)
     assert any(method == "DELETE" and url.endswith("/memory/m-2") for method, url, _ in calls)
+
+
+def test_iterative_wipe_stops_at_batch_limit(monkeypatch):
+    client = OpenMemoryClient(base_url="http://openmemory.test")
+    delete_calls: list[str] = []
+
+    def fake_delete_compat(*, paths, params_variants, allowed_statuses=(400, 404, 405, 422)):  # noqa: ARG001
+        delete_calls.extend(paths)
+        return _response("DELETE", f"http://openmemory.test{paths[0]}", 200, {"ok": True})
+
+    monkeypatch.setattr(
+        client,
+        "list_memories",
+        lambda user_id=None, space=None, limit=100, offset=0: ListResult(
+            success=True,
+            memories=[{"id": "m-1", "content": "hello"}],
+            total=1,
+        ),
+    )
+    monkeypatch.setattr(client, "_delete_compat", fake_delete_compat)
+    monkeypatch.setattr("engram.gateway.openmemory_client.ITERATIVE_WIPE_MAX_BATCHES", 1)
+
+    result = client._delete_memories_by_iteration()
+
+    assert result.success is False
+    assert result.error == "iterative_wipe_limit_exceeded:1"
+    assert delete_calls == ["/memory/m-1"]
