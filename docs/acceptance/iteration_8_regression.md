@@ -4,7 +4,17 @@
 
 # Iteration 8 Regression Report
 
-## 门禁验证证据
+## 执行信息
+
+| 项目 | 值 |
+|------|-----|
+| **执行时间** | 2026-02-01T20:35:41Z |
+| **执行环境** | darwin 24.6.0 (arm64) |
+| **执行者** | Cursor Agent |
+| **Commit** | `11fb91d` |
+| **状态** | **SUPERSEDED**（已被 Iteration 9 取代） |
+
+## 最小门禁命令块
 
 > **Evidence 文件**: [iteration_8_evidence.json](evidence/iteration_8_evidence.json)
 >

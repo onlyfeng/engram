@@ -246,6 +246,18 @@ python3 scripts/ci/check_mypy_gate.py --gate baseline --mypy-path src/engram/
 
 ---
 
+## 最小门禁命令块
+
+以下命令为 Iteration 9 的最小回归命令集：
+
+```bash
+make regression
+pytest tests/gateway/ -v
+pytest tests/acceptance/ -v
+```
+
+---
+
 ## 验收证据
 
 - [iteration_9_evidence.json](evidence/iteration_9_evidence.json)

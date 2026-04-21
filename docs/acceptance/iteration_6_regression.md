@@ -1,6 +1,6 @@
 # Iteration 6 Regression - CI 流水线验证记录
 
-## 执行日期
+## 执行信息
 2026-02-01
 
 **最终结论日期**: 2026-02-01
@@ -256,7 +256,7 @@ from engram.logbook.scm_db import (
 
 ---
 
-## 验证命令
+## 最小门禁命令块
 
 ```bash
 # 完整 CI 检查（修复 lint 后）
@@ -276,6 +276,13 @@ python scripts/verify_logbook_consistency.py --verbose
 python scripts/verify_scm_sync_consistency.py --verbose
 python scripts/ci/check_env_var_consistency.py --verbose
 ```
+
+---
+
+## 验收证据
+
+- **历史证据路径**: `evidence/iteration_6_evidence.json`
+- **说明**: 本迭代为历史回归记录；若未单独补录 evidence JSON，请以本文执行记录、命令输出与相关提交说明为准。
 
 ---
 

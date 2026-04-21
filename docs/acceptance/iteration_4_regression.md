@@ -1,6 +1,6 @@
 # Iteration 4 Regression - 代码质量修复记录
 
-## 执行日期
+## 执行信息
 2026-01-31
 
 ## 任务概述
@@ -152,7 +152,7 @@
 2. 为第三方模块创建 stub 文件
 3. 启用 mypy 的 `--strict` 模式
 
-## 验证命令
+## 最小门禁命令块
 ```bash
 make format      # ✅ 通过
 make lint        # ✅ 通过  
@@ -345,3 +345,12 @@ make check-env-consistency
 2. 文档中记录但代码中未直接使用的变量（由外部组件读取）
 
 这些 WARN 是预期行为，不需要修复
+
+---
+
+## 验收证据
+
+- **历史证据路径**: `evidence/iteration_4_evidence.json`
+- **说明**: 本迭代为历史回归记录；若未单独补录 evidence JSON，请以本文执行记录、命令输出与相关提交说明为准。
+
+---

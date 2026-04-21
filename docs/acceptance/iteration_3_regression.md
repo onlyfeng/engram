@@ -2,9 +2,19 @@
 
 本文档记录本地与 CI 对齐的回归测试命令，以及实际执行结果记录。
 
+## 执行信息
+
+| 项目 | 值 |
+|------|-----|
+| **执行日期** | 2026-01-31 |
+| **执行环境** | Darwin 24.6.0 (x86_64) |
+| **Python 版本** | 3.13.2 |
+| **执行者** | Cursor Agent |
+| **说明** | 详细执行记录见“## 3. 执行结果记录” |
+
 ---
 
-## 1. 本地与 CI 对齐的回归命令
+## 最小门禁命令块
 
 以下命令与 `.github/workflows/ci.yml` 中的 CI 流程保持一致。
 
@@ -307,3 +317,12 @@ Fixtures 校验结果:
 - [环境变量参考](../reference/environment_variables.md)
 - [ADR: mypy 基线管理与 Gate 门禁策略](../architecture/adr_mypy_baseline_and_gating.md)
 - [mypy 基线管理指南](../dev/mypy_baseline.md)
+
+---
+
+## 验收证据
+
+- **历史证据路径**: `evidence/iteration_3_evidence.json`
+- **说明**: 本迭代为历史回归记录；若未单独补录 evidence JSON，请以本文执行记录、命令输出与相关提交说明为准。
+
+---

@@ -81,6 +81,14 @@ SCHEMA_FILES = [
     "openmemory_upstream_lock.schema.json",
 ]
 
+# 这些 schema 属于历史 vendoring / OpenMemory 配套产物；当前仓库默认不内置时，
+# 在常规 check-schemas 中应静默跳过，避免产生误导性的 warn-only 噪音。
+OPTIONAL_MISSING_SCHEMA_FILES = {
+    "openmemory_conflict.schema.json",
+    "openmemory_patches.schema.json",
+    "openmemory_upstream_lock.schema.json",
+}
+
 # ============================================================================
 # 数据结构
 # ============================================================================
@@ -464,7 +472,7 @@ def validate_all_schemas(
         file_path = schemas_dir / file_name
         if file_path.exists():
             existing_files.append(file_name)
-        elif verbose:
+        elif verbose and file_name not in OPTIONAL_MISSING_SCHEMA_FILES:
             log_warn(f"跳过不存在的文件: {file_name}")
 
     report.total_schemas = len(existing_files)

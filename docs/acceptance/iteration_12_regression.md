@@ -182,12 +182,19 @@
 
 ## 下一步行动
 
-### 验证命令
+## 最小门禁命令块
 
 ```bash
 # 完整 CI 验证
 make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 ```
+
+---
+
+## 验收证据
+
+- **历史证据路径**: `evidence/iteration_12_evidence.json`
+- **说明**: 本迭代为历史回归记录；若未单独补录 evidence JSON，请以本文执行记录、命令输出与相关提交说明为准。
 
 ---
 

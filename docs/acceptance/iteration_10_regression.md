@@ -215,12 +215,19 @@
    - 选项 A: 更新基线文件
    - 选项 B: 逐步修复类型错误
 
-### 验证命令
+## 最小门禁命令块
 
 ```bash
 # 完整 CI 验证
 make ci && pytest tests/gateway/ -q && pytest tests/acceptance/ -q
 ```
+
+---
+
+## 验收证据
+
+- **历史证据路径**: `evidence/iteration_10_evidence.json`
+- **说明**: 本迭代为历史回归记录；若未单独补录 evidence JSON，请以本文执行记录、命令输出与相关提交说明为准。
 
 ---
 

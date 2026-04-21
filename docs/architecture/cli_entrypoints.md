@@ -38,7 +38,9 @@
 | 命令 | 入口模块 | 功能描述 | 依赖 |
 |------|----------|----------|------|
 | `engram-logbook` | `engram.logbook.cli.logbook:main` | Logbook 主操作 CLI | 核心 |
+| `engram-artifacts` | `engram.logbook.cli.artifacts:main` | Artifacts 独立 CLI（等价于 `engram-logbook artifacts ...`） | 核心 |
 | `engram-migrate` | `engram.logbook.cli.db_migrate:main` | 数据库迁移 | 核心 |
+| `engram-bootstrap-roles` | `engram.logbook.cli.db_bootstrap:main` | 数据库 bootstrap（服务账号创建与预检） | 核心 |
 | `engram-scm` | `engram.logbook.cli.scm:main` | SCM 操作入口 | scm |
 | `engram-gateway` | `engram.gateway.main:main` | Gateway 服务启动 | gateway |
 | `engram-iteration` | `engram.iteration.cli:main` | Iteration 工具入口（rerun-advice） | core |
@@ -48,6 +50,7 @@
 | `engram-scm-reaper` | `engram.logbook.cli.scm_sync:reaper_main` | 清理器快捷入口 | scm |
 | `engram-scm-status` | `engram.logbook.cli.scm_sync:status_main` | 状态查询快捷入口 | scm |
 | `engram-scm-runner` | `engram.logbook.cli.scm_sync:runner_main` | Runner 快捷入口 | scm |
+| `engram-identity-sync` | `engram.logbook.identity_sync:main` | Identity 同步工具 | 核心 |
 
 ### 1.2 根目录脚本（已移除）
 
