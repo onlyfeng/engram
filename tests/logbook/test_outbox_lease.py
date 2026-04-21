@@ -24,6 +24,10 @@ import psycopg
 import pytest
 
 
+def _dedup_search_path(schemas: dict[str, str]) -> str:
+    return ", ".join((schemas["logbook"], schemas["governance"], "public"))
+
+
 class TestGetConnectionStatementTimeout:
     """get_connection 的 statement_timeout 功能测试"""
 
@@ -153,14 +157,14 @@ class TestCheckDedup:
     def test_check_dedup_no_match(self, migrated_db):
         """无匹配记录时返回 None"""
         dsn = migrated_db["dsn"]
-        logbook_schema = migrated_db["schemas"]["logbook"]
+        search_path = _dedup_search_path(migrated_db["schemas"])
 
         conn = psycopg.connect(dsn, autocommit=True)
         try:
             with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SET search_path TO {logbook_schema}")
+                    cur.execute(f"SET search_path TO {search_path}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
@@ -174,7 +178,9 @@ class TestCheckDedup:
     def test_check_dedup_sent_record_found(self, migrated_db):
         """找到 sent 状态的记录"""
         dsn = migrated_db["dsn"]
-        logbook_schema = migrated_db["schemas"]["logbook"]
+        schemas = migrated_db["schemas"]
+        logbook_schema = schemas["logbook"]
+        search_path = _dedup_search_path(schemas)
 
         conn = psycopg.connect(dsn, autocommit=True)
         outbox_id = None
@@ -192,7 +198,7 @@ class TestCheckDedup:
             with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SET search_path TO {logbook_schema}")
+                    cur.execute(f"SET search_path TO {search_path}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
@@ -217,7 +223,9 @@ class TestCheckDedup:
     def test_check_dedup_ignores_pending(self, migrated_db):
         """pending 状态的记录不应被去重检测到"""
         dsn = migrated_db["dsn"]
-        logbook_schema = migrated_db["schemas"]["logbook"]
+        schemas = migrated_db["schemas"]
+        logbook_schema = schemas["logbook"]
+        search_path = _dedup_search_path(schemas)
 
         conn = psycopg.connect(dsn, autocommit=True)
         outbox_id = None
@@ -235,7 +243,7 @@ class TestCheckDedup:
             with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SET search_path TO {logbook_schema}")
+                    cur.execute(f"SET search_path TO {search_path}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
@@ -256,7 +264,9 @@ class TestCheckDedup:
     def test_check_dedup_ignores_dead(self, migrated_db):
         """dead 状态的记录不应被去重检测到"""
         dsn = migrated_db["dsn"]
-        logbook_schema = migrated_db["schemas"]["logbook"]
+        schemas = migrated_db["schemas"]
+        logbook_schema = schemas["logbook"]
+        search_path = _dedup_search_path(schemas)
 
         conn = psycopg.connect(dsn, autocommit=True)
         outbox_id = None
@@ -274,7 +284,7 @@ class TestCheckDedup:
             with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SET search_path TO {logbook_schema}")
+                    cur.execute(f"SET search_path TO {search_path}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
@@ -295,7 +305,9 @@ class TestCheckDedup:
     def test_check_dedup_different_target_space(self, migrated_db):
         """不同 target_space 不应匹配"""
         dsn = migrated_db["dsn"]
-        logbook_schema = migrated_db["schemas"]["logbook"]
+        schemas = migrated_db["schemas"]
+        logbook_schema = schemas["logbook"]
+        search_path = _dedup_search_path(schemas)
 
         conn = psycopg.connect(dsn, autocommit=True)
         outbox_id = None
@@ -313,7 +325,7 @@ class TestCheckDedup:
             with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SET search_path TO {logbook_schema}")
+                    cur.execute(f"SET search_path TO {search_path}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
@@ -335,7 +347,7 @@ class TestCheckDedup:
     def test_check_dedup_falls_back_to_success_write_audit(self, migrated_db):
         """直写成功但未进入 outbox 时，仍可通过 success audit 命中去重。"""
         dsn = migrated_db["dsn"]
-        logbook_schema = migrated_db["schemas"]["logbook"]
+        search_path = _dedup_search_path(migrated_db["schemas"])
 
         conn = psycopg.connect(dsn, autocommit=True)
         audit_id = None
@@ -360,7 +372,7 @@ class TestCheckDedup:
             with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
                 mock_conn = psycopg.connect(dsn, autocommit=False)
                 with mock_conn.cursor() as cur:
-                    cur.execute(f"SET search_path TO {logbook_schema}")
+                    cur.execute(f"SET search_path TO {search_path}")
                 mock_get_conn.return_value = mock_conn
 
                 from engram.logbook.outbox import check_dedup
@@ -379,6 +391,62 @@ class TestCheckDedup:
                 with conn.cursor() as cur:
                     cur.execute(
                         "DELETE FROM governance.write_audit WHERE audit_id = %s",
+                        (audit_id,),
+                    )
+            conn.close()
+
+    def test_check_dedup_prefixed_schema_falls_back_to_success_write_audit(self, temp_schemas):
+        """prefixed schema 下回退查询应依赖 search_path 命中 write_audit。"""
+        dsn = temp_schemas["dsn"]
+        schemas = temp_schemas["schemas"]
+        governance_schema = schemas["governance"]
+        search_path = _dedup_search_path(schemas)
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        audit_id = None
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {governance_schema}.write_audit
+                        (actor_user_id, target_space, action, reason, payload_sha, evidence_refs_json, status)
+                    VALUES (%s, %s, 'allow', 'policy_allow', %s, %s::jsonb, 'success')
+                    RETURNING audit_id
+                    """,
+                    (
+                        "alice",
+                        "team:prefixed",
+                        "sha_audit_success_prefixed",
+                        json.dumps({"memory_id": "mem_audit_success_prefixed"}),
+                    ),
+                )
+                audit_id = cur.fetchone()[0]
+
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {search_path}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram.logbook.outbox import check_dedup
+
+                result = check_dedup(
+                    target_space="team:prefixed",
+                    payload_sha="sha_audit_success_prefixed",
+                )
+
+                assert result is not None
+                assert result.get("outbox_id") is None
+                assert result["target_space"] == "team:prefixed"
+                assert result["payload_sha"] == "sha_audit_success_prefixed"
+                assert result["status"] == "sent"
+                assert result["memory_id"] == "mem_audit_success_prefixed"
+                assert result["last_error"] == "memory_id=mem_audit_success_prefixed"
+        finally:
+            if audit_id:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"DELETE FROM {governance_schema}.write_audit WHERE audit_id = %s",
                         (audit_id,),
                     )
             conn.close()
@@ -415,7 +483,7 @@ class TestCheckDedup:
         first_call = mock_cursor.execute.call_args_list[0]
         second_call = mock_cursor.execute.call_args_list[1]
         assert "FROM outbox_memory" in first_call.args[0]
-        assert "FROM governance.write_audit" in second_call.args[0]
+        assert "FROM write_audit" in second_call.args[0]
 
 
 class TestClaimOutbox:

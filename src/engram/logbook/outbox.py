@@ -90,7 +90,7 @@ def check_dedup(
 
     查询条件：
     1. logbook.outbox_memory 中 target_space + payload_sha + status='sent'
-    2. governance.write_audit 中同 payload 的成功 allow 审计（覆盖直写成功路径）
+    2. write_audit 中同 payload 的成功 allow 审计（依赖 search_path 覆盖直写成功路径）
 
     Args:
         target_space: 目标空间 (team:<project> / private:<user> / org:shared)
@@ -134,7 +134,7 @@ def check_dedup(
                 SELECT evidence_refs_json->>'memory_id' AS memory_id,
                        created_at,
                        updated_at
-                FROM governance.write_audit
+                FROM write_audit
                 WHERE target_space = %s
                   AND payload_sha = %s
                   AND action = 'allow'
