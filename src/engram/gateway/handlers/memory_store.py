@@ -162,9 +162,7 @@ def _resolve_openmemory_user_id(
         owner = target_space[len(private_space_prefix) :]
         if owner:
             return owner
-        raise ValueError(
-            f"私有空间名称格式无效（owner 为空）: {target_space!r}"
-        )
+        raise ValueError(f"私有空间名称格式无效（owner 为空）: {target_space!r}")
     return actor_user_id
 
 
