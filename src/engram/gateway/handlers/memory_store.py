@@ -233,7 +233,10 @@ async def _verify_readback_after_store(
             failure = _classify_readback_fetch_failure(error)
             if failure is not None:
                 last_failure = failure
+                last_skipped_error = None
             else:
+                # 终态应反映最后一次观测结果；瞬时传输错误不能沿用更早的确定性失败。
+                last_failure = None
                 last_skipped_error = error or "unknown_error"
         else:
             last_failure = _validate_readback_memory(
@@ -241,6 +244,7 @@ async def _verify_readback_after_store(
                 expected_space=expected_space,
                 expected_payload_sha=expected_payload_sha,
             )
+            last_skipped_error = None
             if last_failure is None:
                 return _ReadbackVerificationResult()
 

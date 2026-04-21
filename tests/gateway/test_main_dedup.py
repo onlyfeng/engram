@@ -25,6 +25,7 @@ from engram.gateway.services.hash_utils import compute_payload_sha
 # 导入 Fake 依赖
 from tests.gateway.fakes import (
     FakeGatewayConfig,
+    FakeGetResult,
     FakeLogbookAdapter,
     FakeLogbookDatabase,
     FakeOpenMemoryClient,
@@ -472,6 +473,48 @@ class TestMemoryStoreReadbackValidation:
 
         assert result.ok is True
         assert result.memory_id == "mem_readback_004"
+        assert fake_db.update_audit_calls[-1]["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_transient_retry_after_not_found_keeps_success(self):
+        payload_md = "# Readback transient after miss"
+        target_space = "team:test"
+
+        fake_config = FakeGatewayConfig(default_team_space="team:test")
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.bind_database(fake_db)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_readback_005")
+
+        readback_results = iter(
+            [
+                FakeGetResult(success=False, error="memory_not_found"),
+                FakeGetResult(success=False, error="http_error: 503"),
+                FakeGetResult(success=False, error="http_error: 503"),
+            ]
+        )
+        fake_client._get_behavior = lambda **kwargs: next(readback_results)
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            actor_user_id="alice",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is True
+        assert result.memory_id == "mem_readback_005"
         assert fake_db.update_audit_calls[-1]["status"] == "success"
 
 
