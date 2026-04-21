@@ -687,6 +687,47 @@ export OM_TIER=hybrid  # 可选: hybrid/fast/smart/deep
 如需持久化（systemd 场景），可写入 OpenMemory 的 env 文件（例如 `/etc/engram/openmemory.env`），再重启服务。
 </details>
 
+<details>
+<summary><b>上层写入长记忆时，最终只看到约 200 字摘要</b></summary>
+
+这通常不是 Gateway 截断，而是 OpenMemory 的摘要模式在生效。
+
+当前 Engram 的统一栈示例和 OpenMemory 上游默认都使用：
+
+```bash
+OM_USE_SUMMARY_ONLY=true
+OM_SUMMARY_MAX_LENGTH=200
+```
+
+在该模式下，OpenMemory 会先提炼摘要再落库；因此上层即使提交了更长的 `payload_md` / memory content，最终存储结果也常常只剩约 200 字。
+
+排查步骤：
+
+```bash
+# Linux / WSL2 / systemd
+grep -E "OM_USE_SUMMARY_ONLY|OM_SUMMARY_MAX_LENGTH" /etc/engram/openmemory.env
+
+# 项目根目录中的统一栈 .env
+grep -E "OM_USE_SUMMARY_ONLY|OM_SUMMARY_MAX_LENGTH" .env
+```
+
+PowerShell：
+
+```powershell
+Get-Content .env | Select-String "OM_USE_SUMMARY_ONLY|OM_SUMMARY_MAX_LENGTH"
+```
+
+如果你的上层集成需要保留完整记忆原文，请显式关闭摘要模式：
+
+```bash
+OM_USE_SUMMARY_ONLY=false
+```
+
+可选地保留 `OM_SUMMARY_MAX_LENGTH` 作为注释说明，但当 `OM_USE_SUMMARY_ONLY=false` 时，该值不再参与正文裁剪。
+
+修改配置后，记得重启 OpenMemory 服务（以及通过 env 注入配置的统一栈 / systemd / nssm 服务）。
+</details>
+
 ---
 
 ## 安全建议（即便内网）

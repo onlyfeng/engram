@@ -46,6 +46,8 @@ x-openmemory-env: &openmemory_env
   OM_EMBEDDINGS: ${OM_EMBEDDINGS:-synthetic}
   OM_VEC_DIM: ${OM_VEC_DIM:-256}
   OM_MIN_SCORE: ${OM_MIN_SCORE:-0.3}
+  OM_USE_SUMMARY_ONLY: ${OM_USE_SUMMARY_ONLY:-true}
+  OM_SUMMARY_MAX_LENGTH: ${OM_SUMMARY_MAX_LENGTH:-200}
 
 services:
   postgres:

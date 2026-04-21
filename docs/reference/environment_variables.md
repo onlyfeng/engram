@@ -166,9 +166,23 @@ level = "INFO"
 |------|------|--------|------|
 | `OM_MIN_SCORE` | 搜索最小相似度分数 | `0.3` | |
 | `OM_MAX_PAYLOAD_SIZE` | 最大请求体大小（字节） | `1000000` | |
-| `OM_USE_SUMMARY_ONLY` | 仅存储摘要 | `true` | |
-| `OM_SUMMARY_MAX_LENGTH` | 摘要最大长度 | `200` | |
+| `OM_USE_SUMMARY_ONLY` | 是否仅存储提炼后的摘要而非完整原文 | `true` | |
+| `OM_SUMMARY_MAX_LENGTH` | 摘要最大长度（仅在 `OM_USE_SUMMARY_ONLY=true` 时生效） | `200` | |
 | `OM_SEG_SIZE` | 每段记忆数 | `10000` | |
+
+> **长度与存储说明**：
+> - 默认 `OM_USE_SUMMARY_ONLY=true` 时，OpenMemory 会在写入前先提炼摘要；上层提交的长文本不会按原文完整落库，常见现象是最终只保留约 `200` 字的摘要内容。
+> - 如果上层依赖完整记忆内容进行回放、审计或二次处理，请在 `.env` 中显式设置 `OM_USE_SUMMARY_ONLY=false`。
+> - `OM_SUMMARY_MAX_LENGTH` 只在摘要模式下生效；关闭摘要模式后，OpenMemory 不再按该阈值裁剪正文。
+
+```bash
+# 保持默认摘要模式（长文本会被提炼为摘要）
+OM_USE_SUMMARY_ONLY=true
+OM_SUMMARY_MAX_LENGTH=200
+
+# 若上层需要保留完整记忆内容，请显式关闭摘要模式
+OM_USE_SUMMARY_ONLY=false
+```
 
 ### 衰减系统
 
