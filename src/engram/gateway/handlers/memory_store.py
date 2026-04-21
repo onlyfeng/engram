@@ -48,6 +48,7 @@ handler 不再自行生成 correlation_id，确保同一请求使用同一 ID。
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
@@ -220,6 +221,24 @@ def _validate_readback_memory(
     return None
 
 
+def _supports_readback_retry_config(client: object) -> bool:
+    """判断 client.get_memory 是否显式支持 retry_config 或 **kwargs。"""
+    get_memory = getattr(client, "get_memory", None)
+    if not callable(get_memory):
+        return False
+
+    try:
+        signature = inspect.signature(get_memory)
+    except (TypeError, ValueError):
+        return False
+
+    parameters = signature.parameters.values()
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD or parameter.name == "retry_config"
+        for parameter in parameters
+    )
+
+
 async def _verify_readback_after_store(
     *,
     client: object,
@@ -233,7 +252,7 @@ async def _verify_readback_after_store(
     对未实现 typed `get_memory()` 的测试 stub 降级为跳过校验，避免把
     “未配置 readback 返回值的 mock”误判成线上一致性故障。
     """
-    if not isinstance(client, _ReadbackClient):
+    if not isinstance(client, _ReadbackClient) or not _supports_readback_retry_config(client):
         return _ReadbackVerificationResult()
 
     last_failure: Optional[_ReadbackValidationFailure] = None

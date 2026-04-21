@@ -29,6 +29,7 @@ from tests.gateway.fakes import (
     FakeLogbookAdapter,
     FakeLogbookDatabase,
     FakeOpenMemoryClient,
+    FakeStoreResult,
 )
 
 # Mock 路径：handlers 模块使用的依赖
@@ -521,6 +522,53 @@ class TestMemoryStoreReadbackValidation:
         assert result.ok is True
         assert result.memory_id == "mem_readback_005"
         assert fake_db.update_audit_calls[-1]["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_legacy_get_memory_without_retry_config_keeps_success(self):
+        payload_md = "# Legacy readback client"
+        target_space = "team:test"
+
+        fake_config = FakeGatewayConfig(default_team_space="team:test")
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.bind_database(fake_db)
+        fake_adapter.configure_dedup_miss()
+
+        class LegacyOpenMemoryClient:
+            def __init__(self):
+                self.store_calls = []
+                self.get_calls = []
+
+            def store(self, **kwargs):
+                self.store_calls.append(kwargs)
+                return FakeStoreResult(success=True, memory_id="mem_readback_legacy")
+
+            def get_memory(self, memory_id: str):
+                self.get_calls.append({"memory_id": memory_id})
+                return FakeGetResult(success=True, memory=None)
+
+        legacy_client = LegacyOpenMemoryClient()
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=legacy_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            actor_user_id="alice",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is True
+        assert result.memory_id == "mem_readback_legacy"
+        assert fake_db.update_audit_calls[-1]["status"] == "success"
+        assert legacy_client.get_calls == []
 
 
 # ==================== strict evidence 校验测试 ====================
