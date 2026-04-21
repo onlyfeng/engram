@@ -3,7 +3,7 @@
 环境变量一致性检查脚本
 
 检查 `.env.example`、`docs/reference/environment_variables.md` 和
-`src/engram/**/config.py` 中的环境变量集合是否一致。
+`src/engram/**/config.py`（以及少量运行时配置模块）中的环境变量集合是否一致。
 
 用法:
     python scripts/ci/check_env_var_consistency.py [--strict] [--json] [--verbose]
@@ -90,6 +90,7 @@ DOC_ONLY_VARS: Set[str] = {
     "MYPY_GATE",  # [已废弃] 兼容别名，将在未来版本移除
     "ENGRAM_VERIFY_GATE",
     "ENGRAM_VERIFY_STRICT",
+    "ENGRAM_PG_STATEMENT_TIMEOUT_MS",
     # OpenMemory 上游组件详细配置（不在 engram 代码中读取）
     "OM_MODE",
     "OM_TIER",
@@ -307,14 +308,23 @@ def parse_env_doc(file_path: Path) -> Set[str]:
 
 
 def parse_config_py_files(config_dir: Path) -> Set[str]:
-    """从 config.py 文件解析环境变量名"""
+    """从 config.py 和少量运行时配置模块解析环境变量名"""
     vars_set: Set[str] = set()
 
-    # 查找所有 config.py 文件
-    config_files = list(config_dir.rglob("config.py"))
+    # 主路径：所有 config.py
+    target_files = list(config_dir.rglob("config.py"))
 
-    for config_file in config_files:
-        content = config_file.read_text(encoding="utf-8")
+    # 补充少量不在 config.py 中、但承担运行时配置职责的模块
+    extra_files = [
+        config_dir / "gateway" / "observability.py",
+        config_dir / "logbook" / "db.py",
+    ]
+    for extra_file in extra_files:
+        if extra_file.exists():
+            target_files.append(extra_file)
+
+    for py_file in target_files:
+        content = py_file.read_text(encoding="utf-8")
 
         # 匹配 os.environ.get("VAR") 或 os.environ["VAR"] 或 os.getenv("VAR")
         patterns = [
@@ -328,6 +338,10 @@ def parse_config_py_files(config_dir: Path) -> Set[str]:
             # 匹配带环境变量名的函数调用（通用模式）
             r'_get_env_or_config\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
             r'_get_env_or_config_bool\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
+            # 匹配 logbook/db.py 中的环境变量解析辅助函数
+            r'_parse_bool_env\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
+            r'_parse_int_env\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
+            r'_parse_float_env\(\s*["\']([A-Z][A-Z0-9_]+)["\']',
         ]
 
         for pattern in patterns:
@@ -436,7 +450,7 @@ def analyze_consistency(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="检查 .env.example、环境变量文档和 config.py 中的环境变量一致性"
+        description="检查 .env.example、环境变量文档和配置模块中的环境变量一致性"
     )
     parser.add_argument(
         "--strict",

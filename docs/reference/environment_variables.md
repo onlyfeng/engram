@@ -55,6 +55,7 @@ PROJECT_KEY=proj_b POSTGRES_DB=proj_b make deploy
 |------|------|--------|------|
 | `POSTGRES_DSN` | PostgreSQL 完整连接字符串 | - | 二选一 |
 | `ENGRAM_LOGBOOK_CONFIG` | 配置文件路径（TOML 格式） | `.agentx/config.toml` | 二选一 |
+| `ENGRAM_PG_STATEMENT_TIMEOUT_MS` | 单条 SQL 的 `statement_timeout` 覆盖值（毫秒） | - | |
 
 > **注意**: `POSTGRES_DSN` 优先级高于配置文件。
 
