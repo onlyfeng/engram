@@ -608,13 +608,14 @@ class OpenMemoryClient:
         paths: list[str],
         params_variants: list[dict[str, Any]],
         allowed_statuses: tuple[int, ...] = (400, 404, 405, 422),
+        retry_config: Optional[RetryConfig] = None,
     ) -> httpx.Response:
         """对多个路由和 query 参数变体执行兼容 GET。"""
         last_http_error: Optional[httpx.HTTPStatusError] = None
         for url in self._candidate_urls(*paths):
             for params in params_variants:
                 try:
-                    return self._get_with_retry(url, params)
+                    return self._get_with_retry(url, params, retry_config=retry_config)
                 except httpx.HTTPStatusError as exc:
                     if self._is_compat_status(exc, allowed_statuses):
                         last_http_error = exc
@@ -1236,7 +1237,11 @@ class OpenMemoryClient:
             finally:
                 observe_openmemory_call(operation, status, max(time.perf_counter() - started, 0.0))
 
-    def get_memory(self, memory_id: str) -> GetResult:
+    def get_memory(
+        self,
+        memory_id: str,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> GetResult:
         """
         获取单条记忆详情（OpenMemory 1.3.x 兼容）
 
@@ -1244,6 +1249,7 @@ class OpenMemoryClient:
 
         Args:
             memory_id: 记忆 ID
+            retry_config: 可选重试配置；为 None 时沿用客户端默认策略
 
         Returns:
             GetResult 结果对象
@@ -1261,6 +1267,7 @@ class OpenMemoryClient:
                     paths=[f"/memory/{memory_id}"],
                     params_variants=[{}],
                     allowed_statuses=(404,),
+                    retry_config=retry_config,
                 )
                 data = response.json()
 

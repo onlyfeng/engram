@@ -474,6 +474,11 @@ class TestMemoryStoreReadbackValidation:
         assert result.ok is True
         assert result.memory_id == "mem_readback_004"
         assert fake_db.update_audit_calls[-1]["status"] == "success"
+        assert len(fake_client.get_calls) == 3
+        assert all(
+            call["retry_config"] is not None and call["retry_config"].max_retries == 0
+            for call in fake_client.get_calls
+        )
 
     @pytest.mark.asyncio
     async def test_transient_retry_after_not_found_keeps_success(self):

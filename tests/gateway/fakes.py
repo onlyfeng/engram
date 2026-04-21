@@ -65,6 +65,7 @@ from engram.gateway.openmemory_client import (
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
+    RetryConfig,
 )
 
 
@@ -455,9 +456,13 @@ class FakeOpenMemoryClient:
         assert self._list_behavior is not None
         return self._list_behavior(**call_args)
 
-    def get_memory(self, memory_id: str) -> FakeGetResult:
+    def get_memory(
+        self,
+        memory_id: str,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> FakeGetResult:
         """获取单条记忆（模拟）"""
-        call_args = {"memory_id": memory_id}
+        call_args = {"memory_id": memory_id, "retry_config": retry_config}
         self.get_calls.append(call_args)
         assert self._get_behavior is not None
         return self._get_behavior(**call_args)

@@ -68,6 +68,7 @@ from ..openmemory_client import (
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
+    RetryConfig,
     extract_memory_object_content,
     extract_memory_object_payload_sha,
     extract_memory_object_space,
@@ -86,6 +87,12 @@ from engram.logbook.errors import ErrorCode
 logger = logging.getLogger("gateway.handlers.memory_store")
 READBACK_VERIFY_ATTEMPTS = 3
 READBACK_VERIFY_DELAY_SECONDS = 0.1
+READBACK_VERIFY_GET_RETRY_CONFIG = RetryConfig(
+    max_retries=0,
+    base_delay=READBACK_VERIFY_DELAY_SECONDS,
+    max_delay=READBACK_VERIFY_DELAY_SECONDS,
+    jitter=0.0,
+)
 
 
 class MemoryStoreResponse(BaseModel):
@@ -136,7 +143,11 @@ class _ReadbackVerificationResult:
 
 @runtime_checkable
 class _ReadbackClient(Protocol):
-    def get_memory(self, memory_id: str) -> GetResult: ...
+    def get_memory(
+        self,
+        memory_id: str,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> GetResult: ...
 
 
 def _resolve_openmemory_user_id(
@@ -228,7 +239,10 @@ async def _verify_readback_after_store(
     last_failure: Optional[_ReadbackValidationFailure] = None
     last_skipped_error: Optional[str] = None
     for attempt in range(READBACK_VERIFY_ATTEMPTS):
-        get_result = client.get_memory(memory_id)
+        get_result = client.get_memory(
+            memory_id,
+            retry_config=READBACK_VERIFY_GET_RETRY_CONFIG,
+        )
         if not isinstance(get_result, GetResult):
             return _ReadbackVerificationResult()
 
