@@ -25,6 +25,7 @@ from engram.gateway.services.hash_utils import compute_payload_sha
 # 导入 Fake 依赖
 from tests.gateway.fakes import (
     FakeGatewayConfig,
+    FakeLogbookAdapter,
     FakeLogbookDatabase,
     FakeOpenMemoryClient,
 )
@@ -300,6 +301,144 @@ class TestMemoryStoreDedup:
 
         assert result.ok is True
         assert result.action == "allow"
+
+
+class TestMemoryStoreReadbackValidation:
+    """memory_store 写后读校验测试"""
+
+    @pytest.mark.asyncio
+    async def test_space_mismatch_returns_error(self):
+        payload_md = "# Readback mismatch"
+        target_space = "private:alice"
+        payload_sha = compute_payload_sha(payload_md)
+
+        fake_config = FakeGatewayConfig(default_team_space="team:test")
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.bind_database(fake_db)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_readback_001")
+        fake_client.configure_get_success(
+            memory={
+                "id": "mem_readback_001",
+                "content": payload_md,
+                "metadata": {
+                    "target_space": "private:bob",
+                    "payload_sha": payload_sha,
+                },
+            }
+        )
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is False
+        assert result.action == "error"
+        assert "space 不一致" in (result.message or "")
+
+        assert fake_db.update_audit_calls[-1]["status"] == "failed"
+        assert (
+            fake_db.update_audit_calls[-1]["reason_suffix"]
+            == "openmemory_consistency_failed:space_mismatch"
+        )
+
+    @pytest.mark.asyncio
+    async def test_empty_content_returns_error(self):
+        payload_md = "# Empty readback"
+        target_space = "private:alice"
+
+        fake_config = FakeGatewayConfig(default_team_space="team:test")
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.bind_database(fake_db)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_readback_002")
+        fake_client.configure_get_success(
+            memory={
+                "id": "mem_readback_002",
+                "content": "",
+                "metadata": {
+                    "target_space": target_space,
+                    "payload_sha": compute_payload_sha(payload_md),
+                },
+            }
+        )
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            actor_user_id="alice",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is False
+        assert result.action == "error"
+        assert "content 为空" in (result.message or "")
+
+    @pytest.mark.asyncio
+    async def test_payload_mismatch_returns_error(self):
+        payload_md = "# Payload readback"
+        target_space = "private:alice"
+
+        fake_config = FakeGatewayConfig(default_team_space="team:test")
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.bind_database(fake_db)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_readback_003")
+        fake_client.configure_get_success(
+            memory={
+                "id": "mem_readback_003",
+                "content": "# other payload",
+                "metadata": {
+                    "target_space": target_space,
+                },
+            }
+        )
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            actor_user_id="alice",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is False
+        assert result.action == "error"
+        assert "payload_sha 不一致" in (result.message or "")
 
 
 # ==================== strict evidence 校验测试 ====================

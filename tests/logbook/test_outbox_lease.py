@@ -16,8 +16,9 @@ Worker 流程语义测试请参见 Gateway 测试：
 - statement_timeout: 连接级超时设置
 """
 
+import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import psycopg
 import pytest
@@ -330,6 +331,91 @@ class TestCheckDedup:
                         (outbox_id,),
                     )
             conn.close()
+
+    def test_check_dedup_falls_back_to_success_write_audit(self, migrated_db):
+        """直写成功但未进入 outbox 时，仍可通过 success audit 命中去重。"""
+        dsn = migrated_db["dsn"]
+        logbook_schema = migrated_db["schemas"]["logbook"]
+
+        conn = psycopg.connect(dsn, autocommit=True)
+        audit_id = None
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO governance.write_audit
+                        (actor_user_id, target_space, action, reason, payload_sha, evidence_refs_json, status)
+                    VALUES (%s, %s, 'allow', 'policy_allow', %s, %s::jsonb, 'success')
+                    RETURNING audit_id
+                    """,
+                    (
+                        "alice",
+                        "team:test",
+                        "sha_audit_success_001",
+                        json.dumps({"memory_id": "mem_audit_success_001"}),
+                    ),
+                )
+                audit_id = cur.fetchone()[0]
+
+            with patch("engram_logbook.outbox.get_connection") as mock_get_conn:
+                mock_conn = psycopg.connect(dsn, autocommit=False)
+                with mock_conn.cursor() as cur:
+                    cur.execute(f"SET search_path TO {logbook_schema}")
+                mock_get_conn.return_value = mock_conn
+
+                from engram.logbook.outbox import check_dedup
+
+                result = check_dedup(target_space="team:test", payload_sha="sha_audit_success_001")
+
+                assert result is not None
+                assert result.get("outbox_id") is None
+                assert result["target_space"] == "team:test"
+                assert result["payload_sha"] == "sha_audit_success_001"
+                assert result["status"] == "sent"
+                assert result["memory_id"] == "mem_audit_success_001"
+                assert result["last_error"] == "memory_id=mem_audit_success_001"
+        finally:
+            if audit_id:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM governance.write_audit WHERE audit_id = %s",
+                        (audit_id,),
+                    )
+            conn.close()
+
+    def test_check_dedup_falls_back_to_success_write_audit_without_db(self):
+        """纯单元测试：outbox 未命中时回退到 success audit。"""
+        created_at = datetime.now(timezone.utc)
+        updated_at = created_at + timedelta(seconds=1)
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.side_effect = [
+            None,
+            ("mem_audit_success_002", created_at, updated_at),
+        ]
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+        with patch("engram_logbook.outbox.get_connection", return_value=mock_conn):
+            from engram.logbook.outbox import check_dedup
+
+            result = check_dedup(target_space="team:test", payload_sha="sha_audit_success_002")
+
+        assert result is not None
+        assert result.get("outbox_id") is None
+        assert result["target_space"] == "team:test"
+        assert result["payload_sha"] == "sha_audit_success_002"
+        assert result["status"] == "sent"
+        assert result["memory_id"] == "mem_audit_success_002"
+        assert result["last_error"] == "memory_id=mem_audit_success_002"
+        assert result["created_at"] == created_at
+        assert result["updated_at"] == updated_at
+
+        assert mock_cursor.execute.call_count == 2
+        first_call = mock_cursor.execute.call_args_list[0]
+        second_call = mock_cursor.execute.call_args_list[1]
+        assert "FROM outbox_memory" in first_call.args[0]
+        assert "FROM governance.write_audit" in second_call.args[0]
 
 
 class TestClaimOutbox:

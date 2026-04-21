@@ -53,6 +53,16 @@ class ErrorCode:
     )
     OPENMEMORY_WRITE_FAILED_GENERIC = "openmemory_write_failed:openmemory_error"
     OPENMEMORY_WRITE_FAILED_UNKNOWN = "openmemory_write_failed:unknown"
+    OPENMEMORY_CONSISTENCY_FAILED_NOT_FOUND = "openmemory_consistency_failed:not_found"
+    OPENMEMORY_CONSISTENCY_FAILED_INVALID_PAYLOAD = "openmemory_consistency_failed:invalid_payload"
+    OPENMEMORY_CONSISTENCY_FAILED_MEMORY_ID_MISMATCH = (
+        "openmemory_consistency_failed:memory_id_mismatch"
+    )
+    OPENMEMORY_CONSISTENCY_FAILED_SPACE_MISMATCH = "openmemory_consistency_failed:space_mismatch"
+    OPENMEMORY_CONSISTENCY_FAILED_EMPTY_CONTENT = "openmemory_consistency_failed:empty_content"
+    OPENMEMORY_CONSISTENCY_FAILED_PAYLOAD_MISMATCH = (
+        "openmemory_consistency_failed:payload_mismatch"
+    )
 
     @staticmethod
     def openmemory_api_error(status_code: Optional[int] = None) -> str:

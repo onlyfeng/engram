@@ -208,15 +208,92 @@ def _extract_health_ok(payload: Any) -> bool:
     return False
 
 
+def extract_memory_object_metadata(memory: Any) -> dict[str, Any]:
+    """提取记忆对象 metadata，非字典输入返回空字典。"""
+    if not isinstance(memory, dict):
+        return {}
+    metadata = memory.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def extract_memory_object_id(memory: Any) -> Optional[str]:
+    """从单条记忆对象中提取稳定的 ID。"""
+    if not isinstance(memory, dict):
+        return None
+    for key in ("id", "memory_id"):
+        memory_id = _as_non_empty_str(memory.get(key))
+        if memory_id is not None:
+            return memory_id
+    metadata = extract_memory_object_metadata(memory)
+    for key in ("id", "memory_id"):
+        memory_id = _as_non_empty_str(metadata.get(key))
+        if memory_id is not None:
+            return memory_id
+    return None
+
+
+def extract_memory_object_content(memory: Any) -> Optional[str]:
+    """从单条记忆对象中提取正文内容。"""
+    if not isinstance(memory, dict):
+        return None
+    for key in ("content", "text"):
+        value = memory.get(key)
+        if isinstance(value, str):
+            return value
+    metadata = extract_memory_object_metadata(memory)
+    for key in ("content", "text"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def extract_memory_object_space(memory: Any) -> Optional[str]:
+    """从单条记忆对象中提取 space / target_space。"""
+    if not isinstance(memory, dict):
+        return None
+    for key in ("space", "target_space"):
+        value = _as_non_empty_str(memory.get(key))
+        if value is not None:
+            return value
+    metadata = extract_memory_object_metadata(memory)
+    for key in ("space", "target_space"):
+        value = _as_non_empty_str(metadata.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def extract_memory_object_payload_sha(memory: Any) -> Optional[str]:
+    """从单条记忆对象中提取 payload_sha。"""
+    if not isinstance(memory, dict):
+        return None
+    payload_sha = _as_non_empty_str(memory.get("payload_sha"))
+    if payload_sha is not None:
+        return payload_sha
+    metadata = extract_memory_object_metadata(memory)
+    return _as_non_empty_str(metadata.get("payload_sha"))
+
+
+def _with_space_metadata(
+    metadata: Optional[dict[str, Any]], space: Optional[str]
+) -> dict[str, Any]:
+    """统一写入 space / target_space，避免跨版本元数据键漂移。"""
+    final_metadata = dict(metadata or {})
+    normalized_space = (
+        _as_non_empty_str(space)
+        or _as_non_empty_str(final_metadata.get("target_space"))
+        or _as_non_empty_str(final_metadata.get("space"))
+    )
+    if normalized_space is not None:
+        final_metadata["space"] = normalized_space
+        final_metadata["target_space"] = normalized_space
+    return final_metadata
+
+
 def _memory_matches_space(memory: dict[str, Any], space: str) -> bool:
     """在 OpenMemory 不支持 space 过滤时，基于 metadata 做本地兼容过滤。"""
-    for key in ("space", "target_space"):
-        if memory.get(key) == space:
-            return True
-    metadata = memory.get("metadata")
-    if isinstance(metadata, dict):
-        return metadata.get("space") == space or metadata.get("target_space") == space
-    return False
+    return extract_memory_object_space(memory) == space
 
 
 # ---------- 响应数据结构 ----------
@@ -798,6 +875,7 @@ class OpenMemoryClient:
         metadata: Dict[str, Any] = {}
         if target_space:
             metadata["target_space"] = target_space
+            metadata["space"] = target_space
         if kind:
             metadata["kind"] = kind
         if module:
@@ -810,6 +888,7 @@ class OpenMemoryClient:
         # 合并额外 metadata
         if extra_metadata:
             metadata.update(extra_metadata)
+        metadata = _with_space_metadata(metadata, target_space)
 
         # 构建请求 payload
         payload = {
@@ -882,9 +961,7 @@ class OpenMemoryClient:
             OpenMemoryAPIError: API 返回错误
         """
         # 合并 metadata 和 meta
-        final_metadata = metadata or meta or {}
-        if space:
-            final_metadata["space"] = space
+        final_metadata = _with_space_metadata(metadata or meta, space)
 
         payload = {
             "content": content,
@@ -1189,6 +1266,25 @@ class OpenMemoryClient:
 
                 # 兼容返回结构
                 memory = data.get("memory") or data.get("data") or data
+                if not isinstance(memory, dict):
+                    logger.error("OpenMemory get_memory 返回了非对象 payload: %r", memory)
+                    return GetResult(success=False, error="invalid_memory_payload:not_object")
+
+                actual_memory_id = extract_memory_object_id(memory)
+                if actual_memory_id is None:
+                    logger.error("OpenMemory get_memory 返回对象缺少 id: %r", memory)
+                    return GetResult(success=False, error="invalid_memory_payload:missing_id")
+
+                if actual_memory_id != memory_id:
+                    logger.error(
+                        "OpenMemory get_memory 返回了错误对象: requested=%s actual=%s",
+                        memory_id,
+                        actual_memory_id,
+                    )
+                    return GetResult(
+                        success=False,
+                        error=f"memory_id_mismatch:{actual_memory_id}",
+                    )
                 status = "ok"
 
                 return GetResult(success=True, memory=memory)
@@ -1599,4 +1695,10 @@ __all__ = [
     # 配置函数
     "get_base_url",
     "get_api_key",
+    # 记忆对象解析辅助
+    "extract_memory_object_content",
+    "extract_memory_object_id",
+    "extract_memory_object_metadata",
+    "extract_memory_object_payload_sha",
+    "extract_memory_object_space",
 ]

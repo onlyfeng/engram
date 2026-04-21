@@ -67,9 +67,17 @@ class DedupResult(TypedDict, total=False):
     target_space: str
     payload_sha: str
     status: OutboxStatus
+    memory_id: Optional[str]
     last_error: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+
+def _extract_memory_id_from_last_error(last_error: Optional[str]) -> Optional[str]:
+    if not last_error or not last_error.startswith("memory_id="):
+        return None
+    memory_id = last_error.split("=", 1)[1].strip()
+    return memory_id or None
 
 
 def check_dedup(
@@ -80,7 +88,9 @@ def check_dedup(
     """
     检查是否存在已成功写入的重复记录（幂等去重）
 
-    查询条件：target_space + payload_sha + status='sent'
+    查询条件：
+    1. logbook.outbox_memory 中 target_space + payload_sha + status='sent'
+    2. governance.write_audit 中同 payload 的成功 allow 审计（覆盖直写成功路径）
 
     Args:
         target_space: 目标空间 (team:<project> / private:<user> / org:shared)
@@ -106,16 +116,48 @@ def check_dedup(
             )
             row = cur.fetchone()
             if row:
+                last_error = str(row[4]) if row[4] else None
                 result: DedupResult = {
                     "outbox_id": int(row[0]),
                     "target_space": str(row[1]),
                     "payload_sha": str(row[2]),
                     "status": cast(OutboxStatus, row[3]),
-                    "last_error": str(row[4]) if row[4] else None,
+                    "memory_id": _extract_memory_id_from_last_error(last_error),
+                    "last_error": last_error,
                     "created_at": row[5],
                     "updated_at": row[6],
                 }
                 return result
+
+            cur.execute(
+                """
+                SELECT evidence_refs_json->>'memory_id' AS memory_id,
+                       created_at,
+                       updated_at
+                FROM governance.write_audit
+                WHERE target_space = %s
+                  AND payload_sha = %s
+                  AND action = 'allow'
+                  AND status = 'success'
+                  AND COALESCE(evidence_refs_json->>'memory_id', '') <> ''
+                  AND COALESCE(reason, '') <> 'dedup_hit'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (target_space, payload_sha),
+            )
+            audit_row = cur.fetchone()
+            if audit_row:
+                memory_id = str(audit_row[0])
+                return {
+                    "target_space": target_space,
+                    "payload_sha": payload_sha,
+                    "status": "sent",
+                    "memory_id": memory_id,
+                    "last_error": f"memory_id={memory_id}",
+                    "created_at": audit_row[1],
+                    "updated_at": audit_row[2] or audit_row[1],
+                }
             return None
     except psycopg.Error as e:
         raise DatabaseError(

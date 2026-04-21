@@ -294,6 +294,59 @@ def test_reinforce_falls_back_to_legacy_payload(monkeypatch):
     assert any(payload.get("id") == "m-1" and payload.get("boost") == 2.5 for payload in payloads)
 
 
+def test_store_writes_space_and_target_space_metadata(monkeypatch):
+    client = OpenMemoryClient(base_url="http://openmemory.test")
+    payloads: list[dict] = []
+    original_metadata = {"kind": "FACT"}
+
+    def fake_post(url, payload, retry_config=None):  # noqa: ARG001
+        payloads.append(payload)
+        return _response("POST", url, 200, {"id": "m-1"})
+
+    monkeypatch.setattr(client, "_post_with_retry", fake_post)
+
+    result = client.store(
+        content="hello",
+        space="private:alice",
+        user_id="alice",
+        metadata=original_metadata,
+    )
+
+    assert result.success is True
+    assert payloads[0]["metadata"]["space"] == "private:alice"
+    assert payloads[0]["metadata"]["target_space"] == "private:alice"
+    assert original_metadata == {"kind": "FACT"}
+
+
+def test_get_memory_rejects_mismatched_object_id(monkeypatch):
+    client = OpenMemoryClient(base_url="http://openmemory.test")
+
+    class FakeHttpxClient:
+        def __init__(self, *args, **kwargs):  # noqa: D401, ANN002, ANN003
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def get(self, url, params=None, headers=None):  # noqa: ANN001
+            return _response(
+                "GET",
+                url,
+                200,
+                {"memory": {"id": "m-2", "content": "hello"}},
+            )
+
+    monkeypatch.setattr("engram.gateway.openmemory_client.httpx.Client", FakeHttpxClient)
+
+    result = client.get_memory("m-1")
+
+    assert result.success is False
+    assert result.error == "memory_id_mismatch:m-2"
+
+
 def test_wipe_user_uses_delete_users_memories_route(monkeypatch):
     client = OpenMemoryClient(base_url="http://openmemory.test")
     delete_calls: list[str] = []

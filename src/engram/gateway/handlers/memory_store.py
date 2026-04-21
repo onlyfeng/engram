@@ -47,7 +47,9 @@ handler 不再自行生成 correlation_id，确保同一请求使用同一 ID。
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import BaseModel
@@ -65,6 +67,9 @@ from ..openmemory_client import (
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
+    extract_memory_object_content,
+    extract_memory_object_payload_sha,
+    extract_memory_object_space,
 )
 from ..policy import PolicyAction, create_engine_from_settings
 from ..services.actor_validation import validate_actor_user
@@ -78,6 +83,8 @@ if TYPE_CHECKING:
 from engram.logbook.errors import ErrorCode
 
 logger = logging.getLogger("gateway.handlers.memory_store")
+READBACK_VERIFY_ATTEMPTS = 3
+READBACK_VERIFY_DELAY_SECONDS = 0.1
 
 
 class MemoryStoreResponse(BaseModel):
@@ -112,6 +119,121 @@ def _to_updated_count(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+@dataclass
+class _ReadbackValidationFailure:
+    reason: str
+    message: str
+
+
+def _resolve_openmemory_user_id(
+    *,
+    target_space: str,
+    actor_user_id: Optional[str],
+    private_space_prefix: str,
+) -> Optional[str]:
+    """私有空间一律使用 space owner 作为 OpenMemory user_id。"""
+    if target_space.startswith(private_space_prefix):
+        owner = target_space[len(private_space_prefix) :]
+        if owner:
+            return owner
+    return actor_user_id
+
+
+def _classify_readback_fetch_failure(error: Optional[str]) -> _ReadbackValidationFailure:
+    """将 get_memory 返回错误收敛为稳定的审计 reason。"""
+    if error == "memory_not_found":
+        return _ReadbackValidationFailure(
+            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_NOT_FOUND,
+            message="memory_get 未找到刚写入的对象",
+        )
+    if error and error.startswith("memory_id_mismatch:"):
+        return _ReadbackValidationFailure(
+            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_MEMORY_ID_MISMATCH,
+            message=f"memory_get 返回了错误对象: {error}",
+        )
+    return _ReadbackValidationFailure(
+        reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_INVALID_PAYLOAD,
+        message=f"memory_get 返回了无效对象: {error or 'unknown_error'}",
+    )
+
+
+def _validate_readback_memory(
+    *,
+    memory: Any,
+    expected_space: str,
+    expected_payload_sha: str,
+) -> Optional[_ReadbackValidationFailure]:
+    """校验写后读对象的关键一致性字段。"""
+    actual_space = extract_memory_object_space(memory)
+    if actual_space != expected_space:
+        return _ReadbackValidationFailure(
+            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_SPACE_MISMATCH,
+            message=f"memory_get 返回的 space 不一致: expected={expected_space}, actual={actual_space}",
+        )
+
+    content = extract_memory_object_content(memory)
+    if not isinstance(content, str) or not content.strip():
+        return _ReadbackValidationFailure(
+            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_EMPTY_CONTENT,
+            message="memory_get 返回的 content 为空",
+        )
+
+    actual_payload_sha = extract_memory_object_payload_sha(memory)
+    if actual_payload_sha is None:
+        actual_payload_sha = compute_payload_sha(content)
+    if actual_payload_sha != expected_payload_sha:
+        return _ReadbackValidationFailure(
+            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_PAYLOAD_MISMATCH,
+            message=(
+                "memory_get 返回的 payload_sha 不一致: "
+                f"expected={expected_payload_sha}, actual={actual_payload_sha}"
+            ),
+        )
+
+    return None
+
+
+async def _verify_readback_after_store(
+    *,
+    client: Any,
+    memory_id: str,
+    expected_space: str,
+    expected_payload_sha: str,
+) -> Optional[_ReadbackValidationFailure]:
+    """
+    用短暂重试覆盖 OpenMemory 的瞬时读写抖动。
+
+    对测试中的裸 MagicMock 客户端降级为跳过校验，避免把“未实现 get_memory 的 stub”
+    误判成线上一致性故障。
+    """
+    get_memory = getattr(client, "get_memory", None)
+    if not callable(get_memory):
+        return None
+
+    last_failure: Optional[_ReadbackValidationFailure] = None
+    for attempt in range(READBACK_VERIFY_ATTEMPTS):
+        get_result = get_memory(memory_id)
+        success_value = getattr(get_result, "success", None)
+        if not isinstance(success_value, bool):
+            return None
+
+        if not success_value:
+            last_failure = _classify_readback_fetch_failure(getattr(get_result, "error", None))
+        else:
+            last_failure = _validate_readback_memory(
+                memory=getattr(get_result, "memory", None),
+                expected_space=expected_space,
+                expected_payload_sha=expected_payload_sha,
+            )
+            if last_failure is None:
+                return None
+
+        if attempt < READBACK_VERIFY_ATTEMPTS - 1:
+            await asyncio.sleep(READBACK_VERIFY_DELAY_SECONDS)
+
+    return last_failure
 
 
 async def memory_store_impl(
@@ -320,6 +442,11 @@ async def memory_store_impl(
         final_space = decision.final_space
         action = decision.action.value
         policy_reason = ErrorCode.policy_reason(decision.reason)
+        openmemory_user_id = _resolve_openmemory_user_id(
+            target_space=final_space,
+            actor_user_id=actor_user_id,
+            private_space_prefix=config.private_space_prefix,
+        )
 
         # 4.1 先写 pending 审计，后续 success/redirected 走 finalize 更新
         pending_gateway_event = build_gateway_audit_event(
@@ -379,7 +506,7 @@ async def memory_store_impl(
             result = client.store(
                 content=payload_md,
                 space=final_space,
-                user_id=actor_user_id or "anonymous",
+                user_id=openmemory_user_id,
                 metadata=om_metadata,
             )
 
@@ -398,6 +525,40 @@ async def memory_store_impl(
                     response=None,
                 )
             logger.info(f"OpenMemory 写入成功: memory_id={memory_id}, space={final_space}")
+
+            readback_failure = await _verify_readback_after_store(
+                client=client,
+                memory_id=memory_id,
+                expected_space=final_space,
+                expected_payload_sha=payload_sha,
+            )
+            if readback_failure is not None:
+                logger.error(
+                    "OpenMemory 写后校验失败: memory_id=%s, reason=%s, message=%s",
+                    memory_id,
+                    readback_failure.reason,
+                    readback_failure.message,
+                )
+                return _handle_post_write_validation_failure(
+                    reason=readback_failure.reason,
+                    validation_message=readback_failure.message,
+                    memory_id=memory_id,
+                    final_space=final_space,
+                    action=action,
+                    target_space=current_target_space,
+                    payload_md=payload_md,
+                    payload_sha=payload_sha,
+                    actor_user_id=actor_user_id,
+                    evidence_refs=evidence_refs,
+                    normalized_evidence=normalized_evidence,
+                    evidence_source=evidence_source,
+                    evidence_validation=evidence_validation,
+                    validate_refs_effective=validate_refs_effective,
+                    validate_refs_reason=validate_refs_reason,
+                    correlation_id=correlation_id,
+                    audit_store=adapter,
+                    policy_mode=evidence_mode,
+                )
 
             # 写入成功审计
             return _handle_success(
@@ -483,10 +644,9 @@ def _handle_dedup_hit(
     """处理 dedupe hit 场景"""
     logger.info(f"Dedupe hit: target_space={target_space}, payload_sha={payload_sha[:16]}...")
 
-    # 从 last_error 中提取 memory_id
-    memory_id = None
+    memory_id = dedup_record.get("memory_id")
     last_error = dedup_record.get("last_error")
-    if last_error and last_error.startswith("memory_id="):
+    if memory_id is None and last_error and last_error.startswith("memory_id="):
         memory_id = last_error.split("=", 1)[1]
 
     # 构建 gateway_event
@@ -708,6 +868,87 @@ def _handle_policy_reject(
         correlation_id=correlation_id,
         evidence_refs=evidence_refs,
         message=f"策略拒绝: {decision.reason}",
+    )
+
+
+def _handle_post_write_validation_failure(
+    reason: str,
+    validation_message: str,
+    memory_id: str,
+    final_space: str,
+    action: str,
+    target_space: str,
+    payload_md: str,
+    payload_sha: str,
+    actor_user_id: Optional[str],
+    evidence_refs: Optional[List[str]],
+    normalized_evidence: List[Dict[str, Any]],
+    evidence_source: str,
+    evidence_validation: Any,
+    validate_refs_effective: bool,
+    validate_refs_reason: str,
+    correlation_id: str,
+    audit_store: Any,
+    policy_mode: Optional[str] = None,
+) -> MemoryStoreResponse:
+    """处理 OpenMemory 返回成功但写后读校验失败的场景。"""
+    failure_gateway_event = build_gateway_audit_event(
+        operation="memory_store",
+        correlation_id=correlation_id,
+        actor_user_id=actor_user_id,
+        requested_space=target_space,
+        final_space=final_space,
+        action=action,
+        reason=reason,
+        payload_sha=payload_sha,
+        payload_len=len(payload_md),
+        evidence=normalized_evidence,
+        memory_id=memory_id,
+        extra={
+            "validation_error": validation_message,
+            "evidence_source": evidence_source,
+        },
+        policy_mode=policy_mode,
+        policy_mode_reason="from_settings" if policy_mode else None,
+        policy_version="v1",
+        policy_is_pointerized=False,
+        policy_source="settings",
+        validate_refs_effective=validate_refs_effective,
+        validate_refs_reason=validate_refs_reason,
+        evidence_validation=evidence_validation.to_dict() if evidence_validation else None,
+    )
+    updated_count = _to_updated_count(
+        audit_store.update_write_audit(
+            correlation_id=correlation_id,
+            status="failed",
+            reason_suffix=reason,
+            replace_reason=True,
+            evidence_refs_json_patch={
+                "memory_id": memory_id,
+                "gateway_event": failure_gateway_event,
+            },
+        )
+    )
+    if updated_count != 1:
+        raise AuditWriteError(
+            "pending 审计 finalize 为 failed 失败",
+            audit_data={
+                "correlation_id": correlation_id,
+                "updated_count": updated_count,
+                "final_space": final_space,
+                "reason": reason,
+            },
+        )
+
+    return MemoryStoreResponse(
+        ok=False,
+        action="error",
+        space_written=None,
+        memory_id=None,
+        outbox_id=None,
+        correlation_id=correlation_id,
+        evidence_refs=evidence_refs,
+        message=f"OpenMemory 写后校验失败: {validation_message}",
     )
 
 

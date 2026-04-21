@@ -189,6 +189,75 @@ class TestActorUserIdInAudit:
         assert audit_call["actor_user_id"] == actor_user_id
 
     @pytest.mark.asyncio
+    async def test_private_space_uses_space_owner_for_openmemory_user_id(self):
+        """private:<user> 写入时应使用 space owner，而不是 actor_user_id。"""
+        payload_md = "# Private owner content"
+        target_space = "private:alice"
+        actor_user_id = "bob"
+
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_user_exists(True)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_private_owner_001")
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+            actor_user_id=actor_user_id,
+        )
+
+        assert result.ok is True
+        store_call = fake_client.store_calls[-1]
+        assert store_call["space"] == target_space
+        assert store_call["user_id"] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_private_space_without_actor_user_id_uses_space_owner(self):
+        """未提供 actor_user_id 时，private space 仍应路由到对应 owner。"""
+        payload_md = "# Private anonymous content"
+        target_space = "private:alice"
+
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_private_owner_002")
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+            target_space=target_space,
+        )
+
+        assert result.ok is True
+        store_call = fake_client.store_calls[-1]
+        assert store_call["space"] == target_space
+        assert store_call["user_id"] == "alice"
+
+    @pytest.mark.asyncio
     async def test_actor_user_id_passed_to_audit_on_openmemory_error(self):
         """OpenMemory 失败场景下 actor_user_id 传入审计"""
         payload_md = "# Error content"
