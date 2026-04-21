@@ -344,6 +344,14 @@ class FakeOpenMemoryClient:
 
         self._get_behavior = _behavior
 
+    def configure_get_failure(self, error: str = "memory_not_found"):
+        """配置 get_memory 返回失败结果（不抛异常）。"""
+
+        def _behavior(**kwargs):
+            return FakeGetResult(success=False, error=error)
+
+        self._get_behavior = _behavior
+
     def configure_reinforce_success(
         self,
         memory_id: str = "fake_memory_id",

@@ -127,6 +127,12 @@ class _ReadbackValidationFailure:
     message: str
 
 
+@dataclass
+class _ReadbackVerificationResult:
+    failure: Optional[_ReadbackValidationFailure] = None
+    skipped_error: Optional[str] = None
+
+
 def _resolve_openmemory_user_id(
     *,
     target_space: str,
@@ -141,8 +147,8 @@ def _resolve_openmemory_user_id(
     return actor_user_id
 
 
-def _classify_readback_fetch_failure(error: Optional[str]) -> _ReadbackValidationFailure:
-    """将 get_memory 返回错误收敛为稳定的审计 reason。"""
+def _classify_readback_fetch_failure(error: Optional[str]) -> Optional[_ReadbackValidationFailure]:
+    """仅将可确定的一致性异常收敛为稳定 reason。"""
     if error == "memory_not_found":
         return _ReadbackValidationFailure(
             reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_NOT_FOUND,
@@ -153,10 +159,12 @@ def _classify_readback_fetch_failure(error: Optional[str]) -> _ReadbackValidatio
             reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_MEMORY_ID_MISMATCH,
             message=f"memory_get 返回了错误对象: {error}",
         )
-    return _ReadbackValidationFailure(
-        reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_INVALID_PAYLOAD,
-        message=f"memory_get 返回了无效对象: {error or 'unknown_error'}",
-    )
+    if error and error.startswith("invalid_memory_payload:"):
+        return _ReadbackValidationFailure(
+            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_INVALID_PAYLOAD,
+            message=f"memory_get 返回了无效对象: {error}",
+        )
+    return None
 
 
 def _validate_readback_memory(
@@ -201,7 +209,7 @@ async def _verify_readback_after_store(
     memory_id: str,
     expected_space: str,
     expected_payload_sha: str,
-) -> Optional[_ReadbackValidationFailure]:
+) -> _ReadbackVerificationResult:
     """
     用短暂重试覆盖 OpenMemory 的瞬时读写抖动。
 
@@ -210,17 +218,23 @@ async def _verify_readback_after_store(
     """
     get_memory = getattr(client, "get_memory", None)
     if not callable(get_memory):
-        return None
+        return _ReadbackVerificationResult()
 
     last_failure: Optional[_ReadbackValidationFailure] = None
+    last_skipped_error: Optional[str] = None
     for attempt in range(READBACK_VERIFY_ATTEMPTS):
         get_result = get_memory(memory_id)
         success_value = getattr(get_result, "success", None)
         if not isinstance(success_value, bool):
-            return None
+            return _ReadbackVerificationResult()
 
         if not success_value:
-            last_failure = _classify_readback_fetch_failure(getattr(get_result, "error", None))
+            error = getattr(get_result, "error", None)
+            failure = _classify_readback_fetch_failure(error)
+            if failure is not None:
+                last_failure = failure
+            else:
+                last_skipped_error = error or "unknown_error"
         else:
             last_failure = _validate_readback_memory(
                 memory=getattr(get_result, "memory", None),
@@ -228,12 +242,15 @@ async def _verify_readback_after_store(
                 expected_payload_sha=expected_payload_sha,
             )
             if last_failure is None:
-                return None
+                return _ReadbackVerificationResult()
 
         if attempt < READBACK_VERIFY_ATTEMPTS - 1:
             await asyncio.sleep(READBACK_VERIFY_DELAY_SECONDS)
 
-    return last_failure
+    return _ReadbackVerificationResult(
+        failure=last_failure,
+        skipped_error=last_skipped_error,
+    )
 
 
 async def memory_store_impl(
@@ -526,12 +543,13 @@ async def memory_store_impl(
                 )
             logger.info(f"OpenMemory 写入成功: memory_id={memory_id}, space={final_space}")
 
-            readback_failure = await _verify_readback_after_store(
+            readback_result = await _verify_readback_after_store(
                 client=client,
                 memory_id=memory_id,
                 expected_space=final_space,
                 expected_payload_sha=payload_sha,
             )
+            readback_failure = readback_result.failure
             if readback_failure is not None:
                 logger.error(
                     "OpenMemory 写后校验失败: memory_id=%s, reason=%s, message=%s",
@@ -558,6 +576,12 @@ async def memory_store_impl(
                     correlation_id=correlation_id,
                     audit_store=adapter,
                     policy_mode=evidence_mode,
+                )
+            if readback_result.skipped_error is not None:
+                logger.warning(
+                    "OpenMemory 写后校验跳过: memory_id=%s, transient_error=%s",
+                    memory_id,
+                    readback_result.skipped_error,
                 )
 
             # 写入成功审计

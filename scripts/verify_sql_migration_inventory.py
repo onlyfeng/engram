@@ -52,7 +52,7 @@ RENUMBERING_JSON = PROJECT_ROOT / "docs" / "logbook" / "sql_renumbering_map.json
 # 分类前缀定义（与 migrate.py 保持一致）
 # 这些常量必须与 src/engram/logbook/migrate.py 中的定义一致
 # 脚本启动时会进行一致性断言检查（若能导入 engram.logbook.migrate）
-DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13", "14"}
+DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13", "14", "15"}
 PERMISSION_SCRIPT_PREFIXES = {"04", "05"}
 VERIFY_SCRIPT_PREFIXES = {"99"}
 

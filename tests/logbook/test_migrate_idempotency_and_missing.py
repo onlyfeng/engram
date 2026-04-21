@@ -319,7 +319,7 @@ class TestSQLScriptPrefixOrdering:
 
         # 验证包含所有预期的 DDL 前缀（包括 12/13/14 governance 相关迁移）
         # 注：编号 10 已废弃，迁移序列为 09 -> 11
-        expected = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13", "14"}
+        expected = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13", "14", "15"}
         assert DDL_SCRIPT_PREFIXES == expected
 
     def test_permission_script_prefixes(self):

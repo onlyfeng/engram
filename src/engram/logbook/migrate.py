@@ -81,7 +81,9 @@ DEFAULT_SCHEMA_SUFFIXES = ["identity", "logbook", "scm", "analysis", "governance
 # 11: sync_jobs 添加维度列（编号 10 已废弃）
 # 12: artifact 操作审计表
 # 13: 对象存储审计事件表
-DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13", "14"}
+# 14: write_audit 状态字段与基础索引
+# 15: write_audit 去重回退查询索引
+DDL_SCRIPT_PREFIXES = {"01", "02", "03", "06", "07", "08", "09", "11", "12", "13", "14", "15"}
 # 可选执行：权限脚本（需要 admin/superuser）
 PERMISSION_SCRIPT_PREFIXES = {"04", "05"}
 # 验证脚本：仅通过 --verify 执行
@@ -159,6 +161,8 @@ REQUIRED_INDEX_TEMPLATES = [
     # governance - object_store_audit_events 索引
     ("governance", "idx_object_store_audit_bucket_key_ts"),
     ("governance", "idx_object_store_audit_request_id"),
+    # governance - write_audit 去重回退索引（15_write_audit_dedup_lookup.sql）
+    ("governance", "idx_write_audit_dedup_lookup"),
     # scm - sync_jobs 维度列索引（11_sync_jobs_dimension_columns.sql）
     ("scm", "idx_sync_jobs_gitlab_instance_active"),
     ("scm", "idx_sync_jobs_tenant_id_active"),

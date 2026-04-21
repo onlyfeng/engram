@@ -14,7 +14,7 @@
 |---------|------|------|
 | 重命名 | 2 | 文件移动或编号变更 |
 | 删除（整合） | 6 | 旧编号文件内容整合到新编号文件 |
-| 新增 | 1 | 05_openmemory_roles_and_grants.sql |
+| 新增 | 3 | 05_openmemory_roles_and_grants.sql, 14_write_audit_status.sql, 15_write_audit_dedup_lookup.sql |
 | 修改 | 6 | 现有文件内容增强 |
 
 ---
@@ -73,10 +73,13 @@
 | 文件 | 功能 | 来源提交 |
 |------|------|----------|
 | `sql/05_openmemory_roles_and_grants.sql` | OpenMemory schema 权限配置 | `55a41690` |
+| `sql/14_write_audit_status.sql` | write_audit 状态字段与基础索引 | `post-renumbering` |
+| `sql/15_write_audit_dedup_lookup.sql` | write_audit 去重回退查询索引 | `post-renumbering` |
 
 ### 4.1 说明
 
-此文件在编号 05 位置新增，用于 OpenMemory 集成。原 05 编号的 `05_scm_sync_runs.sql` 内容已整合到 `06_scm_sync_runs.sql`。
+这些文件在重编号完成后按需新增，用于补齐 OpenMemory 权限、write_audit 状态管理与 dedup 查询性能。
+原 05 编号的 `05_scm_sync_runs.sql` 内容已整合到 `06_scm_sync_runs.sql`。
 
 ---
 
@@ -111,6 +114,8 @@
 | 09 | 09_sync_jobs_dimension_columns.sql | 11 | 11_sync_jobs_dimension_columns.sql | **整合** |
 | 10 | 10_governance_artifact_ops_audit.sql | 12 | 12_governance_artifact_ops_audit.sql | **整合** |
 | 11 | 11_governance_object_store_audit_events.sql | 13 | 13_governance_object_store_audit_events.sql | **整合** |
+| - | （新增） | 14 | 14_write_audit_status.sql | **新增** |
+| - | （新增） | 15 | 15_write_audit_dedup_lookup.sql | **新增** |
 | 99 | 99_verify_permissions.sql | 99 | verify/99_verify_permissions.sql | **迁移到子目录** |
 
 ### 6.2 缺失编号说明

@@ -440,6 +440,40 @@ class TestMemoryStoreReadbackValidation:
         assert result.action == "error"
         assert "payload_sha 不一致" in (result.message or "")
 
+    @pytest.mark.asyncio
+    async def test_transient_readback_http_error_keeps_success(self):
+        payload_md = "# Readback transient"
+        target_space = "team:test"
+
+        fake_config = FakeGatewayConfig(default_team_space="team:test")
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.bind_database(fake_db)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_readback_004")
+        fake_client.configure_get_failure(error="http_error: 503")
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            actor_user_id="alice",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is True
+        assert result.memory_id == "mem_readback_004"
+        assert fake_db.update_audit_calls[-1]["status"] == "success"
+
 
 # ==================== strict evidence 校验测试 ====================
 
