@@ -162,6 +162,9 @@ def _resolve_openmemory_user_id(
         owner = target_space[len(private_space_prefix) :]
         if owner:
             return owner
+        raise ValueError(
+            f"私有空间名称格式无效（owner 为空）: {target_space!r}"
+        )
     return actor_user_id
 
 
@@ -272,9 +275,11 @@ async def _verify_readback_after_store(
                 last_failure = failure
                 last_skipped_error = None
             else:
-                # 终态应反映最后一次观测结果；瞬时传输错误不能沿用更早的确定性失败。
-                last_failure = None
-                last_skipped_error = error or "unknown_error"
+                # 瞬时传输错误（如 http_error: 503）不覆盖已观测到的确定性失败；
+                # 只在没有确定性失败时才记录跳过原因，避免将"写后读不可达"
+                # 误当成"确定写入成功"返回给调用方。
+                if last_failure is None:
+                    last_skipped_error = error or "unknown_error"
         else:
             last_failure = _validate_readback_memory(
                 memory=get_result.memory,
@@ -712,7 +717,7 @@ def _handle_dedup_hit(
     memory_id = dedup_record.get("memory_id")
     last_error = dedup_record.get("last_error")
     if memory_id is None and last_error and last_error.startswith("memory_id="):
-        memory_id = last_error.split("=", 1)[1]
+        memory_id = last_error.split("=", 1)[1].strip() or None
 
     # 构建 gateway_event
     # dedup_hit 发生在策略决策之前，policy/validation 字段使用 None 表示未进入该阶段

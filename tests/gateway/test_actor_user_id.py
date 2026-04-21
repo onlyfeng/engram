@@ -258,6 +258,18 @@ class TestActorUserIdInAudit:
         assert store_call["user_id"] == "alice"
 
     @pytest.mark.asyncio
+    async def test_malformed_private_space_raises_value_error(self):
+        """private: 空 owner 格式应立即报错，而不是静默降级为 actor_user_id。"""
+        from engram.gateway.handlers.memory_store import _resolve_openmemory_user_id
+
+        with pytest.raises(ValueError, match="owner 为空"):
+            _resolve_openmemory_user_id(
+                target_space="private:",
+                actor_user_id="alice",
+                private_space_prefix="private:",
+            )
+
+    @pytest.mark.asyncio
     async def test_actor_user_id_passed_to_audit_on_openmemory_error(self):
         """OpenMemory 失败场景下 actor_user_id 传入审计"""
         payload_md = "# Error content"
