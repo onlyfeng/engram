@@ -52,6 +52,7 @@ Gateway 测试用 Fake 依赖
 - 不再支持旧的 _config/_openmemory_client 参数
 """
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -60,9 +61,11 @@ from typing import Any, Callable, Dict, List, Optional
 # 导入真实的 OpenMemory 异常类型，让 fake 异常继承自它们
 # 这样 memory_store_impl 中的异常处理可以正确捕获 fake 异常
 from engram.gateway.openmemory_client import (
+    GetResult,
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
+    RetryConfig,
 )
 
 
@@ -96,12 +99,8 @@ class FakeListResult:
 
 
 @dataclass
-class FakeGetResult:
+class FakeGetResult(GetResult):
     """Fake 单条记忆结果"""
-
-    success: bool
-    memory: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
 
 
 @dataclass
@@ -180,6 +179,7 @@ class FakeOpenMemoryClient:
         self.get_calls: List[Dict[str, Any]] = []
         self.reinforce_calls: List[Dict[str, Any]] = []
         self.wipe_calls: List[Dict[str, Any]] = []
+        self._stored_memories: Dict[str, Dict[str, Any]] = {}
 
         # 配置的响应行为
         self._store_behavior: Optional[Callable] = None
@@ -332,8 +332,21 @@ class FakeOpenMemoryClient:
         """配置 get_memory 返回成功"""
 
         def _behavior(**kwargs):
-            target_memory = memory or {"id": kwargs.get("memory_id", "fake_memory_id")}
+            target_memory = memory
+            if target_memory is None:
+                target_memory = self._stored_memories.get(kwargs.get("memory_id", ""))
+            if target_memory is None:
+                target_memory = {"id": kwargs.get("memory_id", "fake_memory_id")}
+            target_memory = copy.deepcopy(target_memory)
             return FakeGetResult(success=True, memory=target_memory)
+
+        self._get_behavior = _behavior
+
+    def configure_get_failure(self, error: str = "memory_not_found"):
+        """配置 get_memory 返回失败结果（不抛异常）。"""
+
+        def _behavior(**kwargs):
+            return FakeGetResult(success=False, error=error)
 
         self._get_behavior = _behavior
 
@@ -378,11 +391,30 @@ class FakeOpenMemoryClient:
             "space": space,
             "user_id": user_id,
             "tags": tags,
-            "metadata": metadata or meta,
+            "metadata": dict(metadata or meta or {}),
         }
         self.store_calls.append(call_args)
 
-        return self._store_behavior(**call_args)
+        assert self._store_behavior is not None
+        result = self._store_behavior(**call_args)
+        if result.success and result.memory_id:
+            stored_metadata = dict(call_args["metadata"])
+            if space:
+                stored_metadata["space"] = space
+                stored_metadata["target_space"] = space
+            stored_memory: Dict[str, Any] = {
+                "id": result.memory_id,
+                "content": content,
+                "metadata": stored_metadata,
+            }
+            if user_id is not None:
+                stored_memory["user_id"] = user_id
+            if tags is not None:
+                stored_memory["tags"] = list(tags)
+            if isinstance(result.data, dict):
+                stored_memory.update({k: v for k, v in result.data.items() if k != "id"})
+            self._stored_memories[result.memory_id] = stored_memory
+        return result
 
     def search(
         self,
@@ -424,9 +456,13 @@ class FakeOpenMemoryClient:
         assert self._list_behavior is not None
         return self._list_behavior(**call_args)
 
-    def get_memory(self, memory_id: str) -> FakeGetResult:
+    def get_memory(
+        self,
+        memory_id: str,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> FakeGetResult:
         """获取单条记忆（模拟）"""
-        call_args = {"memory_id": memory_id}
+        call_args = {"memory_id": memory_id, "retry_config": retry_config}
         self.get_calls.append(call_args)
         assert self._get_behavior is not None
         return self._get_behavior(**call_args)
@@ -464,6 +500,7 @@ class FakeOpenMemoryClient:
         self.get_calls.clear()
         self.reinforce_calls.clear()
         self.wipe_calls.clear()
+        self._stored_memories.clear()
 
     def get_last_store_call(self) -> Optional[Dict[str, Any]]:
         """获取最后一次 store 调用"""

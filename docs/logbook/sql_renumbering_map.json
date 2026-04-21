@@ -114,6 +114,14 @@
       "new_path": "sql/14_write_audit_status.sql",
       "status": "added",
       "notes": "新增"
+    },
+    {
+      "old_prefix": "-",
+      "old_path": null,
+      "new_prefix": "15",
+      "new_path": "sql/15_write_audit_dedup_lookup.sql",
+      "status": "added",
+      "notes": "新增：write_audit 去重回退查询索引"
     }
   ],
   "deprecated_files": [
