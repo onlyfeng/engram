@@ -61,6 +61,7 @@ from typing import Any, Callable, Dict, List, Optional
 # 导入真实的 OpenMemory 异常类型，让 fake 异常继承自它们
 # 这样 memory_store_impl 中的异常处理可以正确捕获 fake 异常
 from engram.gateway.openmemory_client import (
+    GetResult,
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
@@ -97,12 +98,8 @@ class FakeListResult:
 
 
 @dataclass
-class FakeGetResult:
+class FakeGetResult(GetResult):
     """Fake 单条记忆结果"""
-
-    success: bool
-    memory: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
 
 
 @dataclass

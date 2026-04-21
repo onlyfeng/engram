@@ -50,7 +50,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -64,6 +64,7 @@ from ..audit_event import (
 from ..config import resolve_validate_refs
 from ..di import GatewayDepsProtocol
 from ..openmemory_client import (
+    GetResult,
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
@@ -131,6 +132,11 @@ class _ReadbackValidationFailure:
 class _ReadbackVerificationResult:
     failure: Optional[_ReadbackValidationFailure] = None
     skipped_error: Optional[str] = None
+
+
+@runtime_checkable
+class _ReadbackClient(Protocol):
+    def get_memory(self, memory_id: str) -> GetResult: ...
 
 
 def _resolve_openmemory_user_id(
@@ -205,7 +211,7 @@ def _validate_readback_memory(
 
 async def _verify_readback_after_store(
     *,
-    client: Any,
+    client: object,
     memory_id: str,
     expected_space: str,
     expected_payload_sha: str,
@@ -213,23 +219,21 @@ async def _verify_readback_after_store(
     """
     用短暂重试覆盖 OpenMemory 的瞬时读写抖动。
 
-    对测试中的裸 MagicMock 客户端降级为跳过校验，避免把“未实现 get_memory 的 stub”
-    误判成线上一致性故障。
+    对未实现 typed `get_memory()` 的测试 stub 降级为跳过校验，避免把
+    “未配置 readback 返回值的 mock”误判成线上一致性故障。
     """
-    get_memory = getattr(client, "get_memory", None)
-    if not callable(get_memory):
+    if not isinstance(client, _ReadbackClient):
         return _ReadbackVerificationResult()
 
     last_failure: Optional[_ReadbackValidationFailure] = None
     last_skipped_error: Optional[str] = None
     for attempt in range(READBACK_VERIFY_ATTEMPTS):
-        get_result = get_memory(memory_id)
-        success_value = getattr(get_result, "success", None)
-        if not isinstance(success_value, bool):
+        get_result = client.get_memory(memory_id)
+        if not isinstance(get_result, GetResult):
             return _ReadbackVerificationResult()
 
-        if not success_value:
-            error = getattr(get_result, "error", None)
+        if not get_result.success:
+            error = get_result.error
             failure = _classify_readback_fetch_failure(error)
             if failure is not None:
                 last_failure = failure
@@ -240,7 +244,7 @@ async def _verify_readback_after_store(
                 last_skipped_error = error or "unknown_error"
         else:
             last_failure = _validate_readback_memory(
-                memory=getattr(get_result, "memory", None),
+                memory=get_result.memory,
                 expected_space=expected_space,
                 expected_payload_sha=expected_payload_sha,
             )
