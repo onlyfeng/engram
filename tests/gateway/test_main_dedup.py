@@ -482,13 +482,14 @@ class TestMemoryStoreReadbackValidation:
         )
 
     @pytest.mark.asyncio
-    async def test_deterministic_failure_not_overridden_by_transient(self):
-        """确定性失败（memory_not_found）不被后续瞬时 503 覆盖。
+    async def test_transient_after_not_found_resolves_to_success(self):
+        """memory_not_found 后紧接瞬时 503 应以 skip/success 结束。
 
-        场景：第 1 次返回 memory_not_found（确定写入不存在），第 2、3 次返回 503。
-        期望：以 not_found 故障失败，而不是因为最后一次是瞬时错误而保留成功。
+        场景：第 1 次返回 memory_not_found（可能是传播延迟），第 2、3 次返回 503。
+        期望：以最后一次观测（503=不确定）为终态，返回成功并记录 skipped_error，
+        避免将 audit 标为 failed 导致后续重试 dedup 失效、引发重复写入。
         """
-        payload_md = "# Readback deterministic failure priority"
+        payload_md = "# Readback transient after miss"
         target_space = "team:test"
 
         fake_config = FakeGatewayConfig(default_team_space="team:test")
@@ -524,14 +525,9 @@ class TestMemoryStoreReadbackValidation:
             deps=deps,
         )
 
-        assert result.ok is False
-        assert result.action == "error"
-        assert "未找到" in (result.message or "")
-        assert fake_db.update_audit_calls[-1]["status"] == "failed"
-        assert (
-            fake_db.update_audit_calls[-1]["reason_suffix"]
-            == "openmemory_consistency_failed:not_found"
-        )
+        assert result.ok is True
+        assert result.memory_id == "mem_readback_005"
+        assert fake_db.update_audit_calls[-1]["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_legacy_get_memory_without_retry_config_keeps_success(self):

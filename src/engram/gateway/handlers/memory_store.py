@@ -159,10 +159,10 @@ def _resolve_openmemory_user_id(
 ) -> Optional[str]:
     """私有空间一律使用 space owner 作为 OpenMemory user_id。"""
     if target_space.startswith(private_space_prefix):
-        owner = target_space[len(private_space_prefix) :]
+        owner = target_space[len(private_space_prefix) :].strip()
         if owner:
             return owner
-        raise ValueError(f"私有空间名称格式无效（owner 为空）: {target_space!r}")
+        raise ValueError(f"私有空间名称格式无效（owner 为空或仅含空白）: {target_space!r}")
     return actor_user_id
 
 
@@ -273,11 +273,13 @@ async def _verify_readback_after_store(
                 last_failure = failure
                 last_skipped_error = None
             else:
-                # 瞬时传输错误（如 http_error: 503）不覆盖已观测到的确定性失败；
-                # 只在没有确定性失败时才记录跳过原因，避免将"写后读不可达"
-                # 误当成"确定写入成功"返回给调用方。
-                if last_failure is None:
-                    last_skipped_error = error or "unknown_error"
+                # 终态以最后一次观测结果为准：当传输错误（如 http_error: 503）发生在
+                # memory_not_found 之后时，我们无法区分"写入真的缺失"和"传播延迟+读端
+                # 抖动同时发生"。保留旧的确定性失败会导致 audit 被标为 failed，后续重试
+                # 的 dedup 找不到 success 记录，造成重复写入。以 503 结束视为不确定，
+                # 清除之前的 not_found 失败，让调用方持有成功语义。
+                last_failure = None
+                last_skipped_error = error or "unknown_error"
         else:
             last_failure = _validate_readback_memory(
                 memory=get_result.memory,
@@ -361,9 +363,9 @@ async def memory_store_impl(
     current_target_space: str = target_space
 
     # 私有空间格式早期校验：在 dedup check 和 policy 评估之前拦截畸形格式，
-    # 确保 private:（空 owner）无论是否有历史 dedup 记录都能得到一致的错误响应。
+    # 确保 private:（空 owner 或仅含空白）无论是否有历史 dedup 记录都能得到一致的错误响应。
     if current_target_space.startswith(config.private_space_prefix):
-        owner = current_target_space[len(config.private_space_prefix) :]
+        owner = current_target_space[len(config.private_space_prefix) :].strip()
         if not owner:
             logger.error(
                 "空间名称格式无效，拒绝请求: target_space=%r, correlation_id=%s",
@@ -378,7 +380,7 @@ async def memory_store_impl(
                 outbox_id=None,
                 correlation_id=correlation_id,
                 evidence_refs=evidence_refs,
-                message=f"{ErrorCode.INVALID_SPACE_FORMAT}: 私有空间名称格式无效（owner 为空）: {current_target_space!r}",
+                message=f"{ErrorCode.INVALID_SPACE_FORMAT}: 私有空间名称格式无效（owner 为空或仅含空白）: {current_target_space!r}",
             )
 
     payload_sha = compute_payload_sha(payload_md)
