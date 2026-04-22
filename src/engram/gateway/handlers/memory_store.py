@@ -360,6 +360,27 @@ async def memory_store_impl(
     # 此时 target_space 确保为 str 类型，使用类型收敛后的变量
     current_target_space: str = target_space
 
+    # 私有空间格式早期校验：在 dedup check 和 policy 评估之前拦截畸形格式，
+    # 确保 private:（空 owner）无论是否有历史 dedup 记录都能得到一致的错误响应。
+    if current_target_space.startswith(config.private_space_prefix):
+        owner = current_target_space[len(config.private_space_prefix) :]
+        if not owner:
+            logger.error(
+                "空间名称格式无效，拒绝请求: target_space=%r, correlation_id=%s",
+                current_target_space,
+                correlation_id,
+            )
+            return MemoryStoreResponse(
+                ok=False,
+                action="error",
+                space_written=None,
+                memory_id=None,
+                outbox_id=None,
+                correlation_id=correlation_id,
+                evidence_refs=evidence_refs,
+                message=f"{ErrorCode.INVALID_SPACE_FORMAT}: 私有空间名称格式无效（owner 为空）: {current_target_space!r}",
+            )
+
     payload_sha = compute_payload_sha(payload_md)
 
     # 规范化 evidence：v2 优先，v1 映射为 external
