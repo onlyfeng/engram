@@ -237,7 +237,9 @@ class TestDeduplication:
 
         test_cases = [
             ("memory_id=abc123", "abc123"),
-            ("memory_id=", ""),
+            ("memory_id=abc123   ", "abc123"),
+            ("memory_id=", None),
+            ("memory_id=   ", None),
             (None, None),
             ("some_other_error", None),
         ]
