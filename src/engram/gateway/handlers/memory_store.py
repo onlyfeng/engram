@@ -503,11 +503,28 @@ async def memory_store_impl(
         final_space = decision.final_space
         action = decision.action.value
         policy_reason = ErrorCode.policy_reason(decision.reason)
-        openmemory_user_id = _resolve_openmemory_user_id(
-            target_space=final_space,
-            actor_user_id=actor_user_id,
-            private_space_prefix=config.private_space_prefix,
-        )
+        try:
+            openmemory_user_id = _resolve_openmemory_user_id(
+                target_space=final_space,
+                actor_user_id=actor_user_id,
+                private_space_prefix=config.private_space_prefix,
+            )
+        except ValueError as e:
+            logger.error(
+                "空间名称格式无效，拒绝写入: %s, correlation_id=%s",
+                e,
+                correlation_id,
+            )
+            return MemoryStoreResponse(
+                ok=False,
+                action="error",
+                space_written=None,
+                memory_id=None,
+                outbox_id=None,
+                correlation_id=correlation_id,
+                evidence_refs=evidence_refs,
+                message=f"{ErrorCode.INVALID_SPACE_FORMAT}: {e}",
+            )
 
         # 4.1 先写 pending 审计，后续 success/redirected 走 finalize 更新
         pending_gateway_event = build_gateway_audit_event(

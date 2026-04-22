@@ -257,9 +257,8 @@ class TestActorUserIdInAudit:
         assert store_call["space"] == target_space
         assert store_call["user_id"] == "alice"
 
-    @pytest.mark.asyncio
-    async def test_malformed_private_space_raises_value_error(self):
-        """private: 空 owner 格式应立即报错，而不是静默降级为 actor_user_id。"""
+    def test_resolve_openmemory_user_id_raises_on_empty_owner(self):
+        """_resolve_openmemory_user_id: private: 空 owner 应立即 raise ValueError。"""
         from engram.gateway.handlers.memory_store import _resolve_openmemory_user_id
 
         with pytest.raises(ValueError, match="owner 为空"):
@@ -268,6 +267,40 @@ class TestActorUserIdInAudit:
                 actor_user_id="alice",
                 private_space_prefix="private:",
             )
+
+    @pytest.mark.asyncio
+    async def test_malformed_private_space_returns_clean_error_response(self):
+        """memory_store_impl: private: 空 owner 应返回干净的 error 响应，
+        而非通过 except Exception 漏出成"内部错误"。"""
+        from engram.gateway.handlers.memory_store import memory_store_impl
+
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md="# bad space",
+            target_space="private:",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is False
+        assert result.action == "error"
+        assert "invalid_space_format" in (result.message or "")
+        assert "内部错误" not in (result.message or "")
+        assert result.memory_id is None
+        assert result.outbox_id is None
 
     @pytest.mark.asyncio
     async def test_actor_user_id_passed_to_audit_on_openmemory_error(self):
