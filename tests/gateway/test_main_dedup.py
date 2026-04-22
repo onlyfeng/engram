@@ -482,7 +482,13 @@ class TestMemoryStoreReadbackValidation:
         )
 
     @pytest.mark.asyncio
-    async def test_transient_retry_after_not_found_keeps_success(self):
+    async def test_transient_after_not_found_resolves_to_success(self):
+        """memory_not_found 后紧接瞬时 503 应以 skip/success 结束。
+
+        场景：第 1 次返回 memory_not_found（可能是传播延迟），第 2、3 次返回 503。
+        期望：以最后一次观测（503=不确定）为终态，返回成功并记录 skipped_error，
+        避免将 audit 标为 failed 导致后续重试 dedup 失效、引发重复写入。
+        """
         payload_md = "# Readback transient after miss"
         target_space = "team:test"
 

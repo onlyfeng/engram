@@ -351,7 +351,7 @@ def write_reconcile_audit(
     memory_id = None
     last_error = outbox.get("last_error")
     if last_error and last_error.startswith("memory_id="):
-        memory_id = last_error.split("=", 1)[1]
+        memory_id = last_error.split("=", 1)[1].strip() or None
 
     # 构建 extra 信息（包含 original_locked_at/locked_by/reconcile_time 等）
     reconcile_time = datetime.now(timezone.utc).isoformat()

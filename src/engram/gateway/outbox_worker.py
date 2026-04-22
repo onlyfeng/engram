@@ -415,7 +415,7 @@ def _process_single_item_inner(
         memory_id = None
         last_error = dedup_record.get("last_error")
         if last_error and last_error.startswith("memory_id="):
-            memory_id = last_error.split("=", 1)[1]
+            memory_id = last_error.split("=", 1)[1].strip() or None
 
         # 直接调用 ack_sent 标记当前记录为 sent
         ack_ok = logbook_adapter.ack_sent(

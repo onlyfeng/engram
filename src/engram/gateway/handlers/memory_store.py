@@ -159,9 +159,10 @@ def _resolve_openmemory_user_id(
 ) -> Optional[str]:
     """私有空间一律使用 space owner 作为 OpenMemory user_id。"""
     if target_space.startswith(private_space_prefix):
-        owner = target_space[len(private_space_prefix) :]
+        owner = target_space[len(private_space_prefix) :].strip()
         if owner:
             return owner
+        raise ValueError(f"私有空间名称格式无效（owner 为空或仅含空白）: {target_space!r}")
     return actor_user_id
 
 
@@ -272,7 +273,11 @@ async def _verify_readback_after_store(
                 last_failure = failure
                 last_skipped_error = None
             else:
-                # 终态应反映最后一次观测结果；瞬时传输错误不能沿用更早的确定性失败。
+                # 终态以最后一次观测结果为准：当传输错误（如 http_error: 503）发生在
+                # memory_not_found 之后时，我们无法区分"写入真的缺失"和"传播延迟+读端
+                # 抖动同时发生"。保留旧的确定性失败会导致 audit 被标为 failed，后续重试
+                # 的 dedup 找不到 success 记录，造成重复写入。以 503 结束视为不确定，
+                # 清除之前的 not_found 失败，让调用方持有成功语义。
                 last_failure = None
                 last_skipped_error = error or "unknown_error"
         else:
@@ -356,6 +361,27 @@ async def memory_store_impl(
 
     # 此时 target_space 确保为 str 类型，使用类型收敛后的变量
     current_target_space: str = target_space
+
+    # 私有空间格式早期校验：在 dedup check 和 policy 评估之前拦截畸形格式，
+    # 确保 private:（空 owner 或仅含空白）无论是否有历史 dedup 记录都能得到一致的错误响应。
+    if current_target_space.startswith(config.private_space_prefix):
+        owner = current_target_space[len(config.private_space_prefix) :].strip()
+        if not owner:
+            logger.error(
+                "空间名称格式无效，拒绝请求: target_space=%r, correlation_id=%s",
+                current_target_space,
+                correlation_id,
+            )
+            return MemoryStoreResponse(
+                ok=False,
+                action="error",
+                space_written=None,
+                memory_id=None,
+                outbox_id=None,
+                correlation_id=correlation_id,
+                evidence_refs=evidence_refs,
+                message=f"{ErrorCode.INVALID_SPACE_FORMAT}: 私有空间名称格式无效（owner 为空或仅含空白）: {current_target_space!r}",
+            )
 
     payload_sha = compute_payload_sha(payload_md)
 
@@ -500,11 +526,28 @@ async def memory_store_impl(
         final_space = decision.final_space
         action = decision.action.value
         policy_reason = ErrorCode.policy_reason(decision.reason)
-        openmemory_user_id = _resolve_openmemory_user_id(
-            target_space=final_space,
-            actor_user_id=actor_user_id,
-            private_space_prefix=config.private_space_prefix,
-        )
+        try:
+            openmemory_user_id = _resolve_openmemory_user_id(
+                target_space=final_space,
+                actor_user_id=actor_user_id,
+                private_space_prefix=config.private_space_prefix,
+            )
+        except ValueError as e:
+            logger.error(
+                "空间名称格式无效，拒绝写入: %s, correlation_id=%s",
+                e,
+                correlation_id,
+            )
+            return MemoryStoreResponse(
+                ok=False,
+                action="error",
+                space_written=None,
+                memory_id=None,
+                outbox_id=None,
+                correlation_id=correlation_id,
+                evidence_refs=evidence_refs,
+                message=f"{ErrorCode.INVALID_SPACE_FORMAT}: {e}",
+            )
 
         # 4.1 先写 pending 审计，后续 success/redirected 走 finalize 更新
         pending_gateway_event = build_gateway_audit_event(
@@ -712,7 +755,7 @@ def _handle_dedup_hit(
     memory_id = dedup_record.get("memory_id")
     last_error = dedup_record.get("last_error")
     if memory_id is None and last_error and last_error.startswith("memory_id="):
-        memory_id = last_error.split("=", 1)[1]
+        memory_id = last_error.split("=", 1)[1].strip() or None
 
     # 构建 gateway_event
     # dedup_hit 发生在策略决策之前，policy/validation 字段使用 None 表示未进入该阶段

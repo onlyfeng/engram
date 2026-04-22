@@ -257,6 +257,129 @@ class TestActorUserIdInAudit:
         assert store_call["space"] == target_space
         assert store_call["user_id"] == "alice"
 
+    def test_resolve_openmemory_user_id_raises_on_empty_owner(self):
+        """_resolve_openmemory_user_id: private: 空 owner 应立即 raise ValueError。"""
+        from engram.gateway.handlers.memory_store import _resolve_openmemory_user_id
+
+        with pytest.raises(ValueError, match="owner 为空"):
+            _resolve_openmemory_user_id(
+                target_space="private:",
+                actor_user_id="alice",
+                private_space_prefix="private:",
+            )
+
+    def test_resolve_openmemory_user_id_raises_on_whitespace_only_owner(self):
+        """_resolve_openmemory_user_id: private:   （仅含空白）与 private: 等价，应 raise。"""
+        from engram.gateway.handlers.memory_store import _resolve_openmemory_user_id
+
+        with pytest.raises(ValueError, match="owner 为空或仅含空白"):
+            _resolve_openmemory_user_id(
+                target_space="private:   ",
+                actor_user_id="alice",
+                private_space_prefix="private:",
+            )
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_private_owner_returns_clean_error(self):
+        """memory_store_impl: private:   （空白 owner）应返回 invalid_space_format 错误。"""
+        from engram.gateway.handlers.memory_store import memory_store_impl
+
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md="# whitespace owner",
+            target_space="private:   ",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is False
+        assert result.action == "error"
+        assert "invalid_space_format" in (result.message or "")
+        assert result.memory_id is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_private_space_returns_clean_error_response(self):
+        """memory_store_impl: private: 空 owner 应返回干净的 error 响应，
+        而非通过 except Exception 漏出成"内部错误"。"""
+        from engram.gateway.handlers.memory_store import memory_store_impl
+
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md="# bad space",
+            target_space="private:",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is False
+        assert result.action == "error"
+        assert "invalid_space_format" in (result.message or "")
+        assert "内部错误" not in (result.message or "")
+        assert result.memory_id is None
+        assert result.outbox_id is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_private_space_rejected_before_dedup_check(self):
+        """private: 空 owner 应在 dedup check 之前被拦截，即使历史存在 dedup 记录。"""
+        from engram.gateway.handlers.memory_store import memory_store_impl
+
+        fake_config = FakeGatewayConfig()
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        # 模拟 dedup hit：即使命中，也不应绕过格式校验返回成功
+        fake_adapter.configure_dedup_hit(
+            memory_id="mem_historical_bad_space",
+            target_space="private:",
+        )
+        fake_client = FakeOpenMemoryClient()
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md="# bad space with dedup",
+            target_space="private:",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is False
+        assert result.action == "error"
+        assert "invalid_space_format" in (result.message or "")
+        # dedup check 不应被调用
+        assert not fake_adapter.dedup_calls
+
     @pytest.mark.asyncio
     async def test_actor_user_id_passed_to_audit_on_openmemory_error(self):
         """OpenMemory 失败场景下 actor_user_id 传入审计"""

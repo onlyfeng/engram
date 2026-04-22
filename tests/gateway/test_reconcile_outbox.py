@@ -13,6 +13,7 @@ import os
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import psycopg
 import pytest
@@ -197,6 +198,68 @@ def get_outbox_record(
 
 
 # ---------- 测试用例 ----------
+
+
+class TestReconcileAuditMemoryIdParsing:
+    """测试 reconcile 路径的 legacy memory_id 提取一致性。"""
+
+    def test_write_reconcile_audit_trims_memory_id_from_last_error(self):
+        """尾随空白应被 trim，和 logbook.outbox 的提取逻辑保持一致。"""
+        from engram.gateway.reconcile_outbox import write_reconcile_audit
+
+        captured: dict = {}
+        outbox = {
+            "outbox_id": 1,
+            "target_space": "private:alice",
+            "payload_sha": "sha_trimmed",
+            "last_error": "memory_id=mem_trimmed   ",
+            "retry_count": 0,
+            "locked_by": None,
+            "locked_at": None,
+        }
+
+        with patch(
+            "engram.gateway.reconcile_outbox.logbook_adapter.insert_write_audit"
+        ) as mock_insert:
+            mock_insert.side_effect = lambda **kwargs: captured.update(kwargs) or 1
+
+            audit_id = write_reconcile_audit(
+                outbox=outbox,
+                reason="outbox_flush_success",
+                action="allow",
+            )
+
+        assert audit_id == 1
+        assert captured["evidence_refs_json"]["memory_id"] == "mem_trimmed"
+
+    def test_write_reconcile_audit_omits_blank_memory_id(self):
+        """空白 memory_id 归一化为 None，不应写入顶层 evidence 字段。"""
+        from engram.gateway.reconcile_outbox import write_reconcile_audit
+
+        captured: dict = {}
+        outbox = {
+            "outbox_id": 2,
+            "target_space": "private:alice",
+            "payload_sha": "sha_blank",
+            "last_error": "memory_id=   ",
+            "retry_count": 0,
+            "locked_by": None,
+            "locked_at": None,
+        }
+
+        with patch(
+            "engram.gateway.reconcile_outbox.logbook_adapter.insert_write_audit"
+        ) as mock_insert:
+            mock_insert.side_effect = lambda **kwargs: captured.update(kwargs) or 2
+
+            audit_id = write_reconcile_audit(
+                outbox=outbox,
+                reason="outbox_flush_success",
+                action="allow",
+            )
+
+        assert audit_id == 2
+        assert "memory_id" not in captured["evidence_refs_json"]
 
 
 class TestReconcileSentRecords:
