@@ -681,6 +681,51 @@ class TestProcessResults:
             assert result.reason == "outbox_flush_success"
             mock_adapter.ack_sent.assert_called_once()
 
+    def test_space_mismatch_then_transient_not_cleared(self, config):
+        """space_mismatch 后紧接瞬时 503 不得被清除，仍应触发 retry 而非 ack_sent。"""
+        from engram.gateway.services.hash_utils import compute_payload_sha
+
+        item = make_outbox_item(
+            outbox_id=24,
+            target_space="private:alice",
+            payload_sha=compute_payload_sha("# Test Memory"),
+        )
+
+        sequence = iter(
+            [
+                GetResult(
+                    success=True,
+                    memory={
+                        "id": "mem_sticky_sync",
+                        "content": item.payload_md,
+                        "metadata": {
+                            "target_space": "private:bob",
+                            "payload_sha": item.payload_sha,
+                        },
+                    },
+                ),
+                GetResult(success=False, error="http_error: 503"),
+                GetResult(success=False, error="http_error: 503"),
+            ]
+        )
+
+        class SequencedClient:
+            def store(self, **kwargs):
+                return MockStoreResult(success=True, memory_id="mem_sticky_sync")
+
+            def get_memory(self, memory_id: str, retry_config=None, user_id=None):
+                return next(sequence)
+
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
+            mock_adapter.check_dedup.return_value = None
+
+            result = process_single_item(item, "worker", SequencedClient(), config)
+
+            assert result.success is False
+            assert "space_mismatch" in (result.error or "")
+            mock_adapter.ack_sent.assert_not_called()
+            mock_adapter.fail_retry.assert_called_once()
+
     def test_dead_result(self, config):
         """死信时返回正确结果"""
         item = make_outbox_item(outbox_id=3, retry_count=2)  # 下次就是第3次

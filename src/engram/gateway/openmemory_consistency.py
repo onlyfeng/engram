@@ -199,8 +199,21 @@ async def verify_readback_after_store_async(
         if failure is None and skipped_error is None:
             return ReadbackVerificationResult()
 
-        last_failure = failure
-        last_skipped_error = skipped_error
+        if failure is not None:
+            last_failure = failure
+            last_skipped_error = None
+        elif skipped_error is not None:
+            # Transient error clears only NOT_FOUND (propagation-delay uncertainty, per
+            # original memory_store.py design). Concrete integrity violations such as
+            # space_mismatch or payload_mismatch cannot be caused by propagation delay
+            # and must not be overwritten by a later network blip.
+            not_found_only = (
+                last_failure is None
+                or last_failure.reason == ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_NOT_FOUND
+            )
+            if not_found_only:
+                last_failure = None
+                last_skipped_error = skipped_error
 
         if attempt < READBACK_VERIFY_ATTEMPTS - 1:
             await asyncio.sleep(READBACK_VERIFY_DELAY_SECONDS)
@@ -245,8 +258,17 @@ def verify_readback_after_store(
         if failure is None and skipped_error is None:
             return ReadbackVerificationResult()
 
-        last_failure = failure
-        last_skipped_error = skipped_error
+        if failure is not None:
+            last_failure = failure
+            last_skipped_error = None
+        elif skipped_error is not None:
+            not_found_only = (
+                last_failure is None
+                or last_failure.reason == ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_NOT_FOUND
+            )
+            if not_found_only:
+                last_failure = None
+                last_skipped_error = skipped_error
 
         if attempt < READBACK_VERIFY_ATTEMPTS - 1:
             time.sleep(READBACK_VERIFY_DELAY_SECONDS)
