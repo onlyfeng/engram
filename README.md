@@ -170,10 +170,91 @@ macOS / WSL2：
 make openmemory
 ```
 
+> `make openmemory` 现在会按以下顺序自动探测并启动 OpenMemory：
+> 1. `OPENMEMORY_DIR`
+> 2. `../openmemory/packages/openmemory-js`（推荐：Engram 同级目录的 `openmemory` checkout，可以是官方仓库、官方分支或任意 fork）
+> 3. 常见的本地源码目录（如 `~/openmemory/...`、`~/Documents/openmemory/...`、`~/Documents/ai/openmemory/...`）
+> 4. 若未找到可运行的本地源码目录，则回退到 PATH 里的全局 `opm`
+>
+> 如需显式指定目录：
+>
+> ```bash
+> OPENMEMORY_DIR=/path/to/openmemory/packages/openmemory-js make openmemory
+> ```
+
+> 如需首次启动（临时切到 migrator + `OM_PG_AUTO_DDL=true`）：
+>
+> ```bash
+> OPENMEMORY_FIRST_RUN=1 make openmemory
+> ```
+
 Windows PowerShell：
 
 ```powershell
 .\scripts\windows\start_openmemory.ps1
+```
+
+**使用同级 `openmemory` 源码目录**
+
+推荐目录布局如下：
+
+- `../openmemory`：放希望优先启动的 OpenMemory checkout，既可以是官方仓库，也可以是任意分支或 fork
+- 其他 OpenMemory checkout：如需同时保留，可放到别处，并在需要时通过 `OPENMEMORY_DIR` 显式指定
+
+也就是说，本次约定不再对某个特定 fork 或目录命名做强绑定。启动顺序统一为：`OPENMEMORY_DIR` -> 同级 `../openmemory` -> 常见本地目录 -> 全局 `opm`。其中同级 `../openmemory` 只是推荐优先约定路径。
+
+如果你希望显式指定路径、绕过 Makefile 自动探测，或单独启动同级源码版 OpenMemory，也可以直接使用本仓库附带的启动脚本：
+
+macOS / Linux / WSL2(Debian)：
+
+```bash
+# 默认按上述顺序自动探测
+scripts/ops/start_openmemory.sh
+
+# 首次建表 / 补索引时，可临时切换到 migrator
+scripts/ops/start_openmemory.sh --first-run
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\windows\start_openmemory.ps1
+
+# 首次建表 / 补索引时，可临时切换到 migrator
+.\scripts\windows\start_openmemory.ps1 -FirstRun
+```
+
+这两个脚本会：
+
+- 自动加载 `.env` / `.env.local` / `.env.ps1`
+- 启动顺序与 `make openmemory` 保持一致：指定目录 -> 同级 `../openmemory` -> 常见本地目录 -> 全局 `opm`
+- 本地源码目录可运行时，直接执行 `node bin/opm.js serve`
+- 若未找到本地源码目录，或源码目录缺少 `bin/opm.js` / 编译产物，则回退到全局 `opm`（如已安装）
+
+**可选：如你不希望回退到全局 OpenMemory，可先移除全局安装**
+
+如果你以前通过 `npm install -g` 或 `npm link` 安装过 OpenMemory，而你又希望始终命中本地 `../openmemory` 源码目录，可以先清掉全局命令，避免后续在本地源码不可运行时自动回退到旧版本：
+
+```bash
+npm uninstall -g openmemory-js
+npm unlink -g openmemory-js   # 若之前通过 npm link 安装
+```
+
+Windows PowerShell：
+
+```powershell
+npm uninstall -g openmemory-js
+npm unlink -g openmemory-js
+```
+
+如需确认当前 `opm` 指向哪里：
+
+```bash
+which opm
+```
+
+```powershell
+Get-Command opm
 ```
 
 终端 B：启动 Gateway
@@ -291,12 +372,19 @@ $env:PROJECT_KEY="default"
 
 ##### 3.3 Windows 原生补充
 
-如果你不想使用 `start_openmemory.ps1` / `start_gateway.ps1`，手动等价命令如下。
+如果你不想使用 `start_openmemory.ps1` / `start_gateway.ps1`，可按你实际命中的启动方式手动执行等价命令。
 
 Windows PowerShell（两个终端）：
 
 ```powershell
-# 终端 A：OpenMemory
+# 终端 A：OpenMemory（同级 openmemory 源码目录可运行时）
+.\scripts\windows\load_env_local.ps1
+cd ..\openmemory\packages\openmemory-js
+node bin\opm.js serve
+```
+
+```powershell
+# 终端 A：OpenMemory（若本地源码未命中，则回退到全局 opm）
 .\scripts\windows\load_env_local.ps1
 opm serve
 ```
@@ -331,9 +419,10 @@ docker compose -f docker-compose.unified.yml down -v
 | 平台 | 场景 | 脚本 / 方式 |
 |------|------|-------------|
 | Linux/macOS/WSL | 加载环境变量 | `source scripts/ops/load_env_local.sh` |
+| Linux/macOS/WSL | 启动 OpenMemory（顺序：指定目录 > 同级源码 > 常见本地目录 > 全局 opm） | `scripts/ops/start_openmemory.sh` |
 | Windows PowerShell | 加载环境变量 | `.\scripts\windows\load_env_local.ps1` |
 | Windows PowerShell | 一键初始化数据库 | `.\scripts\windows\setup_db.ps1` |
-| Windows PowerShell | 启动 OpenMemory | `.\scripts\windows\start_openmemory.ps1` |
+| Windows PowerShell | 启动 OpenMemory（顺序：指定目录 > 同级源码 > 常见本地目录 > 全局 opm） | `.\scripts\windows\start_openmemory.ps1` |
 | Windows PowerShell | 启动 Gateway | `.\scripts\windows\start_gateway.ps1` |
 | Windows PowerShell | 无 make 运行 CI 门禁 | `.\scripts\windows\ci.ps1` |
 | Windows PowerShell | 全栈诊断 | `.\scripts\windows\stack_doctor.ps1` |

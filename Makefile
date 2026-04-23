@@ -51,6 +51,7 @@ PROJECT_KEY ?= default
 GATEWAY_PORT ?= 8787
 OPENMEMORY_BASE_URL ?= http://localhost:8080
 OPENMEMORY_DIR ?=
+OPENMEMORY_FIRST_RUN ?=
 ENV_LOCAL_FILE ?= .env.local
 
 # 服务账号密码（unified-stack 模式必须设置，logbook-only 模式可不设置）
@@ -1021,31 +1022,11 @@ iteration-min-regression:  ## 运行最小迭代回归命令集（TYPES=cycle DR
 
 openmemory:  ## 启动 OpenMemory 服务（自动加载 .env/.env.local）
 	@set -e; \
-	set -a; \
-	[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"; \
-	[ -f "$(CURDIR)/$(ENV_LOCAL_FILE)" ] && . "$(CURDIR)/$(ENV_LOCAL_FILE)"; \
-	set +a; \
+	ARGS=""; \
 	OPENMEMORY_DIR="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
-	if [ -z "$$OPENMEMORY_DIR" ]; then \
-		for d in "$$HOME/openmemory/packages/openmemory-js" "$$HOME/Documents/openmemory/packages/openmemory-js" "$$HOME/Documents/ai/openmemory/packages/openmemory-js"; do \
-			if [ -d "$$d" ]; then OPENMEMORY_DIR="$$d"; break; fi; \
-		done; \
-	fi; \
-	if ! command -v "$(OPM)" >/dev/null 2>&1; then \
-		echo "[ERROR] 未找到 opm 命令"; \
-		echo "        请先安装 OpenMemory CLI，或通过 OPENMEMORY_DIR=/path/to/openmemory/packages/openmemory-js make openmemory 指定目录"; \
-		exit 1; \
-	fi; \
-	echo "启动 OpenMemory 服务..."; \
-	if [ -n "$$OPENMEMORY_DIR" ]; then \
-		echo "  目录: $$OPENMEMORY_DIR"; \
-	else \
-		echo "  目录: <auto>"; \
-		echo "  提示: 未找到本地 OpenMemory 源码目录，直接使用已安装的 opm"; \
-	fi; \
-	echo ""; \
-	if [ -n "$$OPENMEMORY_DIR" ]; then cd "$$OPENMEMORY_DIR"; fi; \
-	$(OPM) serve
+	if [ -n "$$OPENMEMORY_DIR" ]; then ARGS="$$ARGS --openmemory-dir \"$$OPENMEMORY_DIR\""; fi; \
+	if [ -n "$${OPENMEMORY_FIRST_RUN:-$(OPENMEMORY_FIRST_RUN)}" ]; then ARGS="$$ARGS --first-run"; fi; \
+	eval "scripts/ops/start_openmemory.sh $$ARGS"
 
 gateway:  ## 启动 Gateway 服务（带热重载，自动加载 .env/.env.local）
 	@set -e; \
@@ -1131,7 +1112,8 @@ help:  ## 显示帮助信息
 	@echo "  PROJECT_KEY           项目标识 (默认: default)"
 	@echo "  GATEWAY_PORT          Gateway 端口 (默认: 8787)"
 	@echo "  OPENMEMORY_BASE_URL   OpenMemory 地址 (默认: http://localhost:8080)"
-	@echo "  OPENMEMORY_DIR        OpenMemory 目录（可选；未设置时自动探测，失败则直接使用已安装的 opm）"
+	@echo "  OPENMEMORY_DIR        OpenMemory 目录（可选；顺序：指定目录 > ../openmemory > 常见本地目录 > 全局 opm）"
+	@echo "  OPENMEMORY_FIRST_RUN  设为 1 时，make openmemory 自动使用 migrator + OM_PG_AUTO_DDL=true"
 	@echo ""
 	@echo "\033[1m多项目部署示例:\033[0m"
 	@echo "  PROJECT_KEY=proj_a POSTGRES_DB=proj_a make setup-db"
