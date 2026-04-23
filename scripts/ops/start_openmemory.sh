@@ -18,10 +18,24 @@ Notes:
   - Loads .env / .env.local via scripts/ops/load_env_local.sh
   - Resolution order: --openmemory-dir / OPENMEMORY_DIR, ../openmemory, common local dirs, global opm
   - Falls back to global `opm` when no runnable local checkout is found
+  - OPENMEMORY_FIRST_RUN=1 in env files has the same effect as --first-run
 EOF
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the real script path, following symlinks so REPO_ROOT is always
+# anchored to the actual repository regardless of how the script is invoked.
+_script="${BASH_SOURCE[0]}"
+while [ -L "${_script}" ]; do
+  _link_dir="$(cd "$(dirname "${_script}")" && pwd)"
+  _script="$(readlink "${_script}")"
+  case "${_script}" in
+    /*) ;;
+    *) _script="${_link_dir}/${_script}" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "${_script}")" && pwd)"
+unset _script _link_dir
+
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Fast-path: handle --help/-h before any env loading.
@@ -30,9 +44,39 @@ for _arg in "$@"; do
 done
 unset _arg
 
+# Save caller-set env vars before env-file loading can overwrite them.
+_CALLER_DIR="$(pwd)"
+_CALLER_OM_FIRST_RUN="${OPENMEMORY_FIRST_RUN:-}"
+# Normalize relative OPENMEMORY_DIR against caller CWD now, before cd to REPO_ROOT.
+if [ -n "${OPENMEMORY_DIR:-}" ]; then
+  case "${OPENMEMORY_DIR}" in
+    /*) _CALLER_OM_DIR="${OPENMEMORY_DIR}" ;;
+    *)  _CALLER_OM_DIR="${_CALLER_DIR}/${OPENMEMORY_DIR}" ;;
+  esac
+else
+  _CALLER_OM_DIR=""
+fi
+_CALLER_OM_MIGRATOR_PW="${OPENMEMORY_MIGRATOR_PASSWORD:-}"
+_CALLER_OM_PG_PW="${OM_PG_PASSWORD:-}"
+
 # Source env files first so CLI args can override them.
 cd "${REPO_ROOT}"
 source "${REPO_ROOT}/scripts/ops/load_env_local.sh"
+
+# Restore caller's explicit env vars so they take precedence over env files.
+if [ -n "${_CALLER_OM_FIRST_RUN}" ]; then
+  OPENMEMORY_FIRST_RUN="${_CALLER_OM_FIRST_RUN}"
+fi
+if [ -n "${_CALLER_OM_DIR}" ]; then
+  OPENMEMORY_DIR="${_CALLER_OM_DIR}"
+fi
+if [ -n "${_CALLER_OM_MIGRATOR_PW}" ]; then
+  OPENMEMORY_MIGRATOR_PASSWORD="${_CALLER_OM_MIGRATOR_PW}"
+fi
+if [ -n "${_CALLER_OM_PG_PW}" ]; then
+  OM_PG_PASSWORD="${_CALLER_OM_PG_PW}"
+fi
+unset _CALLER_OM_FIRST_RUN _CALLER_OM_DIR _CALLER_OM_MIGRATOR_PW _CALLER_OM_PG_PW
 
 OPENMEMORY_DIR="${OPENMEMORY_DIR:-}"
 FIRST_RUN=0
@@ -44,7 +88,11 @@ while [ "$#" -gt 0 ]; do
         echo "[ERROR] --openmemory-dir requires a path" >&2
         exit 1
       fi
-      OPENMEMORY_DIR="$2"
+      # Resolve relative paths against the caller's directory, not the repo root.
+      case "$2" in
+        /*) OPENMEMORY_DIR="$2" ;;
+        *)  OPENMEMORY_DIR="${_CALLER_DIR}/$2" ;;
+      esac
       shift 2
       ;;
     --first-run)
@@ -63,6 +111,13 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+unset _CALLER_DIR
+
+# Also honour OPENMEMORY_FIRST_RUN=1 from env files (loaded above).
+if [ "${OPENMEMORY_FIRST_RUN:-}" = "1" ]; then
+  FIRST_RUN=1
+fi
+
 resolve_openmemory_dir() {
   # Explicit path always wins when it exists.
   if [ -n "${OPENMEMORY_DIR}" ] && [ -d "${OPENMEMORY_DIR}" ]; then
@@ -73,12 +128,15 @@ resolve_openmemory_dir() {
   # Prefer sibling checkout, then try common local clones.
   # Skip candidates that exist but lack build artefacts so a runnable checkout
   # later in the list is not silently bypassed.
-  local candidates=(
-    "${REPO_ROOT}/../openmemory/packages/openmemory-js"
-    "${HOME}/openmemory/packages/openmemory-js"
-    "${HOME}/Documents/openmemory/packages/openmemory-js"
-    "${HOME}/Documents/ai/openmemory/packages/openmemory-js"
-  )
+  local candidates=()
+  candidates+=("${REPO_ROOT}/../openmemory/packages/openmemory-js")
+  if [ -n "${HOME:-}" ]; then
+    candidates+=(
+      "${HOME}/openmemory/packages/openmemory-js"
+      "${HOME}/Documents/openmemory/packages/openmemory-js"
+      "${HOME}/Documents/ai/openmemory/packages/openmemory-js"
+    )
+  fi
   local candidate
   for candidate in "${candidates[@]}"; do
     [ -d "${candidate}" ] || continue
