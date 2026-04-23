@@ -71,6 +71,8 @@ resolve_openmemory_dir() {
   fi
 
   # Prefer sibling checkout, then try common local clones.
+  # Skip candidates that exist but lack build artefacts so a runnable checkout
+  # later in the list is not silently bypassed.
   local candidates=(
     "${REPO_ROOT}/../openmemory/packages/openmemory-js"
     "${HOME}/openmemory/packages/openmemory-js"
@@ -79,10 +81,13 @@ resolve_openmemory_dir() {
   )
   local candidate
   for candidate in "${candidates[@]}"; do
-    if [ -d "${candidate}" ]; then
+    [ -d "${candidate}" ] || continue
+    if [ -f "${candidate}/bin/opm.js" ] && [ -f "${candidate}/dist/server/index.js" ]; then
       printf '%s\n' "${candidate}"
       return 0
     fi
+    echo "[WARN] 发现 ${candidate} 但缺少编译产物，跳过继续搜索。" >&2
+    echo "       如需使用该目录，请先执行: npm install && npm run build" >&2
   done
   return 1
 }
