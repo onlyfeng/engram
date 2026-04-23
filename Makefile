@@ -1022,11 +1022,17 @@ iteration-min-regression:  ## 运行最小迭代回归命令集（TYPES=cycle DR
 
 openmemory:  ## 启动 OpenMemory 服务（自动加载 .env/.env.local）
 	@set -e; \
-	ARGS=""; \
-	OPENMEMORY_DIR="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
-	if [ -n "$$OPENMEMORY_DIR" ]; then ARGS="$$ARGS --openmemory-dir \"$$OPENMEMORY_DIR\""; fi; \
-	if [ "$${OPENMEMORY_FIRST_RUN:-$(OPENMEMORY_FIRST_RUN)}" = "1" ]; then ARGS="$$ARGS --first-run"; fi; \
-	eval "scripts/ops/start_openmemory.sh $$ARGS"
+	_om_dir="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
+	_om_first_run="$${OPENMEMORY_FIRST_RUN:-$(OPENMEMORY_FIRST_RUN)}"; \
+	if [ -n "$$_om_dir" ] && [ "$$_om_first_run" = "1" ]; then \
+		scripts/ops/start_openmemory.sh --openmemory-dir "$$_om_dir" --first-run; \
+	elif [ -n "$$_om_dir" ]; then \
+		scripts/ops/start_openmemory.sh --openmemory-dir "$$_om_dir"; \
+	elif [ "$$_om_first_run" = "1" ]; then \
+		scripts/ops/start_openmemory.sh --first-run; \
+	else \
+		scripts/ops/start_openmemory.sh; \
+	fi
 
 gateway:  ## 启动 Gateway 服务（带热重载，自动加载 .env/.env.local）
 	@set -e; \

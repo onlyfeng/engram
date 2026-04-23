@@ -87,6 +87,12 @@ resolve_openmemory_dir() {
   return 1
 }
 
+# Fail fast when an explicit directory was given but does not exist.
+if [ -n "${OPENMEMORY_DIR}" ] && [ ! -d "${OPENMEMORY_DIR}" ]; then
+  echo "[ERROR] 指定的 OpenMemory 目录不存在: ${OPENMEMORY_DIR}" >&2
+  exit 1
+fi
+
 openmemory_dir="$(resolve_openmemory_dir || true)"
 node_cmd="$(command -v node || true)"
 opm_cmd="$(command -v opm || true)"
