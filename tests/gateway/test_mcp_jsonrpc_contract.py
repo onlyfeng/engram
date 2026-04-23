@@ -789,7 +789,6 @@ class TestToolsCall:
         assert payload["ok"] is False
         assert payload["error_code"] == "INVALID_PARAM_VALUE"
 
-
     def test_logbook_query_events_filter_item_id_alias(self, client, mock_dependencies):
         """filter_item_id 作为 item_id 的别名，路由时必须透传相同的整数值。"""
         captured = {}
