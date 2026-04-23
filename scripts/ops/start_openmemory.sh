@@ -24,6 +24,16 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Fast-path: handle --help/-h before any env loading.
+for _arg in "$@"; do
+  case "${_arg}" in -h|--help) usage; exit 0 ;; esac
+done
+unset _arg
+
+# Source env files first so CLI args can override them.
+cd "${REPO_ROOT}"
+source "${REPO_ROOT}/scripts/ops/load_env_local.sh"
+
 OPENMEMORY_DIR="${OPENMEMORY_DIR:-}"
 FIRST_RUN=0
 
@@ -52,9 +62,6 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-
-cd "${REPO_ROOT}"
-source "${REPO_ROOT}/scripts/ops/load_env_local.sh"
 
 resolve_openmemory_dir() {
   # Explicit path always wins when it exists.

@@ -1025,7 +1025,7 @@ openmemory:  ## 启动 OpenMemory 服务（自动加载 .env/.env.local）
 	ARGS=""; \
 	OPENMEMORY_DIR="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
 	if [ -n "$$OPENMEMORY_DIR" ]; then ARGS="$$ARGS --openmemory-dir \"$$OPENMEMORY_DIR\""; fi; \
-	if [ -n "$${OPENMEMORY_FIRST_RUN:-$(OPENMEMORY_FIRST_RUN)}" ]; then ARGS="$$ARGS --first-run"; fi; \
+	if [ "$${OPENMEMORY_FIRST_RUN:-$(OPENMEMORY_FIRST_RUN)}" = "1" ]; then ARGS="$$ARGS --first-run"; fi; \
 	eval "scripts/ops/start_openmemory.sh $$ARGS"
 
 gateway:  ## 启动 Gateway 服务（带热重载，自动加载 .env/.env.local）
