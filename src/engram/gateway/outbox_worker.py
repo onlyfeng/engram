@@ -33,6 +33,7 @@ from .audit_event import (
     build_outbox_worker_audit_event,
     generate_correlation_id,
 )
+from .openmemory_consistency import verify_readback_after_store
 
 # 导入统一错误码
 try:
@@ -503,6 +504,44 @@ def _process_single_item_inner(
         result = openmemory_client.StoreResult(
             success=False, error=f"openmemory_error: {e.message}"
         )
+
+    if result.success:
+        if not result.memory_id:
+            logger.error("[outbox:%s] OpenMemory 返回成功但 memory_id 为空", outbox_id)
+            result = openmemory_client.StoreResult(
+                success=False,
+                error="openmemory_success_missing_memory_id",
+            )
+        else:
+            readback_result = verify_readback_after_store(
+                client=client,
+                memory_id=result.memory_id,
+                expected_space=item.target_space,
+                expected_payload_sha=item.payload_sha,
+                openmemory_user_id=user_id,
+            )
+            if readback_result.failure is not None:
+                logger.error(
+                    "[outbox:%s] OpenMemory 写后校验失败: memory_id=%s, reason=%s, message=%s",
+                    outbox_id,
+                    result.memory_id,
+                    readback_result.failure.reason,
+                    readback_result.failure.message,
+                )
+                result = openmemory_client.StoreResult(
+                    success=False,
+                    error=(
+                        f"{readback_result.failure.reason}: "
+                        f"{readback_result.failure.message} (memory_id={result.memory_id})"
+                    ),
+                )
+            elif readback_result.skipped_error is not None:
+                logger.warning(
+                    "[outbox:%s] OpenMemory 写后校验跳过: memory_id=%s, transient_error=%s",
+                    outbox_id,
+                    result.memory_id,
+                    readback_result.skipped_error,
+                )
 
     if result.success:
         # 成功后、ack 前再次续期，确保 ack 不会因租约过期失败

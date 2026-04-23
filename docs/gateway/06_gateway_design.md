@@ -229,7 +229,7 @@ invariant: reliability_report.success_rate == audit.count(action=allow) / audit.
 
 | outbox 状态 | 审计 reason | 审计 action | 说明 |
 |-------------|-------------|-------------|------|
-| sent | `outbox_flush_success` 或 `outbox_flush_dedup_hit` | allow | flush 成功 |
+| sent | `outbox_flush_success` 或 `outbox_flush_dedup_hit` | allow | flush 成功（`outbox_flush_success` 含写后读校验） |
 | dead | `outbox_flush_dead` | reject | 重试耗尽 |
 | pending (stale) | `outbox_stale` | redirect | 锁过期，需重新调度 |
 

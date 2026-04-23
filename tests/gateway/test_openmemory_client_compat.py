@@ -347,6 +347,38 @@ def test_get_memory_rejects_mismatched_object_id(monkeypatch):
     assert result.error == "memory_id_mismatch:m-2"
 
 
+def test_get_memory_passes_user_id_query_param(monkeypatch):
+    client = OpenMemoryClient(base_url="http://openmemory.test")
+    get_calls: list[tuple[str, dict | None]] = []
+
+    class FakeHttpxClient:
+        def __init__(self, *args, **kwargs):  # noqa: D401, ANN002, ANN003
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def get(self, url, params=None, headers=None):  # noqa: ANN001
+            get_calls.append((url, params))
+            return _response(
+                "GET",
+                url,
+                200,
+                {"memory": {"id": "m-1", "content": "hello"}},
+            )
+
+    monkeypatch.setattr("engram.gateway.openmemory_client.httpx.Client", FakeHttpxClient)
+
+    result = client.get_memory("m-1", user_id="alice")
+
+    assert result.success is True
+    assert get_calls
+    assert get_calls[0][1] == {"user_id": "alice"}
+
+
 def test_wipe_user_uses_delete_users_memories_route(monkeypatch):
     client = OpenMemoryClient(base_url="http://openmemory.test")
     delete_calls: list[str] = []

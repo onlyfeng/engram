@@ -47,11 +47,8 @@ handler 不再自行生成 correlation_id，确保同一请求使用同一 ID。
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -65,15 +62,11 @@ from ..audit_event import (
 from ..config import resolve_validate_refs
 from ..di import GatewayDepsProtocol
 from ..openmemory_client import (
-    GetResult,
     OpenMemoryAPIError,
     OpenMemoryConnectionError,
     OpenMemoryError,
-    RetryConfig,
-    extract_memory_object_content,
-    extract_memory_object_payload_sha,
-    extract_memory_object_space,
 )
+from ..openmemory_consistency import verify_readback_after_store_async
 from ..policy import PolicyAction, create_engine_from_settings
 from ..services.actor_validation import validate_actor_user
 from ..services.audit_service import write_audit_or_raise
@@ -86,14 +79,6 @@ if TYPE_CHECKING:
 from engram.logbook.errors import ErrorCode
 
 logger = logging.getLogger("gateway.handlers.memory_store")
-READBACK_VERIFY_ATTEMPTS = 3
-READBACK_VERIFY_DELAY_SECONDS = 0.1
-READBACK_VERIFY_GET_RETRY_CONFIG = RetryConfig(
-    max_retries=0,
-    base_delay=READBACK_VERIFY_DELAY_SECONDS,
-    max_delay=READBACK_VERIFY_DELAY_SECONDS,
-    jitter=0.0,
-)
 
 
 class MemoryStoreResponse(BaseModel):
@@ -130,28 +115,6 @@ def _to_updated_count(value: Any) -> int:
         return 0
 
 
-@dataclass
-class _ReadbackValidationFailure:
-    reason: str
-    message: str
-
-
-@dataclass
-class _ReadbackVerificationResult:
-    failure: Optional[_ReadbackValidationFailure] = None
-    skipped_error: Optional[str] = None
-
-
-@runtime_checkable
-class _ReadbackClient(Protocol):
-    def get_memory(
-        self,
-        memory_id: str,
-        retry_config: Optional[RetryConfig] = None,
-        user_id: Optional[str] = None,
-    ) -> GetResult: ...
-
-
 def _resolve_openmemory_user_id(
     *,
     target_space: str,
@@ -165,165 +128,6 @@ def _resolve_openmemory_user_id(
             return owner
         raise ValueError(f"私有空间名称格式无效（owner 为空或仅含空白）: {target_space!r}")
     return actor_user_id
-
-
-def _classify_readback_fetch_failure(error: Optional[str]) -> Optional[_ReadbackValidationFailure]:
-    """仅将可确定的一致性异常收敛为稳定 reason。"""
-    if error == "memory_not_found":
-        return _ReadbackValidationFailure(
-            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_NOT_FOUND,
-            message="memory_get 未找到刚写入的对象",
-        )
-    if error and error.startswith("memory_id_mismatch:"):
-        return _ReadbackValidationFailure(
-            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_MEMORY_ID_MISMATCH,
-            message=f"memory_get 返回了错误对象: {error}",
-        )
-    if error and error.startswith("invalid_memory_payload:"):
-        return _ReadbackValidationFailure(
-            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_INVALID_PAYLOAD,
-            message=f"memory_get 返回了无效对象: {error}",
-        )
-    return None
-
-
-def _validate_readback_memory(
-    *,
-    memory: Any,
-    expected_space: str,
-    expected_payload_sha: str,
-) -> Optional[_ReadbackValidationFailure]:
-    """校验写后读对象的关键一致性字段。"""
-    actual_space = extract_memory_object_space(memory)
-    if actual_space != expected_space:
-        return _ReadbackValidationFailure(
-            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_SPACE_MISMATCH,
-            message=f"memory_get 返回的 space 不一致: expected={expected_space}, actual={actual_space}",
-        )
-
-    content = extract_memory_object_content(memory)
-    if not isinstance(content, str) or not content.strip():
-        return _ReadbackValidationFailure(
-            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_EMPTY_CONTENT,
-            message="memory_get 返回的 content 为空",
-        )
-
-    actual_payload_sha = extract_memory_object_payload_sha(memory)
-    if actual_payload_sha is None:
-        actual_payload_sha = compute_payload_sha(content)
-    if actual_payload_sha != expected_payload_sha:
-        return _ReadbackValidationFailure(
-            reason=ErrorCode.OPENMEMORY_CONSISTENCY_FAILED_PAYLOAD_MISMATCH,
-            message=(
-                "memory_get 返回的 payload_sha 不一致: "
-                f"expected={expected_payload_sha}, actual={actual_payload_sha}"
-            ),
-        )
-
-    return None
-
-
-def _supports_readback_retry_config(client: object) -> bool:
-    """判断 client.get_memory 是否显式支持 retry_config 或 **kwargs。"""
-    get_memory = getattr(client, "get_memory", None)
-    if not callable(get_memory):
-        return False
-
-    try:
-        signature = inspect.signature(get_memory)
-    except (TypeError, ValueError):
-        return False
-
-    parameters = signature.parameters.values()
-    return any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD or parameter.name == "retry_config"
-        for parameter in parameters
-    )
-
-
-def _supports_readback_user_id(client: object) -> bool:
-    """判断 client.get_memory 是否显式支持 user_id 或 **kwargs。"""
-    get_memory = getattr(client, "get_memory", None)
-    if not callable(get_memory):
-        return False
-
-    try:
-        signature = inspect.signature(get_memory)
-    except (TypeError, ValueError):
-        return False
-
-    parameters = signature.parameters.values()
-    return any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD or parameter.name == "user_id"
-        for parameter in parameters
-    )
-
-
-async def _verify_readback_after_store(
-    *,
-    client: object,
-    memory_id: str,
-    expected_space: str,
-    expected_payload_sha: str,
-    openmemory_user_id: Optional[str] = None,
-) -> _ReadbackVerificationResult:
-    """
-    用短暂重试覆盖 OpenMemory 的瞬时读写抖动。
-
-    对未实现 typed `get_memory()` 的测试 stub 降级为跳过校验，避免把
-    “未配置 readback 返回值的 mock”误判成线上一致性故障。
-
-    openmemory_user_id 在私有空间写入时透传给 GET 请求，让 OpenMemory 后端
-    可以按 owner 做读取约束，避免跨用户 dedup 引起 space_mismatch。
-    """
-    if not isinstance(client, _ReadbackClient) or not _supports_readback_retry_config(client):
-        return _ReadbackVerificationResult()
-
-    pass_user_id = _supports_readback_user_id(client)
-
-    last_failure: Optional[_ReadbackValidationFailure] = None
-    last_skipped_error: Optional[str] = None
-    for attempt in range(READBACK_VERIFY_ATTEMPTS):
-        extra_kwargs: Dict[str, Any] = {"user_id": openmemory_user_id} if pass_user_id else {}
-        get_result = client.get_memory(
-            memory_id,
-            retry_config=READBACK_VERIFY_GET_RETRY_CONFIG,
-            **extra_kwargs,
-        )
-        if not isinstance(get_result, GetResult):
-            return _ReadbackVerificationResult()
-
-        if not get_result.success:
-            error = get_result.error
-            failure = _classify_readback_fetch_failure(error)
-            if failure is not None:
-                last_failure = failure
-                last_skipped_error = None
-            else:
-                # 终态以最后一次观测结果为准：当传输错误（如 http_error: 503）发生在
-                # memory_not_found 之后时，我们无法区分"写入真的缺失"和"传播延迟+读端
-                # 抖动同时发生"。保留旧的确定性失败会导致 audit 被标为 failed，后续重试
-                # 的 dedup 找不到 success 记录，造成重复写入。以 503 结束视为不确定，
-                # 清除之前的 not_found 失败，让调用方持有成功语义。
-                last_failure = None
-                last_skipped_error = error or "unknown_error"
-        else:
-            last_failure = _validate_readback_memory(
-                memory=get_result.memory,
-                expected_space=expected_space,
-                expected_payload_sha=expected_payload_sha,
-            )
-            last_skipped_error = None
-            if last_failure is None:
-                return _ReadbackVerificationResult()
-
-        if attempt < READBACK_VERIFY_ATTEMPTS - 1:
-            await asyncio.sleep(READBACK_VERIFY_DELAY_SECONDS)
-
-    return _ReadbackVerificationResult(
-        failure=last_failure,
-        skipped_error=last_skipped_error,
-    )
 
 
 async def memory_store_impl(
@@ -654,7 +458,7 @@ async def memory_store_impl(
                 )
             logger.info(f"OpenMemory 写入成功: memory_id={memory_id}, space={final_space}")
 
-            readback_result = await _verify_readback_after_store(
+            readback_result = await verify_readback_after_store_async(
                 client=client,
                 memory_id=memory_id,
                 expected_space=final_space,
