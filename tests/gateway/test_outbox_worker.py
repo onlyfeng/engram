@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from engram.gateway.logbook_adapter import OutboxItem
+from engram.gateway.openmemory_client import GetResult
 from engram.gateway.outbox_worker import (
     ProcessResult,
     WorkerConfig,
@@ -41,6 +42,52 @@ class MockStoreResult:
     success: bool
     memory_id: Optional[str] = None
     error: Optional[str] = None
+
+
+class ReadbackCapableClient:
+    """带显式 get_memory 签名的测试客户端，确保 worker 会执行 readback 校验。"""
+
+    def __init__(self, store_result: MockStoreResult, get_result: GetResult):
+        self._store_result = store_result
+        self._get_result = get_result
+        self.store_calls: list[dict] = []
+        self.get_calls: list[dict] = []
+
+    def store(
+        self,
+        content: str,
+        space: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict] = None,
+        meta: Optional[dict] = None,
+    ) -> MockStoreResult:
+        self.store_calls.append(
+            {
+                "content": content,
+                "space": space,
+                "user_id": user_id,
+                "tags": tags,
+                "metadata": metadata,
+                "meta": meta,
+            }
+        )
+        return self._store_result
+
+    def get_memory(
+        self,
+        memory_id: str,
+        retry_config=None,
+        user_id: Optional[str] = None,
+    ) -> GetResult:
+        self.get_calls.append(
+            {
+                "memory_id": memory_id,
+                "retry_config": retry_config,
+                "user_id": user_id,
+            }
+        )
+        return self._get_result
 
 
 def make_outbox_item(
@@ -281,10 +328,22 @@ class TestSpaceParameter:
             payload_sha="abc123",
         )
 
-        mock_client = MagicMock()
-        mock_client.store.return_value = MockStoreResult(
-            success=True,
-            memory_id="mem_123",
+        mock_client = ReadbackCapableClient(
+            store_result=MockStoreResult(
+                success=True,
+                memory_id="mem_123",
+            ),
+            get_result=GetResult(
+                success=True,
+                memory={
+                    "id": "mem_123",
+                    "content": item.payload_md,
+                    "metadata": {
+                        "target_space": item.target_space,
+                        "payload_sha": item.payload_sha,
+                    },
+                },
+            ),
         )
 
         worker_id = "test-worker"
@@ -294,13 +353,16 @@ class TestSpaceParameter:
             process_single_item(item, worker_id, mock_client, config)
 
             # 验证 store 调用参数
-            mock_client.store.assert_called_once()
-            call_kwargs = mock_client.store.call_args[1]
+            assert len(mock_client.store_calls) == 1
+            call_kwargs = mock_client.store_calls[0]
 
             # 关键验证：space 参数正确传递
             assert call_kwargs["space"] == "private:alice"
             # 关键验证：user_id 从 private 空间提取
             assert call_kwargs["user_id"] == "alice"
+            assert len(mock_client.get_calls) == 1
+            get_call_kwargs = mock_client.get_calls[0]
+            assert get_call_kwargs["user_id"] == "alice"
 
             # 验证 metadata 包含必要字段
             metadata = call_kwargs["metadata"]
@@ -317,10 +379,22 @@ class TestSpaceParameter:
             payload_sha="def456",
         )
 
-        mock_client = MagicMock()
-        mock_client.store.return_value = MockStoreResult(
-            success=True,
-            memory_id="mem_456",
+        mock_client = ReadbackCapableClient(
+            store_result=MockStoreResult(
+                success=True,
+                memory_id="mem_456",
+            ),
+            get_result=GetResult(
+                success=True,
+                memory={
+                    "id": "mem_456",
+                    "content": item.payload_md,
+                    "metadata": {
+                        "target_space": item.target_space,
+                        "payload_sha": item.payload_sha,
+                    },
+                },
+            ),
         )
 
         worker_id = "test-worker"
@@ -329,12 +403,15 @@ class TestSpaceParameter:
             mock_adapter.check_dedup.return_value = None  # 非重复记录
             process_single_item(item, worker_id, mock_client, config)
 
-            call_kwargs = mock_client.store.call_args[1]
+            call_kwargs = mock_client.store_calls[0]
 
             # 关键验证：space 参数正确传递
             assert call_kwargs["space"] == "team:project"
             # team 空间不提取 user_id
             assert call_kwargs["user_id"] is None
+            assert len(mock_client.get_calls) == 1
+            get_call_kwargs = mock_client.get_calls[0]
+            assert get_call_kwargs["user_id"] is None
 
             # 验证 metadata
             metadata = call_kwargs["metadata"]
@@ -546,6 +623,64 @@ class TestProcessResults:
             assert result.reason == "outbox_flush_retry"
             assert result.error == "temp_error"
 
+    def test_readback_validation_failure_returns_retry(self, config):
+        """写后读校验失败时不应 ack_sent，而应进入 retry 路径。"""
+        item = make_outbox_item(
+            outbox_id=22,
+            target_space="private:alice",
+            payload_sha="sha_readback_retry",
+        )
+
+        mock_client = ReadbackCapableClient(
+            store_result=MockStoreResult(success=True, memory_id="mem_readback_retry"),
+            get_result=GetResult(
+                success=True,
+                memory={
+                    "id": "mem_readback_retry",
+                    "content": item.payload_md,
+                    "metadata": {
+                        "target_space": "private:bob",
+                        "payload_sha": item.payload_sha,
+                    },
+                },
+            ),
+        )
+
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
+            mock_adapter.check_dedup.return_value = None
+
+            result = process_single_item(item, "worker", mock_client, config)
+
+            assert result.success is False
+            assert result.action == "redirect"
+            assert result.reason == "outbox_flush_retry"
+            assert "openmemory_consistency_failed:space_mismatch" in (result.error or "")
+            mock_adapter.ack_sent.assert_not_called()
+            mock_adapter.fail_retry.assert_called_once()
+
+    def test_transient_readback_error_keeps_success(self, config):
+        """不确定的 GET 抖动不应把已成功写入误判为失败。"""
+        item = make_outbox_item(
+            outbox_id=23,
+            target_space="private:alice",
+            payload_sha="sha_readback_skip",
+        )
+
+        mock_client = ReadbackCapableClient(
+            store_result=MockStoreResult(success=True, memory_id="mem_readback_skip"),
+            get_result=GetResult(success=False, error="http_error: 503"),
+        )
+
+        with patch("engram.gateway.outbox_worker.logbook_adapter") as mock_adapter:
+            mock_adapter.check_dedup.return_value = None
+
+            result = process_single_item(item, "worker", mock_client, config)
+
+            assert result.success is True
+            assert result.action == "allow"
+            assert result.reason == "outbox_flush_success"
+            mock_adapter.ack_sent.assert_called_once()
+
     def test_dead_result(self, config):
         """死信时返回正确结果"""
         item = make_outbox_item(outbox_id=3, retry_count=2)  # 下次就是第3次
@@ -607,10 +742,27 @@ class TestOpenMemoryClientConfig:
             mock_adapter.check_dedup.return_value = None
 
             # 模拟 store 方法
-            with patch.object(
-                openmemory_client.OpenMemoryClient,
-                "store",
-                return_value=MockStoreResult(success=True, memory_id="mem_1"),
+            with (
+                patch.object(
+                    openmemory_client.OpenMemoryClient,
+                    "store",
+                    return_value=MockStoreResult(success=True, memory_id="mem_1"),
+                ),
+                patch.object(
+                    openmemory_client.OpenMemoryClient,
+                    "get_memory",
+                    return_value=GetResult(
+                        success=True,
+                        memory={
+                            "id": "mem_1",
+                            "content": "test",
+                            "metadata": {
+                                "target_space": "private:test",
+                                "payload_sha": "sha123",
+                            },
+                        },
+                    ),
+                ),
             ):
                 process_batch(config, worker_id="test-worker")
 
@@ -668,10 +820,27 @@ class TestOpenMemoryClientConfig:
             mock_adapter.OutboxItem = OutboxItem
             mock_adapter.check_dedup.return_value = None
 
-            with patch.object(
-                openmemory_client.OpenMemoryClient,
-                "store",
-                return_value=MockStoreResult(success=True, memory_id="mem_1"),
+            with (
+                patch.object(
+                    openmemory_client.OpenMemoryClient,
+                    "store",
+                    return_value=MockStoreResult(success=True, memory_id="mem_1"),
+                ),
+                patch.object(
+                    openmemory_client.OpenMemoryClient,
+                    "get_memory",
+                    return_value=GetResult(
+                        success=True,
+                        memory={
+                            "id": "mem_1",
+                            "content": "test",
+                            "metadata": {
+                                "target_space": "private:test",
+                                "payload_sha": "sha123",
+                            },
+                        },
+                    ),
+                ),
             ):
                 process_batch(config, worker_id="test-worker")
 

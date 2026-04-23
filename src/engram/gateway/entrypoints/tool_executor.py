@@ -171,7 +171,10 @@ async def execute_tool(
                     result_dict["message"] = list_result.error
 
             elif tool == "memory_get":
-                get_result = deps.openmemory_client.get_memory(memory_id=args.get("memory_id", ""))
+                get_result = deps.openmemory_client.get_memory(
+                    memory_id=args.get("memory_id", ""),
+                    user_id=args.get("user_id"),
+                )
                 result_dict = {
                     "ok": get_result.success,
                     "memory": get_result.memory,

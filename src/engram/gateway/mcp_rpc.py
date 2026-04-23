@@ -674,6 +674,7 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
             "type": "object",
             "properties": {
                 "memory_id": {"type": "string", "description": "记忆 ID"},
+                "user_id": {"type": "string", "description": "用户 ID（private 记忆排查可选）"},
             },
             "required": ["memory_id"],
         },

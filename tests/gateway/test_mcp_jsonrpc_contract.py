@@ -740,6 +740,36 @@ class TestToolsCall:
         payload = json.loads(result["result"]["content"][0]["text"])
         assert payload["ok"] is True
         assert payload["memory"]["id"] == "m-1"
+        mock_client.get_memory.assert_called_once_with(memory_id="m-1", user_id=None)
+
+    def test_tools_call_memory_get_with_user_id(self, client, mock_dependencies):
+        """memory_get 支持透传可选 user_id。"""
+        mock_client = mock_dependencies["client"]
+        mock_client.get_memory.return_value = MagicMock(
+            success=True,
+            memory={"id": "m-1", "content": "hello", "user_id": "alice"},
+            error=None,
+        )
+
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_get",
+                    "arguments": {"memory_id": "m-1", "user_id": "alice"},
+                },
+                "id": 31,
+            },
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None
+        payload = json.loads(result["result"]["content"][0]["text"])
+        assert payload["ok"] is True
+        assert payload["memory"]["id"] == "m-1"
+        mock_client.get_memory.assert_called_once_with(memory_id="m-1", user_id="alice")
 
     def test_tools_call_memory_reinforce(self, client, mock_dependencies):
         """调用 memory_reinforce 工具"""

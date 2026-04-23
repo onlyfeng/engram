@@ -473,7 +473,7 @@ Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`
 
 | 分层 | 工具 | 说明 |
 |------|------|------|
-| **只读** | `memory_query`, `reliability_report`, `evidence_read`, `artifacts_get`, `artifacts_exists`, `logbook_get_kv`, `logbook_query_items`, `logbook_query_events`, `logbook_list_attachments`, `scm_patch_blob_resolve` | 无写入副作用 |
+| **只读** | `memory_query`, `memory_list`, `memory_get`, `reliability_report`, `evidence_read`, `artifacts_get`, `artifacts_exists`, `logbook_get_kv`, `logbook_query_items`, `logbook_query_events`, `logbook_list_attachments`, `scm_patch_blob_resolve` | 无写入副作用 |
 | **写入** | `memory_store`, `governance_update`, `evidence_upload`, `artifacts_put`, `logbook_create_item`, `logbook_add_event`, `logbook_attach`, `logbook_set_kv`, `scm_materialize_patch_blob` | 可能写入 OpenMemory/Logbook/ArtifactStore |
 
 **鉴权约束**：
@@ -484,7 +484,7 @@ Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`
 
 | 属性 | 值 |
 |------|-----|
-| **描述** | 存储记忆到 OpenMemory，含策略校验、审计、失败降级到 outbox |
+| **描述** | 存储记忆到 OpenMemory，含策略校验、审计、写后读一致性校验、失败降级到 outbox |
 | **必需参数** | `payload_md` |
 
 **输入参数**：
@@ -518,11 +518,16 @@ Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`
 
 | action | ok | 含义 | 后续处理 |
 |--------|-----|------|----------|
-| `allow` | true | 直接写入 OpenMemory 成功 | 无 |
-| `redirect` | true | 策略降级：空间被重定向后写入成功 | 无 |
+| `allow` | true | 直接写入 OpenMemory 成功，且稳定写后读校验通过 | 无 |
+| `redirect` | true | 策略降级：空间被重定向后写入成功，且稳定写后读校验通过 | 无 |
 | `deferred` | false | OpenMemory 不可用，已入队 outbox | outbox_worker 后台重试 |
 | `reject` | false | 策略拒绝，未写入 | 无 |
 | `error` | false | 内部错误（如审计写入失败） | 需人工介入 |
+
+> **写后读校验说明**：
+> - Gateway 在 `memory_store` 成功返回前，会对刚写入的 `memory_id` 执行一次 `GET /memory/:id` 校验，确认 `space` / `content` / `payload_sha` 与请求一致。
+> - private 空间会附带 owner `user_id` 读取，避免上游跨用户 dedup 命中时返回错误对象。
+> - 仅可确定的一致性异常（如 not found / memory_id 不一致 / payload 不一致）会将本次写入收敛为失败；瞬时或未分类的 GET 错误仅记 warning，不降级已确认的写入。
 
 > **对外响应 vs 审计内部 action 的区别**：
 > - 对外响应使用 `deferred` 明确告知调用方操作已入队
@@ -559,6 +564,61 @@ Gateway 通过 MCP 暴露以下工具，定义在 [`mcp_rpc.py::AVAILABLE_TOOLS`
 | `degraded` | boolean | 是否为降级查询结果 |
 
 **降级语义**：当 `degraded=true` 时，结果来自 Logbook 的 `knowledge_candidates` 表回退查询。
+
+---
+
+### `memory_list` - 列出记忆
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 列出 OpenMemory 记忆，支持 user/space 过滤与分页 |
+| **必需参数** | 无 |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `user_id` | string | 否 | 用户过滤 |
+| `space` | string | 否 | 空间过滤 |
+| `limit` | integer | 否 | 返回数量限制（默认 100） |
+| `offset` | integer | 否 | 分页偏移（默认 0） |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 查询是否成功 |
+| `memories` | array | 记忆列表 |
+| `total` | integer | 结果总数 |
+| `message` | string | 附加消息 |
+
+---
+
+### `memory_get` - 获取单条记忆
+
+| 属性 | 值 |
+|------|-----|
+| **描述** | 按 `memory_id` 获取单条记忆详情 |
+| **必需参数** | `memory_id` |
+
+**输入参数**：
+
+| 参数 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `memory_id` | string | **是** | 记忆 ID |
+| `user_id` | string | 否 | 用户 ID；private 空间排查或 owner-scoped 读取时可选传入 |
+
+**返回结构**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ok` | boolean | 查询是否成功 |
+| `memory` | object | 记忆详情 |
+| `message` | string | 附加消息 |
+
+**owner-scoped 读取说明**：
+- `memory_get` 会直连 OpenMemory `GET /memory/:id`。
+- 当传入 `user_id` 时，Gateway 会将其作为 query param 透传给 OpenMemory，帮助 private 空间按 owner 约束读取，避免跨用户 dedup 命中错误对象。
 
 ---
 
@@ -1029,8 +1089,9 @@ Gateway 依赖 `engram_logbook` 提供的原语接口：
 
 | 操作 | 依赖 | 降级行为 |
 |------|------|----------|
-| **写入** | `OpenMemoryClient.store()` | 失败入 outbox，后台重试 |
+| **写入** | `OpenMemoryClient.store()` + `OpenMemoryClient.get_memory()` | `store()` 失败入 outbox，后台重试；成功后以 `get_memory()` 做写后读校验，稳定一致性异常按失败处理 |
 | **查询** | `OpenMemoryClient.search()` | 降级到 Logbook `knowledge_candidates` |
+| **单条读取/校验** | `OpenMemoryClient.get_memory()` | 供 `memory_get` 与写后读校验复用；private 场景可附带 owner `user_id` |
 
 ### 运行模式差异（HTTP_ONLY / FULL）
 
@@ -1689,7 +1750,7 @@ reason 采用分层命名，区分业务层与协议/依赖层：
 | 状态 | 说明 | 后续操作 |
 |------|------|----------|
 | `pending` | 等待处理或重试中 | outbox_worker 会 claim 并处理 |
-| `sent` | 成功写入 OpenMemory | 终态，无后续操作 |
+| `sent` | 成功写入 OpenMemory，且满足成功判定（写后读校验通过，或仅出现瞬时/未分类 GET 异常） | 终态，无后续操作 |
 | `dead` | 超过最大重试次数 | 终态，需人工介入 |
 
 ### Lease 协议
@@ -1697,7 +1758,7 @@ reason 采用分层命名，区分业务层与协议/依赖层：
 | 操作 | 函数 | 说明 | 单一事实来源 |
 |------|------|------|--------------|
 | **领取任务** | `claim_outbox(worker_id, limit, lease_seconds)` | 获取 pending 记录并设置 lease | `outbox_worker.py` |
-| **确认成功** | `ack_sent(outbox_id, worker_id, memory_id)` | 标记为 sent | `outbox_worker.py` |
+| **确认成功** | `ack_sent(outbox_id, worker_id, memory_id)` | 在写入成功且稳定写后读校验通过后标记为 sent | `outbox_worker.py` |
 | **失败重试** | `fail_retry(outbox_id, worker_id, error, next_attempt_at)` | 保持 pending，递增 retry_count | `outbox_worker.py` |
 | **标记死信** | `mark_dead(outbox_id, worker_id, error)` | 标记为 dead | `outbox_worker.py` |
 | **续期租约** | `renew_lease(outbox_id, worker_id)` | 延长 lease 时间 | `outbox_worker.py` |
@@ -1708,7 +1769,7 @@ reason 采用分层命名，区分业务层与协议/依赖层：
 
 | outbox 状态 | 审计 action | 审计 reason | 说明 | 单一事实来源 |
 |-------------|-------------|-------------|------|--------------|
-| `sent` | `allow` | `outbox_flush_success` | 成功写入 OpenMemory | `engram_logbook.errors:ErrorCode` |
+| `sent` | `allow` | `outbox_flush_success` | 成功写入 OpenMemory，且稳定写后读校验通过（瞬时/未分类 GET 错误不降级） | `engram_logbook.errors:ErrorCode` |
 | `sent` (dedup) | `allow` | `outbox_flush_dedup_hit` | 去重命中，跳过写入 | `engram_logbook.errors:ErrorCode` |
 | `pending` (retry) | `redirect` | `outbox_flush_retry` | 失败重试，延后处理 | `engram_logbook.errors:ErrorCode` |
 | `dead` | `reject` | `outbox_flush_dead` | 超过最大重试，放弃 | `engram_logbook.errors:ErrorCode` |

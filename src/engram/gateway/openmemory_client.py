@@ -1642,9 +1642,9 @@ def list_memories(
     return get_client().list_memories(user_id, space, limit, offset)
 
 
-def get_memory(memory_id: str) -> GetResult:
+def get_memory(memory_id: str, user_id: Optional[str] = None) -> GetResult:
     """便捷函数：获取单条记忆（OpenMemory 1.3.x 兼容）"""
-    return get_client().get_memory(memory_id)
+    return get_client().get_memory(memory_id, user_id=user_id)
 
 
 def reinforce_memory(

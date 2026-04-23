@@ -70,15 +70,17 @@
 | `GET` | `/dashboard/stats` | Dashboard 指标（JSON） |
 | `GET` | `/dashboard/activity` | 最近活动（JSON） |
 | `GET` | `/memory/all` | 记忆列表（JSON） |
-| `GET` | `/memory/:id` | 记忆详情（JSON） |
+| `GET` | `/memory/:id` | 记忆详情（JSON，可选 `user_id` query param） |
 | `POST` | `/memory/reinforce` | 强化记忆 |
 | `DELETE` | `/users/:user_id/memories` | 按用户清空记忆（当前上游主路径） |
 
 > 说明：
 > - `/dashboard/*` 为指标 JSON 端点（非 HTML UI），浏览器可直接打开查看 JSON。
 > - 当设置了 `OM_API_KEY`（或 `OPENMEMORY_API_KEY`）时，除 public endpoint 外都需要携带 `Authorization: Bearer <key>` 或 `x-api-key: <key>`。
+> - `GET /memory/:id` 在 private 空间排查场景下可附带 `user_id`，让 OpenMemory 按 owner 约束读取，避免跨用户 dedup 命中错误对象。
 > - 浏览器注入 Header（ModHeader）与端点自检清单，参见 [安装指南](../installation.md) 的「验证 OpenMemory 连接」小节。
 > - 由于 OpenMemory 上游处于重写期，Gateway client 当前会自动兼容 `/memory/query` / `/memory/search`、`/memory/*` / `/api/memory/*`、以及缺失 wipe 端点时的逐条删除回退。
+> - Gateway 在直写 `memory_store` 与 outbox flush 成功路径都会执行一次 `GET /memory/:id` 写后读校验，确认 `space` / `content` / `payload_sha`；仅瞬时或未分类 GET 错误不会降级已确认的写入。
 
 **字段映射规范**
 
