@@ -351,7 +351,7 @@ async def execute_tool(
             elif tool == "logbook_query_events":
                 result_dict = await execute_logbook_query_events(
                     limit=args.get("limit", 100),
-                    item_id=args.get("item_id"),
+                    item_id=args.get("item_id") or args.get("filter_item_id"),
                     event_type=args.get("event_type"),
                     actor_user_id=args.get("actor_user_id"),
                     since=args.get("since"),

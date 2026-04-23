@@ -460,9 +460,10 @@ class FakeOpenMemoryClient:
         self,
         memory_id: str,
         retry_config: Optional[RetryConfig] = None,
+        user_id: Optional[str] = None,
     ) -> FakeGetResult:
         """获取单条记忆（模拟）"""
-        call_args = {"memory_id": memory_id, "retry_config": retry_config}
+        call_args = {"memory_id": memory_id, "retry_config": retry_config, "user_id": user_id}
         self.get_calls.append(call_args)
         assert self._get_behavior is not None
         return self._get_behavior(**call_args)

@@ -148,6 +148,7 @@ class _ReadbackClient(Protocol):
         self,
         memory_id: str,
         retry_config: Optional[RetryConfig] = None,
+        user_id: Optional[str] = None,
     ) -> GetResult: ...
 
 
@@ -240,28 +241,54 @@ def _supports_readback_retry_config(client: object) -> bool:
     )
 
 
+def _supports_readback_user_id(client: object) -> bool:
+    """判断 client.get_memory 是否显式支持 user_id 或 **kwargs。"""
+    get_memory = getattr(client, "get_memory", None)
+    if not callable(get_memory):
+        return False
+
+    try:
+        signature = inspect.signature(get_memory)
+    except (TypeError, ValueError):
+        return False
+
+    parameters = signature.parameters.values()
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD or parameter.name == "user_id"
+        for parameter in parameters
+    )
+
+
 async def _verify_readback_after_store(
     *,
     client: object,
     memory_id: str,
     expected_space: str,
     expected_payload_sha: str,
+    openmemory_user_id: Optional[str] = None,
 ) -> _ReadbackVerificationResult:
     """
     用短暂重试覆盖 OpenMemory 的瞬时读写抖动。
 
     对未实现 typed `get_memory()` 的测试 stub 降级为跳过校验，避免把
     “未配置 readback 返回值的 mock”误判成线上一致性故障。
+
+    openmemory_user_id 在私有空间写入时透传给 GET 请求，让 OpenMemory 后端
+    可以按 owner 做读取约束，避免跨用户 dedup 引起 space_mismatch。
     """
     if not isinstance(client, _ReadbackClient) or not _supports_readback_retry_config(client):
         return _ReadbackVerificationResult()
 
+    pass_user_id = _supports_readback_user_id(client)
+
     last_failure: Optional[_ReadbackValidationFailure] = None
     last_skipped_error: Optional[str] = None
     for attempt in range(READBACK_VERIFY_ATTEMPTS):
+        extra_kwargs: Dict[str, Any] = {"user_id": openmemory_user_id} if pass_user_id else {}
         get_result = client.get_memory(
             memory_id,
             retry_config=READBACK_VERIFY_GET_RETRY_CONFIG,
+            **extra_kwargs,
         )
         if not isinstance(get_result, GetResult):
             return _ReadbackVerificationResult()
@@ -632,6 +659,7 @@ async def memory_store_impl(
                 memory_id=memory_id,
                 expected_space=final_space,
                 expected_payload_sha=payload_sha,
+                openmemory_user_id=openmemory_user_id,
             )
             readback_failure = readback_result.failure
             if readback_failure is not None:

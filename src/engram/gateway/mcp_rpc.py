@@ -952,6 +952,7 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
             "properties": {
                 "limit": {"type": "integer", "description": "返回数量上限"},
                 "item_id": {"type": "integer", "description": "按 item_id 过滤"},
+                "filter_item_id": {"type": "integer", "description": "item_id 的兼容别名，效果相同"},
                 "event_type": {"type": "string", "description": "按事件类型过滤"},
                 "actor_user_id": {"type": "string", "description": "按操作者过滤"},
                 "since": {"type": "string", "description": "起始时间（ISO 8601）"},

@@ -1241,6 +1241,7 @@ class OpenMemoryClient:
         self,
         memory_id: str,
         retry_config: Optional[RetryConfig] = None,
+        user_id: Optional[str] = None,
     ) -> GetResult:
         """
         获取单条记忆详情（OpenMemory 1.3.x 兼容）
@@ -1250,6 +1251,8 @@ class OpenMemoryClient:
         Args:
             memory_id: 记忆 ID
             retry_config: 可选重试配置；为 None 时沿用客户端默认策略
+            user_id: 可选用户 ID；传入时作为 query param，让 OpenMemory 按 owner 约束读取，
+                     避免跨用户 dedup 引起 space_mismatch
 
         Returns:
             GetResult 结果对象
@@ -1263,9 +1266,10 @@ class OpenMemoryClient:
             attributes={"openmemory.operation": operation},
         ):
             try:
+                params_variants = [{"user_id": user_id}] if user_id else [{}]
                 response = self._get_compat(
                     paths=[f"/memory/{memory_id}"],
-                    params_variants=[{}],
+                    params_variants=params_variants,
                     allowed_statuses=(404,),
                     retry_config=retry_config,
                 )
