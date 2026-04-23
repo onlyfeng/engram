@@ -790,6 +790,39 @@ class TestToolsCall:
         assert payload["error_code"] == "INVALID_PARAM_VALUE"
 
 
+    def test_logbook_query_events_filter_item_id_alias(self, client, mock_dependencies):
+        """filter_item_id 作为 item_id 的别名，路由时必须透传相同的整数值。"""
+        captured = {}
+
+        async def fake_query_events(limit, item_id, event_type, actor_user_id, since, *, deps):
+            captured["item_id"] = item_id
+            return {"ok": True, "events": [], "count": 0}
+
+        with patch(
+            "engram.gateway.handlers.execute_logbook_query_events",
+            side_effect=fake_query_events,
+        ):
+            response = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "logbook_query_events",
+                        "arguments": {"filter_item_id": 42},
+                    },
+                    "id": 1,
+                },
+            )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result.get("error") is None, f"期望无错误，实际: {result.get('error')}"
+        assert captured.get("item_id") == 42, (
+            f"filter_item_id 应路由为 item_id=42，实际: {captured.get('item_id')}"
+        )
+
+
 class TestLegacyProtocol:
     """测试旧 {tool, arguments} 格式仍返回原 MCPResponse 结构"""
 

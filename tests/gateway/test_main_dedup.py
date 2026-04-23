@@ -576,6 +576,50 @@ class TestMemoryStoreReadbackValidation:
         assert fake_db.update_audit_calls[-1]["status"] == "success"
         assert legacy_client.get_calls == []
 
+    @pytest.mark.asyncio
+    async def test_private_space_readback_passes_owner_as_user_id(self):
+        """私有空间写后读 GET 必须携带 owner user_id，防止跨用户串读。"""
+        payload_md = "# Private readback owner check"
+        target_space = "private:alice"
+        payload_sha = compute_payload_sha(payload_md)
+
+        fake_config = FakeGatewayConfig(default_team_space="team:test")
+        fake_db = FakeLogbookDatabase()
+        fake_db.configure_settings(team_write_enabled=True, policy_json={})
+        fake_adapter = FakeLogbookAdapter()
+        fake_adapter.bind_database(fake_db)
+        fake_adapter.configure_dedup_miss()
+        fake_client = FakeOpenMemoryClient()
+        fake_client.configure_store_success(memory_id="mem_owner_check")
+        fake_client.configure_get_success(
+            memory={
+                "id": "mem_owner_check",
+                "content": payload_md,
+                "metadata": {"target_space": target_space, "payload_sha": payload_sha},
+            }
+        )
+
+        deps = GatewayDeps.for_testing(
+            config=fake_config,
+            db=fake_db,
+            logbook_adapter=fake_adapter,
+            openmemory_client=fake_client,
+        )
+
+        result = await memory_store_impl(
+            payload_md=payload_md,
+            target_space=target_space,
+            actor_user_id="alice",
+            correlation_id=_test_correlation_id(),
+            deps=deps,
+        )
+
+        assert result.ok is True
+        assert fake_client.get_calls, "readback GET 应该被调用"
+        assert all(call["user_id"] == "alice" for call in fake_client.get_calls), (
+            "私有空间的所有 readback GET 必须携带 owner user_id"
+        )
+
 
 # ==================== strict evidence 校验测试 ====================
 
