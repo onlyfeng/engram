@@ -19,6 +19,7 @@ Notes:
   - Resolution order: --openmemory-dir / OPENMEMORY_DIR, ../openmemory, common local dirs, global opm
   - Falls back to global `opm` when no runnable local checkout is found
   - OPENMEMORY_FIRST_RUN=1 in env files has the same effect as --first-run
+  - OPM=/path/to/opm can pin a custom CLI binary or wrapper when needed
 EOF
 }
 
@@ -58,6 +59,21 @@ else
 fi
 _CALLER_OM_MIGRATOR_PW="${OPENMEMORY_MIGRATOR_PASSWORD:-}"
 _CALLER_OM_PG_PW="${OM_PG_PASSWORD:-}"
+if [ -n "${OPM:-}" ]; then
+  case "${OPM}" in
+    */*)
+      case "${OPM}" in
+        /*) _CALLER_OPM="${OPM}" ;;
+        *)  _CALLER_OPM="${_CALLER_DIR}/${OPM}" ;;
+      esac
+      ;;
+    *)
+      _CALLER_OPM="${OPM}"
+      ;;
+  esac
+else
+  _CALLER_OPM=""
+fi
 
 # Source env files first so CLI args can override them.
 cd "${REPO_ROOT}"
@@ -76,7 +92,10 @@ fi
 if [ -n "${_CALLER_OM_PG_PW}" ]; then
   OM_PG_PASSWORD="${_CALLER_OM_PG_PW}"
 fi
-unset _CALLER_OM_FIRST_RUN _CALLER_OM_DIR _CALLER_OM_MIGRATOR_PW _CALLER_OM_PG_PW
+if [ -n "${_CALLER_OPM}" ]; then
+  OPM="${_CALLER_OPM}"
+fi
+unset _CALLER_OM_FIRST_RUN _CALLER_OM_DIR _CALLER_OM_MIGRATOR_PW _CALLER_OM_PG_PW _CALLER_OPM
 
 OPENMEMORY_DIR="${OPENMEMORY_DIR:-}"
 FIRST_RUN=0
@@ -158,7 +177,28 @@ fi
 
 openmemory_dir="$(resolve_openmemory_dir || true)"
 node_cmd="$(command -v node || true)"
-opm_cmd="$(command -v opm || true)"
+EXPLICIT_OPM=0
+if [ -n "${OPM:-}" ]; then
+  EXPLICIT_OPM=1
+  case "${OPM}" in
+    */*)
+      if [ ! -x "${OPM}" ]; then
+        echo "[ERROR] 指定的 OPM 可执行文件不可执行: ${OPM}" >&2
+        exit 1
+      fi
+      opm_cmd="${OPM}"
+      ;;
+    *)
+      opm_cmd="$(command -v "${OPM}" || true)"
+      if [ -z "${opm_cmd}" ]; then
+        echo "[ERROR] 在 PATH 中未找到指定的 OPM 命令: ${OPM}" >&2
+        exit 1
+      fi
+      ;;
+  esac
+else
+  opm_cmd="$(command -v opm || true)"
+fi
 
 if [ "${FIRST_RUN}" = "1" ]; then
   if [ -z "${OPENMEMORY_MIGRATOR_PASSWORD:-}" ] && [ -z "${OM_PG_PASSWORD:-}" ]; then
@@ -183,6 +223,14 @@ if [ -n "${openmemory_dir}" ]; then
   echo "       dir=${openmemory_dir}"
 else
   echo "       dir=<auto>"
+fi
+
+if [ "${EXPLICIT_OPM}" = "1" ]; then
+  echo "       runtime=explicit-opm (${opm_cmd})"
+  if [ -n "${openmemory_dir}" ] && [ -d "${openmemory_dir}" ]; then
+    cd "${openmemory_dir}"
+  fi
+  exec "${opm_cmd}" serve
 fi
 
 if [ -n "${openmemory_dir}" ] \

@@ -1022,6 +1022,7 @@ iteration-min-regression:  ## 运行最小迭代回归命令集（TYPES=cycle DR
 
 openmemory:  ## 启动 OpenMemory 服务（自动加载 .env/.env.local）
 	@set -e; \
+	if [ "$(origin OPM)" != "file" ] || [ "$(OPM)" != "opm" ]; then export OPM="$(OPM)"; else unset OPM; fi; \
 	_om_dir="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
 	if [ -n "$$_om_dir" ]; then \
 		scripts/ops/start_openmemory.sh --openmemory-dir "$$_om_dir"; \
@@ -1115,6 +1116,7 @@ help:  ## 显示帮助信息
 	@echo "  OPENMEMORY_BASE_URL   OpenMemory 地址 (默认: http://localhost:8080)"
 	@echo "  OPENMEMORY_DIR        OpenMemory 目录（可选；顺序：指定目录 > ../openmemory > 常见本地目录 > 全局 opm）"
 	@echo "  OPENMEMORY_FIRST_RUN  设为 1 时，make openmemory 自动使用 migrator + OM_PG_AUTO_DDL=true"
+	@echo "  OPM                   OpenMemory CLI 命令/路径（可选；显式指定时优先于 PATH 中的 opm）"
 	@echo ""
 	@echo "\033[1m多项目部署示例:\033[0m"
 	@echo "  PROJECT_KEY=proj_a POSTGRES_DB=proj_a make setup-db"

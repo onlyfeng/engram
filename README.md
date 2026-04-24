@@ -187,6 +187,12 @@ make openmemory
 > ```bash
 > OPENMEMORY_FIRST_RUN=1 make openmemory
 > ```
+>
+> 如需显式指定自定义 `opm` 包装器或非 PATH 安装位置：
+>
+> ```bash
+> OPM=/path/to/opm make openmemory
+> ```
 
 Windows PowerShell：
 
