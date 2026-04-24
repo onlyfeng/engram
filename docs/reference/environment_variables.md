@@ -341,6 +341,16 @@ POSTGRES_PASSWORD=postgres
 | `DASHBOARD_PORT` | Dashboard 服务端口 | `3000` |
 | `NEXT_PUBLIC_API_URL` | 前端 API 地址 | `http://localhost:${OM_PORT}` |
 | `NEXT_PUBLIC_API_KEY` | 前端 API 密钥 | `${OM_API_KEY}` |
+| `OPENMEMORY_DASHBOARD_PORT` | 本地 OpenMemory Dashboard launcher 端口 | `3000` |
+| `OPENMEMORY_DASHBOARD_DIR` | 本地 OpenMemory repo root 或 `dashboard/` 目录 | - |
+
+### OpenMemory 本地源码 Launcher 配置（可选）
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `OPENMEMORY_DIR` | 本地 OpenMemory `packages/openmemory-js` 目录（后端 launcher） | 自动探测 |
+| `OPENMEMORY_FIRST_RUN` | `1` 时后端 launcher 临时使用 migrator + `OM_PG_AUTO_DDL=true` | `0` |
+| `OPM` | 自定义 `opm` 可执行文件或 wrapper 路径 | `opm` |
 
 ---
 

@@ -131,38 +131,54 @@ Add-Content -Path ".\.env.ps1" -Value '$env:OM_API_KEY="change_me"'
 Add-Content -Path ".\.env.ps1" -Value '$env:OM_TIER="hybrid"'
 ```
 
-如果你还没有准备可运行的 OpenMemory checkout / `opm` 命令，再额外执行一次：
+如果你还没有准备可运行的 OpenMemory checkout / `opm` 命令，再额外执行一次。这里的“官方源码”指当前 Engram 适配的上游仓库
+[`CaviraOSS/OpenMemory`](https://github.com/CaviraOSS/OpenMemory)；“三方源码”指你自己的 fork 或其他兼容分支。三方源码必须至少保留：
+
+- `packages/openmemory-js/`：OpenMemory API / MCP 后端，`make openmemory` 会使用它
+- `dashboard/`：OpenMemory Next.js Dashboard，`make openmemory-dashboard` 会使用它
+
+推荐把你希望默认使用的 checkout 放在 Engram 同级目录 `../openmemory`；其他 fork 可以放到任意目录，并通过 `OPENMEMORY_DIR` / `OPENMEMORY_DASHBOARD_DIR` 显式指定。
 
 macOS / WSL2：
 
 ```bash
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
-cd ~/openmemory
-# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
-# git checkout v1.3.3
+OPENMEMORY_REPO=https://github.com/CaviraOSS/OpenMemory.git  # 可替换成你的 fork URL
+git clone "$OPENMEMORY_REPO" ../openmemory
+cd ../openmemory
+
+# 后端 / opm CLI
 cd packages/openmemory-js
 npm install
 npm run build
 npm link   # 可选；仅当你希望全局使用 opm 时需要
+
+# Dashboard（可选，但 PR #9 的 make openmemory-dashboard 需要）
+cd ../../dashboard
+npm install
 ```
 
 Windows PowerShell：
 
 ```powershell
-git clone https://github.com/caviraoss/openmemory.git $env:USERPROFILE\openmemory   # 或替换成你的 fork URL
-cd $env:USERPROFILE\openmemory
-# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
-# git checkout v1.3.3
+$env:OPENMEMORY_REPO = "https://github.com/CaviraOSS/OpenMemory.git"  # 可替换成你的 fork URL
+git clone $env:OPENMEMORY_REPO "$env:USERPROFILE\openmemory"
+cd "$env:USERPROFILE\openmemory"
+
+# 后端 / opm CLI
 cd packages\openmemory-js
 npm install
 npm run build
 npm link   # 可选；仅当你希望全局使用 opm 时需要
+
+# Dashboard（可选，但 start_openmemory_dashboard.ps1 需要）
+cd ..\..\dashboard
+npm install
 ```
 
 > macOS / WSL2 下，`make setup-db` 生成的 `.env.local` 默认会包含 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 以及常用的 `OM_PG_*` 配置；`make openmemory` / `make gateway` 会自动加载它。
 > Windows 原生下，推荐使用 `.\scripts\windows\setup_db.ps1` 生成并维护本地 `.\.env.ps1`，后续终端直接加载它。
 >
-> `git checkout v1.3.3` 不是强制步骤：只有在你想复现“纯上游基线”时才需要。若你使用自己的 fork，且该 fork 仍保持 `1.3.3` 兼容面（或已完成兼容验证），可直接停留在你的分支/commit；改过 TS 源码后只需重新执行 `npm run build`。
+> 源码 checkout 不再强制 `git checkout v1.3.3`：如果你要复现某个冻结基线，请 pin 到你已验证过的 tag/commit；如果你使用三方 fork，只要它保持 `packages/openmemory-js` 和 `dashboard` 的兼容结构即可。改过后端 TS 源码后需重新执行 `npm run build`；改过 Dashboard 或首次运行 Dashboard 时需在 `dashboard/` 下执行 `npm install`。
 
 **日常启动**
 
@@ -206,6 +222,27 @@ Windows PowerShell：
 .\scripts\windows\start_openmemory.ps1
 ```
 
+终端 C（可选）：启动 OpenMemory Dashboard
+
+macOS / WSL2：
+
+```bash
+make openmemory-dashboard
+
+# 自定义端口或显式指定 OpenMemory repo root / dashboard 目录
+OPENMEMORY_DASHBOARD_PORT=3001 make openmemory-dashboard
+OPENMEMORY_DASHBOARD_DIR=/path/to/openmemory make openmemory-dashboard
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\windows\start_openmemory_dashboard.ps1
+.\scripts\windows\start_openmemory_dashboard.ps1 -OpenMemoryDir "$env:USERPROFILE\openmemory" -Port 3001
+```
+
+> Dashboard 启动脚本会自动加载 Engram 的 `.env` / `.env.local` / `.env.ps1`，并在未设置 `NEXT_PUBLIC_API_URL` 时优先使用 `OPENMEMORY_BASE_URL`，否则回退到 `http://localhost:<OM_PORT|8080>`。
+
 **使用同级 `openmemory` 源码目录**
 
 推荐目录布局如下：
@@ -242,6 +279,13 @@ Windows PowerShell：
 - 启动顺序与 `make openmemory` 保持一致：指定目录 -> 同级 `../openmemory` -> 常见本地目录 -> 全局 `opm`
 - 本地源码目录可运行时，直接执行 `node bin/opm.js serve`
 - 若未找到本地源码目录，或源码目录缺少 `bin/opm.js` / 编译产物，则回退到全局 `opm`（如已安装）
+
+Dashboard 对应脚本：
+
+- macOS / Linux / WSL2: `scripts/ops/start_openmemory_dashboard.sh`
+- Windows PowerShell: `.\scripts\windows\start_openmemory_dashboard.ps1`
+- 启动顺序：`OPENMEMORY_DASHBOARD_DIR` / 参数指定 -> 从 `OPENMEMORY_DIR` 推导（支持 repo root 或 `packages/openmemory-js`）-> 同级 `../openmemory/dashboard` -> 常见本地目录
+- Dashboard 不回退到全局 `opm`；它要求目标目录存在 `package.json`，并且已安装依赖（`node_modules/.bin/next`）
 
 **可选：如你不希望回退到全局 OpenMemory，可先移除全局安装**
 
@@ -290,6 +334,7 @@ macOS / WSL2：
 ```bash
 curl -fsS http://127.0.0.1:8080/health && echo "OpenMemory OK"
 curl -fsS http://127.0.0.1:8787/health && echo "Gateway OK"
+# 可选：Dashboard 启动后访问 http://127.0.0.1:3000
 make mcp-doctor
 # 可选：make stack-doctor
 ```
@@ -299,6 +344,7 @@ Windows PowerShell：
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8080/health | Out-Null
 Invoke-RestMethod http://127.0.0.1:8787/health | Out-Null
+# 可选：Dashboard 启动后访问 http://127.0.0.1:3000
 python scripts/ops/mcp_doctor.py
 # 可选：python scripts/ops/stack_doctor.py
 ```
@@ -432,9 +478,11 @@ docker compose -f docker-compose.unified.yml down -v
 |------|------|-------------|
 | Linux/macOS/WSL | 加载环境变量 | `source scripts/ops/load_env_local.sh` |
 | Linux/macOS/WSL | 启动 OpenMemory（顺序：指定目录 > 同级源码 > 常见本地目录 > 全局 opm） | `scripts/ops/start_openmemory.sh` |
+| Linux/macOS/WSL | 启动 OpenMemory Dashboard（Next.js dev server） | `scripts/ops/start_openmemory_dashboard.sh` |
 | Windows PowerShell | 加载环境变量 | `.\scripts\windows\load_env_local.ps1` |
 | Windows PowerShell | 一键初始化数据库 | `.\scripts\windows\setup_db.ps1` |
 | Windows PowerShell | 启动 OpenMemory（顺序：指定目录 > 同级源码 > 常见本地目录 > 全局 opm） | `.\scripts\windows\start_openmemory.ps1` |
+| Windows PowerShell | 启动 OpenMemory Dashboard（Next.js dev server） | `.\scripts\windows\start_openmemory_dashboard.ps1` |
 | Windows PowerShell | 启动 Gateway | `.\scripts\windows\start_gateway.ps1` |
 | Windows PowerShell | 无 make 运行 CI 门禁 | `.\scripts\windows\ci.ps1` |
 | Windows PowerShell | 全栈诊断 | `.\scripts\windows\stack_doctor.ps1` |
@@ -597,6 +645,7 @@ make verify-permissions     # 验证数据库权限配置
 
 # 服务
 make openmemory    # 启动 OpenMemory（自动加载 .env/.env.local）
+make openmemory-dashboard  # 启动 OpenMemory Dashboard（自动加载 .env/.env.local）
 make gateway       # 启动 Gateway（带热重载）
 
 # 测试
@@ -618,6 +667,7 @@ make check-iteration-docs  # 迭代文档规范检查
 | `make install-dev` | `pip install -e ".[full,dev]"` |
 | `make setup-db` | 建议使用 WSL 或参考 [安装指南](docs/installation.md) 分步执行 |
 | `make openmemory` | `.\scripts\windows\start_openmemory.ps1` |
+| `make openmemory-dashboard` | `.\scripts\windows\start_openmemory_dashboard.ps1` |
 | `make gateway` | `.\scripts\windows\start_gateway.ps1` |
 | `make ci` | `.\scripts\windows\ci.ps1`（或 `python scripts/ops/ci_no_make.py`） |
 | `make mcp-doctor` | `python scripts/ops/mcp_doctor.py` |

@@ -7,7 +7,7 @@
 
 ## 1. 根因：跨文件一致性检查密度极高
 
-`make ci` 包含 **30 个检查目标**，其中 **12 个为跨文件一致性检查**。修改任一文件而未同步关联文件，即触发失败。
+`make ci` 包含 **31 个检查目标**，其中至少 **12 个为跨文件一致性检查**。修改任一文件而未同步关联文件，即触发失败。
 
 ### 最高耦合区域
 
@@ -100,6 +100,7 @@ make ci              # 2. 再验证，确保无新增问题
 | 迭代文档 | `make check-iteration-docs` |
 | JSON / Schema | `make check-schemas` |
 | Workflow 合约 | `make validate-workflows-strict && make check-workflow-contract-docs-sync` |
+| Makefile `ci` / no-make wrapper / OpenMemory launcher | `make check-local-ci-smoke && python scripts/ops/ci_no_make.py --dry-run --json` |
 | 环境变量 | `make check-env-consistency` |
 | Gateway 代码 | `make check-gateway-public-api-surface && make check-gateway-di-boundaries` |
 | 全量验证 | `make ci` |
@@ -157,6 +158,21 @@ feat: some feature
 - `&&` → `;`（命令分隔）
 - `<<'EOF'...EOF` → 多个 `-m` 参数或 `@"..."@`（多行字符串）
 - `dir /s /b` → `Get-ChildItem -Recurse`（目录列表）
+
+### 案例：本地 `make ci` 与 `ci_no_make.py` 漂移
+
+**问题**：`Makefile` 的 `ci:` 依赖增加目标后，`scripts/ops/ci_no_make.py` 未同步，导致 Windows / 无 GNU make 场景的本地 CI 等价入口少跑检查。
+
+**根因**：`make ci`、`ci_no_make.py`、`scripts/windows/ci.ps1` 是同一目标的不同入口；新增本地门禁时只改 Makefile 会破坏等价性。
+
+**修复**：新增/调整 `ci:` 依赖时同步 `CI_TARGET_ORDER` 与 `TARGET_COMMAND_TEMPLATES`，并运行：
+
+```bash
+make check-local-ci-smoke
+python scripts/ops/ci_no_make.py --dry-run --json
+```
+
+**教训**：CI 入口属于契约面。新增 PR 专属的轻量回归（如 OpenMemory launcher wrapper）应接入 `check-local-ci-smoke`，而不是只依赖 GitHub 上的完整 `pytest tests/ci/`。
 
 ---
 

@@ -441,25 +441,32 @@ OpenMemory 是独立的语义记忆服务，Engram 通过 HTTP API 与其通信�
 
 ### 使用 Node.js 后端（推荐）
 
-1) 安装/获取 OpenMemory（按上游 README）
+1) 安装/获取 OpenMemory（官方源码或兼容 fork）
 
 - 前置：Node.js >= 18
-- 获取源码并安装 `opm`（示例，按上游仓库结构为准）：
+- 官方源码：[`CaviraOSS/OpenMemory`](https://github.com/CaviraOSS/OpenMemory)
+- 三方源码 / fork：必须保留 `packages/openmemory-js/`（后端 / `opm`）和可选的 `dashboard/`（Next.js Dashboard）目录结构
+- 推荐目录：Engram 同级的 `../openmemory`。脚本会优先探测该目录，其他 checkout 可通过 `OPENMEMORY_DIR` / `OPENMEMORY_DASHBOARD_DIR` 指定。
 
 ```bash
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
-cd ~/openmemory
-# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
-# git checkout v1.3.3
+OPENMEMORY_REPO=https://github.com/CaviraOSS/OpenMemory.git  # 可替换成你的 fork URL
+git clone "$OPENMEMORY_REPO" ../openmemory
+cd ../openmemory
+
+# 后端 / opm CLI
 cd packages/openmemory-js
 npm install
 npm run build
 npm link   # 可选；仅当你希望全局使用 opm 时需要
+
+# Dashboard（可选；make openmemory-dashboard / start_openmemory_dashboard.ps1 需要）
+cd ../../dashboard
+npm install
 ```
 
 > 如果你的环境里 `opm` 仍不可用，请新开一个终端或确保 `npm` 的全局 bin 目录在 PATH 中。
 >
-> `git checkout v1.3.3` 并非强制。它只用于复现 Engram 当前记录的纯上游基线；如果你使用自己的 fork，且仍保持 `1.3.3` 兼容面（或已经完成兼容验证），可以直接停留在你的分支/commit。此时改完 TS 源码后重新执行 `npm run build` 即可。
+> 源码 checkout 不再强制 `git checkout v1.3.3`。若要复现某个冻结基线，请 pin 到你已验证过的 tag/commit；若使用三方 fork，只要它与 Engram 当前 OpenMemory 兼容面匹配即可。改完 `packages/openmemory-js/src` 后重新执行 `npm run build`；首次启动 Dashboard 或更新 Dashboard 依赖后，在 `dashboard/` 下执行 `npm install`。
 
 2) （推荐）在**新终端**加载 Engram 的本地环境变量文件，避免重复输入密码（环境变量不会自动跨终端）：
 
@@ -625,11 +632,37 @@ npm install
 npm run dev
 ```
 
+如果你在 Engram 仓库根目录工作，推荐改用本仓库 wrapper，避免手动加载 env 和选错 checkout：
+
+```bash
+# 后端：按 OPENMEMORY_DIR -> ../openmemory -> 常见本地目录 -> 全局 opm 的顺序启动
+make openmemory
+
+# Dashboard：按 OPENMEMORY_DASHBOARD_DIR/参数 -> 从 OPENMEMORY_DIR 推导（repo root 或 packages/openmemory-js）-> ../openmemory/dashboard -> 常见本地目录的顺序启动
+make openmemory-dashboard
+
+# 可选：指定端口或路径
+OPENMEMORY_DASHBOARD_PORT=3001 make openmemory-dashboard
+OPENMEMORY_DASHBOARD_DIR=/path/to/openmemory make openmemory-dashboard
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\windows\start_openmemory.ps1
+.\scripts\windows\start_openmemory_dashboard.ps1
+
+# 可选：指定 OpenMemory repo root / dashboard 目录和端口
+.\scripts\windows\start_openmemory_dashboard.ps1 -OpenMemoryDir "C:\openmemory" -Port 3001
+```
+
 ### 验证 OpenMemory 连接
 
 ```bash
 curl http://localhost:8080/health
 ```
+
+Dashboard 默认运行在 `http://localhost:3000`；它读取 `NEXT_PUBLIC_API_URL`，未设置时由 wrapper 优先使用 `OPENMEMORY_BASE_URL`，否则回退到 `http://localhost:<OM_PORT|8080>`。
 
 > 说明：OpenMemory HTTP Server 默认提供的是 **API/MCP/指标端点**，不一定提供 HTML 首页。  
 > 因此浏览器直接访问 `http://localhost:8080/` 返回 `404: Not Found` 也是正常的；请以 `/health` 与下述端点为准。
@@ -839,6 +872,8 @@ make help
 | `make db-create` | 创建数据库 |
 | `make db-drop` | 删除数据库（危险操作） |
 | `make reset-native` | 重置数据库 + 4 个服务账号（危险操作） |
+| `make openmemory` | 启动 OpenMemory 后端（自动加载 `.env`/`.env.local`） |
+| `make openmemory-dashboard` | 启动 OpenMemory Dashboard（Next.js dev server） |
 | `make gateway` | 启动 Gateway 服务（带热重载） |
 | `make env-shell` | 输出加载 `.env`/`.env.local` 的 shell 片段（配合 `eval` 使用） |
 | `make openmemory-fix-vector-dim` | 修复 OpenMemory 向量维度（OM_VEC_DIM） |
@@ -968,10 +1003,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT
 # 注意: Engram 需要 OpenMemory 的 HTTP API 服务（端口 8080），
 #       不能只用 Python SDK（pip install openmemory-py）的嵌入式模式
 
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
+OPENMEMORY_REPO=https://github.com/CaviraOSS/OpenMemory.git  # 可替换成你的 fork URL
+git clone "$OPENMEMORY_REPO" ~/openmemory
 cd ~/openmemory
-# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
-# git checkout v1.3.3
 
 # 配置环境变量（连接到 Step 4 创建的 PostgreSQL）
 export OM_METADATA_BACKEND=postgres
@@ -992,6 +1026,11 @@ npm install
 npm run build
 npm link   # 可选；仅当你希望全局使用 opm 时需要
 
+# Dashboard 依赖（可选；需要 Dashboard 时执行）
+cd ../../dashboard
+npm install
+cd ../packages/openmemory-js
+
 # 首次启动前：修复 pgvector 列维度（PostgreSQL 18 必需）
 psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);" 2>/dev/null || true
 
@@ -1000,9 +1039,10 @@ opm serve
 # 服务将在 http://localhost:8080 启动
 
 # 说明：
-# - 如果你使用的是自己的 fork，通常不需要额外 checkout 到 v1.3.3；
-#   只要该分支/commit 仍与 Engram 的 1.3.3 兼容面匹配即可。
+# - 如果你使用的是自己的 fork，通常不需要额外 checkout 到某个固定 tag；
+#   只要该分支/commit 仍与 Engram 当前 OpenMemory 兼容面匹配即可。
 # - 如果你改过 packages/openmemory-js/src 下的源码，启动前请重新执行 npm run build。
+# - 如果你改过 dashboard/ 或首次启动 Dashboard，请先在 dashboard/ 下执行 npm install。
 
 # Step 6: 启动 Gateway（新终端）
 cd /Users/a4399/Documents/ai/onlyfeng/engram

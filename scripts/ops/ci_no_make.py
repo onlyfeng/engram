@@ -43,6 +43,8 @@ CI_TARGET_ORDER: tuple[str, ...] = (
     "check-mcp-error-contract",
     "check-mcp-error-docs-sync",
     "check-ci-test-isolation",
+    "check-local-ci-smoke",
+    "check-agent-rule-sync",
 )
 
 # "{python}" is resolved to the current Python interpreter at runtime.
@@ -144,6 +146,17 @@ TARGET_COMMAND_TEMPLATES: dict[str, tuple[tuple[str, ...], ...]] = {
     "check-ci-test-isolation": (
         ("{python}", "-m", "scripts.ci.check_ci_test_isolation", "--verbose"),
     ),
+    "check-local-ci-smoke": (
+        (
+            "{python}",
+            "-m",
+            "pytest",
+            "scripts/tests/test_ci_no_make.py",
+            "tests/ci/test_start_openmemory_launcher.py",
+            "-q",
+        ),
+    ),
+    "check-agent-rule-sync": (("{python}", "scripts/docs/sync_agent_rules.py", "--check"),),
 }
 
 

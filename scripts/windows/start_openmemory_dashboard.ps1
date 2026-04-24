@@ -9,9 +9,9 @@ Usage:
 
 Notes:
 - Loads .env / .env.local / .env.ps1 automatically
-- Resolution order: -OpenMemoryDir / OPENMEMORY_DASHBOARD_DIR, ..\openmemory\dashboard, common local dirs
-- -OpenMemoryDir accepts either the OpenMemory repo root or the dashboard directory directly
-- NEXT_PUBLIC_API_URL defaults to http://localhost:<OM_PORT|8080> when not set
+- Resolution order: -OpenMemoryDir / OPENMEMORY_DASHBOARD_DIR, OPENMEMORY_DIR-derived dashboard, ..\openmemory\dashboard, common local dirs
+- -OpenMemoryDir accepts the OpenMemory repo root, packages\openmemory-js, or the dashboard directory directly
+- NEXT_PUBLIC_API_URL defaults to OPENMEMORY_BASE_URL, then http://localhost:<OM_PORT|8080>
 - OPENMEMORY_DASHBOARD_PORT env has the same effect as -Port
 #>
 
@@ -74,24 +74,39 @@ if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir) -and
   $OpenMemoryDir = Join-Path $CallerDir $OpenMemoryDir
 }
 
+function Resolve-DashboardFromOpenMemoryDir {
+  param([string]$PathValue)
+
+  if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+
+  $dashSub = Join-Path $PathValue "dashboard"
+  if (Test-Path -LiteralPath $dashSub -PathType Container) {
+    return (Resolve-Path -LiteralPath $dashSub).Path
+  }
+
+  # OPENMEMORY_DIR normally points at packages\openmemory-js for the backend launcher.
+  $packageSiblingDash = Join-Path (Join-Path $PathValue "..\..") "dashboard"
+  if (Test-Path -LiteralPath $packageSiblingDash -PathType Container) {
+    return (Resolve-Path -LiteralPath $packageSiblingDash).Path
+  }
+
+  return ""
+}
+
 # Determine dashboard directory.
 $DashboardDir = ""
 if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir)) {
-  # Accept repo root (contains dashboard\) or a direct dashboard path.
-  $dashSub = Join-Path $OpenMemoryDir "dashboard"
-  if (Test-Path -LiteralPath $dashSub -PathType Container) {
-    $DashboardDir = $dashSub
+  # Accept repo root, packages\openmemory-js, or a direct dashboard path.
+  $resolvedDashboard = Resolve-DashboardFromOpenMemoryDir $OpenMemoryDir
+  if (-not [string]::IsNullOrWhiteSpace($resolvedDashboard)) {
+    $DashboardDir = $resolvedDashboard
   } else {
     $DashboardDir = $OpenMemoryDir
   }
 } elseif (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   $DashboardDir = $env:OPENMEMORY_DASHBOARD_DIR
 } elseif (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DIR)) {
-  # Fall back: treat OPENMEMORY_DIR as the OpenMemory repo root and look for its dashboard subdir.
-  $omDashSub = Join-Path $env:OPENMEMORY_DIR "dashboard"
-  if (Test-Path -LiteralPath $omDashSub -PathType Container) {
-    $DashboardDir = $omDashSub
-  }
+  $DashboardDir = Resolve-DashboardFromOpenMemoryDir $env:OPENMEMORY_DIR
 }
 if ([string]::IsNullOrWhiteSpace($DashboardDir)) {
   # Auto-discover candidates.

@@ -8,7 +8,16 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _require_command(name: str) -> str:
+    path = shutil.which(name)
+    if not path:
+        pytest.skip(f"{name} required to exercise the launcher wrapper")
+    return path
 
 
 def _copy_openmemory_launcher(tmp_path: Path) -> Path:
@@ -45,8 +54,7 @@ def test_start_openmemory_fails_fast_for_missing_explicit_dir(tmp_path: Path) ->
     repo = _copy_openmemory_launcher(tmp_path)
     missing_dir = repo / "does-not-exist" / "packages" / "openmemory-js"
 
-    bash = shutil.which("bash")
-    assert bash, "bash required to exercise the launcher script"
+    bash = _require_command("bash")
     result = subprocess.run(
         [bash, "scripts/ops/start_openmemory.sh", "--openmemory-dir", str(missing_dir)],
         cwd=repo,
@@ -64,6 +72,8 @@ def test_start_openmemory_fails_fast_for_missing_explicit_dir(tmp_path: Path) ->
 
 
 def test_make_openmemory_preserves_explicit_opm_override(tmp_path: Path) -> None:
+    _require_command("bash")
+    make = _require_command("make")
     repo = _copy_openmemory_launcher(tmp_path)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
@@ -75,7 +85,7 @@ def test_make_openmemory_preserves_explicit_opm_override(tmp_path: Path) -> None
     os.chmod(fake_opm, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
 
     result = subprocess.run(
-        ["make", "--no-print-directory", "openmemory", f"OPM={fake_opm}"],
+        [make, "--no-print-directory", "openmemory", f"OPM={fake_opm}"],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -93,13 +103,15 @@ def test_make_openmemory_preserves_explicit_opm_override(tmp_path: Path) -> None
 
 
 def test_make_openmemory_dashboard_runs_script_via_bash(tmp_path: Path) -> None:
+    _require_command("bash")
+    make = _require_command("make")
     repo = _copy_openmemory_launcher(tmp_path)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
 
     result = subprocess.run(
         [
-            "make",
+            make,
             "--no-print-directory",
             "openmemory-dashboard",
             "OPENMEMORY_DASHBOARD_DIR=/missing",
@@ -126,25 +138,29 @@ def test_dashboard_launcher_resolves_relative_openmemory_dir_env_from_caller_cwd
 
     Layout:
       tmp_path/caller/           ← caller CWD
-      tmp_path/openmemory/dashboard/   ← valid-looking checkout (no package.json)
+      tmp_path/openmemory/packages/openmemory-js/   ← backend launcher path
+      tmp_path/openmemory/dashboard/                ← valid-looking dashboard (no package.json)
 
-    OPENMEMORY_DIR=../openmemory is relative to caller_cwd.  The repo root is a
-    different directory, so if the script cd-s first and then resolves the relative
-    path, it will NOT find the dashboard dir and will fall through to auto-discovery
-    ("未找到可启动的 OpenMemory Dashboard").  With the fix the path is resolved from
-    caller_cwd first and the script should reach the "缺少 package.json" fast-fail.
+    OPENMEMORY_DIR=../openmemory/packages/openmemory-js is relative to caller_cwd.
+    The repo root is a different directory, so if the script cd-s first or assumes
+    OPENMEMORY_DIR is always the repo root, it will NOT find the dashboard dir and
+    will fall through to auto-discovery ("未找到可启动的 OpenMemory Dashboard"). With
+    the fix the path is resolved from caller_cwd first and the script should reach
+    the "缺少 package.json" fast-fail.
     """
+    bash = _require_command("bash")
     repo = _copy_openmemory_launcher(tmp_path)
     caller_cwd = tmp_path / "caller"
     caller_cwd.mkdir()
     # Create a dashboard dir sibling to caller_cwd — only valid via the relative path
     # from caller_cwd, NOT from the repo root.
+    (tmp_path / "openmemory" / "packages" / "openmemory-js").mkdir(parents=True)
     (tmp_path / "openmemory" / "dashboard").mkdir(parents=True)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
 
     result = subprocess.run(
-        ["bash", str(repo / "scripts" / "ops" / "start_openmemory_dashboard.sh")],
+        [bash, str(repo / "scripts" / "ops" / "start_openmemory_dashboard.sh")],
         cwd=caller_cwd,
         capture_output=True,
         text=True,
@@ -152,7 +168,7 @@ def test_dashboard_launcher_resolves_relative_openmemory_dir_env_from_caller_cwd
         env={
             "HOME": str(fake_home),
             "PATH": os.environ["PATH"],
-            "OPENMEMORY_DIR": "../openmemory",
+            "OPENMEMORY_DIR": "../openmemory/packages/openmemory-js",
         },
     )
 

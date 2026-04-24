@@ -17,9 +17,9 @@ Options:
 
 Notes:
   - Loads .env / .env.local via scripts/ops/load_env_local.sh
-  - Resolution order: --openmemory-dir / OPENMEMORY_DASHBOARD_DIR, ../openmemory/dashboard,
-    common local dirs, then fails with guidance.
-  - NEXT_PUBLIC_API_URL defaults to http://localhost:<OM_PORT|8080> when not set.
+  - Resolution order: --openmemory-dir / OPENMEMORY_DASHBOARD_DIR, OPENMEMORY_DIR-derived
+    dashboard, ../openmemory/dashboard, common local dirs, then fails with guidance.
+  - NEXT_PUBLIC_API_URL defaults to OPENMEMORY_BASE_URL, then http://localhost:<OM_PORT|8080>.
   - OPENMEMORY_DASHBOARD_PORT=<PORT> has the same effect as --port.
 EOF
 }
@@ -80,11 +80,28 @@ if [ -n "${_CALLER_OM_DIR}" ]; then
 fi
 unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT _CALLER_OM_DIR
 
+dashboard_from_openmemory_dir() {
+  local om_dir="$1"
+  [ -n "${om_dir}" ] || return 1
+  if [ -d "${om_dir}/dashboard" ]; then
+    printf '%s\n' "${om_dir}/dashboard"
+    return 0
+  fi
+  # OPENMEMORY_DIR normally points at packages/openmemory-js for the backend launcher.
+  if [ -d "${om_dir}/../../dashboard" ]; then
+    local repo_root
+    repo_root="$(cd "${om_dir}/../.." && pwd)"
+    printf '%s\n' "${repo_root}/dashboard"
+    return 0
+  fi
+  return 1
+}
+
 DASHBOARD_DIR="${OPENMEMORY_DASHBOARD_DIR:-}"
 # If OPENMEMORY_DASHBOARD_DIR is unset but OPENMEMORY_DIR is configured (e.g. via .env.local),
-# try treating OPENMEMORY_DIR as the OpenMemory repo root and use its dashboard/ subdirectory.
-if [ -z "${DASHBOARD_DIR}" ] && [ -n "${OPENMEMORY_DIR:-}" ] && [ -d "${OPENMEMORY_DIR}/dashboard" ]; then
-  DASHBOARD_DIR="${OPENMEMORY_DIR}/dashboard"
+# derive dashboard/ from either an OpenMemory repo root or packages/openmemory-js path.
+if [ -z "${DASHBOARD_DIR}" ] && [ -n "${OPENMEMORY_DIR:-}" ]; then
+  DASHBOARD_DIR="$(dashboard_from_openmemory_dir "${OPENMEMORY_DIR}" || true)"
 fi
 PORT="${OPENMEMORY_DASHBOARD_PORT:-3000}"
 
@@ -99,9 +116,13 @@ while [ "$#" -gt 0 ]; do
         /*) _raw_dir="$2" ;;
         *)  _raw_dir="${_CALLER_DIR}/$2" ;;
       esac
-      # Accept either the repo root (contains dashboard/) or the dashboard dir directly.
+      # Accept the repo root, packages/openmemory-js, or the dashboard dir directly.
       if [ -d "${_raw_dir}/dashboard" ]; then
         DASHBOARD_DIR="${_raw_dir}/dashboard"
+      elif [ -d "${_raw_dir}/../../dashboard" ]; then
+        _repo_root="$(cd "${_raw_dir}/../.." && pwd)"
+        DASHBOARD_DIR="${_repo_root}/dashboard"
+        unset _repo_root
       else
         DASHBOARD_DIR="${_raw_dir}"
       fi

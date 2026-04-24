@@ -53,6 +53,7 @@
 |--------|------|
 | `apply-openmemory-grants` | CI/workflow 必需 |
 | `apply-roles` | CI/workflow 必需 |
+| `check-agent-rule-sync` | CI/workflow 必需 |
 | `check-ci-test-isolation` | CI/workflow 必需 |
 | `check-env-consistency` | CI/workflow 必需 |
 | `check-gateway-correlation-id-single-source` | CI/workflow 必需 |
@@ -62,6 +63,7 @@
 | `check-gateway-public-api-surface` | CI/workflow 必需 |
 | `check-iteration-docs` | CI/workflow 必需 |
 | `check-iteration-fixtures-freshness` | CI/workflow 必需 |
+| `check-local-ci-smoke` | CI/workflow 必需 |
 | `check-logbook-consistency` | CI/workflow 必需 |
 | `check-migration-sanity` | CI/workflow 必需 |
 | `check-schemas` | CI/workflow 必需 |
