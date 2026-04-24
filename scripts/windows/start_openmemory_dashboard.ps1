@@ -107,6 +107,13 @@ if (-not [string]::IsNullOrWhiteSpace($DashboardDir) -and
   throw "指定的 Dashboard 目录不存在: $DashboardDir"
 }
 
+# Fail fast when an explicit directory exists but is not a Node.js project.
+if (-not [string]::IsNullOrWhiteSpace($DashboardDir) -and
+    (Test-Path -PathType Container $DashboardDir) -and
+    -not (Test-Path -PathType Leaf (Join-Path $DashboardDir "package.json"))) {
+  throw "指定目录缺少 package.json，请确认这是有效的 dashboard 目录并执行 npm install: $DashboardDir"
+}
+
 if ([string]::IsNullOrWhiteSpace($DashboardDir)) {
   Write-Error "未找到可启动的 OpenMemory Dashboard"
   Write-Host "  已按顺序检查：指定目录、..\openmemory\dashboard、常见本地目录"
@@ -126,6 +133,12 @@ if ([string]::IsNullOrWhiteSpace($ResolvedPort)) {
   $ResolvedPort = "3000"
 }
 
+# Validate port is a number in range 1-65535.
+$portNumber = 0
+if (-not [int]::TryParse($ResolvedPort, [ref]$portNumber) -or $portNumber -lt 1 -or $portNumber -gt 65535) {
+  throw "Port 必须是 1-65535 之间的整数，得到: '$ResolvedPort'"
+}
+
 # Default NEXT_PUBLIC_API_URL.
 if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_URL)) {
   $omPort = if (-not [string]::IsNullOrWhiteSpace($env:OM_PORT)) { $env:OM_PORT } else { "8080" }
@@ -139,9 +152,14 @@ Write-Host "       api=$($env:NEXT_PUBLIC_API_URL)"
 
 $nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
-  throw "未找到 node 命令，请确认 Node.js 已安装并在 PATH 中。"
+  throw "未找到 node 命令，请安装 Node.js 并确认其在 PATH 中。"
+}
+
+$npmCmd = Get-Command "npm" -ErrorAction SilentlyContinue
+if (-not $npmCmd) {
+  throw "未找到 npm 命令，请安装 Node.js/npm 并确认其在 PATH 中。"
 }
 
 Set-Location $DashboardDir
-& npm run dev -- --port $ResolvedPort
+& $npmCmd.Source run dev -- --port $ResolvedPort
 exit $LASTEXITCODE

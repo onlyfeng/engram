@@ -12,7 +12,7 @@ Usage:
 Options:
   --openmemory-dir PATH  OpenMemory repo root (dashboard expected at PATH/dashboard)
                          Also accepts a direct path to the dashboard directory.
-  --port PORT            Dashboard port (default: 3000)
+  --port PORT            Dashboard port 1-65535 (default: 3000)
   -h, --help             Show help
 
 Notes:
@@ -113,9 +113,27 @@ done
 
 unset _CALLER_DIR
 
+# Validate port is a number in range 1-65535.
+case "${PORT}" in
+  ''|*[!0-9]*)
+    echo "[ERROR] --port 必须是 1-65535 之间的整数，得到: '${PORT}'" >&2
+    exit 1
+    ;;
+esac
+if [ "${PORT}" -lt 1 ] || [ "${PORT}" -gt 65535 ]; then
+  echo "[ERROR] --port 必须是 1-65535 之间的整数，得到: ${PORT}" >&2
+  exit 1
+fi
+
 # Fail fast when an explicit directory was given but does not exist.
 if [ -n "${DASHBOARD_DIR}" ] && [ ! -d "${DASHBOARD_DIR}" ]; then
   echo "[ERROR] 指定的 Dashboard 目录不存在: ${DASHBOARD_DIR}" >&2
+  exit 1
+fi
+
+# Fail fast when an explicit directory exists but is not a Node.js project.
+if [ -n "${DASHBOARD_DIR}" ] && [ -d "${DASHBOARD_DIR}" ] && [ ! -f "${DASHBOARD_DIR}/package.json" ]; then
+  echo "[ERROR] 指定目录缺少 package.json，请确认这是有效的 dashboard 目录并执行 npm install: ${DASHBOARD_DIR}" >&2
   exit 1
 fi
 
@@ -162,6 +180,18 @@ if [ -z "${dashboard_dir}" ]; then
   exit 1
 fi
 
+# Check runtime dependencies before attempting to start.
+node_cmd="$(command -v node || true)"
+npm_cmd="$(command -v npm || true)"
+if [ -z "${node_cmd}" ]; then
+  echo "[ERROR] 未找到 node 命令，请安装 Node.js 并确认其在 PATH 中。" >&2
+  exit 1
+fi
+if [ -z "${npm_cmd}" ]; then
+  echo "[ERROR] 未找到 npm 命令，请安装 Node.js/npm 并确认其在 PATH 中。" >&2
+  exit 1
+fi
+
 # Default NEXT_PUBLIC_API_URL to the OpenMemory backend if not already set.
 if [ -z "${NEXT_PUBLIC_API_URL:-}" ]; then
   export NEXT_PUBLIC_API_URL="http://localhost:${OM_PORT:-8080}"
@@ -173,4 +203,4 @@ echo "       port=${PORT}"
 echo "       api=${NEXT_PUBLIC_API_URL}"
 
 cd "${dashboard_dir}"
-exec npm run dev -- --port "${PORT}"
+exec "${npm_cmd}" run dev -- --port "${PORT}"

@@ -53,6 +53,7 @@ OPENMEMORY_BASE_URL ?= http://localhost:8080
 OPENMEMORY_DIR ?=
 OPENMEMORY_FIRST_RUN ?=
 OPENMEMORY_DASHBOARD_PORT ?=
+OPENMEMORY_DASHBOARD_DIR ?=
 ENV_LOCAL_FILE ?= .env.local
 
 # 服务账号密码（unified-stack 模式必须设置，logbook-only 模式可不设置）
@@ -1033,16 +1034,18 @@ openmemory:  ## 启动 OpenMemory 服务（自动加载 .env/.env.local）
 
 openmemory-dashboard:  ## 启动 OpenMemory Dashboard（Next.js 开发服务器，自动加载 .env/.env.local）
 	@set -e; \
+	_dashboard_dir="$${OPENMEMORY_DASHBOARD_DIR:-$(OPENMEMORY_DASHBOARD_DIR)}"; \
 	_om_dir="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
+	_dir="$${_dashboard_dir:-$$_om_dir}"; \
 	_port="$${OPENMEMORY_DASHBOARD_PORT:-$(OPENMEMORY_DASHBOARD_PORT)}"; \
-	if [ -n "$$_om_dir" ] && [ -n "$$_port" ]; then \
-		scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_om_dir" --port "$$_port"; \
-	elif [ -n "$$_om_dir" ]; then \
-		scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_om_dir"; \
+	if [ -n "$$_dir" ] && [ -n "$$_port" ]; then \
+		bash scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_dir" --port "$$_port"; \
+	elif [ -n "$$_dir" ]; then \
+		bash scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_dir"; \
 	elif [ -n "$$_port" ]; then \
-		scripts/ops/start_openmemory_dashboard.sh --port "$$_port"; \
+		bash scripts/ops/start_openmemory_dashboard.sh --port "$$_port"; \
 	else \
-		scripts/ops/start_openmemory_dashboard.sh; \
+		bash scripts/ops/start_openmemory_dashboard.sh; \
 	fi
 
 gateway:  ## 启动 Gateway 服务（带热重载，自动加载 .env/.env.local）
@@ -1133,6 +1136,7 @@ help:  ## 显示帮助信息
 	@echo "  OPENMEMORY_FIRST_RUN       设为 1 时，make openmemory 自动使用 migrator + OM_PG_AUTO_DDL=true"
 	@echo "  OPM                        OpenMemory CLI 命令/路径（可选；显式指定时优先于 PATH 中的 opm）"
 	@echo "  OPENMEMORY_DASHBOARD_PORT  Dashboard 端口（默认: 3000）"
+	@echo "  OPENMEMORY_DASHBOARD_DIR   Dashboard 目录（可选；优先于 OPENMEMORY_DIR 的自动发现）"
 	@echo ""
 	@echo "\033[1m多项目部署示例:\033[0m"
 	@echo "  PROJECT_KEY=proj_a POSTGRES_DB=proj_a make setup-db"
