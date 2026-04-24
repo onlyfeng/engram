@@ -850,6 +850,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 |-------------|------|
 | `apply-openmemory-grants` | CI 必需目标 |
 | `apply-roles` | CI 必需目标 |
+| `check-agent-rule-sync` | CI 必需目标 |
 | `check-ci-test-isolation` | CI 必需目标 |
 | `check-env-consistency` | CI 必需目标 |
 | `check-gateway-correlation-id-single-source` | CI 必需目标 |
@@ -859,6 +860,7 @@ Makefile acceptance targets 在调用子目标时会**显式设置**以下环境
 | `check-gateway-public-api-surface` | CI 必需目标 |
 | `check-iteration-docs` | CI 必需目标 |
 | `check-iteration-fixtures-freshness` | CI 必需目标 |
+| `check-local-ci-smoke` | CI 必需目标 |
 | `check-logbook-consistency` | CI 必需目标 |
 | `check-migration-sanity` | CI 必需目标 |
 | `check-schemas` | CI 必需目标 |
@@ -2142,6 +2144,7 @@ class ErrorTypes:
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| v2.28.0 | 2026-04-24 | 新增本地 CI smoke 门禁：`make ci` 接入 `check-local-ci-smoke`，覆盖 `ci_no_make` wrapper parity 与 OpenMemory launcher 回归；补齐 `check-agent-rule-sync` 的 no-make 等价入口 |
 | v2.27.0 | 2026-02-23 | 新增 cross-platform-smoke job：多平台轻量 smoke（ci_no_make dry-run + Windows ci.ps1 dry-run + Unix make migration sanity） |
 | v2.26.0 | 2026-02-03 | chore: migrate workflow contract file/schema to v2 naming and drop v1 assets |
 | v2.25.1 | 2026-02-04 | fix: version policy checker handles shallow history conservatively |

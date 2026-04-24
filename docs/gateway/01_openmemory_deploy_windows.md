@@ -91,8 +91,25 @@ engram-migrate --dsn "postgresql://<admin_user>@localhost:5432/engram" --verify
 > 注意：`scripts/windows/config.ps1` 是本地配置文件（从 `scripts/windows/config.ps1.example` 复制生成并按需修改），仓库已在 `.gitignore` 中忽略，请勿提交。
 
 ### A.4 部署 OpenMemory
-- 拉取 OpenMemory 后端（参考官方仓库），设置 `OM_METADATA_BACKEND=postgres` 和 `OM_PG_*` 变量  
-- 启动后端服务（HTTP + MCP + Dashboard），默认 8080
+- 官方源码：[`CaviraOSS/OpenMemory`](https://github.com/CaviraOSS/OpenMemory)。如使用三方 fork，请确认它仍保留 `packages/openmemory-js/`（后端 / `opm`）和可选的 `dashboard/`（Next.js Dashboard）目录。
+- 启动 OpenMemory 后端需要 `OM_METADATA_BACKEND=postgres` 和 `OM_PG_*` 变量；默认 API/MCP 端口为 `8080`。
+- Dashboard 是独立 Next.js dev server，默认端口为 `3000`，通过 `NEXT_PUBLIC_API_URL` 指向后端（未设置时本仓库脚本会使用 `OPENMEMORY_BASE_URL` 或 `OM_PORT` 推导）。
+
+```powershell
+$env:OPENMEMORY_REPO = "https://github.com/CaviraOSS/OpenMemory.git"  # 可替换成你的 fork URL
+git clone $env:OPENMEMORY_REPO C:\openmemory
+cd C:\openmemory
+
+# 后端 / opm CLI
+cd packages\openmemory-js
+npm install
+npm run build
+npm link   # 可选；仅当你希望全局使用 opm 时需要
+
+# Dashboard（可选）
+cd ..\..\dashboard
+npm install
+```
 
 ### A.5 部署 Engram Gateway
 ```powershell
@@ -144,6 +161,18 @@ $env:OM_PORT="8080"
 # npm run build
 # npm link
 opm serve
+```
+
+**OpenMemory Dashboard（可选）**：
+
+```powershell
+# 推荐使用本仓库脚本，自动加载 .env/.env.local/.env.ps1 并设置 NEXT_PUBLIC_API_URL
+.\scripts\windows\start_openmemory_dashboard.ps1 -OpenMemoryDir "C:\openmemory" -Port 3000
+
+# 或手动运行
+$env:NEXT_PUBLIC_API_URL="http://localhost:8080"
+cd C:\openmemory\dashboard
+npm run dev -- --port 3000
 ```
 
 **Outbox Worker**：
@@ -361,15 +390,19 @@ sudo -u postgres "$PYTHON_BIN" -m engram.logbook.cli.db_migrate \
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# 克隆并构建 OpenMemory
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
+# 克隆并构建 OpenMemory（官方源码；也可替换成兼容 fork）
+OPENMEMORY_REPO=https://github.com/CaviraOSS/OpenMemory.git
+git clone "$OPENMEMORY_REPO" ~/openmemory
 cd ~/openmemory
-# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
-# git checkout v1.3.3
 cd packages/openmemory-js
 npm install
 npm run build
 sudo npm link   # 可选；仅当你希望全局使用 opm 时需要
+
+# Dashboard（可选）
+cd ../../dashboard
+npm install
+cd ../packages/openmemory-js
 
 # 配置环境变量
 export OM_METADATA_BACKEND=postgres
@@ -392,13 +425,17 @@ sudo -u postgres psql -d engram -c \
 
 # 启动服务
 opm serve
+
+# 如需 Dashboard，另开终端在 Engram 仓库根目录执行：
+# make openmemory-dashboard
 ```
 
 说明：
 
-- `git checkout v1.3.3` 不是强制步骤；它只用于复现 Engram 当前记录的纯上游基线。
-- 若你使用自己的 fork，且该分支/commit 仍保持 `1.3.3` 兼容面（或已完成兼容验证），可直接停留在当前分支。
+- 源码 checkout 不强制切到固定 tag；如需冻结基线，请 pin 到已验证的 tag/commit。
+- 若你使用自己的 fork，且该分支/commit 仍保持 Engram 当前 OpenMemory 兼容面（或已完成兼容验证），可直接停留在当前分支。
 - 若刚修改过 `packages/openmemory-js/src`，请先重新执行 `npm run build`，再启动 `opm serve`。
+- 若刚修改过 `dashboard/` 或首次启动 Dashboard，请先在 `dashboard/` 下执行 `npm install`。
 
 ### B.6 部署 Engram Gateway（WSL2 内）
 ```

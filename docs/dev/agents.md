@@ -66,7 +66,8 @@ make check-workflow-contract-docs-sync  # Workflow 合约与文档同步检查
 make check-workflow-contract-version-policy  # Workflow 合约版本策略检查
 make check-mcp-error-contract           # MCP JSON-RPC 错误码合约检查
 make check-mcp-error-docs-sync          # MCP JSON-RPC 错误码文档与 Schema 同步检查
-make check-agent-rule-sync             # Agent 规则 SSOT 同步检查
+make check-local-ci-smoke               # 本地 CI wrapper 与 OpenMemory launcher 轻量回归
+make check-agent-rule-sync              # Agent 规则 SSOT 同步检查
 
 # 可选的独立检查（未包含在 make ci 中）
 make typecheck-gate                     # mypy baseline 模式检查（用于增量修复）

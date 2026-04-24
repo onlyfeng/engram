@@ -152,6 +152,12 @@ DOC_ONLY_VARS: Set[str] = {
     "DASHBOARD_PORT",
     "NEXT_PUBLIC_API_URL",
     "NEXT_PUBLIC_API_KEY",
+    # Local OpenMemory launcher 配置（scripts/ops 与 Windows wrapper 使用，不在 src/engram 中读取）
+    "OPENMEMORY_DASHBOARD_DIR",
+    "OPENMEMORY_DASHBOARD_PORT",
+    "OPENMEMORY_DIR",
+    "OPENMEMORY_FIRST_RUN",
+    "OPM",
     # SCM 凭证配置（敏感，不在 .env.example 中提供默认值）
     "GITLAB_PRIVATE_TOKEN",
     "GITLAB_TOKEN",

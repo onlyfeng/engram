@@ -143,6 +143,7 @@ make check-migration-sanity
 make check-scm-sync-consistency
 make check-cli-entrypoints
 make check-ci-test-isolation
+make check-local-ci-smoke
 pytest tests/logbook/test_sql_migrations_safety.py -v
 git ls-files .iteration  # 期望无输出
 ```
@@ -335,6 +336,7 @@ pytest tests/ci/ -q
 | **iteration docs** | `check-iteration-docs` | `iteration-docs-check` job | CI 仅跑 no-iteration-links + evidence contract；本地额外检查本地产物链接与占位符（warn-only） |
 | **iteration toolchain drift map** | `check-iteration-toolchain-drift-map-contract` | - | 本地可选；CI 未覆盖 |
 | **workflow doc anchors** | `check-workflow-contract-doc-anchors` | `workflow-contract` job | CI 有此检查；`make ci` 当前不包含 |
+| **local CI smoke** | `check-local-ci-smoke` | - | 本地覆盖 `ci_no_make` wrapper parity 与 OpenMemory launcher 回归；CI 的 `workflow-contract` job 仍运行更完整的 `tests/ci` |
 | **CI script tests** | `pytest tests/ci/ -q` | `workflow-contract` job | CI 运行 tests/ci（带 ignore 列表）；本地需手动执行 |
 | **no-iteration-tracked** | - | `no-iteration-tracked` job | CI 额外检查 `.iteration/` 未被跟踪；本地可用 `git ls-files .iteration` |
 | **noqa/no_root_wrappers** | `check-noqa-policy` / `check-no-root-wrappers` | - | 当前仅本地可选门禁，未接入 CI |
@@ -354,6 +356,7 @@ pytest tests/ci/ -q
 | **type: ignore policy** | `python -m scripts.ci.check_type_ignore_policy` | `lint` | - | CI 中添加 `\|\| true` | strict-island 路径下缺少错误码或说明 | 补充：`# type: ignore[code] - reason` |
 | **no_root_wrappers** | `make check-no-root-wrappers` | `lint` | `scripts/ci/no_root_wrappers_allowlist.json` | 添加到 allowlist 或使用 inline marker | 从根目录导入 wrapper 模块 | 1) 改用 `engram.logbook.xxx` 导入 2) 添加到 allowlist 3) 使用 inline marker |
 | **ci test isolation** | `make check-ci-test-isolation` | `lint` | - | - | 模块级 sys.path 污染、顶层 CI 模块导入、双模式导入 | 1) 改用 `scripts.ci.*` 导入 2) 移除模块级 sys.path 修改 3) 参见 [CI 测试隔离规范](./ci_test_isolation.md) |
+| **local CI smoke** | `make check-local-ci-smoke` | - | - | - | `ci_no_make` 与 `make ci` 漂移、OpenMemory launcher wrapper 回归 | 1) 同步 `scripts/ops/ci_no_make.py` 2) 修复 launcher wrapper 回归测试 |
 | **env consistency** | `make check-env-consistency` | `env-var-consistency` | - | - | 环境变量文档/代码不一致 | 同步 `.env.example`, docs, 代码 |
 | **schema validation** | `make check-schemas` | `schema-validate` | - | - | JSON Schema 校验失败 | 修复 schema 或 fixture |
 | **migration sanity** | `make check-migration-sanity` | `migration-sanity` | - | - | SQL 文件命名/分类违规 | 参见 `docs/logbook/sql_file_inventory.md` |

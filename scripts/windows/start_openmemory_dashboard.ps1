@@ -9,9 +9,9 @@ Usage:
 
 Notes:
 - Loads .env / .env.local / .env.ps1 automatically
-- Resolution order: -OpenMemoryDir / OPENMEMORY_DASHBOARD_DIR, ..\openmemory\dashboard, common local dirs
-- -OpenMemoryDir accepts either the OpenMemory repo root or the dashboard directory directly
-- NEXT_PUBLIC_API_URL defaults to http://localhost:<OM_PORT|8080> when not set
+- Resolution order: -OpenMemoryDir / OPENMEMORY_DASHBOARD_DIR, OPENMEMORY_DIR-derived dashboard, ..\openmemory\dashboard, common local dirs
+- -OpenMemoryDir accepts the OpenMemory repo root, packages\openmemory-js, or the dashboard directory directly
+- NEXT_PUBLIC_API_URL defaults to OPENMEMORY_BASE_URL, then http://localhost:<OM_PORT|8080>
 - OPENMEMORY_DASHBOARD_PORT env has the same effect as -Port
 #>
 
@@ -33,6 +33,9 @@ $ErrorActionPreference = "Stop"
 $CallerDir = (Get-Location).Path
 
 # Save caller-set env vars before env-file loading can overwrite them.
+# Use Test-Path Env: to distinguish "set to empty" from "unset", so a caller that
+# explicitly sets OPENMEMORY_DASHBOARD_DIR="" can clear env-file values.
+$CallerDashboardDirWasSet = Test-Path Env:OPENMEMORY_DASHBOARD_DIR
 $CallerDashboardDir = ""
 if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   if ([System.IO.Path]::IsPathRooted($env:OPENMEMORY_DASHBOARD_DIR)) {
@@ -58,7 +61,8 @@ Set-Location $RepoRoot
 . (Join-Path $PSScriptRoot "load_env_local.ps1")
 
 # Restore caller overrides so they win over env files.
-if (-not [string]::IsNullOrWhiteSpace($CallerDashboardDir)) {
+# Use the WAS_SET flag so an explicit empty value also overrides env-file content.
+if ($CallerDashboardDirWasSet) {
   $env:OPENMEMORY_DASHBOARD_DIR = $CallerDashboardDir
 }
 if (-not [string]::IsNullOrWhiteSpace($CallerDashboardPort)) {
@@ -67,6 +71,11 @@ if (-not [string]::IsNullOrWhiteSpace($CallerDashboardPort)) {
 if (-not [string]::IsNullOrWhiteSpace($CallerOMDir)) {
   $env:OPENMEMORY_DIR = $CallerOMDir
 }
+# If caller supplied OPENMEMORY_DIR but not OPENMEMORY_DASHBOARD_DIR, prevent
+# an env-file OPENMEMORY_DASHBOARD_DIR from silently winning over the caller's intent.
+if (-not [string]::IsNullOrWhiteSpace($CallerOMDir) -and -not $CallerDashboardDirWasSet) {
+  $env:OPENMEMORY_DASHBOARD_DIR = ""
+}
 
 # Resolve -OpenMemoryDir: relative paths against caller CWD.
 if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir) -and
@@ -74,24 +83,44 @@ if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir) -and
   $OpenMemoryDir = Join-Path $CallerDir $OpenMemoryDir
 }
 
+function Resolve-DashboardFromOpenMemoryDir {
+  param([string]$PathValue)
+
+  if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+  if (-not (Test-Path -LiteralPath $PathValue -PathType Container)) { return "" }
+
+  $dashSub = Join-Path $PathValue "dashboard"
+  if (Test-Path -LiteralPath $dashSub -PathType Container) {
+    return (Resolve-Path -LiteralPath $dashSub).Path
+  }
+
+  # OPENMEMORY_DIR normally points at packages\openmemory-js for the backend launcher.
+  # Only probe the sibling dashboard when the path is exactly .../packages/openmemory-js.
+  $leafName   = Split-Path -Leaf $PathValue
+  $parentDirName = Split-Path -Leaf (Split-Path -Parent $PathValue)
+  $packageSiblingDash = Join-Path (Join-Path $PathValue "..\..") "dashboard"
+  if ($leafName -eq "openmemory-js" -and $parentDirName -eq "packages" -and
+      (Test-Path -LiteralPath $packageSiblingDash -PathType Container)) {
+    return (Resolve-Path -LiteralPath $packageSiblingDash).Path
+  }
+
+  return ""
+}
+
 # Determine dashboard directory.
 $DashboardDir = ""
 if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir)) {
-  # Accept repo root (contains dashboard\) or a direct dashboard path.
-  $dashSub = Join-Path $OpenMemoryDir "dashboard"
-  if (Test-Path -LiteralPath $dashSub -PathType Container) {
-    $DashboardDir = $dashSub
+  # Accept repo root, packages\openmemory-js, or a direct dashboard path.
+  $resolvedDashboard = Resolve-DashboardFromOpenMemoryDir $OpenMemoryDir
+  if (-not [string]::IsNullOrWhiteSpace($resolvedDashboard)) {
+    $DashboardDir = $resolvedDashboard
   } else {
     $DashboardDir = $OpenMemoryDir
   }
 } elseif (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   $DashboardDir = $env:OPENMEMORY_DASHBOARD_DIR
 } elseif (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DIR)) {
-  # Fall back: treat OPENMEMORY_DIR as the OpenMemory repo root and look for its dashboard subdir.
-  $omDashSub = Join-Path $env:OPENMEMORY_DIR "dashboard"
-  if (Test-Path -LiteralPath $omDashSub -PathType Container) {
-    $DashboardDir = $omDashSub
-  }
+  $DashboardDir = Resolve-DashboardFromOpenMemoryDir $env:OPENMEMORY_DIR
 }
 if ([string]::IsNullOrWhiteSpace($DashboardDir)) {
   # Auto-discover candidates.
@@ -191,7 +220,13 @@ $_savedNativeErrPref = if (Get-Variable -Name PSNativeCommandUseErrorActionPrefe
   $global:PSNativeCommandUseErrorActionPreference
 } else { $null }
 if ($null -ne $_savedNativeErrPref) { $global:PSNativeCommandUseErrorActionPreference = $false }
-& $npmCmd.Source run dev -- --port $ResolvedPort
-$_exitCode = $LASTEXITCODE
-if ($null -ne $_savedNativeErrPref) { $global:PSNativeCommandUseErrorActionPreference = $_savedNativeErrPref }
+$_exitCode = 1
+try {
+  & $npmCmd.Source run dev -- --port $ResolvedPort
+  $_exitCode = $LASTEXITCODE
+} finally {
+  if ($null -ne $_savedNativeErrPref) {
+    $global:PSNativeCommandUseErrorActionPreference = $_savedNativeErrPref
+  }
+}
 exit $_exitCode
