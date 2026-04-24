@@ -8,7 +8,7 @@
 #
 # 详细文档: docs/installation.md
 
-.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-mcp-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified recover-openmemory-init-race mcp-doctor stack-doctor bootstrap-roles bootstrap-roles-required gateway openmemory clean help setup-db setup-db-core setup-db-logbook-only reset-native openmemory-fix-vector-dim openmemory-grant-svc-full env-write-local env-shell env-openmemory-first-run precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json check-agent-rule-sync
+.PHONY: install install-dev test test-logbook test-gateway test-acceptance test-e2e test-mcp-e2e test-quick test-cov test-iteration-tools lint format typecheck typecheck-gate typecheck-strict-island mypy-baseline-update mypy-metrics check-mypy-metrics-thresholds migrate migrate-ddl migrate-plan migrate-plan-full migrate-precheck apply-roles apply-openmemory-grants verify verify-permissions verify-permissions-strict verify-unified recover-openmemory-init-race mcp-doctor stack-doctor bootstrap-roles bootstrap-roles-required gateway openmemory openmemory-dashboard clean help setup-db setup-db-core setup-db-logbook-only reset-native openmemory-fix-vector-dim openmemory-grant-svc-full env-write-local env-shell env-openmemory-first-run precheck ci regression check-env-consistency check-logbook-consistency check-schemas check-migration-sanity check-scm-sync-consistency check-gateway-error-reason-usage check-gateway-public-api-surface check-gateway-public-api-docs-sync check-gateway-di-boundaries check-gateway-import-surface check-gateway-correlation-id-single-source check-iteration-docs check-iteration-fixtures-freshness check-min-gate-profiles-consistency check-iteration-gate-profiles-contract check-iteration-toolchain-drift-map-contract check-iteration-docs-generated-blocks check-iteration-docs-headings check-iteration-docs-headings-warn check-iteration-docs-superseded-only check-iteration-evidence iteration-init iteration-init-next iteration-promote iteration-export iteration-snapshot iteration-audit iteration-rerun-advice iteration-cycle-advice iteration-min-regression validate-workflows validate-workflows-strict validate-workflows-json check-workflow-contract-docs-sync check-workflow-contract-error-types-docs-sync check-workflow-contract-docs-sync-json check-workflow-contract-version-policy check-workflow-contract-version-policy-json check-workflow-contract-doc-anchors check-workflow-contract-doc-anchors-json check-workflow-contract-internal-consistency check-workflow-contract-internal-consistency-json check-workflow-contract-coupling-map-sync check-workflow-contract-coupling-map-sync-json check-workflow-make-targets-consistency check-workflow-make-targets-consistency-json workflow-contract-preflight workflow-contract-drift-report workflow-contract-drift-report-json workflow-contract-drift-report-markdown workflow-contract-drift-report-all workflow-contract-suggest render-workflow-contract-docs update-workflow-contract-docs check-workflow-contract-docs-generated check-cli-entrypoints check-noqa-policy check-no-root-wrappers check-mcp-config-docs-sync update-mcp-config-docs check-mcp-error-contract check-mcp-error-docs-sync check-mcp-error-docs-sync-json check-ci-test-isolation check-ci-test-isolation-json check-agent-rule-sync
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -52,6 +52,7 @@ GATEWAY_PORT ?= 8787
 OPENMEMORY_BASE_URL ?= http://localhost:8080
 OPENMEMORY_DIR ?=
 OPENMEMORY_FIRST_RUN ?=
+OPENMEMORY_DASHBOARD_PORT ?=
 ENV_LOCAL_FILE ?= .env.local
 
 # 服务账号密码（unified-stack 模式必须设置，logbook-only 模式可不设置）
@@ -1030,6 +1031,20 @@ openmemory:  ## 启动 OpenMemory 服务（自动加载 .env/.env.local）
 		scripts/ops/start_openmemory.sh; \
 	fi
 
+openmemory-dashboard:  ## 启动 OpenMemory Dashboard（Next.js 开发服务器，自动加载 .env/.env.local）
+	@set -e; \
+	_om_dir="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
+	_port="$${OPENMEMORY_DASHBOARD_PORT:-$(OPENMEMORY_DASHBOARD_PORT)}"; \
+	if [ -n "$$_om_dir" ] && [ -n "$$_port" ]; then \
+		scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_om_dir" --port "$$_port"; \
+	elif [ -n "$$_om_dir" ]; then \
+		scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_om_dir"; \
+	elif [ -n "$$_port" ]; then \
+		scripts/ops/start_openmemory_dashboard.sh --port "$$_port"; \
+	else \
+		scripts/ops/start_openmemory_dashboard.sh; \
+	fi
+
 gateway:  ## 启动 Gateway 服务（带热重载，自动加载 .env/.env.local）
 	@set -e; \
 	set -a; \
@@ -1114,9 +1129,10 @@ help:  ## 显示帮助信息
 	@echo "  PROJECT_KEY           项目标识 (默认: default)"
 	@echo "  GATEWAY_PORT          Gateway 端口 (默认: 8787)"
 	@echo "  OPENMEMORY_BASE_URL   OpenMemory 地址 (默认: http://localhost:8080)"
-	@echo "  OPENMEMORY_DIR        OpenMemory 目录（可选；顺序：指定目录 > ../openmemory > 常见本地目录 > 全局 opm）"
-	@echo "  OPENMEMORY_FIRST_RUN  设为 1 时，make openmemory 自动使用 migrator + OM_PG_AUTO_DDL=true"
-	@echo "  OPM                   OpenMemory CLI 命令/路径（可选；显式指定时优先于 PATH 中的 opm）"
+	@echo "  OPENMEMORY_DIR             OpenMemory 目录（可选；顺序：指定目录 > ../openmemory > 常见本地目录 > 全局 opm）"
+	@echo "  OPENMEMORY_FIRST_RUN       设为 1 时，make openmemory 自动使用 migrator + OM_PG_AUTO_DDL=true"
+	@echo "  OPM                        OpenMemory CLI 命令/路径（可选；显式指定时优先于 PATH 中的 opm）"
+	@echo "  OPENMEMORY_DASHBOARD_PORT  Dashboard 端口（默认: 3000）"
 	@echo ""
 	@echo "\033[1m多项目部署示例:\033[0m"
 	@echo "  PROJECT_KEY=proj_a POSTGRES_DB=proj_a make setup-db"
