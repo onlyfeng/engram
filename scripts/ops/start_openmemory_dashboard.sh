@@ -20,6 +20,7 @@ Notes:
   - Resolution order: --openmemory-dir / OPENMEMORY_DASHBOARD_DIR, OPENMEMORY_DIR-derived
     dashboard, ../openmemory/dashboard, common local dirs, then fails with guidance.
   - NEXT_PUBLIC_API_URL defaults to OPENMEMORY_BASE_URL, then http://localhost:<OM_PORT|8080>.
+  - NEXT_PUBLIC_API_KEY defaults to OM_API_KEY when set, so authenticated local APIs work.
   - OPENMEMORY_DASHBOARD_PORT=<PORT> has the same effect as --port.
 EOF
 }
@@ -63,6 +64,12 @@ else
   _CALLER_DASHBOARD_DIR=""
 fi
 _CALLER_DASHBOARD_PORT="${OPENMEMORY_DASHBOARD_PORT:-}"
+_CALLER_NEXT_PUBLIC_API_KEY_WAS_SET=0
+_CALLER_NEXT_PUBLIC_API_KEY=""
+if [ -n "${NEXT_PUBLIC_API_KEY+x}" ]; then
+  _CALLER_NEXT_PUBLIC_API_KEY_WAS_SET=1
+  _CALLER_NEXT_PUBLIC_API_KEY="${NEXT_PUBLIC_API_KEY:-}"
+fi
 # Normalize a caller-set OPENMEMORY_DIR before we cd away.
 if [ -n "${OPENMEMORY_DIR:-}" ]; then
   case "${OPENMEMORY_DIR}" in
@@ -84,6 +91,9 @@ fi
 if [ -n "${_CALLER_DASHBOARD_PORT}" ]; then
   OPENMEMORY_DASHBOARD_PORT="${_CALLER_DASHBOARD_PORT}"
 fi
+if [ "${_CALLER_NEXT_PUBLIC_API_KEY_WAS_SET}" = "1" ]; then
+  NEXT_PUBLIC_API_KEY="${_CALLER_NEXT_PUBLIC_API_KEY}"
+fi
 if [ -n "${_CALLER_OM_DIR}" ]; then
   OPENMEMORY_DIR="${_CALLER_OM_DIR}"
 fi
@@ -92,7 +102,7 @@ fi
 if [ -n "${_CALLER_OM_DIR}" ] && [ "${_CALLER_DASHBOARD_DIR_WAS_SET}" = "0" ]; then
   OPENMEMORY_DASHBOARD_DIR=""
 fi
-unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT _CALLER_OM_DIR _CALLER_DASHBOARD_DIR_WAS_SET
+unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT _CALLER_OM_DIR _CALLER_DASHBOARD_DIR_WAS_SET _CALLER_NEXT_PUBLIC_API_KEY
 
 dashboard_from_openmemory_dir() {
   local om_dir="$1"
@@ -262,6 +272,14 @@ if [ -z "${NEXT_PUBLIC_API_URL:-}" ]; then
     export NEXT_PUBLIC_API_URL="http://localhost:${OM_PORT:-8080}"
   fi
 fi
+# The dashboard runs API calls in the browser and reads only NEXT_PUBLIC_API_KEY.
+# Reuse the local OpenMemory key by default; do not print it in startup logs.
+if [ -z "${NEXT_PUBLIC_API_KEY:-}" ] \
+   && [ "${_CALLER_NEXT_PUBLIC_API_KEY_WAS_SET}" = "0" ] \
+   && [ -n "${OM_API_KEY:-}" ]; then
+  export NEXT_PUBLIC_API_KEY="${OM_API_KEY}"
+fi
+unset _CALLER_NEXT_PUBLIC_API_KEY_WAS_SET
 
 echo "[INFO] Starting OpenMemory Dashboard..."
 echo "       dir=${dashboard_dir}"

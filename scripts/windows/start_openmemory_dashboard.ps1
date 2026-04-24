@@ -12,6 +12,7 @@ Notes:
 - Resolution order: -OpenMemoryDir / OPENMEMORY_DASHBOARD_DIR, OPENMEMORY_DIR-derived dashboard, ..\openmemory\dashboard, common local dirs
 - -OpenMemoryDir accepts the OpenMemory repo root, packages\openmemory-js, or the dashboard directory directly
 - NEXT_PUBLIC_API_URL defaults to OPENMEMORY_BASE_URL, then http://localhost:<OM_PORT|8080>
+- NEXT_PUBLIC_API_KEY defaults to OM_API_KEY when set, so authenticated local APIs work
 - OPENMEMORY_DASHBOARD_PORT env has the same effect as -Port
 #>
 
@@ -45,6 +46,8 @@ if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   }
 }
 $CallerDashboardPort = $env:OPENMEMORY_DASHBOARD_PORT
+$CallerNextPublicApiKeyWasSet = Test-Path Env:NEXT_PUBLIC_API_KEY
+$CallerNextPublicApiKey = if ($CallerNextPublicApiKeyWasSet) { $env:NEXT_PUBLIC_API_KEY } else { "" }
 # Normalize a caller-set OPENMEMORY_DIR before we change directory.
 $CallerOMDir = ""
 if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DIR)) {
@@ -67,6 +70,9 @@ if ($CallerDashboardDirWasSet) {
 }
 if (-not [string]::IsNullOrWhiteSpace($CallerDashboardPort)) {
   $env:OPENMEMORY_DASHBOARD_PORT = $CallerDashboardPort
+}
+if ($CallerNextPublicApiKeyWasSet) {
+  $env:NEXT_PUBLIC_API_KEY = $CallerNextPublicApiKey
 }
 if (-not [string]::IsNullOrWhiteSpace($CallerOMDir)) {
   $env:OPENMEMORY_DIR = $CallerOMDir
@@ -195,6 +201,13 @@ if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_URL)) {
     $omPort = if (-not [string]::IsNullOrWhiteSpace($env:OM_PORT)) { $env:OM_PORT } else { "8080" }
     $env:NEXT_PUBLIC_API_URL = "http://localhost:$omPort"
   }
+}
+# The dashboard runs API calls in the browser and reads only NEXT_PUBLIC_API_KEY.
+# Reuse the local OpenMemory key by default; do not print it in startup logs.
+if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_KEY) -and
+    -not $CallerNextPublicApiKeyWasSet -and
+    -not [string]::IsNullOrWhiteSpace($env:OM_API_KEY)) {
+  $env:NEXT_PUBLIC_API_KEY = $env:OM_API_KEY
 }
 
 $nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
