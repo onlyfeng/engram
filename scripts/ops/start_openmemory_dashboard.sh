@@ -119,7 +119,8 @@ while [ "$#" -gt 0 ]; do
       # Accept the repo root, packages/openmemory-js, or the dashboard dir directly.
       if [ -d "${_raw_dir}/dashboard" ]; then
         DASHBOARD_DIR="${_raw_dir}/dashboard"
-      elif [ "$(basename "$(dirname "${_raw_dir}")")" = "packages" ] \
+      elif [ "$(basename "${_raw_dir}")" = "openmemory-js" ] \
+           && [ "$(basename "$(dirname "${_raw_dir}")")" = "packages" ] \
            && [ -d "${_raw_dir}/../../dashboard" ]; then
         _repo_root="$(cd "${_raw_dir}/../.." && pwd)"
         DASHBOARD_DIR="${_repo_root}/dashboard"

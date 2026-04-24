@@ -85,10 +85,12 @@ function Resolve-DashboardFromOpenMemoryDir {
   }
 
   # OPENMEMORY_DIR normally points at packages\openmemory-js for the backend launcher.
-  # Only probe the sibling dashboard when the parent directory is named "packages".
+  # Only probe the sibling dashboard when the path is exactly .../packages/openmemory-js.
+  $leafName   = Split-Path -Leaf $PathValue
   $parentDirName = Split-Path -Leaf (Split-Path -Parent $PathValue)
   $packageSiblingDash = Join-Path (Join-Path $PathValue "..\..") "dashboard"
-  if ($parentDirName -eq "packages" -and (Test-Path -LiteralPath $packageSiblingDash -PathType Container)) {
+  if ($leafName -eq "openmemory-js" -and $parentDirName -eq "packages" -and
+      (Test-Path -LiteralPath $packageSiblingDash -PathType Container)) {
     return (Resolve-Path -LiteralPath $packageSiblingDash).Path
   }
 
