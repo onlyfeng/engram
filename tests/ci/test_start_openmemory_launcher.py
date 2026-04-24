@@ -98,7 +98,12 @@ def test_make_openmemory_dashboard_runs_script_via_bash(tmp_path: Path) -> None:
     fake_home.mkdir()
 
     result = subprocess.run(
-        ["make", "--no-print-directory", "openmemory-dashboard", "OPENMEMORY_DASHBOARD_DIR=/missing"],
+        [
+            "make",
+            "--no-print-directory",
+            "openmemory-dashboard",
+            "OPENMEMORY_DASHBOARD_DIR=/missing",
+        ],
         cwd=repo,
         capture_output=True,
         text=True,
