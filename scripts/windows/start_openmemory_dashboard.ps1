@@ -42,6 +42,7 @@ if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   }
 }
 $CallerDashboardPort = $env:OPENMEMORY_DASHBOARD_PORT
+$CallerOMDir = $env:OPENMEMORY_DIR
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $RepoRoot
@@ -54,6 +55,9 @@ if (-not [string]::IsNullOrWhiteSpace($CallerDashboardDir)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($CallerDashboardPort)) {
   $env:OPENMEMORY_DASHBOARD_PORT = $CallerDashboardPort
+}
+if (-not [string]::IsNullOrWhiteSpace($CallerOMDir)) {
+  $env:OPENMEMORY_DIR = $CallerOMDir
 }
 
 # Resolve -OpenMemoryDir: relative paths against caller CWD.
