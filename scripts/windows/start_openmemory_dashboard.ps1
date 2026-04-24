@@ -118,7 +118,7 @@ if (-not [string]::IsNullOrWhiteSpace($DashboardDir) -and
 if (-not [string]::IsNullOrWhiteSpace($DashboardDir) -and
     (Test-Path -LiteralPath $DashboardDir -PathType Container) -and
     -not (Test-Path -LiteralPath (Join-Path $DashboardDir "package.json") -PathType Leaf)) {
-  throw "指定目录缺少 package.json，请确认这是有效的 dashboard 目录并执行 npm install: $DashboardDir"
+  throw "指定目录缺少 package.json: $DashboardDir`n请传入 OpenMemory repo root 或包含 package.json 的 dashboard 目录。若依赖尚未安装，请在 dashboard 目录执行 npm install"
 }
 
 if ([string]::IsNullOrWhiteSpace($DashboardDir)) {
@@ -156,11 +156,6 @@ if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_URL)) {
   }
 }
 
-Write-Host "[INFO] Starting OpenMemory Dashboard..."
-Write-Host "       dir=$DashboardDir"
-Write-Host "       port=$ResolvedPort"
-Write-Host "       api=$($env:NEXT_PUBLIC_API_URL)"
-
 $nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
   throw "未找到 node 命令，请安装 Node.js 并确认其在 PATH 中。"
@@ -170,6 +165,11 @@ $npmCmd = Get-Command "npm" -ErrorAction SilentlyContinue
 if (-not $npmCmd) {
   throw "未找到 npm 命令，请安装 Node.js/npm 并确认其在 PATH 中。"
 }
+
+Write-Host "[INFO] Starting OpenMemory Dashboard..."
+Write-Host "       dir=$DashboardDir"
+Write-Host "       port=$ResolvedPort"
+Write-Host "       api=$($env:NEXT_PUBLIC_API_URL)"
 
 Set-Location -LiteralPath $DashboardDir
 # Disable PSNativeCommandUseErrorActionPreference so npm's non-zero exit (e.g. Ctrl-C = 130)

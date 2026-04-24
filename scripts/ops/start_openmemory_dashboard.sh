@@ -138,7 +138,9 @@ fi
 
 # Fail fast when an explicit directory exists but is not a Node.js project.
 if [ -n "${DASHBOARD_DIR}" ] && [ -d "${DASHBOARD_DIR}" ] && [ ! -f "${DASHBOARD_DIR}/package.json" ]; then
-  echo "[ERROR] 指定目录缺少 package.json，请确认这是有效的 dashboard 目录并执行 npm install: ${DASHBOARD_DIR}" >&2
+  echo "[ERROR] 指定目录缺少 package.json: ${DASHBOARD_DIR}" >&2
+  echo "        请传入 OpenMemory repo root 或包含 package.json 的 dashboard 目录。" >&2
+  echo "        若依赖尚未安装，请在 dashboard 目录执行: npm install" >&2
   exit 1
 fi
 

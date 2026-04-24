@@ -1036,12 +1036,15 @@ openmemory-dashboard:  ## 启动 OpenMemory Dashboard（Next.js 开发服务器�
 	@set -e; \
 	_dashboard_dir="$${OPENMEMORY_DASHBOARD_DIR:-$(OPENMEMORY_DASHBOARD_DIR)}"; \
 	_om_dir="$${OPENMEMORY_DIR:-$(OPENMEMORY_DIR)}"; \
-	_dir="$${_dashboard_dir:-$$_om_dir}"; \
 	_port="$${OPENMEMORY_DASHBOARD_PORT:-$(OPENMEMORY_DASHBOARD_PORT)}"; \
-	if [ -n "$$_dir" ] && [ -n "$$_port" ]; then \
-		bash scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_dir" --port "$$_port"; \
-	elif [ -n "$$_dir" ]; then \
-		bash scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_dir"; \
+	if [ -n "$$_dashboard_dir" ] && [ -n "$$_port" ]; then \
+		bash scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_dashboard_dir" --port "$$_port"; \
+	elif [ -n "$$_dashboard_dir" ]; then \
+		bash scripts/ops/start_openmemory_dashboard.sh --openmemory-dir "$$_dashboard_dir"; \
+	elif [ -n "$$_om_dir" ] && [ -n "$$_port" ]; then \
+		OPENMEMORY_DIR="$$_om_dir" bash scripts/ops/start_openmemory_dashboard.sh --port "$$_port"; \
+	elif [ -n "$$_om_dir" ]; then \
+		OPENMEMORY_DIR="$$_om_dir" bash scripts/ops/start_openmemory_dashboard.sh; \
 	elif [ -n "$$_port" ]; then \
 		bash scripts/ops/start_openmemory_dashboard.sh --port "$$_port"; \
 	else \
