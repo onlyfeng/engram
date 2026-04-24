@@ -33,6 +33,9 @@ $ErrorActionPreference = "Stop"
 $CallerDir = (Get-Location).Path
 
 # Save caller-set env vars before env-file loading can overwrite them.
+# Use Test-Path Env: to distinguish "set to empty" from "unset", so a caller that
+# explicitly sets OPENMEMORY_DASHBOARD_DIR="" can clear env-file values.
+$CallerDashboardDirWasSet = Test-Path Env:OPENMEMORY_DASHBOARD_DIR
 $CallerDashboardDir = ""
 if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   if ([System.IO.Path]::IsPathRooted($env:OPENMEMORY_DASHBOARD_DIR)) {
@@ -58,7 +61,8 @@ Set-Location $RepoRoot
 . (Join-Path $PSScriptRoot "load_env_local.ps1")
 
 # Restore caller overrides so they win over env files.
-if (-not [string]::IsNullOrWhiteSpace($CallerDashboardDir)) {
+# Use the WAS_SET flag so an explicit empty value also overrides env-file content.
+if ($CallerDashboardDirWasSet) {
   $env:OPENMEMORY_DASHBOARD_DIR = $CallerDashboardDir
 }
 if (-not [string]::IsNullOrWhiteSpace($CallerDashboardPort)) {
@@ -66,6 +70,11 @@ if (-not [string]::IsNullOrWhiteSpace($CallerDashboardPort)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($CallerOMDir)) {
   $env:OPENMEMORY_DIR = $CallerOMDir
+}
+# If caller supplied OPENMEMORY_DIR but not OPENMEMORY_DASHBOARD_DIR, prevent
+# an env-file OPENMEMORY_DASHBOARD_DIR from silently winning over the caller's intent.
+if (-not [string]::IsNullOrWhiteSpace($CallerOMDir) -and -not $CallerDashboardDirWasSet) {
+  $env:OPENMEMORY_DASHBOARD_DIR = ""
 }
 
 # Resolve -OpenMemoryDir: relative paths against caller CWD.
@@ -78,6 +87,7 @@ function Resolve-DashboardFromOpenMemoryDir {
   param([string]$PathValue)
 
   if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+  if (-not (Test-Path -LiteralPath $PathValue -PathType Container)) { return "" }
 
   $dashSub = Join-Path $PathValue "dashboard"
   if (Test-Path -LiteralPath $dashSub -PathType Container) {
@@ -210,7 +220,13 @@ $_savedNativeErrPref = if (Get-Variable -Name PSNativeCommandUseErrorActionPrefe
   $global:PSNativeCommandUseErrorActionPreference
 } else { $null }
 if ($null -ne $_savedNativeErrPref) { $global:PSNativeCommandUseErrorActionPreference = $false }
-& $npmCmd.Source run dev -- --port $ResolvedPort
-$_exitCode = $LASTEXITCODE
-if ($null -ne $_savedNativeErrPref) { $global:PSNativeCommandUseErrorActionPreference = $_savedNativeErrPref }
+$_exitCode = 1
+try {
+  & $npmCmd.Source run dev -- --port $ResolvedPort
+  $_exitCode = $LASTEXITCODE
+} finally {
+  if ($null -ne $_savedNativeErrPref) {
+    $global:PSNativeCommandUseErrorActionPreference = $_savedNativeErrPref
+  }
+}
 exit $_exitCode

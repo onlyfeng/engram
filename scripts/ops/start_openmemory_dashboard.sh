@@ -46,12 +46,20 @@ unset _arg
 _CALLER_DIR="$(pwd)"
 
 # Normalize a caller-set OPENMEMORY_DASHBOARD_DIR before we cd away.
-if [ -n "${OPENMEMORY_DASHBOARD_DIR:-}" ]; then
-  case "${OPENMEMORY_DASHBOARD_DIR}" in
-    /*) _CALLER_DASHBOARD_DIR="${OPENMEMORY_DASHBOARD_DIR}" ;;
-    *)  _CALLER_DASHBOARD_DIR="${_CALLER_DIR}/${OPENMEMORY_DASHBOARD_DIR}" ;;
-  esac
+# Use ${var+x} to distinguish "set to empty" from "unset", so a caller that
+# explicitly exports OPENMEMORY_DASHBOARD_DIR="" can clear env-file values.
+if [ -n "${OPENMEMORY_DASHBOARD_DIR+x}" ]; then
+  _CALLER_DASHBOARD_DIR_WAS_SET=1
+  if [ -n "${OPENMEMORY_DASHBOARD_DIR:-}" ]; then
+    case "${OPENMEMORY_DASHBOARD_DIR}" in
+      /*) _CALLER_DASHBOARD_DIR="${OPENMEMORY_DASHBOARD_DIR}" ;;
+      *)  _CALLER_DASHBOARD_DIR="${_CALLER_DIR}/${OPENMEMORY_DASHBOARD_DIR}" ;;
+    esac
+  else
+    _CALLER_DASHBOARD_DIR=""
+  fi
 else
+  _CALLER_DASHBOARD_DIR_WAS_SET=0
   _CALLER_DASHBOARD_DIR=""
 fi
 _CALLER_DASHBOARD_PORT="${OPENMEMORY_DASHBOARD_PORT:-}"
@@ -69,7 +77,8 @@ cd "${REPO_ROOT}"
 source "${REPO_ROOT}/scripts/ops/load_env_local.sh"
 
 # Restore caller overrides so they win over env files.
-if [ -n "${_CALLER_DASHBOARD_DIR}" ]; then
+# Use the WAS_SET flag so an explicit empty value also overrides env-file content.
+if [ "${_CALLER_DASHBOARD_DIR_WAS_SET}" = "1" ]; then
   OPENMEMORY_DASHBOARD_DIR="${_CALLER_DASHBOARD_DIR}"
 fi
 if [ -n "${_CALLER_DASHBOARD_PORT}" ]; then
@@ -78,17 +87,26 @@ fi
 if [ -n "${_CALLER_OM_DIR}" ]; then
   OPENMEMORY_DIR="${_CALLER_OM_DIR}"
 fi
-unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT _CALLER_OM_DIR
+# If caller supplied OPENMEMORY_DIR but not OPENMEMORY_DASHBOARD_DIR, prevent
+# an env-file OPENMEMORY_DASHBOARD_DIR from silently winning over the caller's intent.
+if [ -n "${_CALLER_OM_DIR}" ] && [ "${_CALLER_DASHBOARD_DIR_WAS_SET}" = "0" ]; then
+  OPENMEMORY_DASHBOARD_DIR=""
+fi
+unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT _CALLER_OM_DIR _CALLER_DASHBOARD_DIR_WAS_SET
 
 dashboard_from_openmemory_dir() {
   local om_dir="$1"
   [ -n "${om_dir}" ] || return 1
+  [ -d "${om_dir}" ] || return 1
   if [ -d "${om_dir}/dashboard" ]; then
     printf '%s\n' "${om_dir}/dashboard"
     return 0
   fi
   # OPENMEMORY_DIR normally points at packages/openmemory-js for the backend launcher.
-  if [ -d "${om_dir}/../../dashboard" ]; then
+  # Only probe the sibling dashboard when the path is exactly .../packages/openmemory-js.
+  if [ "$(basename "${om_dir}")" = "openmemory-js" ] \
+     && [ "$(basename "$(dirname "${om_dir}")")" = "packages" ] \
+     && [ -d "${om_dir}/../../dashboard" ]; then
     local repo_root
     repo_root="$(cd "${om_dir}/../.." && pwd)"
     printf '%s\n' "${repo_root}/dashboard"
@@ -122,7 +140,7 @@ while [ "$#" -gt 0 ]; do
       elif [ "$(basename "${_raw_dir}")" = "openmemory-js" ] \
            && [ "$(basename "$(dirname "${_raw_dir}")")" = "packages" ] \
            && [ -d "${_raw_dir}/../../dashboard" ]; then
-        _repo_root="$(cd "${_raw_dir}/../.." && pwd)"
+        _repo_root="$(cd -P "${_raw_dir}/../.." && pwd -P)"
         DASHBOARD_DIR="${_repo_root}/dashboard"
         unset _repo_root
       else
@@ -154,8 +172,10 @@ done
 unset _CALLER_DIR
 
 # Validate port is a number in range 1-65535.
+# Reject non-digits and 6+ digit strings before the arithmetic comparison so that
+# very large integers cannot overflow the shell's integer type.
 case "${PORT}" in
-  ''|*[!0-9]*)
+  ''|*[!0-9]*|??????*)
     echo "[ERROR] --port 必须是 1-65535 之间的整数，得到: '${PORT}'" >&2
     exit 1
     ;;
