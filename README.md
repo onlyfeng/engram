@@ -131,34 +131,38 @@ Add-Content -Path ".\.env.ps1" -Value '$env:OM_API_KEY="change_me"'
 Add-Content -Path ".\.env.ps1" -Value '$env:OM_TIER="hybrid"'
 ```
 
-如果你还没有安装 OpenMemory 的 `opm` 命令，再额外执行一次：
+如果你还没有准备可运行的 OpenMemory checkout / `opm` 命令，再额外执行一次：
 
 macOS / WSL2：
 
 ```bash
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory
+git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
 cd ~/openmemory
-git checkout v1.3.3
+# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
+# git checkout v1.3.3
 cd packages/openmemory-js
 npm install
 npm run build
-npm link
+npm link   # 可选；仅当你希望全局使用 opm 时需要
 ```
 
 Windows PowerShell：
 
 ```powershell
-git clone https://github.com/caviraoss/openmemory.git $env:USERPROFILE\openmemory
+git clone https://github.com/caviraoss/openmemory.git $env:USERPROFILE\openmemory   # 或替换成你的 fork URL
 cd $env:USERPROFILE\openmemory
-git checkout v1.3.3
+# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
+# git checkout v1.3.3
 cd packages\openmemory-js
 npm install
 npm run build
-npm link
+npm link   # 可选；仅当你希望全局使用 opm 时需要
 ```
 
 > macOS / WSL2 下，`make setup-db` 生成的 `.env.local` 默认会包含 `POSTGRES_DSN`、`OPENMEMORY_BASE_URL` 以及常用的 `OM_PG_*` 配置；`make openmemory` / `make gateway` 会自动加载它。
 > Windows 原生下，推荐使用 `.\scripts\windows\setup_db.ps1` 生成并维护本地 `.\.env.ps1`，后续终端直接加载它。
+>
+> `git checkout v1.3.3` 不是强制步骤：只有在你想复现“纯上游基线”时才需要。若你使用自己的 fork，且该 fork 仍保持 `1.3.3` 兼容面（或已完成兼容验证），可直接停留在你的分支/commit；改过 TS 源码后只需重新执行 `npm run build`。
 
 **日常启动**
 
@@ -175,6 +179,8 @@ make openmemory
 > 2. `../openmemory/packages/openmemory-js`（推荐：Engram 同级目录的 `openmemory` checkout，可以是官方仓库、官方分支或任意 fork）
 > 3. 常见的本地源码目录（如 `~/openmemory/...`、`~/Documents/openmemory/...`、`~/Documents/ai/openmemory/...`）
 > 4. 若未找到可运行的本地源码目录，则回退到 PATH 里的全局 `opm`
+>
+> 这里的“可运行”指源码目录里至少已有 `bin/opm.js` 和 `dist/server/index.js`。如果你刚修改了 fork，请先在 `packages/openmemory-js` 下执行一次 `npm run build`。
 >
 > 如需显式指定目录：
 >
@@ -312,7 +318,7 @@ eval "$(make --no-print-directory env-openmemory-first-run)"
 然后重新执行：
 
 ```bash
-# 默认你已按上文将 ~/openmemory 固定到 v1.3.3
+# 默认你已按上文准备好 ~/openmemory（可以是上游 v1.3.3，也可以是兼容的 fork）
 cd ~/openmemory/packages/openmemory-js
 opm serve
 ```
@@ -320,7 +326,7 @@ opm serve
 Windows PowerShell：
 
 ```powershell
-# 默认你已按上文将 $env:USERPROFILE\openmemory 固定到 v1.3.3
+# 默认你已按上文准备好 $env:USERPROFILE\openmemory（可以是上游 v1.3.3，也可以是兼容的 fork）
 cd C:\path\to\engram
 if (Test-Path ".\.env.ps1") { . .\.env.ps1 }
 $env:OM_PG_USER = "openmemory_migrator_login"

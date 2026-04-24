@@ -362,13 +362,14 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # 克隆并构建 OpenMemory
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory
+git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
 cd ~/openmemory
-git checkout v1.3.3
+# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
+# git checkout v1.3.3
 cd packages/openmemory-js
 npm install
 npm run build
-sudo npm link
+sudo npm link   # 可选；仅当你希望全局使用 opm 时需要
 
 # 配置环境变量
 export OM_METADATA_BACKEND=postgres
@@ -392,6 +393,12 @@ sudo -u postgres psql -d engram -c \
 # 启动服务
 opm serve
 ```
+
+说明：
+
+- `git checkout v1.3.3` 不是强制步骤；它只用于复现 Engram 当前记录的纯上游基线。
+- 若你使用自己的 fork，且该分支/commit 仍保持 `1.3.3` 兼容面（或已完成兼容验证），可直接停留在当前分支。
+- 若刚修改过 `packages/openmemory-js/src`，请先重新执行 `npm run build`，再启动 `opm serve`。
 
 ### B.6 部署 Engram Gateway（WSL2 内）
 ```

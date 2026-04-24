@@ -55,7 +55,15 @@ else
   _CALLER_DASHBOARD_DIR=""
 fi
 _CALLER_DASHBOARD_PORT="${OPENMEMORY_DASHBOARD_PORT:-}"
-_CALLER_OM_DIR="${OPENMEMORY_DIR:-}"
+# Normalize a caller-set OPENMEMORY_DIR before we cd away.
+if [ -n "${OPENMEMORY_DIR:-}" ]; then
+  case "${OPENMEMORY_DIR}" in
+    /*) _CALLER_OM_DIR="${OPENMEMORY_DIR}" ;;
+    *)  _CALLER_OM_DIR="${_CALLER_DIR}/${OPENMEMORY_DIR}" ;;
+  esac
+else
+  _CALLER_OM_DIR=""
+fi
 
 cd "${REPO_ROOT}"
 source "${REPO_ROOT}/scripts/ops/load_env_local.sh"

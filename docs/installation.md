@@ -447,16 +447,19 @@ OpenMemory 是独立的语义记忆服务，Engram 通过 HTTP API 与其通信�
 - 获取源码并安装 `opm`（示例，按上游仓库结构为准）：
 
 ```bash
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory
+git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
 cd ~/openmemory
-git checkout v1.3.3
+# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
+# git checkout v1.3.3
 cd packages/openmemory-js
 npm install
 npm run build
-npm link   # 将 opm 添加到 PATH（仅对当前用户）
+npm link   # 可选；仅当你希望全局使用 opm 时需要
 ```
 
 > 如果你的环境里 `opm` 仍不可用，请新开一个终端或确保 `npm` 的全局 bin 目录在 PATH 中。
+>
+> `git checkout v1.3.3` 并非强制。它只用于复现 Engram 当前记录的纯上游基线；如果你使用自己的 fork，且仍保持 `1.3.3` 兼容面（或已经完成兼容验证），可以直接停留在你的分支/commit。此时改完 TS 源码后重新执行 `npm run build` 即可。
 
 2) （推荐）在**新终端**加载 Engram 的本地环境变量文件，避免重复输入密码（环境变量不会自动跨终端）：
 
@@ -965,9 +968,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE openmemory_migrator IN SCHEMA openmemory GRANT
 # 注意: Engram 需要 OpenMemory 的 HTTP API 服务（端口 8080），
 #       不能只用 Python SDK（pip install openmemory-py）的嵌入式模式
 
-git clone https://github.com/caviraoss/openmemory.git ~/openmemory
+git clone https://github.com/caviraoss/openmemory.git ~/openmemory   # 或替换成你的 fork URL
 cd ~/openmemory
-git checkout v1.3.3
+# 如需复现 Engram 的纯上游基线，再切到 v1.3.3：
+# git checkout v1.3.3
 
 # 配置环境变量（连接到 Step 4 创建的 PostgreSQL）
 export OM_METADATA_BACKEND=postgres
@@ -986,7 +990,7 @@ export OM_TIER=hybrid           # 可选: hybrid/fast/smart/deep
 cd packages/openmemory-js
 npm install
 npm run build
-npm link   # 将 opm 添加到 PATH
+npm link   # 可选；仅当你希望全局使用 opm 时需要
 
 # 首次启动前：修复 pgvector 列维度（PostgreSQL 18 必需）
 psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE vector(1536);" 2>/dev/null || true
@@ -994,6 +998,11 @@ psql -d engram -c "ALTER TABLE openmemory.openmemory_vectors ALTER COLUMN v TYPE
 # 启动 API 服务
 opm serve
 # 服务将在 http://localhost:8080 启动
+
+# 说明：
+# - 如果你使用的是自己的 fork，通常不需要额外 checkout 到 v1.3.3；
+#   只要该分支/commit 仍与 Engram 的 1.3.3 兼容面匹配即可。
+# - 如果你改过 packages/openmemory-js/src 下的源码，启动前请重新执行 npm run build。
 
 # Step 6: 启动 Gateway（新终端）
 cd /Users/a4399/Documents/ai/onlyfeng/engram

@@ -42,7 +42,15 @@ if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   }
 }
 $CallerDashboardPort = $env:OPENMEMORY_DASHBOARD_PORT
-$CallerOMDir = $env:OPENMEMORY_DIR
+# Normalize a caller-set OPENMEMORY_DIR before we change directory.
+$CallerOMDir = ""
+if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DIR)) {
+  if ([System.IO.Path]::IsPathRooted($env:OPENMEMORY_DIR)) {
+    $CallerOMDir = $env:OPENMEMORY_DIR
+  } else {
+    $CallerOMDir = Join-Path $CallerDir $env:OPENMEMORY_DIR
+  }
+}
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $RepoRoot
