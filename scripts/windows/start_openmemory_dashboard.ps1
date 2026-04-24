@@ -67,14 +67,21 @@ $DashboardDir = ""
 if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir)) {
   # Accept repo root (contains dashboard\) or a direct dashboard path.
   $dashSub = Join-Path $OpenMemoryDir "dashboard"
-  if (Test-Path -PathType Container $dashSub) {
+  if (Test-Path -LiteralPath $dashSub -PathType Container) {
     $DashboardDir = $dashSub
   } else {
     $DashboardDir = $OpenMemoryDir
   }
 } elseif (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
   $DashboardDir = $env:OPENMEMORY_DASHBOARD_DIR
-} else {
+} elseif (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DIR)) {
+  # Fall back: treat OPENMEMORY_DIR as the OpenMemory repo root and look for its dashboard subdir.
+  $omDashSub = Join-Path $env:OPENMEMORY_DIR "dashboard"
+  if (Test-Path -LiteralPath $omDashSub -PathType Container) {
+    $DashboardDir = $omDashSub
+  }
+}
+if ([string]::IsNullOrWhiteSpace($DashboardDir)) {
   # Auto-discover candidates.
   $candidates = @(
     (Join-Path $RepoRoot "..\openmemory\dashboard")
@@ -87,14 +94,14 @@ if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir)) {
     )
   }
   foreach ($candidate in $candidates) {
-    if (-not (Test-Path -PathType Container $candidate)) { continue }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { continue }
     $pkgJson  = Join-Path $candidate "package.json"
     $nextBin  = Join-Path $candidate "node_modules\.bin\next"
-    if ((Test-Path -PathType Leaf $pkgJson) -and (Test-Path $nextBin)) {
+    if ((Test-Path -LiteralPath $pkgJson -PathType Leaf) -and (Test-Path -LiteralPath $nextBin)) {
       $DashboardDir = $candidate
       break
     }
-    if (Test-Path -PathType Leaf $pkgJson) {
+    if (Test-Path -LiteralPath $pkgJson -PathType Leaf) {
       Write-Warning "发现 $candidate 但缺少 node_modules，跳过继续搜索。"
       Write-Host "       如需使用该目录，请先在该目录执行: npm install"
     }
@@ -103,14 +110,14 @@ if (-not [string]::IsNullOrWhiteSpace($OpenMemoryDir)) {
 
 # Fail fast when an explicit directory does not exist.
 if (-not [string]::IsNullOrWhiteSpace($DashboardDir) -and
-    -not (Test-Path -PathType Container $DashboardDir)) {
+    -not (Test-Path -LiteralPath $DashboardDir -PathType Container)) {
   throw "指定的 Dashboard 目录不存在: $DashboardDir"
 }
 
 # Fail fast when an explicit directory exists but is not a Node.js project.
 if (-not [string]::IsNullOrWhiteSpace($DashboardDir) -and
-    (Test-Path -PathType Container $DashboardDir) -and
-    -not (Test-Path -PathType Leaf (Join-Path $DashboardDir "package.json"))) {
+    (Test-Path -LiteralPath $DashboardDir -PathType Container) -and
+    -not (Test-Path -LiteralPath (Join-Path $DashboardDir "package.json") -PathType Leaf)) {
   throw "指定目录缺少 package.json，请确认这是有效的 dashboard 目录并执行 npm install: $DashboardDir"
 }
 
@@ -139,10 +146,14 @@ if (-not [int]::TryParse($ResolvedPort, [ref]$portNumber) -or $portNumber -lt 1 
   throw "Port 必须是 1-65535 之间的整数，得到: '$ResolvedPort'"
 }
 
-# Default NEXT_PUBLIC_API_URL.
+# Default NEXT_PUBLIC_API_URL: prefer explicit OPENMEMORY_BASE_URL, then localhost.
 if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_URL)) {
-  $omPort = if (-not [string]::IsNullOrWhiteSpace($env:OM_PORT)) { $env:OM_PORT } else { "8080" }
-  $env:NEXT_PUBLIC_API_URL = "http://localhost:$omPort"
+  if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_BASE_URL)) {
+    $env:NEXT_PUBLIC_API_URL = $env:OPENMEMORY_BASE_URL
+  } else {
+    $omPort = if (-not [string]::IsNullOrWhiteSpace($env:OM_PORT)) { $env:OM_PORT } else { "8080" }
+    $env:NEXT_PUBLIC_API_URL = "http://localhost:$omPort"
+  }
 }
 
 Write-Host "[INFO] Starting OpenMemory Dashboard..."
@@ -160,6 +171,15 @@ if (-not $npmCmd) {
   throw "未找到 npm 命令，请安装 Node.js/npm 并确认其在 PATH 中。"
 }
 
-Set-Location $DashboardDir
+Set-Location -LiteralPath $DashboardDir
+# Disable PSNativeCommandUseErrorActionPreference so npm's non-zero exit (e.g. Ctrl-C = 130)
+# is captured as $LASTEXITCODE rather than being promoted to a terminating error.
+$_savedNativeErrPref = if (Get-Variable -Name PSNativeCommandUseErrorActionPreference `
+    -Scope Global -ErrorAction SilentlyContinue) {
+  $global:PSNativeCommandUseErrorActionPreference
+} else { $null }
+if ($null -ne $_savedNativeErrPref) { $global:PSNativeCommandUseErrorActionPreference = $false }
 & $npmCmd.Source run dev -- --port $ResolvedPort
-exit $LASTEXITCODE
+$_exitCode = $LASTEXITCODE
+if ($null -ne $_savedNativeErrPref) { $global:PSNativeCommandUseErrorActionPreference = $_savedNativeErrPref }
+exit $_exitCode

@@ -69,6 +69,11 @@ fi
 unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT
 
 DASHBOARD_DIR="${OPENMEMORY_DASHBOARD_DIR:-}"
+# If OPENMEMORY_DASHBOARD_DIR is unset but OPENMEMORY_DIR is configured (e.g. via .env.local),
+# try treating OPENMEMORY_DIR as the OpenMemory repo root and use its dashboard/ subdirectory.
+if [ -z "${DASHBOARD_DIR}" ] && [ -n "${OPENMEMORY_DIR:-}" ] && [ -d "${OPENMEMORY_DIR}/dashboard" ]; then
+  DASHBOARD_DIR="${OPENMEMORY_DIR}/dashboard"
+fi
 PORT="${OPENMEMORY_DASHBOARD_PORT:-3000}"
 
 while [ "$#" -gt 0 ]; do
@@ -192,9 +197,13 @@ if [ -z "${npm_cmd}" ]; then
   exit 1
 fi
 
-# Default NEXT_PUBLIC_API_URL to the OpenMemory backend if not already set.
+# Default NEXT_PUBLIC_API_URL: prefer explicit OPENMEMORY_BASE_URL, then localhost.
 if [ -z "${NEXT_PUBLIC_API_URL:-}" ]; then
-  export NEXT_PUBLIC_API_URL="http://localhost:${OM_PORT:-8080}"
+  if [ -n "${OPENMEMORY_BASE_URL:-}" ]; then
+    export NEXT_PUBLIC_API_URL="${OPENMEMORY_BASE_URL}"
+  else
+    export NEXT_PUBLIC_API_URL="http://localhost:${OM_PORT:-8080}"
+  fi
 fi
 
 echo "[INFO] Starting OpenMemory Dashboard..."
