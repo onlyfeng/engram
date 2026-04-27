@@ -13,6 +13,7 @@ Notes:
 - Falls back to global opm when no runnable local checkout is found
 - Use -FirstRun when OpenMemory needs migrator credentials for initial schema creation
 - OPENMEMORY_FIRST_RUN=1 in env files has the same effect as -FirstRun
+- OPENMEMORY_API_KEY is normalized to OM_API_KEY for upstream builds that only read OM_API_KEY
 #>
 
 [CmdletBinding()]
@@ -127,6 +128,16 @@ if ($FirstRun) {
     $env:OM_PG_PASSWORD = $env:OPENMEMORY_MIGRATOR_PASSWORD
   }
   $env:OM_PG_AUTO_DDL = "true"
+}
+
+# Keep Gateway/CLI compatibility naming and upstream server naming on one
+# effective key. Older OpenMemory server builds only read OM_API_KEY.
+if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_API_KEY)) {
+  if (-not [string]::IsNullOrWhiteSpace($env:OM_API_KEY) -and
+      $env:OM_API_KEY -ne $env:OPENMEMORY_API_KEY) {
+    Write-Warning "OPENMEMORY_API_KEY 与 OM_API_KEY 不一致；将按 OPENMEMORY_API_KEY 启动 OpenMemory。"
+  }
+  $env:OM_API_KEY = $env:OPENMEMORY_API_KEY
 }
 
 Write-Host "[INFO] Starting OpenMemory..."

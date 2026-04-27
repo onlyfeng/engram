@@ -6,7 +6,7 @@ Goals:
 - Reduce missed manual exports after `make setup-db` interactive password input.
 - Keep secrets out of version control (.env.local is gitignored).
 - Make it easier to start OpenMemory in another terminal by emitting common OM_* vars.
-- Preserve user-added keys (e.g. OM_API_KEY) across rewrites.
+- Preserve user-added keys (e.g. OPENMEMORY_API_KEY / OM_API_KEY) across rewrites.
 
 Inputs (via environment variables):
 - ENV_LOCAL_FILE (default: .env.local)
@@ -16,7 +16,7 @@ Inputs (via environment variables):
 - LOGBOOK_MIGRATOR_PASSWORD, LOGBOOK_SVC_PASSWORD,
   OPENMEMORY_MIGRATOR_PASSWORD, OPENMEMORY_SVC_PASSWORD
 - OM_PG_SCHEMA (optional)
-- OM_API_KEY, OM_PORT, OM_VEC_DIM, OM_TIER (optional; preserved if already in file)
+- OPENMEMORY_API_KEY, OM_API_KEY, OM_PORT, OM_VEC_DIM, OM_TIER (optional; preserved if already in file)
 """
 
 from __future__ import annotations
@@ -122,6 +122,7 @@ def main() -> int:
 
     # User-managed / optional keys (we will write them if present, and preserve them otherwise)
     optional_keys = [
+        "OPENMEMORY_API_KEY",
         "OM_API_KEY",
         "OM_PORT",
         "OM_VEC_DIM",
@@ -208,6 +209,7 @@ def main() -> int:
     lines.append(f"OM_PG_SCHEMA={_dotenv_quote(om_schema)}")
     lines.append(f"OM_PORT={_dotenv_quote(om_port)}")
 
+    _append_optional("OPENMEMORY_API_KEY")
     _append_optional("OM_API_KEY")
     _append_optional("OM_VEC_DIM")
     _append_optional("OM_TIER")
@@ -241,4 +243,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

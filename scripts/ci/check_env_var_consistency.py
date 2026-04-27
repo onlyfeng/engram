@@ -152,6 +152,7 @@ DOC_ONLY_VARS: Set[str] = {
     "DASHBOARD_PORT",
     "NEXT_PUBLIC_API_URL",
     "NEXT_PUBLIC_API_KEY",
+    "NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS",
     # Local OpenMemory launcher 配置（scripts/ops 与 Windows wrapper 使用，不在 src/engram 中读取）
     "OPENMEMORY_DASHBOARD_DIR",
     "OPENMEMORY_DASHBOARD_PORT",

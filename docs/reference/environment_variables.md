@@ -107,8 +107,8 @@ level = "INFO"
 | `OM_API_KEY` | API 认证密钥（生产环境强烈建议设置） | - | 生产推荐 |
 
 > **兼容说明**：
-> - 当前上游重写中的 OpenMemory 服务端实际读取的是 `OM_API_KEY`
-> - `OPENMEMORY_API_KEY` 仍可作为 Gateway / CLI 兼容变量，但不应作为服务端主配置名
+> - Engram 本地 launcher 会将 `OPENMEMORY_API_KEY` 归一化为 `OM_API_KEY`，兼容只读取 `OM_API_KEY` 的上游 OpenMemory 构建
+> - 若两者同时设置且不同，按 `OPENMEMORY_API_KEY` 生效；生产环境应避免长期保留冲突值
 
 ### 元数据后端
 
@@ -340,7 +340,8 @@ POSTGRES_PASSWORD=postgres
 |------|------|--------|
 | `DASHBOARD_PORT` | Dashboard 服务端口 | `3000` |
 | `NEXT_PUBLIC_API_URL` | 前端 API 地址 | `http://localhost:${OM_PORT}` |
-| `NEXT_PUBLIC_API_KEY` | 前端 API 密钥 | `${OM_API_KEY}` |
+| `NEXT_PUBLIC_API_KEY` | 前端 API 密钥 | `${OPENMEMORY_API_KEY:-${OM_API_KEY}}` |
+| `NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS` | Next/Turbopack 使用系统 TLS 证书（缓解内网/WSL 字体请求证书链问题） | `1` |
 | `OPENMEMORY_DASHBOARD_PORT` | 本地 OpenMemory Dashboard launcher 端口 | `3000` |
 | `OPENMEMORY_DASHBOARD_DIR` | 本地 OpenMemory repo root 或 `dashboard/` 目录 | - |
 
@@ -634,7 +635,7 @@ engram-scm run config --show-backfill
 
 ### API Key 优先级
 
-Gateway 组件中：
+Gateway、本地 OpenMemory launcher 与 Dashboard launcher 中：
 1. `OPENMEMORY_API_KEY`（兼容旧配置）
 2. `OM_API_KEY`（推荐）
 
