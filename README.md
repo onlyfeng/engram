@@ -241,7 +241,12 @@ Windows PowerShell：
 .\scripts\windows\start_openmemory_dashboard.ps1 -OpenMemoryDir "$env:USERPROFILE\openmemory" -Port 3001
 ```
 
-> Dashboard 启动脚本会自动加载 Engram 的 `.env` / `.env.local` / `.env.ps1`，并在未设置 `NEXT_PUBLIC_API_URL` 时优先使用 `OPENMEMORY_BASE_URL`，否则回退到 `http://localhost:<OM_PORT|8080>`。
+> Dashboard 启动脚本的环境处理：
+>
+> - macOS / WSL2 wrapper 会加载 Engram 的 `.env` / `.env.local`；Windows PowerShell wrapper 还会额外加载 `.env.ps1`。
+> - 未设置 `NEXT_PUBLIC_API_URL` 时，优先使用 `OPENMEMORY_BASE_URL`，否则回退到 `http://localhost:<OM_PORT|8080>`。
+> - 未设置 `NEXT_PUBLIC_API_KEY` 时，按 `OPENMEMORY_API_KEY` -> `OM_API_KEY` 顺序注入；两者同时存在且不一致时会启动告警，并以 `OPENMEMORY_API_KEY` 为准。`NEXT_PUBLIC_API_KEY` 会进入浏览器端，仅在本地或可信内网 Dashboard 使用。
+> - 未设置 `NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS` 时默认设为 `1`，用于缓解 WSL / 企业代理下 `next dev` 拉取 Google Fonts 的 TLS 证书链问题。
 
 **使用同级 `openmemory` 源码目录**
 

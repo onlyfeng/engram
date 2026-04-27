@@ -664,6 +664,13 @@ curl http://localhost:8080/health
 
 Dashboard 默认运行在 `http://localhost:3000`；它读取 `NEXT_PUBLIC_API_URL`，未设置时由 wrapper 优先使用 `OPENMEMORY_BASE_URL`，否则回退到 `http://localhost:<OM_PORT|8080>`。
 
+> Dashboard wrapper 环境注入说明：
+>
+> - macOS / WSL2 wrapper 会加载 Engram 的 `.env` / `.env.local`；Windows PowerShell wrapper 还会额外加载 `.env.ps1`。
+> - 未设置 `NEXT_PUBLIC_API_KEY` 时，按 `OPENMEMORY_API_KEY` -> `OM_API_KEY` 顺序注入；两者同时存在且不一致时会启动告警，并以 `OPENMEMORY_API_KEY` 为准。
+> - `NEXT_PUBLIC_API_KEY` 会进入浏览器端，Dashboard 会用它访问 OpenMemory API；不要把带真实 key 的本地 dev Dashboard 暴露到非可信网络。
+> - 未设置 `NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS` 时默认设为 `1`，用于缓解 WSL / 企业代理下 `next dev` 拉取 Google Fonts 的 TLS 证书链问题。
+
 > 说明：OpenMemory HTTP Server 默认提供的是 **API/MCP/指标端点**，不一定提供 HTML 首页。  
 > 因此浏览器直接访问 `http://localhost:8080/` 返回 `404: Not Found` 也是正常的；请以 `/health` 与下述端点为准。
 
