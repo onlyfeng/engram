@@ -102,6 +102,42 @@ def test_make_openmemory_preserves_explicit_opm_override(tmp_path: Path) -> None
     assert "args=serve" in result.stdout
 
 
+def test_start_openmemory_normalizes_openmemory_api_key_for_upstream_server(
+    tmp_path: Path,
+) -> None:
+    """OPENMEMORY_API_KEY must drive OM_API_KEY for upstream builds that only read OM_API_KEY."""
+    bash = _require_command("bash")
+    repo = _copy_openmemory_launcher(tmp_path)
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    fake_opm = tmp_path / "fake-opm"
+    fake_opm.write_text(
+        '#!/usr/bin/env bash\nprintf "om_api_key=%s\\n" "$OM_API_KEY"\nprintf "args=%s\\n" "$*"\n',
+        encoding="utf-8",
+    )
+    os.chmod(fake_opm, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+    result = subprocess.run(
+        [bash, "scripts/ops/start_openmemory.sh"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "HOME": str(fake_home),
+            "PATH": os.environ["PATH"],
+            "OPM": str(fake_opm),
+            "OPENMEMORY_API_KEY": "compat-key",
+            "OM_API_KEY": "stale-key",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "om_api_key=compat-key" in result.stdout
+    assert "args=serve" in result.stdout
+    assert "OPENMEMORY_API_KEY 与 OM_API_KEY 不一致" in result.stderr
+
+
 def test_make_openmemory_dashboard_runs_script_via_bash(tmp_path: Path) -> None:
     _require_command("bash")
     make = _require_command("make")
@@ -205,6 +241,7 @@ def test_dashboard_launcher_exposes_om_api_key_to_next_public_api_key(
         "#!/usr/bin/env bash\n"
         'printf "api=%s\\n" "$NEXT_PUBLIC_API_URL"\n'
         'printf "api_key=%s\\n" "$NEXT_PUBLIC_API_KEY"\n'
+        'printf "tls=%s\\n" "$NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS"\n'
         'printf "args=%s\\n" "$*"\n',
         encoding="utf-8",
     )
@@ -231,4 +268,57 @@ def test_dashboard_launcher_exposes_om_api_key_to_next_public_api_key(
     assert result.returncode == 0, result.stderr
     assert "api=http://localhost:8080" in result.stdout
     assert "api_key=test-secret" in result.stdout
+    assert "tls=1" in result.stdout
     assert "args=run dev -- --port 3000" in result.stdout
+
+
+def test_dashboard_launcher_prefers_openmemory_api_key_for_next_public_api_key(
+    tmp_path: Path,
+) -> None:
+    """Dashboard, Gateway and OpenMemory launcher must agree on API key priority."""
+    bash = _require_command("bash")
+    repo = _copy_openmemory_launcher(tmp_path)
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    dashboard = tmp_path / "openmemory" / "dashboard"
+    dashboard.mkdir(parents=True)
+    (dashboard / "package.json").write_text('{"scripts":{"dev":"next dev"}}\n', encoding="utf-8")
+    (repo / ".env.local").write_text(
+        'OPENMEMORY_API_KEY="compat-secret"\nOM_API_KEY="om-secret"\n',
+        encoding="utf-8",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_node = fake_bin / "node"
+    fake_node.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_npm = fake_bin / "npm"
+    fake_npm.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "api_key=%s\\n" "$NEXT_PUBLIC_API_KEY"\n'
+        'printf "args=%s\\n" "$*"\n',
+        encoding="utf-8",
+    )
+    os.chmod(fake_node, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    os.chmod(fake_npm, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+    result = subprocess.run(
+        [
+            bash,
+            str(repo / "scripts" / "ops" / "start_openmemory_dashboard.sh"),
+            "--openmemory-dir",
+            str(dashboard),
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "HOME": str(fake_home),
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "api_key=compat-secret" in result.stdout
+    assert "OPENMEMORY_API_KEY 与 OM_API_KEY 不一致" in result.stderr

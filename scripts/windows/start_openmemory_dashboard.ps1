@@ -12,7 +12,8 @@ Notes:
 - Resolution order: -OpenMemoryDir / OPENMEMORY_DASHBOARD_DIR, OPENMEMORY_DIR-derived dashboard, ..\openmemory\dashboard, common local dirs
 - -OpenMemoryDir accepts the OpenMemory repo root, packages\openmemory-js, or the dashboard directory directly
 - NEXT_PUBLIC_API_URL defaults to OPENMEMORY_BASE_URL, then http://localhost:<OM_PORT|8080>
-- NEXT_PUBLIC_API_KEY defaults to OM_API_KEY when set, so authenticated local APIs work
+- NEXT_PUBLIC_API_KEY defaults to OPENMEMORY_API_KEY, then OM_API_KEY, so authenticated local APIs work
+- NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS defaults to 1 when unset
 - OPENMEMORY_DASHBOARD_PORT env has the same effect as -Port
 #>
 
@@ -48,6 +49,8 @@ if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DASHBOARD_DIR)) {
 $CallerDashboardPort = $env:OPENMEMORY_DASHBOARD_PORT
 $CallerNextPublicApiKeyWasSet = Test-Path Env:NEXT_PUBLIC_API_KEY
 $CallerNextPublicApiKey = if ($CallerNextPublicApiKeyWasSet) { $env:NEXT_PUBLIC_API_KEY } else { "" }
+$CallerTurbopackTlsWasSet = Test-Path Env:NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS
+$CallerTurbopackTls = if ($CallerTurbopackTlsWasSet) { $env:NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS } else { "" }
 # Normalize a caller-set OPENMEMORY_DIR before we change directory.
 $CallerOMDir = ""
 if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_DIR)) {
@@ -73,6 +76,9 @@ if (-not [string]::IsNullOrWhiteSpace($CallerDashboardPort)) {
 }
 if ($CallerNextPublicApiKeyWasSet) {
   $env:NEXT_PUBLIC_API_KEY = $CallerNextPublicApiKey
+}
+if ($CallerTurbopackTlsWasSet) {
+  $env:NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS = $CallerTurbopackTls
 }
 if (-not [string]::IsNullOrWhiteSpace($CallerOMDir)) {
   $env:OPENMEMORY_DIR = $CallerOMDir
@@ -204,10 +210,21 @@ if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_URL)) {
 }
 # The dashboard runs API calls in the browser and reads only NEXT_PUBLIC_API_KEY.
 # Reuse the local OpenMemory key by default; do not print it in startup logs.
+if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_API_KEY) -and
+    -not [string]::IsNullOrWhiteSpace($env:OM_API_KEY) -and
+    $env:OPENMEMORY_API_KEY -ne $env:OM_API_KEY) {
+  Write-Warning "OPENMEMORY_API_KEY 与 OM_API_KEY 不一致；Dashboard 将优先使用 OPENMEMORY_API_KEY。"
+}
 if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_KEY) -and
-    -not $CallerNextPublicApiKeyWasSet -and
-    -not [string]::IsNullOrWhiteSpace($env:OM_API_KEY)) {
-  $env:NEXT_PUBLIC_API_KEY = $env:OM_API_KEY
+    -not $CallerNextPublicApiKeyWasSet) {
+  if (-not [string]::IsNullOrWhiteSpace($env:OPENMEMORY_API_KEY)) {
+    $env:NEXT_PUBLIC_API_KEY = $env:OPENMEMORY_API_KEY
+  } elseif (-not [string]::IsNullOrWhiteSpace($env:OM_API_KEY)) {
+    $env:NEXT_PUBLIC_API_KEY = $env:OM_API_KEY
+  }
+}
+if (-not (Test-Path Env:NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS)) {
+  $env:NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS = "1"
 }
 
 $nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
@@ -224,6 +241,9 @@ Write-Host "[INFO] Starting OpenMemory Dashboard..."
 Write-Host "       dir=$DashboardDir"
 Write-Host "       port=$ResolvedPort"
 Write-Host "       api=$($env:NEXT_PUBLIC_API_URL)"
+$apiKeyState = if ([string]::IsNullOrWhiteSpace($env:NEXT_PUBLIC_API_KEY)) { "(empty)" } else { "set" }
+Write-Host "       api_key=$apiKeyState"
+Write-Host "       turbopack_system_tls_certs=$($env:NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS)"
 
 Set-Location -LiteralPath $DashboardDir
 # Disable PSNativeCommandUseErrorActionPreference so npm's non-zero exit (e.g. Ctrl-C = 130)

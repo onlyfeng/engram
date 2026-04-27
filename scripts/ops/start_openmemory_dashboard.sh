@@ -20,7 +20,8 @@ Notes:
   - Resolution order: --openmemory-dir / OPENMEMORY_DASHBOARD_DIR, OPENMEMORY_DIR-derived
     dashboard, ../openmemory/dashboard, common local dirs, then fails with guidance.
   - NEXT_PUBLIC_API_URL defaults to OPENMEMORY_BASE_URL, then http://localhost:<OM_PORT|8080>.
-  - NEXT_PUBLIC_API_KEY defaults to OM_API_KEY when set, so authenticated local APIs work.
+  - NEXT_PUBLIC_API_KEY defaults to OPENMEMORY_API_KEY, then OM_API_KEY, so authenticated local APIs work.
+  - NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS defaults to 1 when unset.
   - OPENMEMORY_DASHBOARD_PORT=<PORT> has the same effect as --port.
 EOF
 }
@@ -70,6 +71,12 @@ if [ -n "${NEXT_PUBLIC_API_KEY+x}" ]; then
   _CALLER_NEXT_PUBLIC_API_KEY_WAS_SET=1
   _CALLER_NEXT_PUBLIC_API_KEY="${NEXT_PUBLIC_API_KEY:-}"
 fi
+_CALLER_TURBOPACK_TLS_WAS_SET=0
+_CALLER_TURBOPACK_TLS=""
+if [ -n "${NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS+x}" ]; then
+  _CALLER_TURBOPACK_TLS_WAS_SET=1
+  _CALLER_TURBOPACK_TLS="${NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS:-}"
+fi
 # Normalize a caller-set OPENMEMORY_DIR before we cd away.
 if [ -n "${OPENMEMORY_DIR:-}" ]; then
   case "${OPENMEMORY_DIR}" in
@@ -94,6 +101,9 @@ fi
 if [ "${_CALLER_NEXT_PUBLIC_API_KEY_WAS_SET}" = "1" ]; then
   NEXT_PUBLIC_API_KEY="${_CALLER_NEXT_PUBLIC_API_KEY}"
 fi
+if [ "${_CALLER_TURBOPACK_TLS_WAS_SET}" = "1" ]; then
+  NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS="${_CALLER_TURBOPACK_TLS}"
+fi
 if [ -n "${_CALLER_OM_DIR}" ]; then
   OPENMEMORY_DIR="${_CALLER_OM_DIR}"
 fi
@@ -102,7 +112,7 @@ fi
 if [ -n "${_CALLER_OM_DIR}" ] && [ "${_CALLER_DASHBOARD_DIR_WAS_SET}" = "0" ]; then
   OPENMEMORY_DASHBOARD_DIR=""
 fi
-unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT _CALLER_OM_DIR _CALLER_DASHBOARD_DIR_WAS_SET _CALLER_NEXT_PUBLIC_API_KEY
+unset _CALLER_DASHBOARD_DIR _CALLER_DASHBOARD_PORT _CALLER_OM_DIR _CALLER_DASHBOARD_DIR_WAS_SET _CALLER_NEXT_PUBLIC_API_KEY _CALLER_TURBOPACK_TLS_WAS_SET _CALLER_TURBOPACK_TLS
 
 dashboard_from_openmemory_dir() {
   local om_dir="$1"
@@ -274,17 +284,36 @@ if [ -z "${NEXT_PUBLIC_API_URL:-}" ]; then
 fi
 # The dashboard runs API calls in the browser and reads only NEXT_PUBLIC_API_KEY.
 # Reuse the local OpenMemory key by default; do not print it in startup logs.
+if [ -n "${OPENMEMORY_API_KEY:-}" ] \
+   && [ -n "${OM_API_KEY:-}" ] \
+   && [ "${OPENMEMORY_API_KEY}" != "${OM_API_KEY}" ]; then
+  echo "[WARN] OPENMEMORY_API_KEY 与 OM_API_KEY 不一致；Dashboard 将优先使用 OPENMEMORY_API_KEY。" >&2
+fi
 if [ -z "${NEXT_PUBLIC_API_KEY:-}" ] \
-   && [ "${_CALLER_NEXT_PUBLIC_API_KEY_WAS_SET}" = "0" ] \
-   && [ -n "${OM_API_KEY:-}" ]; then
-  export NEXT_PUBLIC_API_KEY="${OM_API_KEY}"
+   && [ "${_CALLER_NEXT_PUBLIC_API_KEY_WAS_SET}" = "0" ]; then
+  if [ -n "${OPENMEMORY_API_KEY:-}" ]; then
+    export NEXT_PUBLIC_API_KEY="${OPENMEMORY_API_KEY}"
+  elif [ -n "${OM_API_KEY:-}" ]; then
+    export NEXT_PUBLIC_API_KEY="${OM_API_KEY}"
+  fi
 fi
 unset _CALLER_NEXT_PUBLIC_API_KEY_WAS_SET
+if [ -z "${NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS+x}" ]; then
+  export NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS=1
+fi
+
+if [ -n "${NEXT_PUBLIC_API_KEY:-}" ]; then
+  api_key_state="set"
+else
+  api_key_state="(empty)"
+fi
 
 echo "[INFO] Starting OpenMemory Dashboard..."
 echo "       dir=${dashboard_dir}"
 echo "       port=${PORT}"
 echo "       api=${NEXT_PUBLIC_API_URL}"
+echo "       api_key=${api_key_state}"
+echo "       turbopack_system_tls_certs=${NEXT_TURBOPACK_EXPERIMENTAL_USE_SYSTEM_TLS_CERTS:-<unset>}"
 
 cd "${dashboard_dir}"
 exec "${npm_cmd}" run dev -- --port "${PORT}"

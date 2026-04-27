@@ -20,6 +20,7 @@ Notes:
   - Falls back to global `opm` when no runnable local checkout is found
   - OPENMEMORY_FIRST_RUN=1 in env files has the same effect as --first-run
   - OPM=/path/to/opm can pin a custom CLI binary or wrapper when needed
+  - OPENMEMORY_API_KEY is normalized to OM_API_KEY for upstream builds that only read OM_API_KEY
 EOF
 }
 
@@ -210,6 +211,15 @@ if [ "${FIRST_RUN}" = "1" ]; then
     export OM_PG_PASSWORD="${OPENMEMORY_MIGRATOR_PASSWORD}"
   fi
   export OM_PG_AUTO_DDL="true"
+fi
+
+# Keep Gateway/CLI compatibility naming and upstream server naming on one
+# effective key. Older OpenMemory server builds only read OM_API_KEY.
+if [ -n "${OPENMEMORY_API_KEY:-}" ]; then
+  if [ -n "${OM_API_KEY:-}" ] && [ "${OM_API_KEY}" != "${OPENMEMORY_API_KEY}" ]; then
+    echo "[WARN] OPENMEMORY_API_KEY 与 OM_API_KEY 不一致；将按 OPENMEMORY_API_KEY 启动 OpenMemory。" >&2
+  fi
+  export OM_API_KEY="${OPENMEMORY_API_KEY}"
 fi
 
 echo "[INFO] Starting OpenMemory..."
