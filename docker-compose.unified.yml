@@ -172,7 +172,7 @@ services:
       GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-INFO}
       UNKNOWN_ACTOR_POLICY: ${UNKNOWN_ACTOR_POLICY:-auto_create}
     ports:
-      - "${GATEWAY_PORT:-8787}:8787"
+      - "127.0.0.1:${GATEWAY_PORT:-8787}:8787"
     command: ["engram-gateway"]
     networks: [engram_net]
 
