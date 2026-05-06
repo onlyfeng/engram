@@ -173,7 +173,7 @@ async def execute_logbook_attach(
     if parsed_uri.scheme.lower() == "file":
         return {
             "ok": False,
-            "error_code": ToolResultErrorCode.INVALID_PARAMETER,
+            "error_code": "INVALID_URI",
             "retryable": False,
             "message": "不支持 file:// URI，请使用 artifact URI",
         }
