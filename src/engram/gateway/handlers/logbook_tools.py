@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from ..di import GatewayDepsProtocol
 from ..result_error_codes import ToolResultErrorCode
@@ -166,6 +167,15 @@ async def execute_logbook_attach(
             "error_code": ToolResultErrorCode.MISSING_REQUIRED_PARAMETER,
             "retryable": False,
             "message": "缺少必需参数: sha256",
+        }
+
+    parsed_uri = urlparse(uri)
+    if parsed_uri.scheme.lower() == "file":
+        return {
+            "ok": False,
+            "error_code": "INVALID_URI",
+            "retryable": False,
+            "message": "不支持 file:// URI，请使用 artifact URI",
         }
 
     attachment_id = deps.logbook_adapter.attach(
