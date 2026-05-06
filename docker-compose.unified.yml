@@ -150,8 +150,8 @@ services:
         condition: service_healthy
     environment:
       <<: *openmemory_env
-    ports:
-      - "${OM_PORT:-8080}:8080"
+    expose:
+      - "8080"
     networks: [engram_net]
 
   gateway:
