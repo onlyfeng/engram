@@ -151,7 +151,7 @@ services:
     environment:
       <<: *openmemory_env
     ports:
-      - "${OM_PORT:-8080}:8080"
+      - "127.0.0.1:${OM_PORT:-8080}:8080"
     networks: [engram_net]
 
   gateway:
