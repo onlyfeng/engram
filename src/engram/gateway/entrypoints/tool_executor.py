@@ -606,10 +606,10 @@ class DefaultToolExecutor:
         required_params: Dict[str, List[str]] = {
             "memory_store": ["payload_md"],
             "memory_query": ["query"],
-            "memory_list": [],
+            "memory_list": ["user_id"],
             "memory_get": ["memory_id"],
             "memory_reinforce": ["memory_id"],
-            "memory_wipe": ["confirm"],
+            "memory_wipe": ["confirm", "user_id"],
             "evidence_upload": ["content", "content_type"],
             "governance_update": [],  # 无必需参数
             "reliability_report": [],  # 无必需参数
@@ -628,6 +628,16 @@ class DefaultToolExecutor:
                     ok=False,
                     error_code=ToolResultErrorCode.MISSING_REQUIRED_PARAMETER,
                     error_message=f"缺少必需参数: {param}",
+                    retryable=False,
+                )
+
+        if name in {"memory_list", "memory_wipe"}:
+            user_id = arguments.get("user_id")
+            if not isinstance(user_id, str) or not user_id.strip():
+                return ToolCallResult(
+                    ok=False,
+                    error_code="INVALID_PARAM_VALUE",
+                    error_message="参数 user_id 必须为非空字符串",
                     retryable=False,
                 )
 

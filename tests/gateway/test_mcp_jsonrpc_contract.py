@@ -475,10 +475,10 @@ class TestToolsList:
         expected_required = {
             "memory_store": ["payload_md"],
             "memory_query": ["query"],
-            "memory_list": [],
+            "memory_list": ["user_id"],
             "memory_get": ["memory_id"],
             "memory_reinforce": ["memory_id"],
-            "memory_wipe": ["confirm"],
+            "memory_wipe": ["confirm", "user_id"],
             "reliability_report": [],
             "governance_update": [],
             "evidence_upload": ["content", "content_type"],  # content 和 content_type 是必需的
@@ -704,7 +704,10 @@ class TestToolsCall:
             json={
                 "jsonrpc": "2.0",
                 "method": "tools/call",
-                "params": {"name": "memory_list", "arguments": {"limit": 10, "offset": 0}},
+                "params": {
+                    "name": "memory_list",
+                    "arguments": {"user_id": "u-1", "limit": 10, "offset": 0},
+                },
                 "id": 2,
             },
         )
@@ -808,7 +811,10 @@ class TestToolsCall:
             json={
                 "jsonrpc": "2.0",
                 "method": "tools/call",
-                "params": {"name": "memory_wipe", "arguments": {"confirm": False}},
+                "params": {
+                    "name": "memory_wipe",
+                    "arguments": {"confirm": False, "user_id": "u-1"},
+                },
                 "id": 5,
             },
         )

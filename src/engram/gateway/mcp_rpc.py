@@ -659,12 +659,12 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "user_id": {"type": "string", "description": "用户 ID（可选）"},
+                "user_id": {"type": "string", "description": "用户 ID（必需，用于作用域隔离）"},
                 "space": {"type": "string", "description": "空间过滤（可选）"},
                 "limit": {"type": "integer", "description": "返回数量限制（默认 100）"},
                 "offset": {"type": "integer", "description": "分页偏移（默认 0）"},
             },
-            "required": [],
+            "required": ["user_id"],
         },
     ),
     ToolDefinition(
@@ -702,9 +702,9 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
                     "type": "boolean",
                     "description": "危险确认开关，必须传 true 才会执行",
                 },
-                "user_id": {"type": "string", "description": "仅清理该用户数据（可选）"},
+                "user_id": {"type": "string", "description": "仅清理该用户数据（必需）"},
             },
-            "required": ["confirm"],
+            "required": ["confirm", "user_id"],
         },
     ),
     ToolDefinition(
