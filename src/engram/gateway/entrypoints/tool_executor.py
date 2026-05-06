@@ -271,7 +271,7 @@ async def execute_tool(
                     encoding=args.get("encoding"),
                     max_bytes=args.get("max_bytes"),
                     include_content=args.get("include_content", True),
-                    verify_sha256=args.get("verify_sha256", True),
+                    verify_sha256=True,
                     deps=deps,
                 )
             elif tool == "artifacts_put":

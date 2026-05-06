@@ -791,10 +791,6 @@ AVAILABLE_TOOLS: List[ToolDefinition] = [
                     "type": "boolean",
                     "description": "是否返回内容（false 仅返回元数据）",
                 },
-                "verify_sha256": {
-                    "type": "boolean",
-                    "description": "是否校验 SHA256（默认 true）",
-                },
             },
             "required": ["uri"],
         },
