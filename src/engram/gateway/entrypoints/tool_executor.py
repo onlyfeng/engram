@@ -631,7 +631,6 @@ class DefaultToolExecutor:
                     retryable=False,
                 )
 
-
         if name in {"memory_list", "memory_wipe"}:
             user_id = arguments.get("user_id")
             if not isinstance(user_id, str) or not user_id.strip():

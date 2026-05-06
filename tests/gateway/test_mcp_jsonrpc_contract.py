@@ -704,7 +704,10 @@ class TestToolsCall:
             json={
                 "jsonrpc": "2.0",
                 "method": "tools/call",
-                "params": {"name": "memory_list", "arguments": {"user_id": "u-1", "limit": 10, "offset": 0}},
+                "params": {
+                    "name": "memory_list",
+                    "arguments": {"user_id": "u-1", "limit": 10, "offset": 0},
+                },
                 "id": 2,
             },
         )
@@ -808,7 +811,10 @@ class TestToolsCall:
             json={
                 "jsonrpc": "2.0",
                 "method": "tools/call",
-                "params": {"name": "memory_wipe", "arguments": {"confirm": False, "user_id": "u-1"}},
+                "params": {
+                    "name": "memory_wipe",
+                    "arguments": {"confirm": False, "user_id": "u-1"},
+                },
                 "id": 5,
             },
         )
