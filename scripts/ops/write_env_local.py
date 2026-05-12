@@ -122,6 +122,10 @@ def main() -> int:
 
     # User-managed / optional keys (we will write them if present, and preserve them otherwise)
     optional_keys = [
+        "ADMIN_DSN",
+        "ADMIN_BOOTSTRAP_DSN",
+        "ENGRAM_PG_ADMIN_DSN",
+        "DB_ADMIN_PREFIX",
         "OPENMEMORY_API_KEY",
         "OM_API_KEY",
         "OM_PORT",
@@ -134,6 +138,7 @@ def main() -> int:
         "OM_PG_USER",
         "OM_PG_PASSWORD",
     ]
+    optional_allow_empty = {"DB_ADMIN_PREFIX"}
 
     reserved_keys = set(base_keys) | set(optional_keys) | {"POSTGRES_DSN"}
     preserved_lines = _extract_preserved_lines(existing_content, reserved_keys)
@@ -180,6 +185,9 @@ def main() -> int:
 
     # Allow optional keys to persist even when env isn't set (e.g. OM_API_KEY).
     def _append_optional(key: str) -> None:
+        if key in os.environ and (os.environ.get(key, "").strip() or key in optional_allow_empty):
+            lines.append(f"{key}={_dotenv_quote(os.environ.get(key, '').strip())}")
+            return
         val = _get(key)
         if val:
             lines.append(f"{key}={_dotenv_quote(val)}")
@@ -209,6 +217,10 @@ def main() -> int:
     lines.append(f"OM_PG_SCHEMA={_dotenv_quote(om_schema)}")
     lines.append(f"OM_PORT={_dotenv_quote(om_port)}")
 
+    _append_optional("ADMIN_DSN")
+    _append_optional("ADMIN_BOOTSTRAP_DSN")
+    _append_optional("ENGRAM_PG_ADMIN_DSN")
+    _append_optional("DB_ADMIN_PREFIX")
     _append_optional("OPENMEMORY_API_KEY")
     _append_optional("OM_API_KEY")
     _append_optional("OM_VEC_DIM")

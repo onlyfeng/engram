@@ -531,6 +531,7 @@ Cursor MCP 只连接 Gateway，不直连 OpenMemory；因此 OpenMemory 只需�
 > - `opm serve` 报 `permission denied for schema openmemory`：可先用 `eval "$(make --no-print-directory env-openmemory-first-run)"` 临时切到 migrator 登录，或执行 `make openmemory-grant-svc-full` 后重启
 > - `opm serve` 警告 `OM_TIER not set`：在 `.env.local` 设置 `OM_TIER="hybrid"`（或 fast/smart/deep）
 > - WSL2 下若 Windows 访问 `localhost:8080` 不通，可用 `hostname -I` 获取 WSL IP 并改用 `http://<wsl-ip>:8080`
+> - `make reset-native` 会自动加载 `.env` / `.env.local`，并把加载后的数据库/env 设置传给后续初始化；WSL2 export/import 后的重置与局域网端口映射见 `docs/gateway/01_openmemory_deploy_windows.md`（B.4.1、B.9）
 
 ### 二、客户端配置
 
