@@ -909,9 +909,30 @@ db-drop:  ## 删除数据库（危险操作）
 
 reset-native:  ## 重置数据库与服务账号（危险操作：DROP/CREATE + 删除 4 个 LOGIN 账号）
 	@set -e; \
+	ENV_LOCAL_FILE="$${ENV_LOCAL_FILE:-$(ENV_LOCAL_FILE)}"; \
+	case "$$ENV_LOCAL_FILE" in \
+		/*) ENV_LOCAL_PATH="$$ENV_LOCAL_FILE" ;; \
+		*) ENV_LOCAL_PATH="$(CURDIR)/$$ENV_LOCAL_FILE" ;; \
+	esac; \
+	set -a; \
+	[ -f "$(CURDIR)/.env" ] && . "$(CURDIR)/.env"; \
+	[ -f "$$ENV_LOCAL_PATH" ] && . "$$ENV_LOCAL_PATH"; \
+	set +a; \
+	POSTGRES_DB="$${POSTGRES_DB:-$(POSTGRES_DB)}"; \
+	ADMIN_BOOTSTRAP_DSN="$${ADMIN_BOOTSTRAP_DSN:-$(ADMIN_BOOTSTRAP_DSN)}"; \
+	if [ -n "$${ENGRAM_PG_ADMIN_DSN:-}" ]; then \
+		ADMIN_DSN="$$ENGRAM_PG_ADMIN_DSN"; \
+	else \
+		ADMIN_DSN="$${ADMIN_DSN:-postgresql:///$$POSTGRES_DB}"; \
+	fi; \
+	if [ "$${DB_ADMIN_PREFIX+x}" != "x" ]; then \
+		DB_ADMIN_PREFIX="$(DB_ADMIN_PREFIX)"; \
+	fi; \
+	export POSTGRES_DB ADMIN_BOOTSTRAP_DSN ADMIN_DSN DB_ADMIN_PREFIX ENV_LOCAL_FILE; \
 	if [ -z "$$FORCE" ]; then \
 		if [ -t 0 ]; then \
-			echo "[WARN] 将删除数据库 $(POSTGRES_DB) 以及 4 个 LOGIN 账号（logbook_migrator/logbook_svc/openmemory_migrator_login/openmemory_svc）"; \
+			echo "[WARN] 将删除数据库 $$POSTGRES_DB 以及 4 个 LOGIN 账号（logbook_migrator/logbook_svc/openmemory_migrator_login/openmemory_svc）"; \
+			echo "[INFO] 已加载环境文件：.env / $$ENV_LOCAL_FILE（存在时）"; \
 			printf "输入 RESET 确认: "; \
 			IFS= read -r CONFIRM; \
 			if [ "$$CONFIRM" != "RESET" ]; then \
@@ -923,13 +944,29 @@ reset-native:  ## 重置数据库与服务账号（危险操作：DROP/CREATE + 
 			exit 1; \
 		fi; \
 	fi; \
-	echo "[INFO] 终止 $(POSTGRES_DB) 连接..."; \
-	$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$(POSTGRES_DB)' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true; \
-	echo "[INFO] 删除数据库 $(POSTGRES_DB)..."; \
-	$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$(POSTGRES_DB)\";"; \
+	echo "[INFO] 终止 $$POSTGRES_DB 连接..."; \
+	$$DB_ADMIN_PREFIX psql "$$ADMIN_BOOTSTRAP_DSN" -v ON_ERROR_STOP=1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$POSTGRES_DB' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true; \
+	echo "[INFO] 删除数据库 $$POSTGRES_DB..."; \
+	$$DB_ADMIN_PREFIX psql "$$ADMIN_BOOTSTRAP_DSN" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$$POSTGRES_DB\" WITH (FORCE);" || \
+		$$DB_ADMIN_PREFIX psql "$$ADMIN_BOOTSTRAP_DSN" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$$POSTGRES_DB\";"; \
 	echo "[INFO] 删除服务账号..."; \
-	$(DB_ADMIN_PREFIX) psql "$(ADMIN_BOOTSTRAP_DSN)" -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS logbook_migrator, logbook_svc, openmemory_migrator_login, openmemory_svc;"; \
-	$(MAKE) --no-print-directory setup-db
+	if ! $$DB_ADMIN_PREFIX psql "$$ADMIN_BOOTSTRAP_DSN" -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS logbook_migrator, logbook_svc, openmemory_migrator_login, openmemory_svc;"; then \
+		echo ""; \
+		echo "[ERROR] 服务账号仍拥有数据库或对象，无法删除 role。"; \
+		echo "[INFO] 这些数据库当前由 Engram/OpenMemory 服务账号拥有："; \
+		$$DB_ADMIN_PREFIX psql "$$ADMIN_BOOTSTRAP_DSN" -v ON_ERROR_STOP=1 -c "SELECT datname, pg_get_userbyid(datdba) AS owner FROM pg_database WHERE pg_get_userbyid(datdba) IN ('logbook_migrator', 'logbook_svc', 'openmemory_migrator_login', 'openmemory_svc') ORDER BY datname;" || true; \
+		echo ""; \
+		echo "处理方式：确认旧库不再需要后先 DROP DATABASE，例如："; \
+		echo "  psql \"$$ADMIN_BOOTSTRAP_DSN\" -c 'DROP DATABASE IF EXISTS \"openmemory\" WITH (FORCE);'"; \
+		echo "如果 PostgreSQL 错误 DETAIL 指向某个数据库内的对象，请先连接该数据库清理或重分配对象所有权。"; \
+		exit 1; \
+	fi; \
+	$(MAKE) --no-print-directory setup-db \
+		ENV_LOCAL_FILE="$$ENV_LOCAL_FILE" \
+		POSTGRES_DB="$$POSTGRES_DB" \
+		ADMIN_BOOTSTRAP_DSN="$$ADMIN_BOOTSTRAP_DSN" \
+		ADMIN_DSN="$$ADMIN_DSN" \
+		DB_ADMIN_PREFIX="$$DB_ADMIN_PREFIX"
 
 openmemory-fix-vector-dim:  ## 修复 openmemory_vectors 向量维度（需 OM_VEC_DIM）
 	@set -e; \

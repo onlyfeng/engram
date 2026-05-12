@@ -878,7 +878,7 @@ make help
 | `make verify` | 验证数据库权限配置 |
 | `make db-create` | 创建数据库 |
 | `make db-drop` | 删除数据库（危险操作） |
-| `make reset-native` | 重置数据库 + 4 个服务账号（危险操作） |
+| `make reset-native` | 重置数据库 + 4 个服务账号（危险操作；自动加载 `.env`/`.env.local` 并继续初始化） |
 | `make openmemory` | 启动 OpenMemory 后端（自动加载 `.env`/`.env.local`） |
 | `make openmemory-dashboard` | 启动 OpenMemory Dashboard（Next.js dev server） |
 | `make gateway` | 启动 Gateway 服务（带热重载） |

@@ -313,9 +313,9 @@ sudo systemctl reload postgresql
 # conda create -n engram python=3.11 -y
 # conda activate engram
 #
-# 说明：我们建议“尽量避免让 postgres 用户去执行你的 conda/python 环境”，因此优先用 make 串起来：
-# - make 侧通过 DB_ADMIN_PREFIX 控制管理员操作（psql/createdb 走 postgres 用户）
-# - Python CLI（engram-*）仍在当前用户的 venv 中运行
+# 说明：Linux/WSL2 默认会用 DB_ADMIN_PREFIX="sudo -u postgres" 执行数据库管理员步骤。
+# 如果你的 venv / 仓库位于权限较严的用户目录下，postgres 用户可能无法执行该 venv；
+# 这种场景优先使用下方 “B.4.1 WSL2 export/import 后重置” 的 TCP admin DSN 方式。
 #
 # 安装（确保当前 shell 已激活环境后再安装）：
 pip install -e ".[full]"
@@ -348,6 +348,7 @@ fi
 DB_ADMIN_PREFIX="sudo -u postgres" make setup-db
 
 # 如需重置（危险操作：删除数据库与服务账号）
+# reset-native 会自动加载 .env / .env.local，并把加载后的变量传给后续 setup-db。
 DB_ADMIN_PREFIX="sudo -u postgres" FORCE=1 make reset-native
 
 # 以下为手动分步方式（等价）
@@ -382,6 +383,56 @@ sudo -u postgres "$PYTHON_BIN" -m engram.logbook.cli.db_migrate \
 # sudo -u postgres psql -d engram -v ON_ERROR_STOP=1 \
 #   -c "SET om.target_schema = '$OM_PG_SCHEMA';" \
 #   -f sql/05_openmemory_roles_and_grants.sql
+```
+
+#### B.4.1 WSL2 export/import 后重置
+
+WSL2 发行版通过 `wsl --export` / `wsl --import` 迁移到新 Windows 主机后，常见变化是：PostgreSQL 服务未启动、Windows 侧端口转发/防火墙规则丢失、以及 `postgres` Linux 用户无法执行 `/home/<user>/.../.venv/bin/python3`。这不是 Engram 数据逻辑问题，而是 WSL/Windows 边界变化。
+
+先启动 PostgreSQL 并确认可连：
+
+```bash
+sudo service postgresql start
+sudo -u postgres psql -d postgres -c "SELECT version();"
+```
+
+如果 `make reset-native` 报 `sudo: unable to execute .../.venv/bin/python3: Permission denied`，不要放宽整个用户目录权限。推荐让当前用户执行 Python，通过 PostgreSQL admin DSN 连接数据库：
+
+```bash
+# 1) 给 PostgreSQL 的 postgres 数据库用户设置强密码
+sudo -u postgres psql -d postgres -c "ALTER USER postgres WITH PASSWORD '<admin_password>';"
+
+# 2) 写入本地 env；reset-native 会自动加载 .env/.env.local
+DB_ADMIN_PREFIX= \
+ADMIN_BOOTSTRAP_DSN="postgresql://postgres:<admin_password>@127.0.0.1:5432/postgres" \
+ENGRAM_PG_ADMIN_DSN="postgresql://postgres:<admin_password>@127.0.0.1:5432/dhmmc" \
+POSTGRES_DB="dhmmc" \
+make env-write-local
+
+# 3) 重置并在同一流程中重新初始化
+make reset-native
+```
+
+如果删除服务账号时报 `role "openmemory_svc" cannot be dropped ... owner of database openmemory`，说明同一个 PostgreSQL 集群里还有旧的 `openmemory` 数据库属于该账号。`make reset-native` 会在失败时列出仍由 Engram/OpenMemory 服务账号拥有的数据库；确认不要后再删除：
+
+```bash
+sudo -u postgres psql -d postgres -c \
+"SELECT datname, pg_get_userbyid(datdba) AS owner
+ FROM pg_database
+ WHERE pg_get_userbyid(datdba) LIKE 'openmemory%';"
+
+sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 -c \
+'DROP DATABASE IF EXISTS "openmemory" WITH (FORCE);'
+```
+
+如果 PostgreSQL 的 `DETAIL` 指向“某个数据库内还有 N 个对象”，但该数据库不是要删除的目标库，需要先连接到那个数据库执行对象清理或所有权迁移；不要直接删除未知业务库。
+
+重置完成后，新库第一次启动 OpenMemory 要让 migrator 建表：
+
+```bash
+OPENMEMORY_FIRST_RUN=1 make openmemory
+# 另开终端：
+make gateway
 ```
 
 ### B.5 部署 OpenMemory（WSL2 内）
@@ -562,6 +613,8 @@ sudo journalctl -u engram-gateway -n 200 --no-pager
 
 WSL2 默认网络模式是 NAT，**WSL2 的 IP 通常只对 Windows 主机可达**。要让局域网其它机器访问 Gateway，需要把端口暴露到 **Windows 主机的局域网 IP**（例如 `192.168.x.x`）。
 
+> WSL2 发行版 export/import 到新 Windows 主机时，Debian 文件系统会迁移，但 Windows 侧 `.wslconfig`、`netsh interface portproxy` 和防火墙规则不会随发行版迁移；新机上需要重新确认或重建本节配置。
+
 **客户端（其它机器）要改什么？**
 - `.cursor/mcp.json`（或 `~/.cursor/mcp.json`）把 `url` 改为：`http://<windows-lan-ip>:8787/mcp`
 
@@ -616,6 +669,10 @@ netsh interface portproxy show v4tov4
 
 ```bash
 curl -sf http://<windows-lan-ip>:8787/health && echo "Gateway OK"
+
+curl -fsS http://<windows-lan-ip>:8787/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 > 注意：
